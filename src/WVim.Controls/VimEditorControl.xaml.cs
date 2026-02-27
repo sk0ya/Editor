@@ -302,7 +302,7 @@ public partial class VimEditorControl : UserControl
                     StatusBar.UpdateStatus(sme.Message);
                     break;
                 case VimEventType.CommandLineChanged when evt is CommandLineChangedEvent cle:
-                    CmdLine.Update(cle.Text);
+                    StatusBar.UpdateCommandLine(cle.Text);
                     break;
                 case VimEventType.SaveRequested when evt is SaveRequestedEvent sre:
                     SaveRequested?.Invoke(this, new SaveRequestedEventArgs(sre.FilePath));

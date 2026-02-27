@@ -9,7 +9,6 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Editor area (EditorCanvas manages its own scrolling internally) -->
@@ -20,8 +19,5 @@
 
         <!-- Status bar -->
         <local:VimStatusBar x:Name="StatusBar" Grid.Row="1"/>
-
-        <!-- Command line -->
-        <local:CommandLineControl x:Name="CmdLine" Grid.Row="2"/>
     </Grid>
 </UserControl>

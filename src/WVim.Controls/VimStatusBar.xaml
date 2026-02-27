@@ -16,10 +16,15 @@
                        FontWeight="Bold" VerticalAlignment="Center"/>
         </Border>
 
-        <!-- File name -->
-        <TextBlock x:Name="FileText" Grid.Column="1" FontFamily="Cascadia Code, Consolas" FontSize="12"
-                   Foreground="#DDDDDD" VerticalAlignment="Center" Padding="8,0"
-                   TextTrimming="CharacterEllipsis"/>
+        <!-- File name / Command line area -->
+        <Grid Grid.Column="1">
+            <TextBlock x:Name="FileText" FontFamily="Cascadia Code, Consolas" FontSize="12"
+                       Foreground="#DDDDDD" VerticalAlignment="Center" Padding="8,0"
+                       TextTrimming="CharacterEllipsis"/>
+            <TextBlock x:Name="CommandText" FontFamily="Cascadia Code, Consolas" FontSize="13"
+                       Foreground="White" VerticalAlignment="Center" Padding="4,0"
+                       Visibility="Collapsed"/>
+        </Grid>
 
         <!-- Status message -->
         <TextBlock x:Name="StatusText" Grid.Column="2" FontFamily="Cascadia Code, Consolas" FontSize="12"

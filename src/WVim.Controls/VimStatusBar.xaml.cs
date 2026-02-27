@@ -51,4 +51,19 @@ public partial class VimStatusBar : UserControl
     {
         StatusText.Text = message;
     }
+
+    public void UpdateCommandLine(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            CommandText.Visibility = System.Windows.Visibility.Collapsed;
+            FileText.Visibility = System.Windows.Visibility.Visible;
+        }
+        else
+        {
+            CommandText.Text = text;
+            CommandText.Visibility = System.Windows.Visibility.Visible;
+            FileText.Visibility = System.Windows.Visibility.Collapsed;
+        }
+    }
 }
