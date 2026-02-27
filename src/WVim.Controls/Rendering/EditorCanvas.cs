@@ -33,6 +33,8 @@ public class EditorCanvas : FrameworkElement
     private System.Windows.Threading.DispatcherTimer? _cursorTimer;
     private bool _isDragging = false;
     private string _imeCompositionText = string.Empty;
+    private string[] _imeCandidates = [];
+    private int _imeCandidateSelection = -1;
 
     public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
 
@@ -82,6 +84,21 @@ public class EditorCanvas : FrameworkElement
         text ??= string.Empty;
         if (_imeCompositionText == text) return;
         _imeCompositionText = text;
+        InvalidateVisual();
+    }
+    public void SetImeCandidates(IReadOnlyList<string>? candidates, int selectedIndex)
+    {
+        var next = candidates?
+            .Where(static c => !string.IsNullOrWhiteSpace(c))
+            .ToArray() ?? [];
+
+        int nextSelection = next.Length == 0 ? -1 : Math.Clamp(selectedIndex, 0, next.Length - 1);
+
+        if (_imeCandidateSelection == nextSelection && _imeCandidates.SequenceEqual(next))
+            return;
+
+        _imeCandidates = next;
+        _imeCandidateSelection = nextSelection;
         InvalidateVisual();
     }
 
@@ -228,6 +245,8 @@ public class EditorCanvas : FrameworkElement
             // Cursor
             DrawCursor(dc, l, y, textLeft, lineText);
         }
+
+        DrawImeCandidatePopup(dc, textLeft, size);
 
         // Gutter border
         if (_showLineNumbers)
@@ -391,6 +410,59 @@ public class EditorCanvas : FrameworkElement
             pen,
             new Point(cursorX, cursorY + _lineHeight - 1),
             new Point(cursorX + width, cursorY + _lineHeight - 1));
+    }
+
+    private void DrawImeCandidatePopup(DrawingContext dc, double textLeft, Size size)
+    {
+        if (_imeCandidates.Length == 0) return;
+
+        const int maxVisible = 8;
+        int count = Math.Min(maxVisible, _imeCandidates.Length);
+        var items = _imeCandidates.Take(count)
+            .Select((c, i) => $"{i + 1}. {c}")
+            .ToArray();
+
+        var texts = new FormattedText[count];
+        double maxTextWidth = 0;
+        for (int i = 0; i < count; i++)
+        {
+            var ft = FormatText(items[i], Theme.Foreground);
+            texts[i] = ft;
+            maxTextWidth = Math.Max(maxTextWidth, ft.Width);
+        }
+
+        double rowH = Math.Max(_lineHeight, texts.Max(static t => t.Height));
+        double padX = 8;
+        double padY = 4;
+        double popupW = maxTextWidth + (padX * 2);
+        double popupH = (rowH * count) + (padY * 2);
+
+        var cursor = GetCursorPixelPosition();
+        double x = cursor.X;
+        double y = cursor.Y + _lineHeight + 2;
+
+        if (x + popupW > size.Width)
+            x = Math.Max(textLeft, size.Width - popupW - 2);
+
+        if (y + popupH > size.Height)
+            y = Math.Max(0, cursor.Y - popupH - 2);
+
+        var bg = new SolidColorBrush(Color.FromArgb(0xEE, 0x1E, 0x1F, 0x29));
+        var border = new Pen(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)), 1);
+        dc.DrawRectangle(bg, border, new Rect(x, y, popupW, popupH));
+
+        int selected = _imeCandidateSelection;
+        for (int i = 0; i < count; i++)
+        {
+            double rowY = y + padY + (rowH * i);
+            if (i == selected)
+            {
+                dc.DrawRectangle(Theme.SelectionBg, null, new Rect(x + 1, rowY, popupW - 2, rowH));
+            }
+
+            var ft = texts[i];
+            dc.DrawText(ft, new Point(x + padX, rowY + (rowH - ft.Height) / 2));
+        }
     }
 
     /// <summary>

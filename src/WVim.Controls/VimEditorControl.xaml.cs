@@ -50,6 +50,12 @@ public partial class VimEditorControl : UserControl
     [DllImport("imm32.dll")] private static extern bool   ImmNotifyIME(IntPtr hImc, int dwAction, int dwIndex, int dwValue);
     [DllImport("imm32.dll")] private static extern bool   ImmSetCompositionWindow(IntPtr hImc, ref COMPOSITIONFORM lpCompForm);
     [DllImport("imm32.dll")] private static extern bool   ImmSetCandidateWindow(IntPtr hImc, ref CANDIDATEFORM lpCandidateForm);
+    [DllImport("imm32.dll", CharSet = CharSet.Unicode)] private static extern uint ImmGetCandidateListW(IntPtr hImc, uint deIndex, IntPtr lpCandList, uint dwBufLen);
+    [DllImport("user32.dll")] private static extern IntPtr DefWindowProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool   CreateCaret(IntPtr hWnd, IntPtr hBitmap, int nWidth, int nHeight);
+    [DllImport("user32.dll")] private static extern bool   DestroyCaret();
+    [DllImport("user32.dll")] private static extern bool   SetCaretPos(int x, int y);
+    [DllImport("user32.dll")] private static extern bool   HideCaret(IntPtr hWnd);
 
     private const int  NI_COMPOSITIONSTR      = 0x0015;
     private const int  CPS_CANCEL             = 0x0004;
@@ -58,6 +64,17 @@ public partial class VimEditorControl : UserControl
     private const uint CFS_CANDIDATEPOS       = 0x0040;
     private const int  WM_IME_STARTCOMPOSITION = 0x010D;
     private const int  WM_IME_SETCONTEXT       = 0x0281;
+    private const int  WM_IME_NOTIFY           = 0x0282;
+    private const int  IME_OFFSCREEN_COORD     = -32000;
+    private const long ISC_SHOWUICOMPOSITIONWINDOW  = 0x80000000L;
+    private const long ISC_SHOWUIGUIDELINE          = 0x40000000L;
+    private const long ISC_SHOWUIALLCANDIDATEWINDOW = 0x0000000FL;
+    private const long ISC_SHOWUISOFTKBD            = 0x00000080L;
+    private const int  IMN_CHANGECANDIDATE     = 0x0003;
+    private const int  IMN_CLOSECANDIDATE      = 0x0004;
+    private const int  IMN_OPENCANDIDATE       = 0x0005;
+    private const int  IMN_SETCANDIDATEPOS     = 0x0009;
+    private const int  IMN_SETCOMPOSITIONWINDOW = 0x000B;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct COMPOSITIONFORM
@@ -123,6 +140,7 @@ public partial class VimEditorControl : UserControl
     private bool _replayingImeKeys = false;
     private int  _replayCount      = 0;
     private bool _imeWindowUpdateInProgress = false;
+    private bool _imeSuppressionCaretCreated = false;
 
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
@@ -179,36 +197,201 @@ public partial class VimEditorControl : UserControl
         TextCompositionManager.RemovePreviewTextInputStartHandler(this, OnPreviewTextInputStart);
         TextCompositionManager.RemovePreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
         ClearImeCompositionOverlay();
+        ClearImeCandidateOverlay();
+        DestroyImeSuppressionCaret();
         if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
             hwndSource.RemoveHook(ImeWndProc);
     }
 
     /// <summary>
     /// Win32 message hook: intercepts WM_IME_STARTCOMPOSITION / WM_IME_SETCONTEXT
-    /// so the IME composition and candidate windows appear at the cursor position.
+    /// and disables the native IME UI because composition is rendered in-editor.
     /// </summary>
     private IntPtr ImeWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (_engine.Mode is not (VimMode.Insert or VimMode.Replace))
+        if (!ShouldSuppressNativeImeUi(_engine.Mode))
             return IntPtr.Zero;
 
-        if (msg is WM_IME_SETCONTEXT or WM_IME_STARTCOMPOSITION)
+        if (msg == WM_IME_SETCONTEXT && wParam != IntPtr.Zero)
+        {
+            long filtered = lParam.ToInt64() &
+                ~(ISC_SHOWUICOMPOSITIONWINDOW
+                | ISC_SHOWUIGUIDELINE
+                | ISC_SHOWUIALLCANDIDATEWINDOW
+                | ISC_SHOWUISOFTKBD);
+
+            UpdateImeWindowPos(hwnd);
+            handled = true;
+            return DefWindowProc(hwnd, msg, wParam, new IntPtr(filtered));
+        }
+
+        if (msg == WM_IME_STARTCOMPOSITION)
         {
             UpdateImeWindowPos(hwnd);
+        }
+        else if (msg == WM_IME_NOTIFY)
+        {
+            int notify = wParam.ToInt32();
+            if (notify is IMN_OPENCANDIDATE or IMN_CHANGECANDIDATE
+                or IMN_SETCANDIDATEPOS or IMN_SETCOMPOSITIONWINDOW)
+            {
+                UpdateImeCandidateOverlay(hwnd, lParam);
+                UpdateImeWindowPos(hwnd);
+                handled = true;
+                return IntPtr.Zero;
+            }
+            if (notify == IMN_CLOSECANDIDATE)
+            {
+                ClearImeCandidateOverlay();
+                handled = true;
+                return IntPtr.Zero;
+            }
         }
 
         return IntPtr.Zero;
     }
 
-    private static void SetCandidateWindowPos(IntPtr imc, int x, int y)
+    private static bool ShouldSuppressNativeImeUi(VimMode mode)
+        => mode is VimMode.Insert or VimMode.Replace or VimMode.Command
+            or VimMode.SearchForward or VimMode.SearchBackward;
+
+    private void UpdateImeCandidateOverlay(IntPtr hwnd, IntPtr lParam)
     {
+        IntPtr imc = IntPtr.Zero;
+        try
+        {
+            imc = ImmGetContext(hwnd);
+            if (imc == IntPtr.Zero)
+            {
+                ClearImeCandidateOverlay();
+                return;
+            }
+
+            uint index = ResolveCandidateListIndex(lParam);
+            var candidates = ReadCandidateListWithFallback(imc, index, out int selected);
+            if (candidates.Count == 0)
+            {
+                ClearImeCandidateOverlay();
+                return;
+            }
+
+            Canvas.SetImeCandidates(candidates, selected);
+        }
+        catch
+        {
+            ClearImeCandidateOverlay();
+        }
+        finally
+        {
+            if (imc != IntPtr.Zero)
+                ImmReleaseContext(hwnd, imc);
+        }
+    }
+
+    private static List<string> ReadCandidateListWithFallback(IntPtr imc, uint preferredIndex, out int selection)
+    {
+        var best = ReadCandidateList(imc, preferredIndex, out selection);
+        if (best.Count > 0) return best;
+
+        for (uint i = 0; i < 4; i++)
+        {
+            if (i == preferredIndex) continue;
+            var candidates = ReadCandidateList(imc, i, out int idx);
+            if (candidates.Count == 0) continue;
+            selection = idx;
+            return candidates;
+        }
+
+        selection = -1;
+        return [];
+    }
+
+    private void ClearImeCandidateOverlay() => Canvas.SetImeCandidates([], -1);
+
+    private static uint ResolveCandidateListIndex(IntPtr lParam)
+    {
+        uint mask = unchecked((uint)lParam.ToInt64());
+        if (mask == 0) return 0;
+
+        for (uint i = 0; i < 32; i++)
+        {
+            if ((mask & (1u << (int)i)) != 0)
+                return i;
+        }
+        return 0;
+    }
+
+    private static List<string> ReadCandidateList(IntPtr imc, uint index, out int selection)
+    {
+        selection = -1;
+        uint size = ImmGetCandidateListW(imc, index, IntPtr.Zero, 0);
+        if (size < 24) return [];
+
+        IntPtr buffer = Marshal.AllocHGlobal((int)size);
+        try
+        {
+            uint written = ImmGetCandidateListW(imc, index, buffer, size);
+            if (written < 24) return [];
+
+            int rawCount = Marshal.ReadInt32(buffer, 8);
+            int rawSelection = Marshal.ReadInt32(buffer, 12);
+            int maxOffsets = Math.Max(0, ((int)written - 24) / 4);
+            int count = Math.Clamp(rawCount, 0, maxOffsets);
+
+            var result = new List<string>(count);
+            for (int i = 0; i < count; i++)
+            {
+                int offset = Marshal.ReadInt32(buffer, 24 + (i * 4));
+                if (offset <= 0 || offset >= written) continue;
+                string? text = Marshal.PtrToStringUni(IntPtr.Add(buffer, offset));
+                if (!string.IsNullOrEmpty(text))
+                    result.Add(text);
+            }
+
+            if (result.Count == 0) return result;
+            selection = Math.Clamp(rawSelection, 0, result.Count - 1);
+            return result;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private void EnsureImeSuppressionCaret(IntPtr hwnd)
+    {
+        if (!_imeSuppressionCaretCreated)
+        {
+            if (CreateCaret(hwnd, IntPtr.Zero, 1, 1))
+                _imeSuppressionCaretCreated = true;
+        }
+
+        if (_imeSuppressionCaretCreated)
+        {
+            HideCaret(hwnd);
+            SetCaretPos(IME_OFFSCREEN_COORD, IME_OFFSCREEN_COORD);
+        }
+    }
+
+    private void DestroyImeSuppressionCaret()
+    {
+        if (!_imeSuppressionCaretCreated) return;
+        DestroyCaret();
+        _imeSuppressionCaretCreated = false;
+    }
+
+    private static POINTAPI OffscreenPoint() => new() { x = IME_OFFSCREEN_COORD, y = IME_OFFSCREEN_COORD };
+
+    private static void HideCandidateWindows(IntPtr imc)
+    {
+        var offscreen = OffscreenPoint();
         for (int i = 0; i < 4; i++)
         {
             var candForm = new CANDIDATEFORM
             {
                 dwIndex = i,
                 dwStyle = CFS_CANDIDATEPOS,
-                ptCurrentPos = new POINTAPI { x = x, y = y }
+                ptCurrentPos = offscreen
             };
             ImmSetCandidateWindow(imc, ref candForm);
         }
@@ -350,12 +533,17 @@ public partial class VimEditorControl : UserControl
 
         Canvas.SetImeCompositionText(text ?? string.Empty);
         if (!string.IsNullOrEmpty(text))
+        {
+            if (PresentationSource.FromVisual(this) is HwndSource source)
+                UpdateImeCandidateOverlay(source.Handle, IntPtr.Zero);
             UpdateImeWindowPos();
+        }
     }
 
     private void ClearImeCompositionOverlay()
     {
         Canvas.SetImeCompositionText(string.Empty);
+        ClearImeCandidateOverlay();
     }
 
     // ─────────────── Key handling ───────────────
@@ -743,9 +931,8 @@ public partial class VimEditorControl : UserControl
     }
 
     /// <summary>
-    /// Moves the IME composition and candidate windows to the current cursor position.
-    /// Called both from the Win32 hook (WM_IME_STARTCOMPOSITION / WM_IME_SETCONTEXT)
-    /// and proactively when entering Insert mode or moving the cursor.
+    /// Hides native IME windows (composition/candidate) because composition
+    /// text is rendered directly inside the editor canvas.
     /// </summary>
     private void UpdateImeWindowPos(IntPtr hwnd = default)
     {
@@ -757,58 +944,32 @@ public partial class VimEditorControl : UserControl
         try
         {
             if (PresentationSource.FromVisual(this) is not HwndSource source) return;
-            if (source.CompositionTarget == null || source.RootVisual == null) return;
 
             handle = hwnd == default ? source.Handle : hwnd;
             imc = ImmGetContext(handle);
             if (imc == IntPtr.Zero) return;
 
-            // Canvas-local cursor position (DIPs, top of cursor line)
-            var canvasPt = Canvas.GetCursorPixelPosition();
-
-            // Transform to HWND client-area coordinates (DIPs)
-            var transform = Canvas.TransformToAncestor(source.RootVisual);
-            var clientDip = transform.Transform(canvasPt);
-            var canvasTopLeftDip = transform.Transform(new Point(0, 0));
-            var canvasBottomRightDip = transform.Transform(new Point(Canvas.RenderSize.Width, Canvas.RenderSize.Height));
-
-            // Convert DIPs → physical pixels (HWND client coordinates)
-            var toDevice = source.CompositionTarget.TransformToDevice;
-            var physPt = toDevice.Transform(clientDip);
-            var canvasTopLeftPx = toDevice.Transform(canvasTopLeftDip);
-            var canvasBottomRightPx = toDevice.Transform(canvasBottomRightDip);
-            var lineH = (int)(Canvas.LineHeight * toDevice.M22);
-
-            int px = (int)physPt.X;
-            int py = (int)physPt.Y;
-            int minX = (int)Math.Min(canvasTopLeftPx.X, canvasBottomRightPx.X);
-            int maxX = (int)Math.Max(canvasTopLeftPx.X, canvasBottomRightPx.X) - 1;
-            int minY = (int)Math.Min(canvasTopLeftPx.Y, canvasBottomRightPx.Y);
-            int maxY = (int)Math.Max(canvasTopLeftPx.Y, canvasBottomRightPx.Y);
-            if (maxX < minX) maxX = minX;
-            if (maxY < minY) maxY = minY;
-            int maxCompY = Math.Max(minY, maxY - Math.Max(1, lineH));
-
-            px = Math.Clamp(px, minX, maxX);
-            py = Math.Clamp(py, minY, maxCompY);
+            EnsureImeSuppressionCaret(handle);
+            var offscreen = OffscreenPoint();
 
             var compForm = new COMPOSITIONFORM
             {
                 dwStyle      = CFS_POINT | CFS_FORCE_POSITION,
-                ptCurrentPos = new POINTAPI { x = px, y = py }
+                ptCurrentPos = offscreen,
+                rcArea = new RECT
+                {
+                    left = offscreen.x,
+                    top = offscreen.y,
+                    right = offscreen.x + 1,
+                    bottom = offscreen.y + 1
+                }
             };
             ImmSetCompositionWindow(imc, ref compForm);
-
-            int candidateY = py + Math.Max(1, lineH);
-            if (candidateY > maxCompY)
-                candidateY = Math.Max(minY, py - Math.Max(1, lineH));
-            candidateY = Math.Clamp(candidateY, minY, maxCompY);
-
-            SetCandidateWindowPos(imc, px, candidateY);
+            HideCandidateWindows(imc);
         }
         catch
         {
-            // IME window positioning failures must not crash the editor.
+            // IME window suppression failures must not crash the editor.
         }
         finally
         {
