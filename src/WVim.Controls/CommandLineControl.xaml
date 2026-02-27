@@ -1,0 +1,9 @@
+<UserControl x:Class="WVim.Controls.CommandLineControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Height="24" Visibility="Collapsed">
+    <Grid Background="#1E1E1E">
+        <TextBlock x:Name="CmdText" FontFamily="Cascadia Code, Consolas" FontSize="13"
+                   Foreground="White" VerticalAlignment="Center" Padding="4,0"/>
+    </Grid>
+</UserControl>

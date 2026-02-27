@@ -1,0 +1,34 @@
+# Build outputs
+bin/
+obj/
+*.user
+
+# .NET
+*.dll
+*.exe
+*.pdb
+*.nupkg
+*.snupkg
+
+# Visual Studio
+.vs/
+*.suo
+*.userprefs
+*.sln.docstates
+
+# Rider / JetBrains
+.idea/
+
+# NuGet
+packages/
+*.nupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Publish
+publish/

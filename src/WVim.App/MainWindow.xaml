@@ -1,0 +1,71 @@
+<Window x:Class="WVim.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:WVim.Controls;assembly=WVim.Controls"
+        Title="WVIM" Height="700" Width="1100"
+        Background="#282A36"
+        WindowStyle="SingleBorderWindow"
+        Loaded="Window_Loaded">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Menu Bar -->
+        <Menu Grid.Row="0" Background="#1E1E1E" Foreground="#DDDDDD">
+            <MenuItem Header="_File" Foreground="#DDDDDD">
+                <MenuItem Header="_New Tab" Click="NewTab_Click" InputGestureText=":tabnew"/>
+                <MenuItem Header="_Open..." Click="OpenFile_Click" InputGestureText=":e"/>
+                <MenuItem Header="_Save" Click="Save_Click" InputGestureText=":w"/>
+                <MenuItem Header="Save _As..." Click="SaveAs_Click"/>
+                <Separator/>
+                <MenuItem Header="E_xit" Click="Exit_Click" InputGestureText=":q"/>
+            </MenuItem>
+            <MenuItem Header="_Edit" Foreground="#DDDDDD">
+                <MenuItem Header="_Undo" Click="Undo_Click" InputGestureText="u"/>
+                <MenuItem Header="_Redo" Click="Redo_Click" InputGestureText="Ctrl+r"/>
+            </MenuItem>
+            <MenuItem Header="_View" Foreground="#DDDDDD">
+                <MenuItem Header="Line _Numbers" x:Name="LineNumMenu" IsCheckable="True" IsChecked="True"
+                          Click="LineNumbers_Click"/>
+                <MenuItem Header="Syntax _Highlighting" x:Name="SyntaxMenu" IsCheckable="True" IsChecked="True"
+                          Click="Syntax_Click"/>
+                <Separator/>
+                <MenuItem Header="Theme: Dracula" Click="ThemeDracula_Click"/>
+                <MenuItem Header="Theme: Dark" Click="ThemeDark_Click"/>
+            </MenuItem>
+        </Menu>
+
+        <!-- Tab bar -->
+        <TabControl x:Name="TabCtrl" Grid.Row="1"
+                    Background="#1E1E1E" BorderThickness="0"
+                    SelectionChanged="TabCtrl_SelectionChanged"
+                    Height="30">
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="TabItem">
+                    <Setter Property="Background" Value="#2D2D30"/>
+                    <Setter Property="Foreground" Value="#CCCCCC"/>
+                    <Setter Property="BorderThickness" Value="0"/>
+                    <Setter Property="Padding" Value="12,4"/>
+                    <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
+                    <Setter Property="FontSize" Value="12"/>
+                    <Style.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Background" Value="#282A36"/>
+                            <Setter Property="Foreground" Value="White"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </TabControl.ItemContainerStyle>
+        </TabControl>
+
+        <!-- Editor -->
+        <controls:VimEditorControl x:Name="Editor" Grid.Row="2"
+                                   SaveRequested="Editor_SaveRequested"
+                                   QuitRequested="Editor_QuitRequested"
+                                   OpenFileRequested="Editor_OpenFileRequested"
+                                   ModeChanged="Editor_ModeChanged"/>
+    </Grid>
+</Window>

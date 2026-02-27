@@ -1,0 +1,27 @@
+<UserControl x:Class="WVim.Controls.VimEditorControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:WVim.Controls"
+             xmlns:rendering="clr-namespace:WVim.Controls.Rendering"
+             Focusable="True"
+             Background="#282A36">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Editor area (EditorCanvas manages its own scrolling internally) -->
+        <rendering:EditorCanvas x:Name="Canvas" Grid.Row="0"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch"
+                                ClipToBounds="True"/>
+
+        <!-- Status bar -->
+        <local:VimStatusBar x:Name="StatusBar" Grid.Row="1"/>
+
+        <!-- Command line -->
+        <local:CommandLineControl x:Name="CmdLine" Grid.Row="2"/>
+    </Grid>
+</UserControl>

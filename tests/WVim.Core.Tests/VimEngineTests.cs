@@ -1,0 +1,204 @@
+using WVim.Core.Config;
+using WVim.Core.Engine;
+using WVim.Core.Models;
+
+namespace WVim.Core.Tests;
+
+public class VimEngineTests
+{
+    private VimEngine CreateEngine(string text = "")
+    {
+        var engine = new VimEngine(new VimConfig());
+        if (!string.IsNullOrEmpty(text))
+            engine.SetText(text);
+        return engine;
+    }
+
+    [Fact]
+    public void InitialMode_IsNormal()
+    {
+        var engine = CreateEngine();
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void PressI_EntersInsertMode()
+    {
+        var engine = CreateEngine("hello");
+        var events = engine.ProcessKey("i");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Contains(events, e => e.Type == VimEventType.ModeChanged);
+    }
+
+    [Fact]
+    public void PressEscape_InInsert_ReturnsToNormal()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("i");
+        engine.ProcessKey("Escape");
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void TypeInInsert_AddsText()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("h");
+        engine.ProcessKey("i");
+        engine.ProcessKey("Escape");
+        Assert.Equal("hi", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void PressH_MovesLeft()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("l"); // move right first
+        var col = engine.Cursor.Column;
+        engine.ProcessKey("h");
+        Assert.Equal(col - 1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void PressL_MovesRight()
+    {
+        var engine = CreateEngine("hello");
+        var col = engine.Cursor.Column;
+        engine.ProcessKey("l");
+        Assert.Equal(col + 1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void PressJ_MovesDown()
+    {
+        var engine = CreateEngine("line1\nline2");
+        var line = engine.Cursor.Line;
+        engine.ProcessKey("j");
+        Assert.Equal(line + 1, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void PressK_MovesUp()
+    {
+        var engine = CreateEngine("line1\nline2");
+        engine.ProcessKey("j"); // go to line 2
+        var line = engine.Cursor.Line;
+        engine.ProcessKey("k");
+        Assert.Equal(line - 1, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void DD_DeletesLine()
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+        engine.ProcessKey("d");
+        engine.ProcessKey("d");
+        var text = engine.CurrentBuffer.Text.GetText();
+        Assert.DoesNotContain("line1", text);
+        Assert.Contains("line2", text);
+    }
+
+    [Fact]
+    public void YY_YanksLine_ThenP_Pastes()
+    {
+        var engine = CreateEngine("hello\nworld");
+        engine.ProcessKey("y");
+        engine.ProcessKey("y");
+        engine.ProcessKey("p");
+        Assert.Equal(3, engine.CurrentBuffer.Text.LineCount);
+    }
+
+    [Fact]
+    public void Undo_RestoresText()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("i");
+        engine.ProcessKey("x");
+        engine.ProcessKey("Escape");
+        var modified = engine.CurrentBuffer.Text.GetText();
+        engine.ProcessKey("u");
+        var restored = engine.CurrentBuffer.Text.GetText();
+        Assert.NotEqual(modified, restored);
+        Assert.Equal("hello", restored);
+    }
+
+    [Fact]
+    public void PressV_EntersVisualMode()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("v");
+        Assert.Equal(VimMode.Visual, engine.Mode);
+    }
+
+    [Fact]
+    public void PressColon_EntersCommandMode()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey(":");
+        Assert.Equal(VimMode.Command, engine.Mode);
+    }
+
+    [Fact]
+    public void PressW_MovesForwardWord()
+    {
+        var engine = CreateEngine("hello world");
+        engine.ProcessKey("w");
+        Assert.Equal(6, engine.Cursor.Column); // "world" starts at col 6
+    }
+
+    [Fact]
+    public void PressZero_GoesToLineStart()
+    {
+        var engine = CreateEngine("   hello");
+        engine.ProcessKey("$"); // go to end
+        engine.ProcessKey("0"); // go to start
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void PressGG_GoesToFirstLine()
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("g");
+        engine.ProcessKey("g");
+        Assert.Equal(0, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void PressG_GoesToLastLine()
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+        engine.ProcessKey("G");
+        Assert.Equal(2, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void Count_Prefix_RepeatMotion()
+    {
+        var engine = CreateEngine("hello world foo bar");
+        engine.ProcessKey("3");
+        engine.ProcessKey("l");
+        Assert.Equal(3, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void X_DeleteCharUnderCursor()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("x");
+        Assert.Equal("ello", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void O_OpensLineBelow()
+    {
+        var engine = CreateEngine("line1\nline3");
+        engine.ProcessKey("o");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Equal(3, engine.CurrentBuffer.Text.LineCount);
+        Assert.Equal(1, engine.Cursor.Line);
+    }
+}
