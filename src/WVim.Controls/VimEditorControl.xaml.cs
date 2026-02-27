@@ -205,37 +205,80 @@ public partial class VimEditorControl : UserControl
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Resolve actual key — handles IME (ImeProcessed) and Alt combos (System)
+        Key actualKey = e.Key switch
+        {
+            Key.ImeProcessed => e.ImeProcessedKey,
+            Key.System => e.SystemKey,
+            _ => e.Key
+        };
+
         // Handle keys that WPF normally consumes (Tab, etc.)
         var mode = _engine.Mode;
         if (mode == VimMode.Insert || mode == VimMode.Replace)
         {
-            if (e.Key == Key.Tab)
+            // When e.Key == Key.ImeProcessed, the IME is mid-composition (e.g. Enter to
+            // confirm kanji). Do NOT intercept — let the IME finalize the composition.
+            if (e.Key != Key.ImeProcessed)
             {
-                ProcessKey("Tab", false, false, false);
-                e.Handled = true;
-            }
-            else if (e.Key == Key.Return)
-            {
-                ProcessKey("Return", false, false, false);
-                e.Handled = true;
-            }
-            else if (e.Key == Key.Back)
-            {
-                ProcessKey("Back", false, false, false);
-                e.Handled = true;
-            }
-            else if (e.Key == Key.Delete)
-            {
-                ProcessKey("Delete", false, false, false);
-                e.Handled = true;
+                if (actualKey == Key.Tab)
+                {
+                    ProcessKey("Tab", false, false, false);
+                    e.Handled = true;
+                }
+                else if (actualKey == Key.Return)
+                {
+                    ProcessKey("Return", false, false, false);
+                    e.Handled = true;
+                }
+                else if (actualKey == Key.Back)
+                {
+                    ProcessKey("Back", false, false, false);
+                    e.Handled = true;
+                }
+                else if (actualKey == Key.Delete)
+                {
+                    ProcessKey("Delete", false, false, false);
+                    e.Handled = true;
+                }
             }
         }
 
-        // Always handle Escape
-        if (e.Key == Key.Escape)
+        // Handle Escape — but not when IME is composing (ImeProcessed Escape cancels
+        // the composition; a subsequent Escape will then exit Insert mode normally).
+        if (actualKey == Key.Escape && e.Key != Key.ImeProcessed)
         {
             ProcessKey("Escape", false, false, false);
             e.Handled = true;
+        }
+
+        // In Normal/Visual/Command/Search mode, intercept IME-processed keys before
+        // the IME can consume them and turn them into Japanese text.
+        if (e.Key == Key.ImeProcessed &&
+            mode is VimMode.Normal or VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock
+                 or VimMode.Command or VimMode.SearchForward or VimMode.SearchBackward)
+        {
+            bool ctrl = (e.KeyboardDevice.Modifiers & ModifierKeys.Control) != 0;
+            bool shift = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
+            bool alt = (e.KeyboardDevice.Modifiers & ModifierKeys.Alt) != 0;
+
+            if (ctrl)
+            {
+                var ctrlKey = GetCtrlKey(actualKey);
+                if (ctrlKey != null)
+                {
+                    ProcessKey(ctrlKey, true, shift, alt);
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            var keyStr = GetVimKey(actualKey, shift);
+            if (keyStr != null)
+            {
+                ProcessKey(keyStr, ctrl, shift, alt);
+                e.Handled = true;
+            }
         }
     }
 
@@ -247,7 +290,12 @@ public partial class VimEditorControl : UserControl
         bool shift = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
         bool alt = (e.KeyboardDevice.Modifiers & ModifierKeys.Alt) != 0;
 
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        var key = e.Key switch
+        {
+            Key.System => e.SystemKey,
+            Key.ImeProcessed => e.ImeProcessedKey,
+            _ => e.Key
+        };
         string? keyStr = null;
 
         // In normal/visual/command mode, handle all key presses as vim keys
