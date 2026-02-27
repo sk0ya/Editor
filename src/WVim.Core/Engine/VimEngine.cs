@@ -40,8 +40,10 @@ public class VimEngine
     private ParsedCommand? _pendingInsertRepeatCommand;
     private List<VimKeyStroke>? _pendingInsertRepeatKeys;
     private bool _isDotReplaying;
+    private BlockInsertState? _blockInsertState;
 
     private sealed record RepeatChange(ParsedCommand Command, IReadOnlyList<VimKeyStroke> InsertKeys);
+    private sealed record BlockInsertState(int StartLine, int EndLine, int Column);
 
     public VimMode Mode => _mode;
     public CursorPosition Cursor => _cursor;
@@ -549,6 +551,9 @@ public class VimEngine
             }
         }
 
+        if (!ctrl && _mode == VimMode.Insert && HandleBlockInsertKey(key, events))
+            return;
+
         switch (key)
         {
             case "Escape":
@@ -615,15 +620,29 @@ public class VimEngine
     // ─────────────── VISUAL MODE ───────────────
     private void HandleVisual(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
-        var buf = _bufferManager.Current.Text;
-
-        if (key == "Escape") { ExitVisualMode(events); return; }
+        if (key == "Escape")
+        {
+            _commandParser.Reset();
+            ExitVisualMode(events);
+            return;
+        }
 
         if (ctrl)
         {
             if (key == "[")
             {
+                _commandParser.Reset();
                 ExitVisualMode(events);
+                return;
+            }
+            if (key == "v")
+            {
+                _commandParser.Reset();
+                if (_mode != VimMode.VisualBlock)
+                {
+                    ChangeMode(VimMode.VisualBlock, events);
+                    UpdateSelection(events);
+                }
                 return;
             }
             HandleNormalCtrl(key, events);
@@ -631,33 +650,286 @@ public class VimEngine
             return;
         }
 
-        // Let most normal mode motions work in visual mode
+        if (TryHandlePendingVisualMotion(key, events))
+            return;
+
+        // Visual operations and mode toggles
         switch (key)
         {
-            case "h": _cursor = new MotionEngine(buf).MoveLeft(_cursor); break;
-            case "l": _cursor = new MotionEngine(buf).MoveRight(_cursor); break;
-            case "j": _cursor = new MotionEngine(buf).MoveDown(_cursor); break;
-            case "k": _cursor = new MotionEngine(buf).MoveUp(_cursor); break;
-            case "w": _cursor = new MotionEngine(buf).WordForward(_cursor, 1, false); break;
-            case "b": _cursor = new MotionEngine(buf).WordBackward(_cursor, 1, false); break;
-            case "e": _cursor = new MotionEngine(buf).WordEnd(_cursor, 1, false); break;
-            case "0": _cursor = _cursor with { Column = 0 }; break;
-            case "$": _cursor = _cursor with { Column = Math.Max(0, buf.GetLineLength(_cursor.Line) - 1) }; break;
-            case "gg": case "g" when key == "gg": _cursor = new CursorPosition(0, 0); break;
-            case "G": _cursor = new CursorPosition(buf.LineCount - 1, 0); break;
-            // Switch visual modes
-            case "v": if (_mode == VimMode.Visual) ExitVisualMode(events); else EnterVisualMode(VimMode.Visual, events); return;
-            case "V": if (_mode == VimMode.VisualLine) ExitVisualMode(events); else EnterVisualMode(VimMode.VisualLine, events); return;
+            case "v":
+                _commandParser.Reset();
+                if (_mode == VimMode.Visual) ExitVisualMode(events);
+                else
+                {
+                    ChangeMode(VimMode.Visual, events);
+                    UpdateSelection(events);
+                }
+                return;
+            case "V":
+                _commandParser.Reset();
+                if (_mode == VimMode.VisualLine) ExitVisualMode(events);
+                else
+                {
+                    ChangeMode(VimMode.VisualLine, events);
+                    UpdateSelection(events);
+                }
+                return;
+            case "\x16":
+                _commandParser.Reset();
+                if (_mode != VimMode.VisualBlock)
+                {
+                    ChangeMode(VimMode.VisualBlock, events);
+                    UpdateSelection(events);
+                }
+                return;
+            case "o":
+            case "O":
+                _commandParser.Reset();
+                var oldCursor = _cursor;
+                _cursor = _visualStart;
+                _visualStart = oldCursor;
+                UpdateSelection(events);
+                return;
+            case "I":
+            case "i":
+                if (_mode == VimMode.VisualBlock)
+                {
+                    _commandParser.Reset();
+                    BeginVisualBlockInsert(events);
+                    return;
+                }
+                break;
             // Operators on selection
-            case "d": ExecuteVisualDelete('"', events); return;
-            case "y": ExecuteVisualYank('"', events); return;
-            case "c": ExecuteVisualDelete('"', events); EnterInsertMode(false, events); return;
-            case ">": ExecuteVisualIndent(true, events); return;
-            case "<": ExecuteVisualIndent(false, events); return;
-            case "~": ExecuteVisualToggleCase(events); return;
+            case "d":
+            case "x":
+            case "X":
+            case "D":
+                _commandParser.Reset();
+                ExecuteVisualDelete('"', events);
+                return;
+            case "y":
+                _commandParser.Reset();
+                ExecuteVisualYank('"', events);
+                return;
+            case "c":
+            case "C":
+            case "s":
+            case "S":
+                _commandParser.Reset();
+                if (_mode == VimMode.VisualBlock)
+                    BeginVisualBlockChange('"', events);
+                else
+                {
+                    ExecuteVisualDelete('"', events);
+                    EnterInsertMode(false, events);
+                }
+                return;
+            case ">":
+                _commandParser.Reset();
+                ExecuteVisualIndent(true, events);
+                return;
+            case "<":
+                _commandParser.Reset();
+                ExecuteVisualIndent(false, events);
+                return;
+            case "~":
+                _commandParser.Reset();
+                ExecuteVisualToggleCase(events);
+                return;
         }
 
+        var (state, cmd) = _commandParser.Feed(key);
+        if (state == CommandState.Incomplete)
+            return;
+        if (state == CommandState.Invalid || cmd == null)
+        {
+            _commandParser.Reset();
+            return;
+        }
+
+        if (!ApplyVisualMotion(cmd.Value, events))
+            return;
+
         UpdateSelection(events);
+    }
+
+    private bool TryHandlePendingVisualMotion(string key, List<VimEvent> events)
+    {
+        if (string.IsNullOrEmpty(_commandParser.Buffer))
+            return false;
+
+        var (state, cmd) = _commandParser.Feed(key);
+        if (state == CommandState.Incomplete)
+            return true;
+
+        if (state == CommandState.Invalid || cmd == null)
+        {
+            _commandParser.Reset();
+            return false;
+        }
+
+        if (!ApplyVisualMotion(cmd.Value, events))
+            return false;
+
+        UpdateSelection(events);
+        return true;
+    }
+
+    private bool ApplyVisualMotion(ParsedCommand cmd, List<VimEvent> events)
+    {
+        if (cmd.Operator != null) return false;
+
+        var buf = _bufferManager.Current.Text;
+        var motion = new MotionEngine(buf);
+        int count = Math.Max(1, cmd.Count);
+
+        switch (cmd.Motion)
+        {
+            case "Left":
+            case "h":
+                _cursor = motion.MoveLeft(_cursor, count);
+                _preferredColumn = _cursor.Column;
+                return true;
+            case "Right":
+            case "l":
+                _cursor = motion.MoveRight(_cursor, count);
+                _preferredColumn = _cursor.Column;
+                return true;
+            case "Up":
+            case "k":
+                for (int i = 0; i < count; i++)
+                    _cursor = motion.MoveUp(_cursor);
+                return true;
+            case "Down":
+            case "j":
+                for (int i = 0; i < count; i++)
+                    _cursor = motion.MoveDown(_cursor);
+                return true;
+            case "0":
+                _cursor = _cursor with { Column = 0 };
+                _preferredColumn = 0;
+                return true;
+            case "^":
+                _cursor = _cursor with { Column = GetFirstNonBlank() };
+                _preferredColumn = _cursor.Column;
+                return true;
+            case "$":
+                _cursor = _cursor with { Column = Math.Max(0, GetLineLength() - 1) };
+                _preferredColumn = _cursor.Column;
+                return true;
+            case "w":
+                _cursor = motion.WordForward(_cursor, count, false);
+                return true;
+            case "W":
+                _cursor = motion.WordForward(_cursor, count, true);
+                return true;
+            case "b":
+                _cursor = motion.WordBackward(_cursor, count, false);
+                return true;
+            case "B":
+                _cursor = motion.WordBackward(_cursor, count, true);
+                return true;
+            case "e":
+                _cursor = motion.WordEnd(_cursor, count, false);
+                return true;
+            case "E":
+                _cursor = motion.WordEnd(_cursor, count, true);
+                return true;
+            case "ge":
+                _cursor = WordEndBackward(count);
+                return true;
+            case "gj":
+                for (int i = 0; i < count; i++)
+                    _cursor = motion.MoveDown(_cursor);
+                return true;
+            case "gk":
+                for (int i = 0; i < count; i++)
+                    _cursor = motion.MoveUp(_cursor);
+                return true;
+            case "gg":
+                _cursor = new CursorPosition(0, 0);
+                _preferredColumn = 0;
+                return true;
+            case "G":
+                var targetLine = count == 1 ? buf.LineCount - 1 : count - 1;
+                _cursor = new CursorPosition(Math.Clamp(targetLine, 0, buf.LineCount - 1), 0);
+                _preferredColumn = 0;
+                return true;
+            case "+":
+                var downLine = Math.Clamp(_cursor.Line + count, 0, buf.LineCount - 1);
+                _cursor = new CursorPosition(downLine, GetFirstNonBlank(downLine));
+                _preferredColumn = _cursor.Column;
+                return true;
+            case "-":
+                var upLine = Math.Clamp(_cursor.Line - count, 0, buf.LineCount - 1);
+                _cursor = new CursorPosition(upLine, GetFirstNonBlank(upLine));
+                _preferredColumn = _cursor.Column;
+                return true;
+            case "_":
+                var underLine = Math.Clamp(_cursor.Line + Math.Max(0, count - 1), 0, buf.LineCount - 1);
+                _cursor = new CursorPosition(underLine, GetFirstNonBlank(underLine));
+                _preferredColumn = _cursor.Column;
+                return true;
+            case "|":
+                _cursor = _cursor with { Column = Math.Clamp(count - 1, 0, Math.Max(0, GetLineLength() - 1)) };
+                _preferredColumn = _cursor.Column;
+                return true;
+            case "{":
+                for (int i = 0; i < count; i++)
+                    _cursor = ParagraphBackward();
+                return true;
+            case "}":
+                for (int i = 0; i < count; i++)
+                    _cursor = ParagraphForward();
+                return true;
+            case "%":
+                var mb = MatchBracket(buf, motion);
+                if (mb.HasValue)
+                    _cursor = mb.Value;
+                return true;
+            case "H":
+                _cursor = ScreenPosition(0);
+                return true;
+            case "M":
+                _cursor = ScreenPosition(10);
+                return true;
+            case "L":
+                _cursor = ScreenPosition(20);
+                return true;
+            case ";":
+                for (int i = 0; i < count; i++)
+                    RepeatFind(false, events);
+                return true;
+            case ",":
+                for (int i = 0; i < count; i++)
+                    RepeatFind(true, events);
+                return true;
+            case "n":
+                for (int i = 0; i < count; i++)
+                    SearchNext(true, events);
+                return true;
+            case "N":
+                for (int i = 0; i < count; i++)
+                    SearchNext(false, events);
+                return true;
+            case "*":
+                SearchWordUnderCursor(true, events);
+                return true;
+            case "#":
+                SearchWordUnderCursor(false, events);
+                return true;
+            case "f":
+            case "F":
+            case "t":
+            case "T":
+                if (!cmd.FindChar.HasValue) return false;
+                bool fwd = cmd.Motion is "f" or "t";
+                bool before = cmd.Motion is "t" or "T";
+                _cursor = motion.FindChar(_cursor, cmd.FindChar.Value, fwd, before, count);
+                return true;
+            default:
+                return false;
+        }
     }
 
     // ─────────────── COMMAND LINE MODE ───────────────
@@ -788,6 +1060,7 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
         if (_cursor.Column > 0 && _cursor.Column >= buf.GetLineLength(_cursor.Line))
             _cursor = _cursor with { Column = Math.Max(0, _cursor.Column - 1) };
+        _blockInsertState = null;
         ChangeMode(VimMode.Normal, events);
     }
 
@@ -842,6 +1115,101 @@ public class VimEngine
             _ => SelectionType.Character
         });
         events.Add(VimEvent.SelectionChanged(_selection));
+    }
+
+    private bool HandleBlockInsertKey(string key, List<VimEvent> events)
+    {
+        if (_blockInsertState == null) return false;
+        var state = _blockInsertState;
+        var buf = _bufferManager.Current.Text;
+
+        switch (key)
+        {
+            case "Back":
+                if (_cursor.Column <= state.Column)
+                    return true;
+                for (int line = state.StartLine; line <= state.EndLine; line++)
+                {
+                    var lineLen = buf.GetLineLength(line);
+                    var deleteCol = Math.Min(_cursor.Column - 1, lineLen - 1);
+                    if (deleteCol >= state.Column && deleteCol >= 0)
+                        buf.DeleteChar(line, deleteCol);
+                }
+                _cursor = _cursor with { Column = _cursor.Column - 1 };
+                EmitText(events);
+                return true;
+            case "Delete":
+                for (int line = state.StartLine; line <= state.EndLine; line++)
+                {
+                    if (_cursor.Column < buf.GetLineLength(line))
+                        buf.DeleteChar(line, _cursor.Column);
+                }
+                EmitText(events);
+                return true;
+            case "Tab":
+                var insert = _config.Options.ExpandTab
+                    ? new string(' ', _config.Options.TabStop)
+                    : "\t";
+                for (int line = state.StartLine; line <= state.EndLine; line++)
+                {
+                    var col = Math.Min(_cursor.Column, buf.GetLineLength(line));
+                    buf.InsertText(line, col, insert);
+                }
+                _cursor = _cursor with { Column = _cursor.Column + insert.Length };
+                EmitText(events);
+                return true;
+            default:
+                if (key.Length == 1)
+                {
+                    for (int line = state.StartLine; line <= state.EndLine; line++)
+                    {
+                        var col = Math.Min(_cursor.Column, buf.GetLineLength(line));
+                        buf.InsertChar(line, col, key[0]);
+                    }
+                    _cursor = _cursor with { Column = _cursor.Column + 1 };
+                    EmitText(events);
+                    return true;
+                }
+                return false;
+        }
+    }
+
+    private static (int StartLine, int EndLine, int LeftColumn, int RightColumn) GetBlockBounds(Selection selection)
+    {
+        var startLine = Math.Min(selection.Start.Line, selection.End.Line);
+        var endLine = Math.Max(selection.Start.Line, selection.End.Line);
+        var leftColumn = Math.Min(selection.Start.Column, selection.End.Column);
+        var rightColumn = Math.Max(selection.Start.Column, selection.End.Column);
+        return (startLine, endLine, leftColumn, rightColumn);
+    }
+
+    private void BeginVisualBlockInsert(List<VimEvent> events)
+    {
+        if (_selection == null) { ExitVisualMode(events); return; }
+        var (startLine, endLine, leftColumn, _) = GetBlockBounds(_selection.Value);
+        _selection = null;
+        events.Add(VimEvent.SelectionChanged(null));
+        _blockInsertState = new BlockInsertState(startLine, endLine, leftColumn);
+        _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn), insertMode: true);
+        EnterInsertMode(false, events);
+        EmitCursor(events);
+    }
+
+    private void BeginVisualBlockChange(char register, List<VimEvent> events)
+    {
+        if (_selection == null) { ExitVisualMode(events); return; }
+        var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(_selection.Value);
+
+        Snapshot();
+        YankBlock(register, startLine, endLine, leftColumn, rightColumn);
+        DeleteBlock(startLine, endLine, leftColumn, rightColumn);
+        _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn), insertMode: true);
+        EmitText(events);
+
+        _selection = null;
+        events.Add(VimEvent.SelectionChanged(null));
+        _blockInsertState = new BlockInsertState(startLine, endLine, leftColumn);
+        EnterInsertMode(false, events);
     }
 
     private void MoveVertical(int delta, List<VimEvent> events)
@@ -1387,8 +1755,20 @@ public class VimEngine
     private void ExecuteVisualDelete(char register, List<VimEvent> events)
     {
         if (_selection == null) { ExitVisualMode(events); return; }
-        Snapshot();
         var sel = _selection.Value;
+        if (_mode == VimMode.VisualBlock)
+        {
+            var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(sel);
+            Snapshot();
+            YankBlock(register, startLine, endLine, leftColumn, rightColumn);
+            DeleteBlock(startLine, endLine, leftColumn, rightColumn);
+            _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn));
+            EmitText(events);
+            ExitVisualMode(events);
+            return;
+        }
+
+        Snapshot();
         var start = sel.NormalizedStart;
         var end = sel.NormalizedEnd;
 
@@ -1410,6 +1790,15 @@ public class VimEngine
     {
         if (_selection == null) { ExitVisualMode(events); return; }
         var sel = _selection.Value;
+        if (_mode == VimMode.VisualBlock)
+        {
+            var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(sel);
+            YankBlock(register, startLine, endLine, leftColumn, rightColumn);
+            MoveCursor(new CursorPosition(startLine, leftColumn), events);
+            ExitVisualMode(events);
+            return;
+        }
+
         var start = sel.NormalizedStart;
         var end = sel.NormalizedEnd;
 
@@ -1420,6 +1809,38 @@ public class VimEngine
 
         MoveCursor(start, events);
         ExitVisualMode(events);
+    }
+
+    private void DeleteBlock(int startLine, int endLine, int leftColumn, int rightColumn)
+    {
+        var buf = _bufferManager.Current.Text;
+        for (int line = startLine; line <= endLine; line++)
+        {
+            var length = buf.GetLineLength(line);
+            if (length <= leftColumn) continue;
+            var endExclusive = Math.Min(length, rightColumn + 1);
+            buf.DeleteRange(line, leftColumn, endExclusive);
+        }
+    }
+
+    private void YankBlock(char register, int startLine, int endLine, int leftColumn, int rightColumn)
+    {
+        var buf = _bufferManager.Current.Text;
+        var lines = new List<string>();
+        for (int line = startLine; line <= endLine; line++)
+        {
+            var text = buf.GetLine(line);
+            if (text.Length <= leftColumn)
+            {
+                lines.Add("");
+                continue;
+            }
+
+            var endExclusive = Math.Min(text.Length, rightColumn + 1);
+            lines.Add(text[leftColumn..endExclusive]);
+        }
+
+        _registerManager.SetYank(register, new Register(string.Join("\n", lines), RegisterType.Block));
     }
 
     private void ExecuteVisualIndent(bool indent, List<VimEvent> events)

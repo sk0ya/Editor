@@ -132,6 +132,34 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VisualMode_Gg_MovesToFirstLine()
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+        engine.ProcessKey("j");
+        engine.ProcessKey("v");
+
+        engine.ProcessKey("g");
+        engine.ProcessKey("g");
+
+        Assert.Equal(VimMode.Visual, engine.Mode);
+        Assert.Equal(0, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void VisualMode_Ge_MovesToEndOfPreviousWord()
+    {
+        var engine = CreateEngine("one two");
+        engine.ProcessKey("w");
+        engine.ProcessKey("v");
+
+        engine.ProcessKey("g");
+        engine.ProcessKey("e");
+
+        Assert.Equal(VimMode.Visual, engine.Mode);
+        Assert.Equal(2, engine.Cursor.Column);
+    }
+
+    [Fact]
     public void PressColon_EntersCommandMode()
     {
         var engine = CreateEngine("hello");
@@ -388,6 +416,86 @@ public class VimEngineTests
         engine.ProcessKey("d");
         var after = engine.CurrentBuffer.Text.GetText();
         Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public void CtrlV_BlockDelete_DeletesRectangularSelection()
+    {
+        var engine = CreateEngine("abcd\nabcd\nabcd");
+
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("l");
+        engine.ProcessKey("d");
+
+        Assert.Equal("cd\ncd\ncd", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void CtrlV_BlockInsertI_InsertsTextOnEachSelectedLine()
+    {
+        var engine = CreateEngine("abc\nabc\nabc");
+
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("I");
+        engine.ProcessKey("X");
+        engine.ProcessKey("Escape");
+
+        Assert.Equal("Xabc\nXabc\nXabc", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void CtrlV_BlockChange_C_ChangesRectangularSelectionOnEachLine()
+    {
+        var engine = CreateEngine("abcd\nabcd");
+
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("l");
+        engine.ProcessKey("c");
+        engine.ProcessKey("X");
+        engine.ProcessKey("Escape");
+
+        Assert.Equal("Xcd\nXcd", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void CtrlV_BlockFindMotionF_WorksThenDelete()
+    {
+        var engine = CreateEngine("abcd\nabcd\nabcd");
+
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("f");
+        engine.ProcessKey("d");
+        engine.ProcessKey("d");
+
+        Assert.Equal("\n\n", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void CtrlV_BlockMode_O_SwapsSelectionAnchor()
+    {
+        var engine = CreateEngine("abcd\nabcd");
+
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("l");
+        engine.ProcessKey("o");
+
+        Assert.Equal(VimMode.VisualBlock, engine.Mode);
+        Assert.Equal(new CursorPosition(0, 0), engine.Cursor);
+        Assert.NotNull(engine.Selection);
+        Assert.Equal(new CursorPosition(1, 1), engine.Selection!.Value.Start);
+        Assert.Equal(new CursorPosition(0, 0), engine.Selection!.Value.End);
     }
 
     [Fact]
