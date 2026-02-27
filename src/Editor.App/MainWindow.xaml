@@ -1,0 +1,259 @@
+<Window x:Class="Editor.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:Editor.Controls;assembly=Editor.Controls"
+        Title="Editor" Height="700" Width="1100"
+        Background="#282A36"
+        WindowStyle="None"
+        Loaded="Window_Loaded">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="30"
+                      ResizeBorderThickness="5"
+                      GlassFrameThickness="0"
+                      UseAeroCaptionButtons="False"/>
+    </WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <Style x:Key="TitleBarButton" TargetType="Button">
+            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="FontFamily" Value="Marlett"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#3A3D46"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#2A2D36"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TitleBarCloseButton" TargetType="Button">
+            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="FontFamily" Value="Marlett"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#C42B1C"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#901010"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TabCloseButton" TargetType="Button">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Margin" Value="6,0,-2,0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#888888"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Arrow"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="Transparent" CornerRadius="2">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#C42B1C"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid x:Name="RootPanel">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="30"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ── Title bar: Menu | drag area | window controls ── -->
+        <Grid Grid.Row="0" Background="#1E1E1E">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Menu (requires IsHitTestVisibleInChrome to receive mouse events) -->
+            <Menu Grid.Column="0"
+                  WindowChrome.IsHitTestVisibleInChrome="True"
+                  Background="#1E1E1E"
+                  Foreground="#DDDDDD"
+                  BorderBrush="#1E1E1E"
+                  BorderThickness="0"
+                  VerticalAlignment="Center">
+                <Menu.Resources>
+                    <SolidColorBrush x:Key="Menu.Static.Background" Color="#1E1E1E"/>
+                    <SolidColorBrush x:Key="Menu.Static.Border" Color="#1E1E1E"/>
+                    <SolidColorBrush x:Key="MenuItem.Static.Background" Color="#1E1E1E"/>
+                    <SolidColorBrush x:Key="MenuItem.Static.Border" Color="#1E1E1E"/>
+                    <SolidColorBrush x:Key="MenuItem.Selected.Background" Color="#2B2D34"/>
+                    <SolidColorBrush x:Key="MenuItem.Selected.Border" Color="#2B2D34"/>
+                    <SolidColorBrush x:Key="MenuItem.Highlight.Background" Color="#3A3D46"/>
+                    <SolidColorBrush x:Key="MenuItem.Highlight.Border" Color="#3A3D46"/>
+                    <SolidColorBrush x:Key="MenuItem.Submenu.Background" Color="#1E1E1E"/>
+                    <SolidColorBrush x:Key="MenuItem.Submenu.Border" Color="#1E1E1E"/>
+
+                    <Style TargetType="{x:Type Menu}">
+                        <Setter Property="Background" Value="#1E1E1E"/>
+                        <Setter Property="BorderBrush" Value="#1E1E1E"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="{x:Type Menu}">
+                                    <Border Background="{TemplateBinding Background}"
+                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="0"
+                                            SnapsToDevicePixels="True">
+                                        <ItemsPresenter/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+
+                    <Style TargetType="{x:Type ContextMenu}">
+                        <Setter Property="Background" Value="#1E1E1E"/>
+                        <Setter Property="BorderBrush" Value="#1E1E1E"/>
+                        <Setter Property="BorderThickness" Value="1"/>
+                        <Setter Property="SnapsToDevicePixels" Value="True"/>
+                    </Style>
+
+                    <Style TargetType="{x:Type Separator}">
+                        <Setter Property="Background" Value="#2B2D34"/>
+                        <Setter Property="BorderBrush" Value="#2B2D34"/>
+                    </Style>
+
+                    <Style TargetType="{x:Type MenuItem}">
+                        <Setter Property="Background" Value="#1E1E1E"/>
+                        <Setter Property="Foreground" Value="#E6E6E6"/>
+                        <Setter Property="TextElement.Foreground" Value="#E6E6E6"/>
+                        <Setter Property="BorderBrush" Value="#1E1E1E"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                        <Style.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter Property="Background" Value="#3A3D46"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                                <Setter Property="TextElement.Foreground" Value="#FFFFFF"/>
+                                <Setter Property="BorderBrush" Value="#3A3D46"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#8A8A8A"/>
+                                <Setter Property="TextElement.Foreground" Value="#8A8A8A"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Menu.Resources>
+
+                <MenuItem Header="_File">
+                    <MenuItem Header="_New Tab" Click="NewTab_Click" InputGestureText=":tabnew"/>
+                    <MenuItem Header="_Open..." Click="OpenFile_Click" InputGestureText=":e"/>
+                    <MenuItem Header="_Save" Click="Save_Click" InputGestureText=":w"/>
+                    <MenuItem Header="Save _As..." Click="SaveAs_Click"/>
+                    <Separator/>
+                    <MenuItem Header="E_xit" Click="Exit_Click" InputGestureText=":q"/>
+                </MenuItem>
+                <MenuItem Header="_Edit">
+                    <MenuItem Header="_Undo" Click="Undo_Click" InputGestureText="u"/>
+                    <MenuItem Header="_Redo" Click="Redo_Click" InputGestureText="Ctrl+r"/>
+                </MenuItem>
+                <MenuItem Header="_View">
+                    <MenuItem Header="Line _Numbers" x:Name="LineNumMenu" IsCheckable="True" IsChecked="True"
+                              Click="LineNumbers_Click"/>
+                    <MenuItem Header="Syntax _Highlighting" x:Name="SyntaxMenu" IsCheckable="True" IsChecked="True"
+                              Click="Syntax_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Theme: Dracula" Click="ThemeDracula_Click"/>
+                    <MenuItem Header="Theme: Dark" Click="ThemeDark_Click"/>
+                </MenuItem>
+            </Menu>
+
+            <!-- Column 1: draggable area (no IsHitTestVisibleInChrome) -->
+
+            <!-- Window control buttons -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                <Button Content="1" Style="{StaticResource TitleBarButton}" Click="MinimizeButton_Click"
+                        ToolTip="Minimize"/>
+                <Button x:Name="MaxRestoreButton" Content="2" Style="{StaticResource TitleBarButton}"
+                        Click="MaximizeButton_Click" ToolTip="Maximize"/>
+                <Button Content="r" Style="{StaticResource TitleBarCloseButton}" Click="CloseButton_Click"
+                        ToolTip="Close"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Tab bar + Editor content -->
+        <TabControl x:Name="TabCtrl" Grid.Row="1"
+                    Background="#282A36" BorderThickness="0"
+                    SelectionChanged="TabCtrl_SelectionChanged">
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="TabItem">
+                    <Setter Property="Background" Value="#2D2D30"/>
+                    <Setter Property="Foreground" Value="#CCCCCC"/>
+                    <Setter Property="BorderThickness" Value="0"/>
+                    <Setter Property="Padding" Value="12,4"/>
+                    <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
+                    <Setter Property="FontSize" Value="12"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="TabItem">
+                                <Border Name="Border"
+                                        Background="{TemplateBinding Background}"
+                                        Padding="{TemplateBinding Padding}"
+                                        BorderThickness="0">
+                                    <ContentPresenter ContentSource="Header"
+                                                      TextBlock.Foreground="{TemplateBinding Foreground}"
+                                                      TextBlock.FontFamily="{TemplateBinding FontFamily}"
+                                                      TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                    <Style.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Background" Value="#282A36"/>
+                            <Setter Property="Foreground" Value="White"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </TabControl.ItemContainerStyle>
+        </TabControl>
+
+    </Grid>
+</Window>
