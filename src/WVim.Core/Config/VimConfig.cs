@@ -21,7 +21,15 @@ public class VimConfig
         var vimrcPath = Path.Combine(home, ".vimrc");
         if (!File.Exists(vimrcPath))
             vimrcPath = Path.Combine(home, "_vimrc");
-        return LoadFromFile(vimrcPath);
+
+        var cfg = LoadFromFile(vimrcPath);
+
+        // Allow project-local overrides when running from a workspace.
+        var localVimrcPath = Path.Combine(Environment.CurrentDirectory, ".vimrc");
+        if (File.Exists(localVimrcPath))
+            cfg.ParseLines(File.ReadAllLines(localVimrcPath));
+
+        return cfg;
     }
 
     public void ParseLines(IEnumerable<string> lines)

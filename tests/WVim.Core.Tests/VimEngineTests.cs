@@ -6,9 +6,9 @@ namespace WVim.Core.Tests;
 
 public class VimEngineTests
 {
-    private VimEngine CreateEngine(string text = "")
+    private VimEngine CreateEngine(string text = "", VimConfig? config = null)
     {
-        var engine = new VimEngine(new VimConfig());
+        var engine = new VimEngine(config ?? new VimConfig());
         if (!string.IsNullOrEmpty(text))
             engine.SetText(text);
         return engine;
@@ -545,5 +545,114 @@ public class VimEngineTests
         var zb = engine.ProcessKey("b");
         var zbEvt = Assert.IsType<ViewportAlignRequestedEvent>(Assert.Single(zb, e => e is ViewportAlignRequestedEvent));
         Assert.Equal(ViewportAlign.Bottom, zbEvt.Align);
+    }
+
+    [Fact]
+    public void NormalMap_FromConfig_RemapKey()
+    {
+        var config = new VimConfig();
+        config.NormalMaps["j"] = "l";
+        var engine = CreateEngine("abc", config);
+
+        engine.ProcessKey("j");
+
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void NormalMap_FromConfig_SupportsSpecialLhsNotation()
+    {
+        var config = new VimConfig();
+        config.NormalMaps["<Space>"] = "l";
+        var engine = CreateEngine("abc", config);
+
+        engine.ProcessKey(" ");
+
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void NormalMap_FromConfig_SupportsModifierNotation()
+    {
+        var config = new VimConfig();
+        config.NormalMaps["<C-j>"] = "l";
+        var engine = CreateEngine("abc", config);
+
+        engine.ProcessKey("j", ctrl: true);
+
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void NormalMap_RhsMultiKeySequence_IsExecuted()
+    {
+        var config = new VimConfig();
+        config.NormalMaps["x"] = "dd";
+        var engine = CreateEngine("line1\nline2", config);
+
+        engine.ProcessKey("x");
+
+        Assert.Equal(1, engine.CurrentBuffer.Text.LineCount);
+        Assert.Equal("line2", engine.CurrentBuffer.Text.GetLine(0));
+    }
+
+    [Fact]
+    public void InsertMap_FromConfig_CanLeaveInsertMode()
+    {
+        var config = new VimConfig();
+        config.InsertMaps["x"] = "<Esc>";
+        var engine = CreateEngine("abc", config);
+
+        engine.ProcessKey("i");
+        engine.ProcessKey("x");
+
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        Assert.Equal("abc", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void ExNnoremap_UpdatesNormalMapImmediately()
+    {
+        var engine = CreateEngine("abc");
+
+        engine.ProcessKey(":");
+        foreach (var ch in "nnoremap j l")
+            engine.ProcessKey(ch.ToString());
+        engine.ProcessKey("Return");
+        engine.ProcessKey("j");
+
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void InsertMap_WithMultiKeyLhs_TriggersOnSecondKey()
+    {
+        var config = new VimConfig();
+        config.InsertMaps["jj"] = "<Esc>";
+        var engine = CreateEngine("abc", config);
+
+        engine.ProcessKey("i");
+        engine.ProcessKey("j");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+
+        engine.ProcessKey("j");
+
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        Assert.Equal("abc", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void InsertMap_WithMultiKeyLhs_FallsBackWhenNoMatch()
+    {
+        var config = new VimConfig();
+        config.InsertMaps["jj"] = "<Esc>";
+        var engine = CreateEngine("", config);
+
+        engine.ProcessKey("i");
+        engine.ProcessKey("j");
+        engine.ProcessKey("k");
+
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Equal("jk", engine.CurrentBuffer.Text.GetText());
     }
 }
