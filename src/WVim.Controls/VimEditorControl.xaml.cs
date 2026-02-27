@@ -1,7 +1,9 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using WVim.Controls.Themes;
 using WVim.Core.Config;
 using WVim.Core.Engine;
@@ -40,10 +42,56 @@ public class ModeChangedEventArgs(VimMode mode) : EventArgs
 
 public partial class VimEditorControl : UserControl
 {
+    // ─────────────── Win32 P/Invoke ───────────────
+
+    // imm32 — cancel an active IME composition
+    [DllImport("imm32.dll")] private static extern IntPtr ImmGetContext(IntPtr hWnd);
+    [DllImport("imm32.dll")] private static extern bool   ImmReleaseContext(IntPtr hWnd, IntPtr hImc);
+    [DllImport("imm32.dll")] private static extern bool   ImmNotifyIME(IntPtr hImc, int dwAction, int dwIndex, int dwValue);
+
+    private const int NI_COMPOSITIONSTR = 0x0015;
+    private const int CPS_CANCEL        = 0x0004;
+
+    // user32 — inject synthetic key events back to the IME pipeline.
+    // Layout matches native INPUT / KEYBDINPUT on 64-bit Windows:
+    //   offset 0  : type   (DWORD)
+    //   offset 4  : padding
+    //   offset 8  : wVk    (WORD)  ─┐ KEYBDINPUT
+    //   offset 10 : wScan  (WORD)   │
+    //   offset 12 : dwFlags(DWORD)  │
+    //   offset 16 : time   (DWORD)  │
+    //   [offset 24: dwExtraInfo – stays 0, covered by Size = 40]
+    [StructLayout(LayoutKind.Explicit, Size = 40)]
+    private struct INPUT_SEND
+    {
+        [FieldOffset(0)]  public uint   type;
+        [FieldOffset(8)]  public ushort wVk;
+        [FieldOffset(10)] public ushort wScan;
+        [FieldOffset(12)] public uint   dwFlags;
+        [FieldOffset(16)] public uint   time;
+    }
+
+    private const uint INPUTTYPE_KEYBOARD = 1;
+    private const uint KBDEVENTF_KEYUP    = 0x0002;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT_SEND[] pInputs, int cbSize);
+
+    // ─────────────── Fields ───────────────
+
     private VimEngine _engine;
     private EditorTheme _theme = EditorTheme.Dracula;
     private bool _keyDownHandledByVim;
     private bool _isDragSelecting = false;
+
+    // Buffer that tracks ImeProcessed key characters typed in Insert mode.
+    // Used to detect imap sequences (e.g. "jj" → <Esc>) even when IME is ON.
+    private readonly List<string> _imeInsertBuffer = [];
+
+    // Set to true while we are replaying buffered keys back to the IME so
+    // that the replayed PreviewKeyDown events bypass imap interception.
+    private bool _replayingImeKeys = false;
+    private int  _replayCount      = 0;
 
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
@@ -217,6 +265,130 @@ public partial class VimEditorControl : UserControl
         var mode = _engine.Mode;
         if (mode == VimMode.Insert || mode == VimMode.Replace)
         {
+            // ── IME insert-mode mapping detection ──────────────────────────────
+            // With IME ON every key comes as Key.ImeProcessed.  We need to
+            // intercept the keys that are prefixes of configured imap sequences
+            // (e.g. the first "j" of "jj → <Esc>") before the IME can consume
+            // them.  When the sequence is complete we fire it through VimEngine.
+            //
+            // When a key breaks a pending sequence we replay the buffered keys +
+            // the current key back into the input queue via SendInput so the IME
+            // can compose them correctly (e.g. "j"→buffer, "a"→breaks sequence →
+            // replay "ja" to IME → IME produces "じゃ").
+            //
+            //   PREFIX only  → buffer, intercept (e.Handled = true).
+            //   EXACT match  → fire mapping through VimEngine.
+            //   NO MATCH     → replay buffered + current to IME (if ASCII letters/
+            //                  digits), or flush as literal text (fallback), then
+            //                  check if the current key starts a new sequence.
+            if (e.Key == Key.ImeProcessed)
+            {
+                // Replayed keys: skip imap detection and let the IME process them.
+                if (_replayingImeKeys)
+                {
+                    if (--_replayCount <= 0)
+                        _replayingImeKeys = false;
+                    return;
+                }
+
+                var mods = e.KeyboardDevice.Modifiers;
+                if ((mods & (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift)) == 0)
+                {
+                    var keyStr = GetVimKey(actualKey, false);
+                    if (keyStr != null && keyStr.Length == 1)
+                    {
+                        var maps = _engine.Config.InsertMaps;
+
+                        // Build what the sequence *would be* if we accept this key.
+                        var tentative = new List<string>(_imeInsertBuffer) { keyStr };
+                        var sequence  = string.Concat(tentative);
+
+                        bool hasExact  = maps.ContainsKey(sequence);
+                        bool hasLonger = maps.Keys.Any(k => k.Length > sequence.Length
+                                                          && k.StartsWith(sequence, StringComparison.Ordinal));
+
+                        if (hasExact && !hasLonger)
+                        {
+                            // Unambiguous exact match — fire the mapping.
+                            CancelImeComposition(); // safety net (usually a no-op)
+                            _imeInsertBuffer.Clear();
+                            e.Handled = true;
+                            foreach (var ch in sequence)
+                                ProcessKey(ch.ToString(), false, false, false);
+                            return;
+                        }
+
+                        if (hasExact || hasLonger)
+                        {
+                            // This key extends a potential mapping — hold it away
+                            // from the IME so no kana composition can start.
+                            _imeInsertBuffer.Add(keyStr);
+                            e.Handled = true;
+                            return;
+                        }
+
+                        // The current key breaks any possible mapping.
+                        // If the buffer is non-empty, replay buffer + current key
+                        // back to the IME (so "ja" → "じゃ" etc.).
+                        if (_imeInsertBuffer.Count > 0)
+                        {
+                            bool canReplay =
+                                _imeInsertBuffer.All(k => k.Length == 1
+                                                       && char.IsAsciiLetterOrDigit(k[0]))
+                                && char.IsAsciiLetterOrDigit(keyStr[0]);
+
+                            if (canReplay)
+                            {
+                                // Replay buffered keys + current key to IME.
+                                // Cancel the current key event (it is included in the replay).
+                                ReplayImeKeySequence([.. _imeInsertBuffer, keyStr]);
+                                e.Handled = true;
+                                return;
+                            }
+
+                            // Fallback: insert buffered keys as literal text
+                            // (bypasses VimEngine mapping so no stale buffer state).
+                            FlushImeInsertBuffer();
+                            // Current key: fall through to the "new sequence?" check below.
+                        }
+
+                        // Check whether the current key alone starts a new sequence.
+                        bool newExact  = maps.ContainsKey(keyStr);
+                        bool newLonger = maps.Keys.Any(k => k.StartsWith(keyStr, StringComparison.Ordinal)
+                                                          && k.Length > keyStr.Length);
+                        if (newExact && !newLonger)
+                        {
+                            // Single-key exact match with nothing longer — fire immediately.
+                            e.Handled = true;
+                            ProcessKey(keyStr, false, false, false);
+                            return;
+                        }
+                        if (newExact || newLonger)
+                        {
+                            _imeInsertBuffer.Add(keyStr);
+                            e.Handled = true;
+                        }
+                        // else: no mapping — let IME handle the current key normally.
+                    }
+                    else
+                    {
+                        // Key can't be mapped (null or multi-char) — flush any buffer.
+                        FlushImeInsertBuffer();
+                    }
+                }
+                else
+                {
+                    // Modifier held — flush any buffer.
+                    FlushImeInsertBuffer();
+                }
+                // Do not fall through to the ImeProcessed/Normal-mode block below.
+                return;
+            }
+
+            // When e.key is NOT ImeProcessed, a physical (non-IME) key was pressed;
+            // reset the IME sequence buffer.
+            _imeInsertBuffer.Clear();
+
             // When e.Key == Key.ImeProcessed, the IME is mid-composition (e.g. Enter to
             // confirm kanji). Do NOT intercept — let the IME finalize the composition.
             if (e.Key != Key.ImeProcessed)
@@ -354,6 +526,10 @@ public partial class VimEditorControl : UserControl
 
     private void OnTextInput(object sender, TextCompositionEventArgs e)
     {
+        // IME committed a composition — the key sequence is now finalised by the IME,
+        // so any partially-tracked imap prefix is no longer valid.
+        _imeInsertBuffer.Clear();
+
         if (_keyDownHandledByVim)
         {
             _keyDownHandledByVim = false;
@@ -400,6 +576,70 @@ public partial class VimEditorControl : UserControl
         ProcessVimEvents(events);
     }
 
+    /// <summary>
+    /// Flushes any keys held in the IME insert buffer as <em>literal</em> text
+    /// to VimEngine, bypassing the imap machinery.  This avoids polluting
+    /// VimEngine's internal mapping buffer with a stale partial sequence.
+    /// </summary>
+    private void FlushImeInsertBuffer()
+    {
+        foreach (var ch in _imeInsertBuffer)
+        {
+            Canvas.ResetCursorBlink();
+            var events = _engine.ProcessKeyLiteral(ch);
+            ProcessVimEvents(events);
+        }
+        _imeInsertBuffer.Clear();
+    }
+
+    /// <summary>
+    /// Injects <paramref name="keys"/> back into the Windows input queue via
+    /// SendInput so the IME can compose them correctly (e.g. ["j","a"] → "じゃ").
+    /// Sets <see cref="_replayingImeKeys"/> so that when the replayed
+    /// PreviewKeyDown events arrive they skip imap interception.
+    /// </summary>
+    private void ReplayImeKeySequence(IReadOnlyList<string> keys)
+    {
+        var inputs = new List<INPUT_SEND>();
+        int replayable = 0;
+
+        foreach (var k in keys)
+        {
+            if (k.Length != 1) continue;
+            char c = k[0];
+            ushort vk;
+            if      (char.IsAsciiLetter(c))  vk = (ushort)char.ToUpperInvariant(c);
+            else if (char.IsAsciiDigit(c))   vk = (ushort)c;
+            else continue;
+
+            inputs.Add(new INPUT_SEND { type = INPUTTYPE_KEYBOARD, wVk = vk });
+            inputs.Add(new INPUT_SEND { type = INPUTTYPE_KEYBOARD, wVk = vk, dwFlags = KBDEVENTF_KEYUP });
+            replayable++;
+        }
+
+        if (replayable == 0) return;
+
+        _imeInsertBuffer.Clear();
+        _replayingImeKeys = true;
+        _replayCount      = replayable;
+        SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT_SEND>());
+    }
+
+    /// <summary>
+    /// Cancels any active IME composition without committing its text.
+    /// Called when an imap sequence is detected so that the partially-composed
+    /// kana in the composition window is discarded before we replay the raw
+    /// keystroke sequence through VimEngine.
+    /// </summary>
+    private void CancelImeComposition()
+    {
+        if (PresentationSource.FromVisual(this) is not HwndSource source) return;
+        var imc = ImmGetContext(source.Handle);
+        if (imc == IntPtr.Zero) return;
+        ImmNotifyIME(imc, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+        ImmReleaseContext(source.Handle, imc);
+    }
+
     private void ProcessVimEvents(IReadOnlyList<VimEvent> events)
     {
         bool needFullUpdate = false;
@@ -421,6 +661,12 @@ public partial class VimEditorControl : UserControl
                     }
                     break;
                 case VimEventType.ModeChanged when evt is ModeChangedEvent me:
+                    if (me.Mode is not (VimMode.Insert or VimMode.Replace))
+                    {
+                        _imeInsertBuffer.Clear();
+                        _replayingImeKeys = false;
+                        _replayCount = 0;
+                    }
                     StatusBar.UpdateMode(me.Mode);
                     Canvas.SetMode(me.Mode);
                     ModeChanged?.Invoke(this, new ModeChangedEventArgs(me.Mode));

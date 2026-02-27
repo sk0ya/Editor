@@ -53,6 +53,7 @@ public class VimEngine
     public string SearchPattern => _searchPattern;
     public string StatusMessage => _statusMsg;
     public VimOptions Options => _config.Options;
+    public VimConfig Config => _config;
     public VimBuffer CurrentBuffer => _bufferManager.Current;
     public BufferManager BufferManager => _bufferManager;
     public SyntaxEngine Syntax => _syntaxEngine;
@@ -123,6 +124,16 @@ public class VimEngine
     {
         var events = new List<VimEvent>();
         ProcessStroke(new VimKeyStroke(key, ctrl, shift, alt), events, allowMapping: true);
+        return events;
+    }
+
+    // Like ProcessKey but bypasses insert/normal-mode mappings entirely.
+    // Used to flush keys that were held back from the IME but ultimately
+    // did not complete any mapped sequence.
+    public IReadOnlyList<VimEvent> ProcessKeyLiteral(string key)
+    {
+        var events = new List<VimEvent>();
+        ProcessStroke(new VimKeyStroke(key, false, false, false), events, allowMapping: false);
         return events;
     }
 
