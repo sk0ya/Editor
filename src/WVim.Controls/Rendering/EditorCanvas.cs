@@ -14,6 +14,7 @@ public class EditorCanvas : FrameworkElement
     private double _fontSize = 14;
     private double _charWidth;
     private double _lineHeight;
+    private readonly Dictionary<char, double> _charWidthCache = [];
     private double _scrollOffsetY;
     private double _scrollOffsetX;
     private int _visibleLines;
@@ -56,6 +57,8 @@ public class EditorCanvas : FrameworkElement
     {
         _typeface = new Typeface(family);
         _fontSize = size;
+        _charWidth = 0;
+        _charWidthCache.Clear();
         MeasureChar();
         InvalidateVisual();
     }
@@ -141,9 +144,10 @@ public class EditorCanvas : FrameworkElement
         int line = (int)((point.Y + _scrollOffsetY) / _lineHeight);
         line = Math.Clamp(line, 0, Math.Max(0, _lines.Length - 1));
 
-        int col = (int)((point.X - lineNumGutter + _scrollOffsetX) / _charWidth);
-        int lineLen = line < _lines.Length ? _lines[line].Length : 0;
-        int maxCol = Math.Max(0, lineLen - 1);
+        string hitLine = line < _lines.Length ? _lines[line] : "";
+        double visualX = point.X - lineNumGutter + _scrollOffsetX;
+        int col = VisualXToCol(hitLine, visualX);
+        int maxCol = Math.Max(0, hitLine.Length - 1);
         col = Math.Clamp(col, 0, maxCol);
 
         return (line, col);
@@ -205,10 +209,10 @@ public class EditorCanvas : FrameworkElement
             }
 
             // Selection highlight
-            DrawSelection(dc, l, y, textLeft, lineText.Length);
+            DrawSelection(dc, l, y, textLeft, lineText);
 
             // Search highlights
-            DrawSearchHighlights(dc, l, y, textLeft, lineText.Length);
+            DrawSearchHighlights(dc, l, y, textLeft, lineText);
 
             // Text with syntax coloring
             DrawLineText(dc, l, lineText, y, textLeft);
@@ -225,7 +229,7 @@ public class EditorCanvas : FrameworkElement
         }
     }
 
-    private void DrawSelection(DrawingContext dc, int line, double y, double textLeft, int lineLen)
+    private void DrawSelection(DrawingContext dc, int line, double y, double textLeft, string lineText)
     {
         if (_selection == null || !_selection.Value.ContainsLine(line)) return;
         var sel = _selection.Value;
@@ -242,22 +246,23 @@ public class EditorCanvas : FrameworkElement
         else
         {
             int startCol = line == start.Line ? start.Column : 0;
-            int endCol = line == end.Line ? end.Column + 1 : lineLen;
-            selLeft = textLeft + startCol * _charWidth - _scrollOffsetX;
-            selWidth = (endCol - startCol) * _charWidth;
+            int endCol = line == end.Line ? end.Column + 1 : lineText.Length;
+            selLeft = textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX;
+            selWidth = GetVisualX(lineText, endCol) - GetVisualX(lineText, startCol);
         }
 
         dc.DrawRectangle(Theme.SelectionBg, null, new Rect(selLeft, y, Math.Max(0, selWidth), _lineHeight));
     }
 
-    private void DrawSearchHighlights(DrawingContext dc, int line, double y, double textLeft, int lineLen)
+    private void DrawSearchHighlights(DrawingContext dc, int line, double y, double textLeft, string lineText)
     {
         if (string.IsNullOrEmpty(_searchPattern)) return;
         foreach (var match in _searchMatches)
         {
             if (match.Line != line) continue;
-            double hLeft = textLeft + match.Column * _charWidth - _scrollOffsetX;
-            double hWidth = _searchPattern.Length * _charWidth;
+            double hLeft = textLeft + GetVisualX(lineText, match.Column) - _scrollOffsetX;
+            int matchEnd = Math.Min(match.Column + _searchPattern.Length, lineText.Length);
+            double hWidth = GetVisualX(lineText, matchEnd) - GetVisualX(lineText, match.Column);
             dc.DrawRectangle(Theme.SearchHighlightBg, null, new Rect(hLeft, y, hWidth, _lineHeight));
         }
     }
@@ -287,7 +292,7 @@ public class EditorCanvas : FrameworkElement
                 if (gap.Length > 0)
                 {
                     var ft = FormatText(gap, Theme.Foreground);
-                    dc.DrawText(ft, new Point(textLeft + pos * _charWidth - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+                    dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, pos) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
                 }
             }
             // Token text
@@ -297,7 +302,7 @@ public class EditorCanvas : FrameworkElement
                 var tokText = lineText[tok.StartColumn..end];
                 var brush = Theme.GetTokenBrush(tok.Kind);
                 var ft = FormatText(tokText, brush);
-                dc.DrawText(ft, new Point(textLeft + tok.StartColumn * _charWidth - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+                dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, tok.StartColumn) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
             }
             pos = Math.Max(pos, tok.StartColumn + tok.Length);
         }
@@ -306,7 +311,7 @@ public class EditorCanvas : FrameworkElement
         {
             var rem = lineText[pos..];
             var ft = FormatText(rem, Theme.Foreground);
-            dc.DrawText(ft, new Point(textLeft + pos * _charWidth - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+            dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, pos) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
         }
     }
 
@@ -314,8 +319,10 @@ public class EditorCanvas : FrameworkElement
     {
         if (line != _cursor.Line || !_cursorVisible) return;
 
-        double cursorX = textLeft + _cursor.Column * _charWidth - _scrollOffsetX;
+        double cursorX = textLeft + GetVisualX(lineText, _cursor.Column) - _scrollOffsetX;
         double cursorY = y;
+
+        double cursorW = _cursor.Column < lineText.Length ? CharW(lineText[_cursor.Column]) : _charWidth;
 
         if (_mode == VimMode.Insert || _mode == VimMode.Command ||
             _mode == VimMode.SearchForward || _mode == VimMode.SearchBackward)
@@ -328,12 +335,12 @@ public class EditorCanvas : FrameworkElement
         {
             // Underline cursor
             var pen = new Pen(Theme.InsertCursor, 2);
-            dc.DrawLine(pen, new Point(cursorX, cursorY + _lineHeight - 2), new Point(cursorX + _charWidth, cursorY + _lineHeight - 2));
+            dc.DrawLine(pen, new Point(cursorX, cursorY + _lineHeight - 2), new Point(cursorX + cursorW, cursorY + _lineHeight - 2));
         }
         else
         {
             // Block cursor
-            dc.DrawRectangle(Theme.CursorBackground, null, new Rect(cursorX, cursorY, _charWidth, _lineHeight));
+            dc.DrawRectangle(Theme.CursorBackground, null, new Rect(cursorX, cursorY, cursorW, _lineHeight));
             if (_cursor.Column < lineText.Length)
             {
                 var ch = lineText[_cursor.Column].ToString();
@@ -341,6 +348,56 @@ public class EditorCanvas : FrameworkElement
                 dc.DrawText(ft, new Point(cursorX, cursorY + (_lineHeight - ft.Height) / 2));
             }
         }
+    }
+
+    // ─────────────── Full-width character helpers ───────────────
+
+    private static bool IsFullWidth(char c) =>
+        (c >= '\u1100' && c <= '\u115F') ||
+        (c >= '\u2E80' && c <= '\u303E') ||
+        (c >= '\u3041' && c <= '\u33BF') ||
+        (c >= '\u3400' && c <= '\u4DBF') ||
+        (c >= '\u4E00' && c <= '\uA4CF') ||
+        (c >= '\uA960' && c <= '\uA97F') ||
+        (c >= '\uAC00' && c <= '\uD7FF') ||
+        (c >= '\uF900' && c <= '\uFAFF') ||
+        (c >= '\uFE10' && c <= '\uFE1F') ||
+        (c >= '\uFE30' && c <= '\uFE6F') ||
+        (c >= '\uFF01' && c <= '\uFF60') ||
+        (c >= '\uFFE0' && c <= '\uFFE6');
+
+    private double CharW(char c)
+    {
+        if (!IsFullWidth(c)) return _charWidth;
+        if (_charWidthCache.TryGetValue(c, out double w)) return w;
+        var ft = new FormattedText(c.ToString(), CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight, _typeface, _fontSize, Brushes.White, GetDpi());
+        w = ft.Width;
+        _charWidthCache[c] = w;
+        return w;
+    }
+
+    /// <summary>Visual X offset (in pixels) for character index <paramref name="col"/> in <paramref name="line"/>.</summary>
+    private double GetVisualX(string line, int col)
+    {
+        double x = 0;
+        int limit = Math.Min(col, line.Length);
+        for (int i = 0; i < limit; i++)
+            x += CharW(line[i]);
+        return x;
+    }
+
+    /// <summary>Convert a visual X pixel offset to a character index in <paramref name="line"/>.</summary>
+    private int VisualXToCol(string line, double visualX)
+    {
+        double x = 0;
+        for (int i = 0; i < line.Length; i++)
+        {
+            double w = CharW(line[i]);
+            if (x + w / 2 >= visualX) return i;
+            x += w;
+        }
+        return line.Length;
     }
 
     private double GetDpi()
