@@ -32,6 +32,7 @@ public class EditorCanvas : FrameworkElement
     private bool _cursorVisible = true;
     private System.Windows.Threading.DispatcherTimer? _cursorTimer;
     private bool _isDragging = false;
+    private string _imeCompositionText = string.Empty;
 
     public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
 
@@ -76,6 +77,13 @@ public class EditorCanvas : FrameworkElement
     public void SetTokens(LineTokens[] tokens) { _tokens = tokens; InvalidateVisual(); }
     public void SetSearchMatches(List<CursorPosition> matches, string pattern) { _searchMatches = matches; _searchPattern = pattern; InvalidateVisual(); }
     public void ShowLineNumbers(bool show) { _showLineNumbers = show; InvalidateVisual(); }
+    public void SetImeCompositionText(string text)
+    {
+        text ??= string.Empty;
+        if (_imeCompositionText == text) return;
+        _imeCompositionText = text;
+        InvalidateVisual();
+    }
 
     public double CharWidth => _charWidth;
     public double LineHeight => _lineHeight;
@@ -269,6 +277,14 @@ public class EditorCanvas : FrameworkElement
 
     private void DrawLineText(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft)
     {
+        if (lineIndex == _cursor.Line &&
+            _mode is VimMode.Insert or VimMode.Replace &&
+            !string.IsNullOrEmpty(_imeCompositionText))
+        {
+            DrawLineTextWithImeComposition(dc, lineText, y, textLeft);
+            return;
+        }
+
         if (string.IsNullOrEmpty(lineText)) return;
 
         var tokens = _tokens.FirstOrDefault(t => t.Line == lineIndex).Tokens;
@@ -315,14 +331,29 @@ public class EditorCanvas : FrameworkElement
         }
     }
 
+    private void DrawLineTextWithImeComposition(DrawingContext dc, string lineText, double y, double textLeft)
+    {
+        int cursorCol = Math.Clamp(_cursor.Column, 0, lineText.Length);
+        string merged = lineText.Insert(cursorCol, _imeCompositionText);
+        if (string.IsNullOrEmpty(merged)) return;
+
+        var ft = FormatText(merged, Theme.Foreground);
+        dc.DrawText(ft, new Point(textLeft - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+    }
+
     private void DrawCursor(DrawingContext dc, int line, double y, double textLeft, string lineText)
     {
-        if (line != _cursor.Line || !_cursorVisible) return;
+        if (line != _cursor.Line) return;
 
         double cursorX = textLeft + GetVisualX(lineText, _cursor.Column) - _scrollOffsetX;
         double cursorY = y;
 
         double cursorW = _cursor.Column < lineText.Length ? CharW(lineText[_cursor.Column]) : _charWidth;
+
+        if (_mode is VimMode.Insert or VimMode.Replace)
+            DrawImeCompositionUnderline(dc, cursorX, cursorY);
+
+        if (!_cursorVisible) return;
 
         if (_mode == VimMode.Insert || _mode == VimMode.Command ||
             _mode == VimMode.SearchForward || _mode == VimMode.SearchBackward)
@@ -348,6 +379,32 @@ public class EditorCanvas : FrameworkElement
                 dc.DrawText(ft, new Point(cursorX, cursorY + (_lineHeight - ft.Height) / 2));
             }
         }
+    }
+
+    private void DrawImeCompositionUnderline(DrawingContext dc, double cursorX, double cursorY)
+    {
+        if (string.IsNullOrEmpty(_imeCompositionText)) return;
+
+        double width = Math.Max(1, FormatText(_imeCompositionText, Theme.Foreground).Width);
+        var pen = new Pen(Theme.InsertCursor, 1);
+        dc.DrawLine(
+            pen,
+            new Point(cursorX, cursorY + _lineHeight - 1),
+            new Point(cursorX + width, cursorY + _lineHeight - 1));
+    }
+
+    /// <summary>
+    /// Returns the canvas-local pixel position of the top-left corner of the cursor cell.
+    /// Used to position the IME composition window.
+    /// </summary>
+    public Point GetCursorPixelPosition()
+    {
+        MeasureChar();
+        int lineNumGutter = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
+        string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : "";
+        double x = lineNumGutter + GetVisualX(line, _cursor.Column) - _scrollOffsetX;
+        double y = _cursor.Line * _lineHeight - _scrollOffsetY;
+        return new Point(Math.Max(lineNumGutter, x), y);
     }
 
     // ─────────────── Full-width character helpers ───────────────

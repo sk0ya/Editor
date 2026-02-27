@@ -48,9 +48,39 @@ public partial class VimEditorControl : UserControl
     [DllImport("imm32.dll")] private static extern IntPtr ImmGetContext(IntPtr hWnd);
     [DllImport("imm32.dll")] private static extern bool   ImmReleaseContext(IntPtr hWnd, IntPtr hImc);
     [DllImport("imm32.dll")] private static extern bool   ImmNotifyIME(IntPtr hImc, int dwAction, int dwIndex, int dwValue);
+    [DllImport("imm32.dll")] private static extern bool   ImmSetCompositionWindow(IntPtr hImc, ref COMPOSITIONFORM lpCompForm);
+    [DllImport("imm32.dll")] private static extern bool   ImmSetCandidateWindow(IntPtr hImc, ref CANDIDATEFORM lpCandidateForm);
 
-    private const int NI_COMPOSITIONSTR = 0x0015;
-    private const int CPS_CANCEL        = 0x0004;
+    private const int  NI_COMPOSITIONSTR      = 0x0015;
+    private const int  CPS_CANCEL             = 0x0004;
+    private const uint CFS_POINT              = 0x0002;
+    private const uint CFS_FORCE_POSITION     = 0x0020;
+    private const uint CFS_CANDIDATEPOS       = 0x0040;
+    private const int  WM_IME_STARTCOMPOSITION = 0x010D;
+    private const int  WM_IME_SETCONTEXT       = 0x0281;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct COMPOSITIONFORM
+    {
+        public uint dwStyle;
+        public POINTAPI ptCurrentPos;
+        public RECT rcArea;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CANDIDATEFORM
+    {
+        public int dwIndex;
+        public uint dwStyle;
+        public POINTAPI ptCurrentPos;
+        public RECT rcArea;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINTAPI { public int x, y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int left, top, right, bottom; }
 
     // user32 — inject synthetic key events back to the IME pipeline.
     // Layout matches native INPUT / KEYBDINPUT on 64-bit Windows:
@@ -92,6 +122,7 @@ public partial class VimEditorControl : UserControl
     // that the replayed PreviewKeyDown events bypass imap interception.
     private bool _replayingImeKeys = false;
     private int  _replayCount      = 0;
+    private bool _imeWindowUpdateInProgress = false;
 
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
@@ -120,6 +151,7 @@ public partial class VimEditorControl : UserControl
         KeyDown += OnKeyDown;
         TextInput += OnTextInput;
         Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
         PreviewKeyDown += OnPreviewKeyDown;
 
         // Mouse and scroll wiring
@@ -136,6 +168,50 @@ public partial class VimEditorControl : UserControl
     {
         Focus();
         UpdateAll();
+        TextCompositionManager.AddPreviewTextInputStartHandler(this, OnPreviewTextInputStart);
+        TextCompositionManager.AddPreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
+        if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
+            hwndSource.AddHook(ImeWndProc);
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        TextCompositionManager.RemovePreviewTextInputStartHandler(this, OnPreviewTextInputStart);
+        TextCompositionManager.RemovePreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
+        ClearImeCompositionOverlay();
+        if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
+            hwndSource.RemoveHook(ImeWndProc);
+    }
+
+    /// <summary>
+    /// Win32 message hook: intercepts WM_IME_STARTCOMPOSITION / WM_IME_SETCONTEXT
+    /// so the IME composition and candidate windows appear at the cursor position.
+    /// </summary>
+    private IntPtr ImeWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (_engine.Mode is not (VimMode.Insert or VimMode.Replace))
+            return IntPtr.Zero;
+
+        if (msg is WM_IME_SETCONTEXT or WM_IME_STARTCOMPOSITION)
+        {
+            UpdateImeWindowPos(hwnd);
+        }
+
+        return IntPtr.Zero;
+    }
+
+    private static void SetCandidateWindowPos(IntPtr imc, int x, int y)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            var candForm = new CANDIDATEFORM
+            {
+                dwIndex = i,
+                dwStyle = CFS_CANDIDATEPOS,
+                ptCurrentPos = new POINTAPI { x = x, y = y }
+            };
+            ImmSetCandidateWindow(imc, ref candForm);
+        }
     }
 
     public void LoadFile(string path)
@@ -249,6 +325,39 @@ public partial class VimEditorControl : UserControl
         _isDragSelecting = false;
     }
 
+    private void OnPreviewTextInputStart(object sender, TextCompositionEventArgs e)
+    {
+        UpdateImeCompositionOverlay(e);
+    }
+
+    private void OnPreviewTextInputUpdate(object sender, TextCompositionEventArgs e)
+    {
+        UpdateImeCompositionOverlay(e);
+    }
+
+    private void UpdateImeCompositionOverlay(TextCompositionEventArgs e)
+    {
+        if (_engine.Mode is not (VimMode.Insert or VimMode.Replace))
+        {
+            ClearImeCompositionOverlay();
+            return;
+        }
+
+        var composition = e.TextComposition;
+        var text = composition?.CompositionText;
+        if (string.IsNullOrEmpty(text))
+            text = composition?.SystemCompositionText;
+
+        Canvas.SetImeCompositionText(text ?? string.Empty);
+        if (!string.IsNullOrEmpty(text))
+            UpdateImeWindowPos();
+    }
+
+    private void ClearImeCompositionOverlay()
+    {
+        Canvas.SetImeCompositionText(string.Empty);
+    }
+
     // ─────────────── Key handling ───────────────
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
@@ -312,6 +421,7 @@ public partial class VimEditorControl : UserControl
                             // Unambiguous exact match — fire the mapping.
                             CancelImeComposition(); // safety net (usually a no-op)
                             _imeInsertBuffer.Clear();
+                            ClearImeCompositionOverlay();
                             e.Handled = true;
                             foreach (var ch in sequence)
                                 ProcessKey(ch.ToString(), false, false, false);
@@ -323,6 +433,7 @@ public partial class VimEditorControl : UserControl
                             // This key extends a potential mapping — hold it away
                             // from the IME so no kana composition can start.
                             _imeInsertBuffer.Add(keyStr);
+                            ClearImeCompositionOverlay();
                             e.Handled = true;
                             return;
                         }
@@ -342,6 +453,7 @@ public partial class VimEditorControl : UserControl
                                 // Replay buffered keys + current key to IME.
                                 // Cancel the current key event (it is included in the replay).
                                 ReplayImeKeySequence([.. _imeInsertBuffer, keyStr]);
+                                ClearImeCompositionOverlay();
                                 e.Handled = true;
                                 return;
                             }
@@ -359,6 +471,7 @@ public partial class VimEditorControl : UserControl
                         if (newExact && !newLonger)
                         {
                             // Single-key exact match with nothing longer — fire immediately.
+                            ClearImeCompositionOverlay();
                             e.Handled = true;
                             ProcessKey(keyStr, false, false, false);
                             return;
@@ -366,6 +479,7 @@ public partial class VimEditorControl : UserControl
                         if (newExact || newLonger)
                         {
                             _imeInsertBuffer.Add(keyStr);
+                            ClearImeCompositionOverlay();
                             e.Handled = true;
                         }
                         // else: no mapping — let IME handle the current key normally.
@@ -388,6 +502,7 @@ public partial class VimEditorControl : UserControl
             // When e.key is NOT ImeProcessed, a physical (non-IME) key was pressed;
             // reset the IME sequence buffer.
             _imeInsertBuffer.Clear();
+            ClearImeCompositionOverlay();
 
             // When e.Key == Key.ImeProcessed, the IME is mid-composition (e.g. Enter to
             // confirm kanji). Do NOT intercept — let the IME finalize the composition.
@@ -420,6 +535,7 @@ public partial class VimEditorControl : UserControl
         // the composition; a subsequent Escape will then exit Insert mode normally).
         if (actualKey == Key.Escape && e.Key != Key.ImeProcessed)
         {
+            ClearImeCompositionOverlay();
             ProcessKey("Escape", false, false, false);
             e.Handled = true;
         }
@@ -529,6 +645,7 @@ public partial class VimEditorControl : UserControl
         // IME committed a composition — the key sequence is now finalised by the IME,
         // so any partially-tracked imap prefix is no longer valid.
         _imeInsertBuffer.Clear();
+        ClearImeCompositionOverlay();
 
         if (_keyDownHandledByVim)
         {
@@ -626,6 +743,82 @@ public partial class VimEditorControl : UserControl
     }
 
     /// <summary>
+    /// Moves the IME composition and candidate windows to the current cursor position.
+    /// Called both from the Win32 hook (WM_IME_STARTCOMPOSITION / WM_IME_SETCONTEXT)
+    /// and proactively when entering Insert mode or moving the cursor.
+    /// </summary>
+    private void UpdateImeWindowPos(IntPtr hwnd = default)
+    {
+        if (_imeWindowUpdateInProgress) return;
+        _imeWindowUpdateInProgress = true;
+
+        IntPtr handle = IntPtr.Zero;
+        IntPtr imc = IntPtr.Zero;
+        try
+        {
+            if (PresentationSource.FromVisual(this) is not HwndSource source) return;
+            if (source.CompositionTarget == null || source.RootVisual == null) return;
+
+            handle = hwnd == default ? source.Handle : hwnd;
+            imc = ImmGetContext(handle);
+            if (imc == IntPtr.Zero) return;
+
+            // Canvas-local cursor position (DIPs, top of cursor line)
+            var canvasPt = Canvas.GetCursorPixelPosition();
+
+            // Transform to HWND client-area coordinates (DIPs)
+            var transform = Canvas.TransformToAncestor(source.RootVisual);
+            var clientDip = transform.Transform(canvasPt);
+            var canvasTopLeftDip = transform.Transform(new Point(0, 0));
+            var canvasBottomRightDip = transform.Transform(new Point(Canvas.RenderSize.Width, Canvas.RenderSize.Height));
+
+            // Convert DIPs → physical pixels (HWND client coordinates)
+            var toDevice = source.CompositionTarget.TransformToDevice;
+            var physPt = toDevice.Transform(clientDip);
+            var canvasTopLeftPx = toDevice.Transform(canvasTopLeftDip);
+            var canvasBottomRightPx = toDevice.Transform(canvasBottomRightDip);
+            var lineH = (int)(Canvas.LineHeight * toDevice.M22);
+
+            int px = (int)physPt.X;
+            int py = (int)physPt.Y;
+            int minX = (int)Math.Min(canvasTopLeftPx.X, canvasBottomRightPx.X);
+            int maxX = (int)Math.Max(canvasTopLeftPx.X, canvasBottomRightPx.X) - 1;
+            int minY = (int)Math.Min(canvasTopLeftPx.Y, canvasBottomRightPx.Y);
+            int maxY = (int)Math.Max(canvasTopLeftPx.Y, canvasBottomRightPx.Y);
+            if (maxX < minX) maxX = minX;
+            if (maxY < minY) maxY = minY;
+            int maxCompY = Math.Max(minY, maxY - Math.Max(1, lineH));
+
+            px = Math.Clamp(px, minX, maxX);
+            py = Math.Clamp(py, minY, maxCompY);
+
+            var compForm = new COMPOSITIONFORM
+            {
+                dwStyle      = CFS_POINT | CFS_FORCE_POSITION,
+                ptCurrentPos = new POINTAPI { x = px, y = py }
+            };
+            ImmSetCompositionWindow(imc, ref compForm);
+
+            int candidateY = py + Math.Max(1, lineH);
+            if (candidateY > maxCompY)
+                candidateY = Math.Max(minY, py - Math.Max(1, lineH));
+            candidateY = Math.Clamp(candidateY, minY, maxCompY);
+
+            SetCandidateWindowPos(imc, px, candidateY);
+        }
+        catch
+        {
+            // IME window positioning failures must not crash the editor.
+        }
+        finally
+        {
+            if (imc != IntPtr.Zero && handle != IntPtr.Zero)
+                ImmReleaseContext(handle, imc);
+            _imeWindowUpdateInProgress = false;
+        }
+    }
+
+    /// <summary>
     /// Cancels any active IME composition without committing its text.
     /// Called when an imap sequence is detected so that the partially-composed
     /// kana in the composition window is discarded before we replay the raw
@@ -638,6 +831,7 @@ public partial class VimEditorControl : UserControl
         if (imc == IntPtr.Zero) return;
         ImmNotifyIME(imc, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
         ImmReleaseContext(source.Handle, imc);
+        ClearImeCompositionOverlay();
     }
 
     private void ProcessVimEvents(IReadOnlyList<VimEvent> events)
@@ -658,6 +852,8 @@ public partial class VimEditorControl : UserControl
                     {
                         Canvas.SetCursor(ce.Position);
                         StatusBar.UpdateCursor(ce.Position, _engine.CurrentBuffer.Text.LineCount);
+                        if (_engine.Mode is VimMode.Insert or VimMode.Replace)
+                            UpdateImeWindowPos();
                     }
                     break;
                 case VimEventType.ModeChanged when evt is ModeChangedEvent me:
@@ -666,6 +862,11 @@ public partial class VimEditorControl : UserControl
                         _imeInsertBuffer.Clear();
                         _replayingImeKeys = false;
                         _replayCount = 0;
+                        ClearImeCompositionOverlay();
+                    }
+                    else
+                    {
+                        UpdateImeWindowPos();
                     }
                     StatusBar.UpdateMode(me.Mode);
                     Canvas.SetMode(me.Mode);
