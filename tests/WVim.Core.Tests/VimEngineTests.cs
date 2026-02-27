@@ -201,4 +201,143 @@ public class VimEngineTests
         Assert.Equal(3, engine.CurrentBuffer.Text.LineCount);
         Assert.Equal(1, engine.Cursor.Line);
     }
+
+    [Fact]
+    public void Ge_MovesToEndOfPreviousWord()
+    {
+        var engine = CreateEngine("one two");
+        engine.ProcessKey("w");
+        engine.ProcessKey("g");
+        engine.ProcessKey("e");
+        Assert.Equal(2, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void GjAndGk_MoveDownAndUp()
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+        engine.ProcessKey("g");
+        engine.ProcessKey("j");
+        Assert.Equal(1, engine.Cursor.Line);
+
+        engine.ProcessKey("g");
+        engine.ProcessKey("k");
+        Assert.Equal(0, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void PlusMinusUnderscoreAndPipe_Motions_Work()
+    {
+        var engine = CreateEngine("  a\n    b\nc");
+
+        engine.ProcessKey("+");
+        Assert.Equal(new CursorPosition(1, 4), engine.Cursor);
+
+        engine.ProcessKey("-");
+        Assert.Equal(new CursorPosition(0, 2), engine.Cursor);
+
+        engine.ProcessKey("2");
+        engine.ProcessKey("_");
+        Assert.Equal(new CursorPosition(1, 4), engine.Cursor);
+
+        engine.ProcessKey("3");
+        engine.ProcessKey("|");
+        Assert.Equal(2, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void GtAndGT_EmitTabNavigationEvents()
+    {
+        var engine = CreateEngine("x");
+
+        engine.ProcessKey("g");
+        var next = engine.ProcessKey("t");
+        Assert.Contains(next, e => e is NextTabRequestedEvent);
+
+        engine.ProcessKey("g");
+        var prev = engine.ProcessKey("T");
+        Assert.Contains(prev, e => e is PrevTabRequestedEvent);
+    }
+
+    [Fact]
+    public void U_AlsoUndoesLastChange()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("i");
+        engine.ProcessKey("x");
+        engine.ProcessKey("Escape");
+
+        engine.ProcessKey("U");
+
+        Assert.Equal("hello", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlRToken_RedoesAfterUndo()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("i");
+        engine.ProcessKey("x");
+        engine.ProcessKey("Escape");
+        engine.ProcessKey("u");
+
+        engine.ProcessKey("\x12");
+
+        Assert.Equal("xhello", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Yiw_YanksInnerWord_AndCanPasteAtEnd()
+    {
+        var engine = CreateEngine("foo bar");
+
+        engine.ProcessKey("y");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+        engine.ProcessKey("$");
+        engine.ProcessKey("p");
+
+        Assert.Equal("foo barfoo", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Ciw_ChangesInnerWord()
+    {
+        var engine = CreateEngine("foo bar");
+
+        engine.ProcessKey("c");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+        engine.ProcessKey("X");
+        engine.ProcessKey("Escape");
+
+        Assert.Equal("X bar", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Dot_RepeatsSimpleChange()
+    {
+        var engine = CreateEngine("abc");
+
+        engine.ProcessKey("x");
+        engine.ProcessKey(".");
+
+        Assert.Equal("c", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Dot_RepeatsCiwInsertedText()
+    {
+        var engine = CreateEngine("foo bar");
+
+        engine.ProcessKey("c");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+        engine.ProcessKey("X");
+        engine.ProcessKey("Escape");
+        engine.ProcessKey("w");
+        engine.ProcessKey(".");
+
+        Assert.Equal("X X", engine.CurrentBuffer.Text.GetText());
+    }
 }

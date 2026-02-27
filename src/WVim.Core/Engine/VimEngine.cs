@@ -36,6 +36,12 @@ public class VimEngine
     private int _preferredColumn = 0; // Sticky column for j/k
 
     private CursorPosition _insertStart;
+    private RepeatChange? _lastRepeatChange;
+    private ParsedCommand? _pendingInsertRepeatCommand;
+    private List<VimKeyStroke>? _pendingInsertRepeatKeys;
+    private bool _isDotReplaying;
+
+    private sealed record RepeatChange(ParsedCommand Command, IReadOnlyList<VimKeyStroke> InsertKeys);
 
     public VimMode Mode => _mode;
     public CursorPosition Cursor => _cursor;
@@ -85,6 +91,7 @@ public class VimEngine
     public IReadOnlyList<VimEvent> ProcessKey(string key, bool ctrl = false, bool shift = false, bool alt = false)
     {
         var events = new List<VimEvent>();
+        var modeBefore = _mode;
         var stroke = new VimKeyStroke(key, ctrl, shift, alt);
 
         // Macro recording
@@ -92,6 +99,7 @@ public class VimEngine
             _macroManager.RecordKey(stroke);
 
         ProcessKeyInternal(key, ctrl, shift, alt, events);
+        TrackPendingInsertRepeat(stroke, modeBefore);
         return events;
     }
 
@@ -185,25 +193,70 @@ public class VimEngine
             var endLine = Math.Min(buf.LineCount - 1, _cursor.Line + count - 1);
             switch (cmd.Operator)
             {
-                case "d": Snapshot(); DeleteLines(_cursor.Line, endLine, events); return;
-                case "c": Snapshot(); DeleteLines(_cursor.Line, endLine, events); EnterInsertMode(false, events); return;
+                case "d":
+                    SetRepeatChange(cmd);
+                    Snapshot();
+                    DeleteLines(_cursor.Line, endLine, events);
+                    return;
+                case "c":
+                    BeginInsertRepeat(cmd);
+                    Snapshot();
+                    DeleteLines(_cursor.Line, endLine, events);
+                    EnterInsertMode(false, events);
+                    return;
                 case "y": YankLines(_cursor.Line, endLine, cmd.Register ?? '"', events); return;
-                case ">": IndentRange(_cursor.Line, endLine, true, events); return;
-                case "<": IndentRange(_cursor.Line, endLine, false, events); return;
-                case "=": AutoIndentRange(_cursor.Line, endLine, events); return;
+                case ">":
+                    SetRepeatChange(cmd);
+                    IndentRange(_cursor.Line, endLine, true, events);
+                    return;
+                case "<":
+                    SetRepeatChange(cmd);
+                    IndentRange(_cursor.Line, endLine, false, events);
+                    return;
+                case "=":
+                    SetRepeatChange(cmd);
+                    AutoIndentRange(_cursor.Line, endLine, events);
+                    return;
             }
         }
 
         switch (cmd.Motion)
         {
             // Mode transitions
-            case "i": EnterInsertMode(false, events); break;
-            case "I": _cursor = motion.FindChar(_cursor, ' ', false, false); GoToLineStart(events); EnterInsertMode(false, events); break;
-            case "a": _cursor = motion.MoveRight(_cursor, 1, true); EnterInsertMode(false, events); break;
-            case "A": GoToLineEnd(true, events); EnterInsertMode(false, events); break;
-            case "o": OpenLineBelow(events); EnterInsertMode(false, events); break;
-            case "O": OpenLineAbove(events); EnterInsertMode(false, events); break;
-            case "R": EnterReplaceMode(events); break;
+            case "i":
+                BeginInsertRepeat(cmd);
+                EnterInsertMode(false, events);
+                break;
+            case "I":
+                BeginInsertRepeat(cmd);
+                _cursor = motion.FindChar(_cursor, ' ', false, false);
+                GoToLineStart(events);
+                EnterInsertMode(false, events);
+                break;
+            case "a":
+                BeginInsertRepeat(cmd);
+                _cursor = motion.MoveRight(_cursor, 1, true);
+                EnterInsertMode(false, events);
+                break;
+            case "A":
+                BeginInsertRepeat(cmd);
+                GoToLineEnd(true, events);
+                EnterInsertMode(false, events);
+                break;
+            case "o":
+                BeginInsertRepeat(cmd);
+                OpenLineBelow(events);
+                EnterInsertMode(false, events);
+                break;
+            case "O":
+                BeginInsertRepeat(cmd);
+                OpenLineAbove(events);
+                EnterInsertMode(false, events);
+                break;
+            case "R":
+                BeginInsertRepeat(cmd);
+                EnterReplaceMode(events);
+                break;
             case "v": EnterVisualMode(VimMode.Visual, events); break;
             case "V": EnterVisualMode(VimMode.VisualLine, events); break;
             case ":": EnterCommandMode(events); break;
@@ -224,10 +277,33 @@ public class VimEngine
             case "B": MoveCursor(motion.WordBackward(_cursor, count, true), events); break;
             case "e": MoveCursor(motion.WordEnd(_cursor, count, false), events); break;
             case "E": MoveCursor(motion.WordEnd(_cursor, count, true), events); break;
+            case "ge": MoveCursor(WordEndBackward(count), events); break;
+            case "gj": MoveVertical(count, events); break;
+            case "gk": MoveVertical(-count, events); break;
             case "gg": MoveCursor(new CursorPosition(0, 0), events); break;
             case "G":
                 var lastLine = count == 1 ? buf.LineCount - 1 : count - 1;
                 MoveCursor(new CursorPosition(Math.Clamp(lastLine, 0, buf.LineCount - 1), 0), events);
+                break;
+            case "gt":
+                for (int i = 0; i < count; i++)
+                    events.Add(VimEvent.NextTabRequested());
+                break;
+            case "gT":
+                for (int i = 0; i < count; i++)
+                    events.Add(VimEvent.PrevTabRequested());
+                break;
+            case "+":
+                MoveLineAndFirstNonBlank(count, events);
+                break;
+            case "-":
+                MoveLineAndFirstNonBlank(-count, events);
+                break;
+            case "_":
+                MoveLineAndFirstNonBlank(Math.Max(0, count - 1), events);
+                break;
+            case "|":
+                MoveToColumn(count, events);
                 break;
             case "{": MoveCursor(ParagraphBackward(), events); break;
             case "}": MoveCursor(ParagraphForward(), events); break;
@@ -242,34 +318,81 @@ public class VimEngine
             case "*": SearchWordUnderCursor(true, events); break;
             case "#": SearchWordUnderCursor(false, events); break;
             case "zz": EmitStatus(events, "zz"); break;
+            case "zt": EmitStatus(events, "zt"); break;
+            case "zb": EmitStatus(events, "zb"); break;
 
             // Editing
             case "x":
+                SetRepeatChange(cmd);
                 // Delete [count] chars from cursor position
                 var xEnd = _cursor with { Column = Math.Min(_cursor.Column + count - 1, Math.Max(0, buf.GetLineLength(_cursor.Line) - 1)) };
                 ExecuteDelete(_cursor, xEnd, false, events);
                 break;
             case "X":
+                SetRepeatChange(cmd);
                 // Delete [count] chars before cursor
                 var xStart = motion.MoveLeft(_cursor, count);
                 if (xStart.Column < _cursor.Column) ExecuteDelete(xStart, _cursor with { Column = _cursor.Column - 1 }, false, events);
                 break;
-            case "s": ExecuteDelete(_cursor, motion.MoveRight(_cursor, count), false, events); EnterInsertMode(false, events); break;
-            case "S": DeleteLines(_cursor.Line, _cursor.Line, events); EnterInsertMode(false, events); break;
-            case "D": var eol = GetLineLength() - 1; if (eol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = eol }, false, events); break;
-            case "C": var ceol = GetLineLength() - 1; if (ceol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = ceol }, false, events); EnterInsertMode(false, events); break;
+            case "s":
+                BeginInsertRepeat(cmd);
+                var sStart = _cursor;
+                ExecuteDelete(_cursor, motion.MoveRight(_cursor, count), false, events);
+                _cursor = _bufferManager.Current.Text.ClampCursor(sStart, true);
+                EnterInsertMode(false, events);
+                break;
+            case "S":
+                BeginInsertRepeat(cmd);
+                DeleteLines(_cursor.Line, _cursor.Line, events);
+                EnterInsertMode(false, events);
+                break;
+            case "D":
+                SetRepeatChange(cmd);
+                var eol = GetLineLength() - 1;
+                if (eol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = eol }, false, events);
+                break;
+            case "C":
+                BeginInsertRepeat(cmd);
+                var cStart = _cursor;
+                var ceol = GetLineLength() - 1;
+                if (ceol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = ceol }, false, events);
+                _cursor = _bufferManager.Current.Text.ClampCursor(cStart, true);
+                EnterInsertMode(false, events);
+                break;
             case "Y": YankLines(_cursor.Line, _cursor.Line + count - 1, cmd.Register ?? '"', events); break;
-            case "p": PasteAfter(cmd.Register ?? '"', events); break;
-            case "P": PasteBefore(cmd.Register ?? '"', events); break;
+            case "p":
+                SetRepeatChange(cmd);
+                PasteAfter(cmd.Register ?? '"', events);
+                break;
+            case "P":
+                SetRepeatChange(cmd);
+                PasteBefore(cmd.Register ?? '"', events);
+                break;
             case "u": ExecuteUndo(events); break;
-            case ".": RepeatLastChange(events); break;
-            case "J": JoinLines(count, events); break;
-            case "~": ToggleCase(count, events); break;
-            case ">>": IndentLine(true, count, events); break;
-            case "<<": IndentLine(false, count, events); break;
+            case "U": ExecuteUndo(events); break;
+            case "\x12": ExecuteRedo(events); break;
+            case "\x16": EnterVisualMode(VimMode.VisualBlock, events); break;
+            case ".": RepeatLastChange(count, events); break;
+            case "J":
+                SetRepeatChange(cmd);
+                JoinLines(count, events);
+                break;
+            case "~":
+                SetRepeatChange(cmd);
+                ToggleCase(count, events);
+                break;
+            case ">>":
+                SetRepeatChange(cmd);
+                IndentLine(true, count, events);
+                break;
+            case "<<":
+                SetRepeatChange(cmd);
+                IndentLine(false, count, events);
+                break;
 
             // r: replace char (needs next input)
             case var r when r?.StartsWith('r') == true && r.Length == 2:
+                SetRepeatChange(cmd);
                 ExecuteReplace(r[1], events);
                 break;
             case "r": _pendingReplaceChar = null; /* wait */ break;
@@ -309,16 +432,30 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
         var motion = new MotionEngine(buf);
 
+        // Text objects
+        if (cmd.Motion is "iw" or "aw" or "iW" or "aW")
+        {
+            var range = GetTextObjectRange(cmd.Motion);
+            if (range == null) return;
+
+            if (cmd.Operator == "c") BeginInsertRepeat(cmd);
+            else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
+
+            ExecuteOperator(cmd.Operator, range.Value.Start, range.Value.End, cmd.Register ?? '"', false, events);
+            return;
+        }
+
         // f/F/t/T find
         if (cmd.Motion is "f" or "F" or "t" or "T" && cmd.FindChar.HasValue)
         {
             bool fwd = cmd.Motion is "f" or "t";
             bool before = cmd.Motion is "t" or "T";
             var found = motion.FindChar(_cursor, cmd.FindChar.Value, fwd, before, cmd.Count);
-            if (cmd.Operator != null)
-                ExecuteOperator(cmd.Operator, _cursor, found, cmd.Register ?? '"', false, events);
-            else
-                MoveCursor(found, events);
+
+            if (cmd.Operator == "c") BeginInsertRepeat(cmd);
+            else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
+
+            ExecuteOperator(cmd.Operator, _cursor, found, cmd.Register ?? '"', false, events);
             return;
         }
 
@@ -328,10 +465,10 @@ public class VimEngine
 
         bool linewise = mot.Value.Type == MotionType.Linewise || cmd.LinewiseForced;
 
-        if (cmd.Operator != null)
-            ExecuteOperator(cmd.Operator, _cursor, mot.Value.Target, cmd.Register ?? '"', linewise, events);
-        else
-            MoveCursor(mot.Value.Target, events);
+        if (cmd.Operator == "c") BeginInsertRepeat(cmd);
+        else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
+
+        ExecuteOperator(cmd.Operator, _cursor, mot.Value.Target, cmd.Register ?? '"', linewise, events);
     }
 
     private void ExecuteOperator(string op, CursorPosition from, CursorPosition to,
@@ -352,7 +489,13 @@ public class VimEngine
                 break;
             case "c":
                 if (linewise) { DeleteLines(start.Line, end.Line, events); EnterInsertMode(false, events); }
-                else { YankRange(register, start, end, false); ExecuteDelete(start, end, false, events); EnterInsertMode(false, events); }
+                else
+                {
+                    YankRange(register, start, end, false);
+                    ExecuteDelete(start, end, false, events);
+                    _cursor = _bufferManager.Current.Text.ClampCursor(start, true);
+                    EnterInsertMode(false, events);
+                }
                 break;
             case "y":
                 if (linewise) YankLines(start.Line, end.Line, register, events);
@@ -703,12 +846,127 @@ public class VimEngine
         EmitCursor(events);
     }
 
-    private int GetFirstNonBlank()
+    private int GetFirstNonBlank(int lineNo)
     {
-        var line = _bufferManager.Current.Text.GetLine(_cursor.Line);
+        var buf = _bufferManager.Current.Text;
+        var line = buf.GetLine(Math.Clamp(lineNo, 0, buf.LineCount - 1));
         int col = 0;
         while (col < line.Length && char.IsWhiteSpace(line[col])) col++;
         return col;
+    }
+
+    private int GetFirstNonBlank() => GetFirstNonBlank(_cursor.Line);
+
+    private void MoveLineAndFirstNonBlank(int lineDelta, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        var line = Math.Clamp(_cursor.Line + lineDelta, 0, buf.LineCount - 1);
+        var col = GetFirstNonBlank(line);
+        _preferredColumn = col;
+        MoveCursor(new CursorPosition(line, col), events);
+    }
+
+    private void MoveToColumn(int oneBasedColumn, List<VimEvent> events)
+    {
+        var maxCol = Math.Max(0, _bufferManager.Current.Text.GetLineLength(_cursor.Line) - 1);
+        var col = Math.Clamp(oneBasedColumn - 1, 0, maxCol);
+        _preferredColumn = col;
+        MoveCursor(_cursor with { Column = col }, events);
+    }
+
+    private CursorPosition WordEndBackward(int count)
+    {
+        var buf = _bufferManager.Current.Text;
+        var pos = _cursor;
+
+        for (int c = 0; c < count; c++)
+        {
+            int line = pos.Line;
+            int col = pos.Column - 1;
+
+            while (true)
+            {
+                var text = buf.GetLine(line);
+
+                if (text.Length == 0 || col < 0)
+                {
+                    if (line == 0)
+                    {
+                        pos = CursorPosition.Zero;
+                        break;
+                    }
+                    line--;
+                    col = buf.GetLine(line).Length - 1;
+                    continue;
+                }
+
+                while (col >= 0 && char.IsWhiteSpace(text[col])) col--;
+                if (col >= 0)
+                {
+                    pos = new CursorPosition(line, col);
+                    break;
+                }
+
+                if (line == 0)
+                {
+                    pos = CursorPosition.Zero;
+                    break;
+                }
+
+                line--;
+                col = buf.GetLine(line).Length - 1;
+            }
+        }
+
+        return pos;
+    }
+
+    private (CursorPosition Start, CursorPosition End)? GetTextObjectRange(string textObject)
+    {
+        if (textObject.Length != 2) return null;
+
+        var buf = _bufferManager.Current.Text;
+        var lineNo = _cursor.Line;
+        var line = buf.GetLine(lineNo);
+        if (line.Length == 0) return null;
+
+        bool around = textObject[0] == 'a';
+        bool bigWord = textObject[1] == 'W';
+        bool IsWordChar(char ch) => bigWord ? !char.IsWhiteSpace(ch) : MotionEngine.IsWordChar(ch);
+
+        int col = Math.Clamp(_cursor.Column, 0, Math.Max(0, line.Length - 1));
+
+        if (!IsWordChar(line[col]))
+        {
+            int right = col;
+            while (right < line.Length && !IsWordChar(line[right])) right++;
+            if (right < line.Length) col = right;
+            else
+            {
+                int left = col;
+                while (left >= 0 && !IsWordChar(line[left])) left--;
+                if (left < 0) return null;
+                col = left;
+            }
+        }
+
+        int start = col;
+        while (start > 0 && IsWordChar(line[start - 1])) start--;
+
+        int end = col;
+        while (end + 1 < line.Length && IsWordChar(line[end + 1])) end++;
+
+        if (around)
+        {
+            int trailingEnd = end;
+            while (trailingEnd + 1 < line.Length && char.IsWhiteSpace(line[trailingEnd + 1])) trailingEnd++;
+            if (trailingEnd > end)
+                end = trailingEnd;
+            else
+                while (start > 0 && char.IsWhiteSpace(line[start - 1])) start--;
+        }
+
+        return (new CursorPosition(lineNo, start), new CursorPosition(lineNo, end));
     }
 
     private int GetLineLength() => _bufferManager.Current.Text.GetLineLength(_cursor.Line);
@@ -891,10 +1149,54 @@ public class VimEngine
         else EmitStatus(events, "Already at newest change");
     }
 
-    private void RepeatLastChange(List<VimEvent> events)
+    private void RepeatLastChange(int count, List<VimEvent> events)
     {
-        // Minimal implementation: replay last command string
-        EmitStatus(events, ".");
+        if (_lastRepeatChange == null) return;
+
+        _isDotReplaying = true;
+        try
+        {
+            for (int i = 0; i < count; i++)
+            {
+                ExecuteNormalCommand(_lastRepeatChange.Command, events);
+                foreach (var stroke in _lastRepeatChange.InsertKeys)
+                    ProcessKeyInternal(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt, events);
+            }
+        }
+        finally
+        {
+            _isDotReplaying = false;
+        }
+    }
+
+    private void SetRepeatChange(ParsedCommand cmd)
+    {
+        if (_isDotReplaying) return;
+        _lastRepeatChange = new RepeatChange(cmd, []);
+        _pendingInsertRepeatCommand = null;
+        _pendingInsertRepeatKeys = null;
+    }
+
+    private void BeginInsertRepeat(ParsedCommand cmd)
+    {
+        if (_isDotReplaying) return;
+        _pendingInsertRepeatCommand = cmd;
+        _pendingInsertRepeatKeys = [];
+    }
+
+    private void TrackPendingInsertRepeat(VimKeyStroke stroke, VimMode modeBefore)
+    {
+        if (_isDotReplaying || _pendingInsertRepeatKeys == null) return;
+        if (modeBefore is not (VimMode.Insert or VimMode.Replace)) return;
+
+        _pendingInsertRepeatKeys.Add(stroke);
+
+        if (_mode is VimMode.Insert or VimMode.Replace) return;
+        if (_pendingInsertRepeatCommand == null) return;
+
+        _lastRepeatChange = new RepeatChange(_pendingInsertRepeatCommand.Value, [.. _pendingInsertRepeatKeys]);
+        _pendingInsertRepeatCommand = null;
+        _pendingInsertRepeatKeys = null;
     }
 
     private void JoinLines(int count, List<VimEvent> events)

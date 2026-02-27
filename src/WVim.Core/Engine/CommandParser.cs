@@ -114,6 +114,8 @@ public class CommandParser
                 'e' => Finalize(count, null, "ge"),
                 'j' => Finalize(count, null, "gj"),
                 'k' => Finalize(count, null, "gk"),
+                't' => Finalize(count, null, "gt"),
+                'T' => Finalize(count, null, "gT"),
                 _ => (CommandState.Invalid, null)
             };
         }
@@ -158,6 +160,8 @@ public class CommandParser
                     'e' => Finalize(count, null, "ge"),
                     'j' => Finalize(count, null, "gj"),
                     'k' => Finalize(count, null, "gk"),
+                    't' => Finalize(count, null, "gt"),
+                    'T' => Finalize(count, null, "gT"),
                     _ => (CommandState.Invalid, null)
                 };
             }
@@ -185,6 +189,18 @@ public class CommandParser
     private (CommandState, ParsedCommand?) ParseMotion(string s, int count, string? op)
     {
         if (s.Length == 0) return (CommandState.Incomplete, null);
+
+        // Text objects for operators: iw/aw (and WORD variants)
+        if (op != null && s is "i" or "a")
+            return (CommandState.Incomplete, null);
+        if (op != null && s.Length == 2 && (s[0] is 'i' or 'a'))
+        {
+            return s[1] switch
+            {
+                'w' or 'W' => Finalize(count, op, s),
+                _ => (CommandState.Invalid, null)
+            };
+        }
 
         // Two-char motions
         if (s == "g" || s == "z") return (CommandState.Incomplete, null);
