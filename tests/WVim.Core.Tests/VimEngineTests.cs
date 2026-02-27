@@ -160,6 +160,20 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VisualMode_R_ReplacesSelectionWithGivenChar()
+    {
+        var engine = CreateEngine("abcdef");
+        engine.ProcessKey("v");
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        engine.ProcessKey("r");
+        engine.ProcessKey("X");
+
+        Assert.Equal("XXXdef", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
     public void PressColon_EntersCommandMode()
     {
         var engine = CreateEngine("hello");
@@ -496,6 +510,20 @@ public class VimEngineTests
         Assert.NotNull(engine.Selection);
         Assert.Equal(new CursorPosition(1, 1), engine.Selection!.Value.Start);
         Assert.Equal(new CursorPosition(0, 0), engine.Selection!.Value.End);
+    }
+
+    [Fact]
+    public void CtrlV_BlockMode_R_ReplacesBlockWithGivenChar()
+    {
+        var engine = CreateEngine("abcd\nabcd");
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("l");
+        engine.ProcessKey("r");
+        engine.ProcessKey("Z");
+
+        Assert.Equal("ZZcd\nZZcd", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
     }
 
     [Fact]

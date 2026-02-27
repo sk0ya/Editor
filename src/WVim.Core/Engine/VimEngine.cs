@@ -927,6 +927,9 @@ public class VimEngine
                 bool before = cmd.Motion is "t" or "T";
                 _cursor = motion.FindChar(_cursor, cmd.FindChar.Value, fwd, before, count);
                 return true;
+            case var r when r?.StartsWith('r') == true && r.Length == 2:
+                ExecuteVisualReplace(r[1], events);
+                return true;
             default:
                 return false;
         }
@@ -1874,6 +1877,55 @@ public class VimEngine
                 line = buf.GetLine(l); // refresh
             }
         }
+        EmitText(events);
+        ExitVisualMode(events);
+    }
+
+    private void ExecuteVisualReplace(char replacement, List<VimEvent> events)
+    {
+        if (_selection == null) { ExitVisualMode(events); return; }
+        Snapshot();
+        var buf = _bufferManager.Current.Text;
+        var sel = _selection.Value;
+
+        if (_mode == VimMode.VisualBlock)
+        {
+            var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(sel);
+            for (int lineNo = startLine; lineNo <= endLine; lineNo++)
+            {
+                var line = buf.GetLine(lineNo);
+                if (line.Length <= leftColumn) continue;
+                var endCol = Math.Min(rightColumn, line.Length - 1);
+                for (int col = leftColumn; col <= endCol; col++)
+                {
+                    buf.DeleteChar(lineNo, col);
+                    buf.InsertChar(lineNo, col, replacement);
+                }
+            }
+        }
+        else
+        {
+            var start = sel.NormalizedStart;
+            var end = sel.NormalizedEnd;
+
+            for (int lineNo = start.Line; lineNo <= end.Line; lineNo++)
+            {
+                var line = buf.GetLine(lineNo);
+                if (line.Length == 0) continue;
+
+                var startCol = lineNo == start.Line ? start.Column : 0;
+                var endCol = lineNo == end.Line ? end.Column : line.Length - 1;
+                startCol = Math.Clamp(startCol, 0, Math.Max(0, line.Length - 1));
+                endCol = Math.Clamp(endCol, startCol, Math.Max(0, line.Length - 1));
+
+                for (int col = startCol; col <= endCol; col++)
+                {
+                    buf.DeleteChar(lineNo, col);
+                    buf.InsertChar(lineNo, col, replacement);
+                }
+            }
+        }
+
         EmitText(events);
         ExitVisualMode(events);
     }
