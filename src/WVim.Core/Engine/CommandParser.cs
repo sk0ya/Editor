@@ -48,7 +48,7 @@ public class CommandParser
                 _lastFindChar = key[0];
                 _awaitingFindChar = false;
                 _buffer += key;
-                return Finalize();
+                return TryParse();
             }
             Reset();
             return (CommandState.Invalid, null);

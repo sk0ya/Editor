@@ -67,6 +67,7 @@ public class EditorCanvas : FrameworkElement
 
     public double CharWidth => _charWidth;
     public double LineHeight => _lineHeight;
+    public int VisibleLines => Math.Max(1, _visibleLines);
     public int FirstVisibleLine => (int)(_scrollOffsetY / _lineHeight);
     public int LastVisibleLine => Math.Min(_lines.Length - 1, FirstVisibleLine + _visibleLines);
 

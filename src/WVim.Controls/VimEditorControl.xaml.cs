@@ -293,6 +293,9 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.CloseTabRequested when evt is CloseTabRequestedEvent ctre:
                     CloseTabRequested?.Invoke(this, new CloseTabRequestedEventArgs(ctre.Force));
                     break;
+                case VimEventType.ViewportAlignRequested when evt is ViewportAlignRequestedEvent vare:
+                    AlignViewport(vare.Align);
+                    break;
                 case VimEventType.SearchResultChanged when evt is SearchResultChangedEvent srce:
                     UpdateSearchHighlights(srce.Pattern);
                     break;
@@ -345,6 +348,24 @@ public partial class VimEditorControl : UserControl
             : _engine.Options.IgnoreCase;
         var matches = buf.FindAll(pattern, ignoreCase);
         Canvas.SetSearchMatches(matches, pattern);
+    }
+
+    private void AlignViewport(ViewportAlign align)
+    {
+        if (Canvas.LineHeight <= 0) return;
+
+        var visible = Canvas.VisibleLines;
+        var targetTopLine = align switch
+        {
+            ViewportAlign.Top => _engine.Cursor.Line,
+            ViewportAlign.Center => _engine.Cursor.Line - (visible / 2),
+            ViewportAlign.Bottom => _engine.Cursor.Line - visible + 1,
+            _ => _engine.Cursor.Line
+        };
+
+        targetTopLine = Math.Clamp(targetTopLine, 0, Math.Max(0, _engine.CurrentBuffer.Text.LineCount - 1));
+        Canvas.ScrollTo(targetTopLine * Canvas.LineHeight);
+        Canvas.SetCursor(_engine.Cursor);
     }
 
     private static string? GetVimKey(Key key, bool shift)

@@ -16,9 +16,17 @@ public enum VimEventType
     NextTabRequested,
     PrevTabRequested,
     CloseTabRequested,
+    ViewportAlignRequested,
     StatusMessage,
     SearchResultChanged,
     CommandLineChanged,
+}
+
+public enum ViewportAlign
+{
+    Top,
+    Center,
+    Bottom
 }
 
 public record VimEvent(VimEventType Type)
@@ -67,6 +75,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent CloseTabRequested(bool force) =>
         new CloseTabRequestedEvent(force);
+
+    public static VimEvent ViewportAlignRequested(ViewportAlign align) =>
+        new ViewportAlignRequestedEvent(align);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -83,3 +94,4 @@ public record SplitRequestedEvent(bool Vertical) : VimEvent(VimEventType.SplitRe
 public record NextTabRequestedEvent() : VimEvent(VimEventType.NextTabRequested);
 public record PrevTabRequestedEvent() : VimEvent(VimEventType.PrevTabRequested);
 public record CloseTabRequestedEvent(bool Force) : VimEvent(VimEventType.CloseTabRequested);
+public record ViewportAlignRequestedEvent(ViewportAlign Align) : VimEvent(VimEventType.ViewportAlignRequested);

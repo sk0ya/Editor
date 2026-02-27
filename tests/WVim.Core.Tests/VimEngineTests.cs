@@ -340,4 +340,74 @@ public class VimEngineTests
 
         Assert.Equal("X X", engine.CurrentBuffer.Text.GetText());
     }
+
+    [Fact]
+    public void FindMotions_FFTT_WorkAsStandaloneMotions()
+    {
+        var engine = CreateEngine("abcabc");
+
+        engine.ProcessKey("f");
+        engine.ProcessKey("c");
+        Assert.Equal(2, engine.Cursor.Column);
+
+        engine.ProcessKey("t");
+        engine.ProcessKey("a");
+        Assert.Equal(2, engine.Cursor.Column);
+
+        engine.ProcessKey("$");
+        engine.ProcessKey("F");
+        engine.ProcessKey("a");
+        Assert.Equal(3, engine.Cursor.Column);
+
+        engine.ProcessKey("$");
+        engine.ProcessKey("T");
+        engine.ProcessKey("a");
+        Assert.Equal(4, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void CtrlNormalBindings_WorksForWHJMAndBracket()
+    {
+        var engine = CreateEngine("one two\nnext line");
+
+        engine.ProcessKey("w", ctrl: true);
+        Assert.Equal(4, engine.Cursor.Column);
+
+        engine.ProcessKey("h", ctrl: true);
+        Assert.Equal(3, engine.Cursor.Column);
+
+        engine.ProcessKey("j", ctrl: true);
+        Assert.Equal(1, engine.Cursor.Line);
+
+        engine.ProcessKey("m", ctrl: true);
+        Assert.Equal(0, engine.Cursor.Column);
+
+        engine.ProcessKey("d");
+        var before = engine.CurrentBuffer.Text.GetText();
+        engine.ProcessKey("[", ctrl: true);
+        engine.ProcessKey("d");
+        var after = engine.CurrentBuffer.Text.GetText();
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public void ZCommands_EmitViewportAlignEvents()
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+
+        engine.ProcessKey("z");
+        var zz = engine.ProcessKey("z");
+        var zzEvt = Assert.IsType<ViewportAlignRequestedEvent>(Assert.Single(zz, e => e is ViewportAlignRequestedEvent));
+        Assert.Equal(ViewportAlign.Center, zzEvt.Align);
+
+        engine.ProcessKey("z");
+        var zt = engine.ProcessKey("t");
+        var ztEvt = Assert.IsType<ViewportAlignRequestedEvent>(Assert.Single(zt, e => e is ViewportAlignRequestedEvent));
+        Assert.Equal(ViewportAlign.Top, ztEvt.Align);
+
+        engine.ProcessKey("z");
+        var zb = engine.ProcessKey("b");
+        var zbEvt = Assert.IsType<ViewportAlignRequestedEvent>(Assert.Single(zb, e => e is ViewportAlignRequestedEvent));
+        Assert.Equal(ViewportAlign.Bottom, zbEvt.Align);
+    }
 }

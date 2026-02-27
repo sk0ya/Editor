@@ -178,6 +178,14 @@ public class VimEngine
             case "o": var jb = _markManager.JumpBack(); if (jb.HasValue) MoveCursor(jb.Value, events); break;
             case "i": var jf = _markManager.JumpForward(); if (jf.HasValue) MoveCursor(jf.Value, events); break;
             case "v": EnterVisualMode(VimMode.VisualBlock, events); break;
+            case "w": MoveCursor(motion.WordForward(_cursor, 1, false), events); break;
+            case "h": MoveCursor(motion.MoveLeft(_cursor, 1), events); _preferredColumn = _cursor.Column; break;
+            case "j": MoveVertical(1, events); break;
+            case "m": MoveLineAndFirstNonBlank(1, events); break;
+            case "[":
+                _commandParser.Reset();
+                EmitStatus(events, "");
+                break;
         }
     }
 
@@ -317,9 +325,9 @@ public class VimEngine
             case "N": SearchNext(false, events); break;
             case "*": SearchWordUnderCursor(true, events); break;
             case "#": SearchWordUnderCursor(false, events); break;
-            case "zz": EmitStatus(events, "zz"); break;
-            case "zt": EmitStatus(events, "zt"); break;
-            case "zb": EmitStatus(events, "zb"); break;
+            case "zz": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Center)); break;
+            case "zt": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Top)); break;
+            case "zb": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Bottom)); break;
 
             // Editing
             case "x":
@@ -428,13 +436,13 @@ public class VimEngine
 
     private void ExecuteOperatorMotion(ParsedCommand cmd, List<VimEvent> events)
     {
-        if (cmd.Operator == null) return;
         var buf = _bufferManager.Current.Text;
         var motion = new MotionEngine(buf);
 
         // Text objects
         if (cmd.Motion is "iw" or "aw" or "iW" or "aW")
         {
+            if (cmd.Operator == null) return;
             var range = GetTextObjectRange(cmd.Motion);
             if (range == null) return;
 
@@ -452,9 +460,14 @@ public class VimEngine
             bool before = cmd.Motion is "t" or "T";
             var found = motion.FindChar(_cursor, cmd.FindChar.Value, fwd, before, cmd.Count);
 
+            if (cmd.Operator == null)
+            {
+                MoveCursor(found, events);
+                return;
+            }
+
             if (cmd.Operator == "c") BeginInsertRepeat(cmd);
             else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
-
             ExecuteOperator(cmd.Operator, _cursor, found, cmd.Register ?? '"', false, events);
             return;
         }
@@ -464,6 +477,12 @@ public class VimEngine
         if (mot == null) return;
 
         bool linewise = mot.Value.Type == MotionType.Linewise || cmd.LinewiseForced;
+
+        if (cmd.Operator == null)
+        {
+            MoveCursor(mot.Value.Target, events);
+            return;
+        }
 
         if (cmd.Operator == "c") BeginInsertRepeat(cmd);
         else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
@@ -602,6 +621,11 @@ public class VimEngine
 
         if (ctrl)
         {
+            if (key == "[")
+            {
+                ExitVisualMode(events);
+                return;
+            }
             HandleNormalCtrl(key, events);
             UpdateSelection(events);
             return;
