@@ -20,6 +20,18 @@ public class OpenFileRequestedEventArgs(string filePath) : EventArgs
 {
     public string FilePath { get; } = filePath;
 }
+public class NewTabRequestedEventArgs(string? filePath) : EventArgs
+{
+    public string? FilePath { get; } = filePath;
+}
+public class SplitRequestedEventArgs(bool vertical) : EventArgs
+{
+    public bool Vertical { get; } = vertical;
+}
+public class CloseTabRequestedEventArgs(bool force) : EventArgs
+{
+    public bool Force { get; } = force;
+}
 public class ModeChangedEventArgs(VimMode mode) : EventArgs
 {
     public VimMode Mode { get; } = mode;
@@ -33,6 +45,11 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
     public event EventHandler<OpenFileRequestedEventArgs>? OpenFileRequested;
+    public event EventHandler<NewTabRequestedEventArgs>? NewTabRequested;
+    public event EventHandler<SplitRequestedEventArgs>? SplitRequested;
+    public event EventHandler? NextTabRequested;
+    public event EventHandler? PrevTabRequested;
+    public event EventHandler<CloseTabRequestedEventArgs>? CloseTabRequested;
     public event EventHandler<ModeChangedEventArgs>? ModeChanged;
 
     public VimMode CurrentMode => _engine.Mode;
@@ -257,6 +274,21 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.OpenFileRequested when evt is OpenFileRequestedEvent ofre:
                     OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(ofre.FilePath));
+                    break;
+                case VimEventType.NewTabRequested when evt is NewTabRequestedEvent ntre:
+                    NewTabRequested?.Invoke(this, new NewTabRequestedEventArgs(ntre.FilePath));
+                    break;
+                case VimEventType.SplitRequested when evt is SplitRequestedEvent stre:
+                    SplitRequested?.Invoke(this, new SplitRequestedEventArgs(stre.Vertical));
+                    break;
+                case VimEventType.NextTabRequested:
+                    NextTabRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case VimEventType.PrevTabRequested:
+                    PrevTabRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case VimEventType.CloseTabRequested when evt is CloseTabRequestedEvent ctre:
+                    CloseTabRequested?.Invoke(this, new CloseTabRequestedEventArgs(ctre.Force));
                     break;
                 case VimEventType.SearchResultChanged when evt is SearchResultChangedEvent srce:
                     UpdateSearchHighlights(srce.Pattern);

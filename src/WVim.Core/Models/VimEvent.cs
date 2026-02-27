@@ -13,6 +13,9 @@ public enum VimEventType
     OpenFileRequested,
     NewTabRequested,
     SplitRequested,
+    NextTabRequested,
+    PrevTabRequested,
+    CloseTabRequested,
     StatusMessage,
     SearchResultChanged,
     CommandLineChanged,
@@ -55,6 +58,15 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent SplitRequested(bool vertical) =>
         new SplitRequestedEvent(vertical);
+
+    public static VimEvent NextTabRequested() =>
+        new NextTabRequestedEvent();
+
+    public static VimEvent PrevTabRequested() =>
+        new PrevTabRequestedEvent();
+
+    public static VimEvent CloseTabRequested(bool force) =>
+        new CloseTabRequestedEvent(force);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -68,3 +80,6 @@ public record CommandLineChangedEvent(string Text) : VimEvent(VimEventType.Comma
 public record SearchResultChangedEvent(string Pattern, int MatchCount) : VimEvent(VimEventType.SearchResultChanged);
 public record NewTabRequestedEvent(string? FilePath) : VimEvent(VimEventType.NewTabRequested);
 public record SplitRequestedEvent(bool Vertical) : VimEvent(VimEventType.SplitRequested);
+public record NextTabRequestedEvent() : VimEvent(VimEventType.NextTabRequested);
+public record PrevTabRequestedEvent() : VimEvent(VimEventType.PrevTabRequested);
+public record CloseTabRequestedEvent(bool Force) : VimEvent(VimEventType.CloseTabRequested);

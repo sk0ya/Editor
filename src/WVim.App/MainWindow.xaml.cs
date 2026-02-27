@@ -62,6 +62,17 @@ public partial class MainWindow : Window
         Title = $"WVIM — {name}";
     }
 
+    private string ResolvePath(string path)
+    {
+        if (Path.IsPathRooted(path))
+            return path;
+
+        var dir = Editor.Engine.CurrentBuffer.FilePath != null
+            ? Path.GetDirectoryName(Editor.Engine.CurrentBuffer.FilePath)
+            : Directory.GetCurrentDirectory();
+        return Path.Combine(dir ?? "", path);
+    }
+
     private void UpdateTabHeader()
     {
         var buf = Editor.Engine.CurrentBuffer;
@@ -128,14 +139,7 @@ public partial class MainWindow : Window
 
     private void Editor_OpenFileRequested(object sender, OpenFileRequestedEventArgs e)
     {
-        var path = e.FilePath;
-        if (!Path.IsPathRooted(path))
-        {
-            var dir = Editor.Engine.CurrentBuffer.FilePath != null
-                ? Path.GetDirectoryName(Editor.Engine.CurrentBuffer.FilePath)
-                : Directory.GetCurrentDirectory();
-            path = Path.Combine(dir ?? "", path);
-        }
+        var path = ResolvePath(e.FilePath);
 
         if (!File.Exists(path))
         {
@@ -147,6 +151,51 @@ public partial class MainWindow : Window
         }
 
         OpenFile(path);
+    }
+
+    private void Editor_NewTabRequested(object sender, NewTabRequestedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(e.FilePath))
+        {
+            AddTab(null);
+            return;
+        }
+
+        AddTab(ResolvePath(e.FilePath));
+    }
+
+    private void Editor_SplitRequested(object sender, SplitRequestedEventArgs e)
+    {
+        MessageBox.Show(
+            $"{(e.Vertical ? "Vertical" : "Horizontal")} split is not implemented yet.",
+            "WVIM",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
+    private void Editor_NextTabRequested(object? sender, EventArgs e)
+    {
+        if (TabCtrl.Items.Count == 0) return;
+        var current = TabCtrl.SelectedIndex < 0 ? 0 : TabCtrl.SelectedIndex;
+        _changingTabs = true;
+        TabCtrl.SelectedIndex = (current + 1) % TabCtrl.Items.Count;
+        _changingTabs = false;
+        _currentTab = TabCtrl.SelectedIndex;
+    }
+
+    private void Editor_PrevTabRequested(object? sender, EventArgs e)
+    {
+        if (TabCtrl.Items.Count == 0) return;
+        var current = TabCtrl.SelectedIndex < 0 ? 0 : TabCtrl.SelectedIndex;
+        _changingTabs = true;
+        TabCtrl.SelectedIndex = (current - 1 + TabCtrl.Items.Count) % TabCtrl.Items.Count;
+        _changingTabs = false;
+        _currentTab = TabCtrl.SelectedIndex;
+    }
+
+    private void Editor_CloseTabRequested(object sender, CloseTabRequestedEventArgs e)
+    {
+        Editor_QuitRequested(sender, new QuitRequestedEventArgs(e.Force));
     }
 
     private void Editor_ModeChanged(object sender, ModeChangedEventArgs e)

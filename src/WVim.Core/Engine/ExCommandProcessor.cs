@@ -68,17 +68,17 @@ public class ExCommandProcessor
 
         cmd = cmd[cmdStart..].Trim();
 
-        // :q :q! :wq :x :wqa
-        if (cmd == "q")
+        // :q :q! :quit :quit! :wq :x :xit :exit
+        if (cmd is "q" or "quit")
         {
             if (_bufferManager.Current.Text.IsModified)
                 return new ExResult(false, "No write since last change (add ! to override)");
             return new ExResult(true, null, VimEvent.QuitRequested(false));
         }
-        if (cmd == "q!")
+        if (cmd is "q!" or "quit!")
             return new ExResult(true, null, VimEvent.QuitRequested(true));
 
-        if (cmd == "wq" || cmd == "x")
+        if (cmd is "wq" or "wq!" or "x" or "x!" or "xit" or "exit")
         {
             var buf = _bufferManager.Current;
             try { buf.Save(); }
@@ -86,24 +86,32 @@ public class ExCommandProcessor
             return new ExResult(true, null, VimEvent.QuitRequested(false));
         }
 
-        if (cmd == "qa" || cmd == "qa!")
-            return new ExResult(true, null, VimEvent.QuitRequested(cmd == "qa!"));
+        if (cmd is "qa" or "qa!" or "qall" or "qall!")
+            return new ExResult(true, null, VimEvent.QuitRequested(cmd.EndsWith('!')));
 
-        // :w [file]
-        if (cmd == "w" || cmd.StartsWith("w "))
+        // :w [file] :write [file]
+        if (cmd == "w" || cmd == "write" || cmd.StartsWith("w ") || cmd.StartsWith("write "))
         {
             var buf = _bufferManager.Current;
-            var path = cmd.Length > 2 ? cmd[2..].Trim() : buf.FilePath;
-            if (path == null) return new ExResult(false, "No file name");
+            var path = cmd.StartsWith("write ", StringComparison.Ordinal)
+                ? cmd[6..].Trim()
+                : cmd.StartsWith("w ", StringComparison.Ordinal)
+                    ? cmd[2..].Trim()
+                    : buf.FilePath;
+            if (string.IsNullOrWhiteSpace(path)) return new ExResult(false, "No file name");
             try { buf.Save(path); return new ExResult(true, $"\"{path}\" written"); }
             catch (Exception ex) { return new ExResult(false, ex.Message); }
         }
 
-        // :e [file]
-        if (cmd == "e" || cmd.StartsWith("e "))
+        // :e [file] :edit [file]
+        if (cmd == "e" || cmd == "edit" || cmd.StartsWith("e ") || cmd.StartsWith("edit "))
         {
-            var path = cmd.Length > 2 ? cmd[2..].Trim() : null;
-            if (path == null) return new ExResult(false, "No file name");
+            var path = cmd.StartsWith("edit ", StringComparison.Ordinal)
+                ? cmd[5..].Trim()
+                : cmd.StartsWith("e ", StringComparison.Ordinal)
+                    ? cmd[2..].Trim()
+                    : null;
+            if (string.IsNullOrWhiteSpace(path)) return new ExResult(false, "No file name");
             return new ExResult(true, null, VimEvent.OpenFileRequested(path));
         }
 
@@ -151,17 +159,34 @@ public class ExCommandProcessor
             return new ExResult(true, "Key mapping registered");
         }
 
-        // :tabnew :tabc :tabn :tabp
-        if (cmd == "tabnew" || cmd.StartsWith("tabnew "))
+        // :tabnew :tabedit :tabe
+        if (cmd == "tabnew" || cmd.StartsWith("tabnew ") ||
+            cmd == "tabedit" || cmd.StartsWith("tabedit ") ||
+            cmd == "tabe" || cmd.StartsWith("tabe "))
         {
-            var path = cmd.Length > 7 ? cmd[7..].Trim() : null;
+            var path = cmd.StartsWith("tabnew ", StringComparison.Ordinal)
+                ? cmd[7..].Trim()
+                : cmd.StartsWith("tabedit ", StringComparison.Ordinal)
+                    ? cmd[8..].Trim()
+                    : cmd.StartsWith("tabe ", StringComparison.Ordinal)
+                        ? cmd[5..].Trim()
+                        : null;
+            if (string.IsNullOrWhiteSpace(path)) path = null;
             return new ExResult(true, null, VimEvent.NewTabRequested(path));
         }
+        if (cmd is "tabn" or "tabnext")
+            return new ExResult(true, null, VimEvent.NextTabRequested());
+        if (cmd is "tabp" or "tabprev" or "tabprevious")
+            return new ExResult(true, null, VimEvent.PrevTabRequested());
+        if (cmd is "tabc" or "tabclose")
+            return new ExResult(true, null, VimEvent.CloseTabRequested(false));
+        if (cmd is "tabc!" or "tabclose!")
+            return new ExResult(true, null, VimEvent.CloseTabRequested(true));
 
         // :split :vsplit
-        if (cmd == "split" || cmd == "sp")
+        if (cmd == "split" || cmd == "sp" || cmd == "new")
             return new ExResult(true, null, VimEvent.SplitRequested(false));
-        if (cmd == "vsplit" || cmd == "vs")
+        if (cmd == "vsplit" || cmd == "vs" || cmd == "vnew")
             return new ExResult(true, null, VimEvent.SplitRequested(true));
 
         // :number (go to line)

@@ -81,6 +81,11 @@
                                    SaveRequested="Editor_SaveRequested"
                                    QuitRequested="Editor_QuitRequested"
                                    OpenFileRequested="Editor_OpenFileRequested"
+                                   NewTabRequested="Editor_NewTabRequested"
+                                   SplitRequested="Editor_SplitRequested"
+                                   NextTabRequested="Editor_NextTabRequested"
+                                   PrevTabRequested="Editor_PrevTabRequested"
+                                   CloseTabRequested="Editor_CloseTabRequested"
                                    ModeChanged="Editor_ModeChanged"/>
     </Grid>
 </Window>
