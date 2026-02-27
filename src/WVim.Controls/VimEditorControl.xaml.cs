@@ -168,6 +168,18 @@ public partial class VimEditorControl : UserControl
         // In normal/visual/command mode, handle all key presses as vim keys
         var mode = _engine.Mode;
 
+        // Ctrl combinations are valid in every mode for the subset the engine supports.
+        if (ctrl)
+        {
+            var ctrlKey = GetCtrlKey(key);
+            if (ctrlKey != null)
+            {
+                ProcessKey(ctrlKey, true, shift, alt);
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (mode != VimMode.Insert && mode != VimMode.Replace)
         {
             keyStr = GetVimKey(key, shift);
@@ -198,15 +210,6 @@ public partial class VimEditorControl : UserControl
         {
             ProcessKey(keyStr, ctrl, shift, alt);
             e.Handled = true;
-        }
-        else if (ctrl && mode != VimMode.Insert && mode != VimMode.Replace)
-        {
-            var ctrlKey = GetCtrlKey(key);
-            if (ctrlKey != null)
-            {
-                ProcessKey(ctrlKey, true, shift, alt);
-                e.Handled = true;
-            }
         }
     }
 
@@ -346,35 +349,31 @@ public partial class VimEditorControl : UserControl
 
     private static string? GetVimKey(Key key, bool shift)
     {
-        // Letter keys
+        if (key >= Key.A && key <= Key.Z)
+        {
+            var offset = (int)key - (int)Key.A;
+            var letter = (char)('A' + offset);
+            return shift
+                ? letter.ToString()
+                : char.ToLowerInvariant(letter).ToString();
+        }
+
+        if (key >= Key.D0 && key <= Key.D9)
+        {
+            const string plain = "0123456789";
+            const string shifted = ")!@#$%^&*(";
+            var offset = (int)key - (int)Key.D0;
+            return (shift ? shifted[offset] : plain[offset]).ToString();
+        }
+
+        if (key >= Key.NumPad0 && key <= Key.NumPad9)
+        {
+            var offset = (int)key - (int)Key.NumPad0;
+            return offset.ToString();
+        }
+
         return key switch
         {
-            Key.H => shift ? "H" : "h",
-            Key.J => shift ? "J" : "j",
-            Key.K => shift ? "K" : "k",
-            Key.L => shift ? "L" : "l",
-            Key.W => shift ? "W" : "w",
-            Key.B => shift ? "B" : "b",
-            Key.E => shift ? "E" : "e",
-            Key.G => shift ? "G" : "g",
-            Key.I => shift ? "I" : "i",
-            Key.A => shift ? "A" : "a",
-            Key.O => shift ? "O" : "o",
-            Key.R => shift ? "R" : "r",
-            Key.S => shift ? "S" : "s",
-            Key.D => shift ? "D" : "d",
-            Key.C => shift ? "C" : "c",
-            Key.Y => shift ? "Y" : "y",
-            Key.P => shift ? "P" : "p",
-            Key.U => shift ? "U" : "u",
-            Key.V => shift ? "V" : "v",
-            Key.X => shift ? "X" : "x",
-            Key.N => shift ? "N" : "n",
-            Key.M => shift ? "M" : "m",
-            Key.F => shift ? "F" : "f",
-            Key.T => shift ? "T" : "t",
-            Key.Z => shift ? "Z" : "z",
-            Key.Q => shift ? "Q" : "q",
             // Punctuation
             Key.OemSemicolon => shift ? ":" : ";",
             Key.OemQuestion => shift ? "?" : "/",
@@ -387,23 +386,18 @@ public partial class VimEditorControl : UserControl
             Key.OemTilde => shift ? "~" : "`",
             Key.OemMinus => shift ? "_" : "-",
             Key.OemPlus => shift ? "+" : "=",
-            // Number row (with shift = symbol)
-            Key.D0 => shift ? ")" : "0",
-            Key.D1 => shift ? "!" : "1",
-            Key.D2 => shift ? "@" : "2",
-            Key.D3 => shift ? "#" : "3",
-            Key.D4 => shift ? "$" : "4",
-            Key.D5 => shift ? "%" : "5",
-            Key.D6 => shift ? "^" : "6",
-            Key.D7 => shift ? "&" : "7",
-            Key.D8 => shift ? "*" : "8",
-            Key.D9 => shift ? "(" : "9",
             // Special
+            Key.Space => " ",
             Key.Escape => "Escape",
             Key.Return => "Return",
             Key.Back => "Back",
             Key.Delete => "Delete",
             Key.Tab => "Tab",
+            Key.Add => "+",
+            Key.Subtract => "-",
+            Key.Multiply => "*",
+            Key.Divide => "/",
+            Key.Decimal => ".",
             _ => null
         };
     }
@@ -419,6 +413,9 @@ public partial class VimEditorControl : UserControl
         Key.I => "i",
         Key.V => "v",
         Key.W => "w",
+        Key.H => "h",
+        Key.J => "j",
+        Key.M => "m",
         Key.OemOpenBrackets => "[",
         _ => null
     };
