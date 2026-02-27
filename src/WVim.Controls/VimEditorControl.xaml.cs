@@ -41,6 +41,7 @@ public partial class VimEditorControl : UserControl
 {
     private VimEngine _engine;
     private EditorTheme _theme = EditorTheme.Dracula;
+    private bool _keyDownHandledByVim;
 
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
@@ -158,6 +159,8 @@ public partial class VimEditorControl : UserControl
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
+        _keyDownHandledByVim = false;
+
         bool ctrl = (e.KeyboardDevice.Modifiers & ModifierKeys.Control) != 0;
         bool shift = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
         bool alt = (e.KeyboardDevice.Modifiers & ModifierKeys.Alt) != 0;
@@ -175,10 +178,14 @@ public partial class VimEditorControl : UserControl
             if (ctrlKey != null)
             {
                 ProcessKey(ctrlKey, true, shift, alt);
+                _keyDownHandledByVim = true;
                 e.Handled = true;
                 return;
             }
         }
+
+        if (!ctrl && !alt && ShouldPreferTextInput(mode, key))
+            return;
 
         if (mode != VimMode.Insert && mode != VimMode.Replace)
         {
@@ -186,6 +193,7 @@ public partial class VimEditorControl : UserControl
             if (keyStr != null)
             {
                 ProcessKey(keyStr, ctrl, shift, alt);
+                _keyDownHandledByVim = true;
                 e.Handled = true;
                 return;
             }
@@ -209,12 +217,19 @@ public partial class VimEditorControl : UserControl
         if (keyStr != null)
         {
             ProcessKey(keyStr, ctrl, shift, alt);
+            _keyDownHandledByVim = true;
             e.Handled = true;
         }
     }
 
     private void OnTextInput(object sender, TextCompositionEventArgs e)
     {
+        if (_keyDownHandledByVim)
+        {
+            _keyDownHandledByVim = false;
+            return;
+        }
+
         var mode = _engine.Mode;
         if (mode == VimMode.Insert || mode == VimMode.Replace ||
             mode == VimMode.Command || mode == VimMode.SearchForward || mode == VimMode.SearchBackward)
@@ -225,6 +240,26 @@ public partial class VimEditorControl : UserControl
                 ProcessKey(ch.ToString(), false, false, false);
             }
             e.Handled = true;
+            return;
+        }
+
+        if (mode == VimMode.Normal || mode == VimMode.Visual ||
+            mode == VimMode.VisualLine || mode == VimMode.VisualBlock)
+        {
+            if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0)
+                return;
+
+            bool handled = false;
+            foreach (var raw in e.Text)
+            {
+                var ch = NormalizeVimInputChar(raw);
+                if (ch is < (char)32 or > (char)126) continue;
+                ProcessKey(ch.ToString(), false, false, false);
+                handled = true;
+            }
+
+            if (handled)
+                e.Handled = true;
         }
     }
 
@@ -440,4 +475,30 @@ public partial class VimEditorControl : UserControl
         Key.OemOpenBrackets => "[",
         _ => null
     };
+
+    private static bool ShouldPreferTextInput(VimMode mode, Key key)
+    {
+        if (mode is not (VimMode.Normal or VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock or
+            VimMode.Command or VimMode.SearchForward or VimMode.SearchBackward))
+            return false;
+
+        if (key >= Key.A && key <= Key.Z) return true;
+        if (key >= Key.D0 && key <= Key.D9) return true;
+        if (key >= Key.NumPad0 && key <= Key.NumPad9) return true;
+
+        return key is
+            Key.Space or
+            Key.OemSemicolon or Key.OemQuestion or Key.OemPeriod or Key.OemComma or
+            Key.OemOpenBrackets or Key.OemCloseBrackets or Key.OemPipe or Key.Oem7 or
+            Key.OemTilde or Key.OemMinus or Key.OemPlus or
+            Key.Add or Key.Subtract or Key.Multiply or Key.Divide or Key.Decimal;
+    }
+
+    private static char NormalizeVimInputChar(char ch)
+    {
+        if (ch == '\u3000') return ' ';
+        if (ch >= '\uFF01' && ch <= '\uFF5E')
+            return (char)(ch - 0xFEE0);
+        return ch;
+    }
 }
