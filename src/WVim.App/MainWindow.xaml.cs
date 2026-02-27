@@ -256,6 +256,28 @@ public partial class MainWindow : Window
         // In a full implementation, we'd restore that tab's buffer
     }
 
+    // ─────────── Title bar controls ─────────────────────────
+
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+        => WindowState = WindowState.Minimized;
+
+    private void MaximizeButton_Click(object sender, RoutedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+        => Close();
+
+    protected override void OnStateChanged(EventArgs e)
+    {
+        base.OnStateChanged(e);
+        // "2" = maximize glyph, "3" = restore glyph in Marlett font
+        MaxRestoreButton.Content = WindowState == WindowState.Maximized ? "3" : "2";
+        // Prevent maximized window from overflowing screen edges
+        RootPanel.Margin = WindowState == WindowState.Maximized
+            ? new System.Windows.Thickness(6)
+            : new System.Windows.Thickness(0);
+    }
+
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         var buf = Editor.Engine.CurrentBuffer;
