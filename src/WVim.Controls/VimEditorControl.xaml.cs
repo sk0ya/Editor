@@ -51,6 +51,7 @@ public partial class VimEditorControl : UserControl
     [DllImport("imm32.dll")] private static extern bool   ImmSetCompositionWindow(IntPtr hImc, ref COMPOSITIONFORM lpCompForm);
     [DllImport("imm32.dll")] private static extern bool   ImmSetCandidateWindow(IntPtr hImc, ref CANDIDATEFORM lpCandidateForm);
     [DllImport("imm32.dll", CharSet = CharSet.Unicode)] private static extern uint ImmGetCandidateListW(IntPtr hImc, uint deIndex, IntPtr lpCandList, uint dwBufLen);
+    [DllImport("msctf.dll")] private static extern int TF_GetThreadMgr(out IntPtr pptim);
     [DllImport("user32.dll")] private static extern IntPtr DefWindowProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] private static extern bool   CreateCaret(IntPtr hWnd, IntPtr hBitmap, int nWidth, int nHeight);
     [DllImport("user32.dll")] private static extern bool   DestroyCaret();
@@ -65,11 +66,14 @@ public partial class VimEditorControl : UserControl
     private const int  WM_IME_STARTCOMPOSITION = 0x010D;
     private const int  WM_IME_SETCONTEXT       = 0x0281;
     private const int  WM_IME_NOTIFY           = 0x0282;
+    private const int  WM_IME_REQUEST          = 0x0288;
+    private const int  IMR_COMPOSITIONWINDOW   = 0x0001;
+    private const int  IMR_CANDIDATEWINDOW     = 0x0002;
     private const int  IME_OFFSCREEN_COORD     = -32000;
-    private const long ISC_SHOWUICOMPOSITIONWINDOW  = 0x80000000L;
-    private const long ISC_SHOWUIGUIDELINE          = 0x40000000L;
-    private const long ISC_SHOWUIALLCANDIDATEWINDOW = 0x0000000FL;
-    private const long ISC_SHOWUISOFTKBD            = 0x00000080L;
+    private const uint ISC_SHOWUICOMPOSITIONWINDOW  = 0x80000000u;
+    private const uint ISC_SHOWUIGUIDELINE          = 0x40000000u;
+    private const uint ISC_SHOWUIALLCANDIDATEWINDOW = 0x0000000Fu;
+    private const uint ISC_SHOWUISOFTKBD            = 0x00000080u;
     private const int  IMN_CHANGECANDIDATE     = 0x0003;
     private const int  IMN_CLOSECANDIDATE      = 0x0004;
     private const int  IMN_OPENCANDIDATE       = 0x0005;
@@ -120,6 +124,10 @@ public partial class VimEditorControl : UserControl
 
     private const uint INPUTTYPE_KEYBOARD = 1;
     private const uint KBDEVENTF_KEYUP    = 0x0002;
+    private const uint TF_INVALID_COOKIE = 0xFFFFFFFFu;
+    private static readonly Guid IID_ITfUIElementMgr = new("EA1EA135-19DF-11D7-A6D2-00065B84435C");
+    private static readonly Guid IID_ITfUIElementSink = new("EA1EA136-19DF-11D7-A6D2-00065B84435C");
+    private static readonly Guid IID_ITfSource = new("4EA48A35-60AE-446F-8FD6-E6A8D82459F7");
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT_SEND[] pInputs, int cbSize);
@@ -141,6 +149,9 @@ public partial class VimEditorControl : UserControl
     private int  _replayCount      = 0;
     private bool _imeWindowUpdateInProgress = false;
     private bool _imeSuppressionCaretCreated = false;
+    private ITfSource? _tsfSource;
+    private ITfUIElementSink? _tsfUiElementSink;
+    private uint _tsfUiElementSinkCookie = TF_INVALID_COOKIE;
 
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
@@ -186,6 +197,7 @@ public partial class VimEditorControl : UserControl
     {
         Focus();
         UpdateAll();
+        TryAttachTsfUiElementSink();
         TextCompositionManager.AddPreviewTextInputStartHandler(this, OnPreviewTextInputStart);
         TextCompositionManager.AddPreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
         if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
@@ -199,6 +211,7 @@ public partial class VimEditorControl : UserControl
         ClearImeCompositionOverlay();
         ClearImeCandidateOverlay();
         DestroyImeSuppressionCaret();
+        DetachTsfUiElementSink();
         if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
             hwndSource.RemoveHook(ImeWndProc);
     }
@@ -209,25 +222,59 @@ public partial class VimEditorControl : UserControl
     /// </summary>
     private IntPtr ImeWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (!ShouldSuppressNativeImeUi(_engine.Mode))
-            return IntPtr.Zero;
-
         if (msg == WM_IME_SETCONTEXT && wParam != IntPtr.Zero)
         {
-            long filtered = lParam.ToInt64() &
-                ~(ISC_SHOWUICOMPOSITIONWINDOW
-                | ISC_SHOWUIGUIDELINE
-                | ISC_SHOWUIALLCANDIDATEWINDOW
-                | ISC_SHOWUISOFTKBD);
-
             UpdateImeWindowPos(hwnd);
             handled = true;
-            return DefWindowProc(hwnd, msg, wParam, new IntPtr(filtered));
+            return DefWindowProc(hwnd, msg, wParam, FilterImeContextFlags(lParam));
         }
+
+        if (!ShouldSuppressNativeImeUi(_engine.Mode))
+            return IntPtr.Zero;
 
         if (msg == WM_IME_STARTCOMPOSITION)
         {
             UpdateImeWindowPos(hwnd);
+        }
+        else if (msg == WM_IME_REQUEST)
+        {
+            int request = wParam.ToInt32();
+            if (request == IMR_COMPOSITIONWINDOW && lParam != IntPtr.Zero)
+            {
+                var compForm = new COMPOSITIONFORM
+                {
+                    dwStyle = CFS_POINT | CFS_FORCE_POSITION,
+                    ptCurrentPos = OffscreenPoint(),
+                    rcArea = new RECT
+                    {
+                        left = IME_OFFSCREEN_COORD,
+                        top = IME_OFFSCREEN_COORD,
+                        right = IME_OFFSCREEN_COORD + 1,
+                        bottom = IME_OFFSCREEN_COORD + 1
+                    }
+                };
+                Marshal.StructureToPtr(compForm, lParam, false);
+                handled = true;
+                return new IntPtr(1);
+            }
+
+            if (request == IMR_CANDIDATEWINDOW && lParam != IntPtr.Zero)
+            {
+                var candForm = Marshal.PtrToStructure<CANDIDATEFORM>(lParam);
+                var offscreen = OffscreenPoint();
+                candForm.dwStyle = CFS_CANDIDATEPOS;
+                candForm.ptCurrentPos = offscreen;
+                candForm.rcArea = new RECT
+                {
+                    left = offscreen.x,
+                    top = offscreen.y,
+                    right = offscreen.x + 1,
+                    bottom = offscreen.y + 1
+                };
+                Marshal.StructureToPtr(candForm, lParam, false);
+                handled = true;
+                return new IntPtr(1);
+            }
         }
         else if (msg == WM_IME_NOTIFY)
         {
@@ -251,9 +298,162 @@ public partial class VimEditorControl : UserControl
         return IntPtr.Zero;
     }
 
+    private void TryAttachTsfUiElementSink()
+    {
+        if (_tsfSource != null && _tsfUiElementSinkCookie != TF_INVALID_COOKIE)
+            return;
+
+        IntPtr threadMgrPtr = IntPtr.Zero;
+        IntPtr uiElementMgrPtr = IntPtr.Zero;
+        IntPtr sourcePtr = IntPtr.Zero;
+
+        try
+        {
+            if (TF_GetThreadMgr(out threadMgrPtr) < 0 || threadMgrPtr == IntPtr.Zero)
+                return;
+
+            var uiElementMgrIid = IID_ITfUIElementMgr;
+            if (Marshal.QueryInterface(threadMgrPtr, in uiElementMgrIid, out uiElementMgrPtr) < 0 || uiElementMgrPtr == IntPtr.Zero)
+                return;
+
+            var sourceIid = IID_ITfSource;
+            if (Marshal.QueryInterface(uiElementMgrPtr, in sourceIid, out sourcePtr) < 0 || sourcePtr == IntPtr.Zero)
+                return;
+
+            _tsfSource = (ITfSource)Marshal.GetObjectForIUnknown(sourcePtr);
+            _tsfUiElementSink = new TsfUiElementSink(this);
+
+            var sinkIid = IID_ITfUIElementSink;
+            if (_tsfSource.AdviseSink(ref sinkIid, _tsfUiElementSink, out _tsfUiElementSinkCookie) < 0)
+            {
+                _tsfUiElementSinkCookie = TF_INVALID_COOKIE;
+                _tsfUiElementSink = null;
+                if (Marshal.IsComObject(_tsfSource))
+                    Marshal.ReleaseComObject(_tsfSource);
+                _tsfSource = null;
+            }
+        }
+        catch
+        {
+            _tsfUiElementSinkCookie = TF_INVALID_COOKIE;
+            _tsfUiElementSink = null;
+            if (_tsfSource != null && Marshal.IsComObject(_tsfSource))
+                Marshal.ReleaseComObject(_tsfSource);
+            _tsfSource = null;
+        }
+        finally
+        {
+            if (sourcePtr != IntPtr.Zero)
+                Marshal.Release(sourcePtr);
+            if (uiElementMgrPtr != IntPtr.Zero)
+                Marshal.Release(uiElementMgrPtr);
+            if (threadMgrPtr != IntPtr.Zero)
+                Marshal.Release(threadMgrPtr);
+        }
+    }
+
+    private void DetachTsfUiElementSink()
+    {
+        try
+        {
+            if (_tsfSource != null && _tsfUiElementSinkCookie != TF_INVALID_COOKIE)
+                _ = _tsfSource.UnadviseSink(_tsfUiElementSinkCookie);
+        }
+        catch
+        {
+            // Sink detach failures should not affect editor shutdown.
+        }
+        finally
+        {
+            _tsfUiElementSinkCookie = TF_INVALID_COOKIE;
+            _tsfUiElementSink = null;
+            if (_tsfSource != null && Marshal.IsComObject(_tsfSource))
+                Marshal.ReleaseComObject(_tsfSource);
+            _tsfSource = null;
+        }
+    }
+
+    private static IntPtr FilterImeContextFlags(IntPtr lParam)
+    {
+        uint flags = unchecked((uint)lParam.ToInt64());
+        flags &= ~(ISC_SHOWUICOMPOSITIONWINDOW
+            | ISC_SHOWUIGUIDELINE
+            | ISC_SHOWUIALLCANDIDATEWINDOW
+            | ISC_SHOWUISOFTKBD);
+        return new IntPtr(unchecked((int)flags));
+    }
+
     private static bool ShouldSuppressNativeImeUi(VimMode mode)
-        => mode is VimMode.Insert or VimMode.Replace or VimMode.Command
-            or VimMode.SearchForward or VimMode.SearchBackward;
+        => mode is VimMode.Normal
+            or VimMode.Insert
+            or VimMode.Visual
+            or VimMode.VisualLine
+            or VimMode.VisualBlock
+            or VimMode.Command
+            or VimMode.Replace
+            or VimMode.SearchForward
+            or VimMode.SearchBackward;
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("4EA48A35-60AE-446F-8FD6-E6A8D82459F7")]
+    private interface ITfSource
+    {
+        [PreserveSig]
+        int AdviseSink(ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] object punk, out uint pdwCookie);
+
+        [PreserveSig]
+        int UnadviseSink(uint dwCookie);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("EA1EA136-19DF-11D7-A6D2-00065B84435C")]
+    private interface ITfUIElementSink
+    {
+        [PreserveSig]
+        int BeginUIElement(uint dwUIElementId, [MarshalAs(UnmanagedType.Bool)] out bool pbShow);
+
+        [PreserveSig]
+        int UpdateUIElement(uint dwUIElementId);
+
+        [PreserveSig]
+        int EndUIElement(uint dwUIElementId);
+    }
+
+    [ClassInterface(ClassInterfaceType.None)]
+    private sealed class TsfUiElementSink(VimEditorControl owner) : ITfUIElementSink
+    {
+        private readonly WeakReference<VimEditorControl> _owner = new(owner);
+
+        public int BeginUIElement(uint dwUIElementId, out bool pbShow)
+        {
+            pbShow = true;
+            if (!_owner.TryGetTarget(out var owner))
+                return 0;
+
+            if (ShouldSuppressNativeImeUi(owner._engine.Mode))
+            {
+                pbShow = false;
+                owner.UpdateImeWindowPos();
+            }
+            return 0;
+        }
+
+        public int UpdateUIElement(uint dwUIElementId)
+        {
+            if (_owner.TryGetTarget(out var owner) && ShouldSuppressNativeImeUi(owner._engine.Mode))
+                owner.UpdateImeWindowPos();
+            return 0;
+        }
+
+        public int EndUIElement(uint dwUIElementId)
+        {
+            if (_owner.TryGetTarget(out var owner))
+                owner.ClearImeCandidateOverlay();
+            return 0;
+        }
+    }
 
     private void UpdateImeCandidateOverlay(IntPtr hwnd, IntPtr lParam)
     {
@@ -532,11 +732,15 @@ public partial class VimEditorControl : UserControl
             text = composition?.SystemCompositionText;
 
         Canvas.SetImeCompositionText(text ?? string.Empty);
+        UpdateImeWindowPos();
         if (!string.IsNullOrEmpty(text))
         {
             if (PresentationSource.FromVisual(this) is HwndSource source)
                 UpdateImeCandidateOverlay(source.Handle, IntPtr.Zero);
-            UpdateImeWindowPos();
+        }
+        else
+        {
+            ClearImeCandidateOverlay();
         }
     }
 
