@@ -1,19 +1,41 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using Microsoft.Win32;
 using WVim.Controls;
 using WVim.Controls.Themes;
-using WVim.Core.Engine;
 
 namespace WVim.App;
 
 public partial class MainWindow : Window
 {
-    private record TabInfo(string? FilePath, string DisplayName);
+    private sealed class TabInfo
+    {
+        public required TabItem Item { get; init; }
+        public required VimEditorControl Editor { get; init; }
+        public required TextBlock HeaderLabel { get; init; }
+        public string? FilePath { get; set; }
+
+        public void UpdateHeader()
+        {
+            var name = FilePath != null ? Path.GetFileName(FilePath) : "[No Name]";
+            var isModified = Editor.Engine.CurrentBuffer.Text.IsModified;
+            HeaderLabel.Text = isModified ? $"• {name}" : name;
+        }
+    }
+
     private readonly List<TabInfo> _tabs = [];
-    private int _currentTab = 0;
-    private bool _changingTabs = false;
+    private EditorTheme _currentTheme = EditorTheme.Dracula;
+
+    private VimEditorControl? CurrentEditor =>
+        TabCtrl.SelectedItem is TabItem ti ? ti.Content as VimEditorControl : null;
+
+    private TabInfo? CurrentTabInfo =>
+        _tabs.Find(t => t.Item == TabCtrl.SelectedItem as TabItem);
+
+    private TabInfo? FindTabInfo(object sender) =>
+        _tabs.Find(t => t.Editor == sender as VimEditorControl);
 
     public MainWindow()
     {
@@ -22,90 +44,58 @@ public partial class MainWindow : Window
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        // Add initial tab
         AddTab(null);
-        Editor.Focus();
 
-        // Handle command line args
         var args = Environment.GetCommandLineArgs();
         if (args.Length > 1 && File.Exists(args[1]))
-        {
             OpenFile(args[1]);
-        }
     }
 
     private void AddTab(string? filePath)
     {
-        var name = filePath != null ? Path.GetFileName(filePath) : "[No Name]";
-        var tab = new TabItem { Header = name };
-        TabCtrl.Items.Add(tab);
-        _tabs.Add(new TabInfo(filePath, name));
-        _changingTabs = true;
-        TabCtrl.SelectedIndex = TabCtrl.Items.Count - 1;
-        _changingTabs = false;
-        _currentTab = TabCtrl.Items.Count - 1;
+        var editor = new VimEditorControl();
+        editor.SetTheme(_currentTheme);
+        WireEditorEvents(editor);
 
-        if (filePath != null)
-            Editor.LoadFile(filePath);
+        var label = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+        var closeBtn = new Button { Content = "×", Style = (Style)FindResource("TabCloseButton") };
+        var header = new StackPanel { Orientation = Orientation.Horizontal };
+        header.Children.Add(label);
+        header.Children.Add(closeBtn);
+
+        var tabItem = new TabItem { Header = header, Content = editor };
+        var tabInfo = new TabInfo { Item = tabItem, Editor = editor, HeaderLabel = label, FilePath = filePath };
+        closeBtn.Click += (_, _) => CloseTab(tabInfo, force: false);
+
+        if (filePath != null && File.Exists(filePath))
+            editor.LoadFile(filePath);
         else
-            Editor.SetText("");
+            editor.SetText("");
+
+        tabInfo.UpdateHeader();
+
+        _tabs.Add(tabInfo);
+        TabCtrl.Items.Add(tabItem);
+        TabCtrl.SelectedItem = tabItem;
+        editor.Focus();
     }
 
-    private void OpenFile(string path)
+    private void WireEditorEvents(VimEditorControl editor)
     {
-        if (!File.Exists(path)) return;
-        Editor.LoadFile(path);
-        var name = Path.GetFileName(path);
-        _tabs[_currentTab] = new TabInfo(path, name);
-        if (TabCtrl.Items[_currentTab] is TabItem ti)
-            ti.Header = name;
-        Title = $"WVIM — {name}";
+        editor.SaveRequested     += Editor_SaveRequested;
+        editor.QuitRequested     += Editor_QuitRequested;
+        editor.OpenFileRequested += Editor_OpenFileRequested;
+        editor.NewTabRequested   += Editor_NewTabRequested;
+        editor.SplitRequested    += Editor_SplitRequested;
+        editor.NextTabRequested  += Editor_NextTabRequested;
+        editor.PrevTabRequested  += Editor_PrevTabRequested;
+        editor.CloseTabRequested += Editor_CloseTabRequested;
     }
 
-    private string ResolvePath(string path)
+    private void CloseTab(TabInfo tabInfo, bool force)
     {
-        if (Path.IsPathRooted(path))
-            return path;
-
-        var dir = Editor.Engine.CurrentBuffer.FilePath != null
-            ? Path.GetDirectoryName(Editor.Engine.CurrentBuffer.FilePath)
-            : Directory.GetCurrentDirectory();
-        return Path.Combine(dir ?? "", path);
-    }
-
-    private void UpdateTabHeader()
-    {
-        var buf = Editor.Engine.CurrentBuffer;
-        var name = buf.FilePath != null ? Path.GetFileName(buf.FilePath) : "[No Name]";
-        if (buf.Text.IsModified) name += " •";
-        if (TabCtrl.Items[_currentTab] is TabItem ti)
-            ti.Header = name;
-        Title = $"WVIM — {name}";
-    }
-
-    // ─────────── Events from VimEditorControl ───────────────
-
-    private void Editor_SaveRequested(object sender, SaveRequestedEventArgs e)
-    {
-        var buf = Editor.Engine.CurrentBuffer;
-        if (buf.FilePath == null || e.FilePath != null)
-        {
-            var dlg = new SaveFileDialog { Filter = "All Files|*.*", Title = "Save File" };
-            if (e.FilePath != null) dlg.FileName = e.FilePath;
-            if (dlg.ShowDialog() != true) return;
-            buf.Save(dlg.FileName);
-        }
-        else
-        {
-            buf.Save();
-        }
-        UpdateTabHeader();
-    }
-
-    private void Editor_QuitRequested(object sender, QuitRequestedEventArgs e)
-    {
-        var buf = Editor.Engine.CurrentBuffer;
-        if (buf.Text.IsModified && !e.Force)
+        var buf = tabInfo.Editor.Engine.CurrentBuffer;
+        if (buf.Text.IsModified && !force)
         {
             var result = MessageBox.Show(
                 $"'{buf.Name}' has unsaved changes. Save before closing?",
@@ -116,7 +106,8 @@ public partial class MainWindow : Window
             if (result == MessageBoxResult.Cancel) return;
             if (result == MessageBoxResult.Yes)
             {
-                try { buf.Save(); } catch (Exception ex)
+                try { buf.Save(); }
+                catch (Exception ex)
                 {
                     MessageBox.Show($"Save failed: {ex.Message}", "WVIM", MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
@@ -124,20 +115,70 @@ public partial class MainWindow : Window
             }
         }
 
-        if (_tabs.Count > 1)
+        var idx = _tabs.IndexOf(tabInfo);
+        _tabs.Remove(tabInfo);
+        TabCtrl.Items.Remove(tabInfo.Item);
+
+        if (_tabs.Count == 0) { Close(); return; }
+
+        var nextIdx = Math.Clamp(idx, 0, _tabs.Count - 1);
+        TabCtrl.SelectedItem = _tabs[nextIdx].Item;
+        _tabs[nextIdx].Editor.Focus();
+    }
+
+    private void OpenFile(string path)
+    {
+        if (!File.Exists(path)) return;
+        var tabInfo = CurrentTabInfo;
+        if (tabInfo == null) return;
+        tabInfo.Editor.LoadFile(path);
+        tabInfo.FilePath = path;
+        tabInfo.UpdateHeader();
+        Title = $"WVIM — {Path.GetFileName(path)}";
+    }
+
+    private string ResolvePath(string path)
+    {
+        if (Path.IsPathRooted(path)) return path;
+        var dir = CurrentEditor?.Engine.CurrentBuffer.FilePath != null
+            ? Path.GetDirectoryName(CurrentEditor.Engine.CurrentBuffer.FilePath)
+            : Directory.GetCurrentDirectory();
+        return Path.Combine(dir ?? "", path);
+    }
+
+    // ─────────── Events from VimEditorControl ───────────────
+
+    private void Editor_SaveRequested(object? sender, SaveRequestedEventArgs e)
+    {
+        if (sender == null) return;
+        var tabInfo = FindTabInfo(sender);
+        if (tabInfo == null) return;
+        var buf = tabInfo.Editor.Engine.CurrentBuffer;
+
+        if (buf.FilePath == null || e.FilePath != null)
         {
-            TabCtrl.Items.RemoveAt(_currentTab);
-            _tabs.RemoveAt(_currentTab);
-            _currentTab = Math.Clamp(_currentTab, 0, _tabs.Count - 1);
-            TabCtrl.SelectedIndex = _currentTab;
+            var dlg = new SaveFileDialog { Filter = "All Files|*.*", Title = "Save File" };
+            if (e.FilePath != null) dlg.FileName = e.FilePath;
+            if (dlg.ShowDialog() != true) return;
+            buf.Save(dlg.FileName);
+            tabInfo.FilePath = dlg.FileName;
         }
         else
         {
-            Close();
+            buf.Save();
         }
+        tabInfo.UpdateHeader();
     }
 
-    private void Editor_OpenFileRequested(object sender, OpenFileRequestedEventArgs e)
+    private void Editor_QuitRequested(object? sender, QuitRequestedEventArgs e)
+    {
+        if (sender == null) return;
+        var tabInfo = FindTabInfo(sender);
+        if (tabInfo != null)
+            CloseTab(tabInfo, e.Force);
+    }
+
+    private void Editor_OpenFileRequested(object? sender, OpenFileRequestedEventArgs e)
     {
         var path = ResolvePath(e.FilePath);
 
@@ -153,18 +194,17 @@ public partial class MainWindow : Window
         OpenFile(path);
     }
 
-    private void Editor_NewTabRequested(object sender, NewTabRequestedEventArgs e)
+    private void Editor_NewTabRequested(object? sender, NewTabRequestedEventArgs e)
     {
         if (string.IsNullOrWhiteSpace(e.FilePath))
         {
             AddTab(null);
             return;
         }
-
         AddTab(ResolvePath(e.FilePath));
     }
 
-    private void Editor_SplitRequested(object sender, SplitRequestedEventArgs e)
+    private void Editor_SplitRequested(object? sender, SplitRequestedEventArgs e)
     {
         MessageBox.Show(
             $"{(e.Vertical ? "Vertical" : "Horizontal")} split is not implemented yet.",
@@ -177,30 +217,22 @@ public partial class MainWindow : Window
     {
         if (TabCtrl.Items.Count == 0) return;
         var current = TabCtrl.SelectedIndex < 0 ? 0 : TabCtrl.SelectedIndex;
-        _changingTabs = true;
         TabCtrl.SelectedIndex = (current + 1) % TabCtrl.Items.Count;
-        _changingTabs = false;
-        _currentTab = TabCtrl.SelectedIndex;
     }
 
     private void Editor_PrevTabRequested(object? sender, EventArgs e)
     {
         if (TabCtrl.Items.Count == 0) return;
         var current = TabCtrl.SelectedIndex < 0 ? 0 : TabCtrl.SelectedIndex;
-        _changingTabs = true;
         TabCtrl.SelectedIndex = (current - 1 + TabCtrl.Items.Count) % TabCtrl.Items.Count;
-        _changingTabs = false;
-        _currentTab = TabCtrl.SelectedIndex;
     }
 
-    private void Editor_CloseTabRequested(object sender, CloseTabRequestedEventArgs e)
+    private void Editor_CloseTabRequested(object? sender, CloseTabRequestedEventArgs e)
     {
-        Editor_QuitRequested(sender, new QuitRequestedEventArgs(e.Force));
-    }
-
-    private void Editor_ModeChanged(object sender, ModeChangedEventArgs e)
-    {
-        // Could update window title or other UI
+        if (sender == null) return;
+        var tabInfo = FindTabInfo(sender);
+        if (tabInfo != null)
+            CloseTab(tabInfo, e.Force);
     }
 
     // ─────────── Menu handlers ───────────────
@@ -210,50 +242,67 @@ public partial class MainWindow : Window
     private void OpenFile_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog { Filter = "All Files|*.*|Text Files|*.txt|C# Files|*.cs|Python|*.py", Title = "Open File" };
-        if (dlg.ShowDialog() == true)
+        if (dlg.ShowDialog() != true) return;
+
+        // 現在タブが空の [No Name] なら置き換え、そうでなければ新規タブで開く
+        var current = CurrentTabInfo;
+        if (current != null && current.FilePath == null && !current.Editor.Engine.CurrentBuffer.Text.IsModified)
             OpenFile(dlg.FileName);
+        else
+            AddTab(dlg.FileName);
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        Editor_SaveRequested(this, new SaveRequestedEventArgs(null));
+        if (CurrentEditor != null)
+            Editor_SaveRequested(CurrentEditor, new SaveRequestedEventArgs(null));
     }
 
     private void SaveAs_Click(object sender, RoutedEventArgs e)
     {
+        var tabInfo = CurrentTabInfo;
+        if (tabInfo == null) return;
         var dlg = new SaveFileDialog { Filter = "All Files|*.*", Title = "Save File As" };
         if (dlg.ShowDialog() == true)
         {
-            Editor.Engine.CurrentBuffer.Save(dlg.FileName);
-            UpdateTabHeader();
+            tabInfo.Editor.Engine.CurrentBuffer.Save(dlg.FileName);
+            tabInfo.FilePath = dlg.FileName;
+            tabInfo.UpdateHeader();
         }
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
 
-    private void Undo_Click(object sender, RoutedEventArgs e) => Editor.Engine.ProcessKey("u");
-    private void Redo_Click(object sender, RoutedEventArgs e) => Editor.Engine.ProcessKey("r", ctrl: true);
+    private void Undo_Click(object sender, RoutedEventArgs e) => CurrentEditor?.Engine.ProcessKey("u");
+    private void Redo_Click(object sender, RoutedEventArgs e) => CurrentEditor?.Engine.ProcessKey("r", ctrl: true);
 
     private void LineNumbers_Click(object sender, RoutedEventArgs e)
     {
         var mi = (MenuItem)sender;
-        Editor.ExecuteCommand(mi.IsChecked ? "set number" : "set nonumber");
+        CurrentEditor?.ExecuteCommand(mi.IsChecked ? "set number" : "set nonumber");
     }
 
     private void Syntax_Click(object sender, RoutedEventArgs e)
     {
         var mi = (MenuItem)sender;
-        Editor.ExecuteCommand(mi.IsChecked ? "syntax on" : "syntax off");
+        CurrentEditor?.ExecuteCommand(mi.IsChecked ? "syntax on" : "syntax off");
     }
 
-    private void ThemeDracula_Click(object sender, RoutedEventArgs e) => Editor.SetTheme(EditorTheme.Dracula);
-    private void ThemeDark_Click(object sender, RoutedEventArgs e) => Editor.SetTheme(EditorTheme.Dark);
+    private void ThemeDracula_Click(object sender, RoutedEventArgs e)
+    {
+        _currentTheme = EditorTheme.Dracula;
+        foreach (var t in _tabs) t.Editor.SetTheme(_currentTheme);
+    }
+
+    private void ThemeDark_Click(object sender, RoutedEventArgs e)
+    {
+        _currentTheme = EditorTheme.Dark;
+        foreach (var t in _tabs) t.Editor.SetTheme(_currentTheme);
+    }
 
     private void TabCtrl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_changingTabs || TabCtrl.SelectedIndex < 0 || TabCtrl.SelectedIndex >= _tabs.Count) return;
-        _currentTab = TabCtrl.SelectedIndex;
-        // In a full implementation, we'd restore that tab's buffer
+        CurrentEditor?.Focus();
     }
 
     // ─────────── Title bar controls ─────────────────────────
@@ -270,9 +319,7 @@ public partial class MainWindow : Window
     protected override void OnStateChanged(EventArgs e)
     {
         base.OnStateChanged(e);
-        // "2" = maximize glyph, "3" = restore glyph in Marlett font
         MaxRestoreButton.Content = WindowState == WindowState.Maximized ? "3" : "2";
-        // Prevent maximized window from overflowing screen edges
         RootPanel.Margin = WindowState == WindowState.Maximized
             ? new System.Windows.Thickness(6)
             : new System.Windows.Thickness(0);
@@ -280,8 +327,8 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        var buf = Editor.Engine.CurrentBuffer;
-        if (buf.Text.IsModified)
+        var unsaved = _tabs.Where(t => t.Editor.Engine.CurrentBuffer.Text.IsModified).ToList();
+        if (unsaved.Count > 0)
         {
             var result = MessageBox.Show(
                 "You have unsaved changes. Exit anyway?",
