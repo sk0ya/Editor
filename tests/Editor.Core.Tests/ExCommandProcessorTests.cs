@@ -85,4 +85,18 @@ public class ExCommandProcessorTests
         var vEvt = Assert.IsType<SplitRequestedEvent>(vertical.Event);
         Assert.True(vEvt.Vertical);
     }
+
+    [Theory]
+    [InlineData("w")]
+    [InlineData("write")]
+    public void WriteWithoutPath_OnUnnamedBuffer_ProducesSaveRequestedEvent(string command)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<SaveRequestedEvent>(result.Event);
+        Assert.Null(evt.FilePath);
+    }
 }

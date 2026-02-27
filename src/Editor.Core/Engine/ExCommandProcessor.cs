@@ -98,7 +98,11 @@ public class ExCommandProcessor
                 : cmd.StartsWith("w ", StringComparison.Ordinal)
                     ? cmd[2..].Trim()
                     : buf.FilePath;
-            if (string.IsNullOrWhiteSpace(path)) return new ExResult(false, "No file name");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                // Delegate unnamed-buffer saves to UI so it can prompt with SaveFileDialog.
+                return new ExResult(true, null, VimEvent.SaveRequested(null));
+            }
             try { buf.Save(path); return new ExResult(true, $"\"{path}\" written"); }
             catch (Exception ex) { return new ExResult(false, ex.Message); }
         }
