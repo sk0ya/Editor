@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using WVim.Controls.Themes;
 using WVim.Core.Config;
@@ -42,6 +43,7 @@ public partial class VimEditorControl : UserControl
     private VimEngine _engine;
     private EditorTheme _theme = EditorTheme.Dracula;
     private bool _keyDownHandledByVim;
+    private bool _isDragSelecting = false;
 
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
@@ -71,6 +73,13 @@ public partial class VimEditorControl : UserControl
         TextInput += OnTextInput;
         Loaded += OnLoaded;
         PreviewKeyDown += OnPreviewKeyDown;
+
+        // Mouse and scroll wiring
+        Canvas.MouseClicked += OnCanvasMouseClicked;
+        Canvas.MouseDragging += OnCanvasMouseDragging;
+        Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
+        Canvas.ScrollChanged += OnCanvasScrollChanged;
+        Canvas.VisibleLinesChanged += OnCanvasVisibleLinesChanged;
 
         ApplyTheme();
     }
@@ -117,6 +126,79 @@ public partial class VimEditorControl : UserControl
         Canvas.Theme = _theme;
         StatusBar.Theme = _theme;
         Background = _theme.Background;
+    }
+
+    // ─────────────── Scrollbar ───────────────
+
+    private void UpdateScrollbar(double offsetY)
+    {
+        double lineH = Canvas.LineHeight;
+        if (lineH <= 0) return;
+        int totalLines = _engine.CurrentBuffer.Text.LineCount;
+        int visibleLines = Canvas.VisibleLines;
+        int maxFirst = Math.Max(0, totalLines - visibleLines);
+
+        VScrollBar.Minimum = 0;
+        VScrollBar.Maximum = maxFirst;
+        VScrollBar.ViewportSize = visibleLines;
+        VScrollBar.LargeChange = Math.Max(1, visibleLines);
+        VScrollBar.SmallChange = 1;
+        VScrollBar.Value = Math.Clamp(offsetY / lineH, 0, maxFirst);
+    }
+
+    private void VScrollBar_Scroll(object sender, ScrollEventArgs e)
+    {
+        double lineH = Canvas.LineHeight;
+        if (lineH <= 0) return;
+        Canvas.ScrollTo(e.NewValue * lineH);
+        Focus();
+    }
+
+    private void OnCanvasScrollChanged(double offsetY, double offsetX)
+    {
+        UpdateScrollbar(offsetY);
+    }
+
+    private void OnCanvasVisibleLinesChanged(int visibleLines)
+    {
+        UpdateScrollbar(Canvas.FirstVisibleLine * Canvas.LineHeight);
+    }
+
+    // ─────────────── Mouse handling ───────────────
+
+    private void OnCanvasMouseClicked(int line, int col)
+    {
+        Focus();
+        // Exit visual mode if active, then move cursor
+        if (_engine.Mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock)
+        {
+            var escEvents = _engine.ProcessKey("Escape");
+            ProcessVimEvents(escEvents);
+        }
+
+        var events = _engine.SetCursorPosition(new CursorPosition(line, col));
+        ProcessVimEvents(events);
+    }
+
+    private void OnCanvasMouseDragging(int line, int col)
+    {
+        if (!_isDragSelecting)
+        {
+            _isDragSelecting = true;
+            if (_engine.Mode is not (VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock))
+            {
+                var vEvents = _engine.ProcessKey("v");
+                ProcessVimEvents(vEvents);
+            }
+        }
+
+        var events = _engine.SetCursorPosition(new CursorPosition(line, col));
+        ProcessVimEvents(events);
+    }
+
+    private void OnCanvasMouseDragEnded()
+    {
+        _isDragSelecting = false;
     }
 
     // ─────────────── Key handling ───────────────
@@ -368,6 +450,8 @@ public partial class VimEditorControl : UserControl
         StatusBar.UpdateMode(_engine.Mode);
         StatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified);
         StatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount);
+
+        UpdateScrollbar(Canvas.FirstVisibleLine * Canvas.LineHeight);
     }
 
     private void UpdateSearchHighlights(string pattern)

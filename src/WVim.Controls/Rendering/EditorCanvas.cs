@@ -30,11 +30,15 @@ public class EditorCanvas : FrameworkElement
     private int _lineNumberWidth = 4; // digits
     private bool _cursorVisible = true;
     private System.Windows.Threading.DispatcherTimer? _cursorTimer;
+    private bool _isDragging = false;
 
     public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
 
     public event Action<double, double>? ScrollChanged;
     public event Action<int>? VisibleLinesChanged;
+    public event Action<int, int>? MouseClicked;    // (line, col)
+    public event Action<int, int>? MouseDragging;   // (line, col) during drag
+    public event Action? MouseDragEnded;
 
     public EditorCanvas()
     {
@@ -42,6 +46,11 @@ public class EditorCanvas : FrameworkElement
         Focusable = false;
         StartCursorBlink();
     }
+
+    // ─────────────── Public scroll info ───────────────
+
+    public double TotalContentHeight => _lines.Length * _lineHeight;
+    public double ViewportHeight => RenderSize.Height;
 
     public void UpdateFont(string family, double size)
     {
@@ -73,9 +82,71 @@ public class EditorCanvas : FrameworkElement
 
     public void ScrollTo(double offsetY, double offsetX = 0)
     {
-        _scrollOffsetY = offsetY;
-        _scrollOffsetX = offsetX;
+        double maxOffsetY = Math.Max(0, TotalContentHeight - RenderSize.Height);
+        _scrollOffsetY = Math.Clamp(offsetY, 0, maxOffsetY);
+        _scrollOffsetX = Math.Max(0, offsetX);
+        ScrollChanged?.Invoke(_scrollOffsetY, _scrollOffsetX);
         InvalidateVisual();
+    }
+
+    // ─────────────── Mouse handling ───────────────
+
+    protected override void OnMouseWheel(System.Windows.Input.MouseWheelEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        // 3 lines per notch (each notch = 120 units)
+        double delta = -(e.Delta / 120.0) * 3 * _lineHeight;
+        ScrollTo(_scrollOffsetY + delta, _scrollOffsetX);
+        e.Handled = true;
+    }
+
+    protected override void OnMouseLeftButtonDown(System.Windows.Input.MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonDown(e);
+        CaptureMouse();
+        var (line, col) = HitTest(e.GetPosition(this));
+        _isDragging = false;
+        MouseClicked?.Invoke(line, col);
+        e.Handled = true;
+    }
+
+    protected override void OnMouseMove(System.Windows.Input.MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed && IsMouseCaptured)
+        {
+            _isDragging = true;
+            var (line, col) = HitTest(e.GetPosition(this));
+            MouseDragging?.Invoke(line, col);
+        }
+    }
+
+    protected override void OnMouseLeftButtonUp(System.Windows.Input.MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonUp(e);
+        if (IsMouseCaptured) ReleaseMouseCapture();
+        if (_isDragging)
+        {
+            _isDragging = false;
+            MouseDragEnded?.Invoke();
+        }
+    }
+
+    private (int line, int col) HitTest(System.Windows.Point point)
+    {
+        if (_lineHeight <= 0 || _charWidth <= 0) return (0, 0);
+
+        int lineNumGutter = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
+
+        int line = (int)((point.Y + _scrollOffsetY) / _lineHeight);
+        line = Math.Clamp(line, 0, Math.Max(0, _lines.Length - 1));
+
+        int col = (int)((point.X - lineNumGutter + _scrollOffsetX) / _charWidth);
+        int lineLen = line < _lines.Length ? _lines[line].Length : 0;
+        int maxCol = Math.Max(0, lineLen - 1);
+        col = Math.Clamp(col, 0, maxCol);
+
+        return (line, col);
     }
 
     protected override Size MeasureOverride(Size availableSize)

@@ -5,19 +5,81 @@
              xmlns:rendering="clr-namespace:WVim.Controls.Rendering"
              Focusable="True"
              Background="#282A36">
+
+    <UserControl.Resources>
+        <!-- Dark scrollbar thumb -->
+        <Style x:Key="ScrollBarThumb" TargetType="Thumb">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border CornerRadius="2"
+                                Background="#555766"
+                                Margin="2,1"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#7C7F8E"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter Property="Background" Value="#BD93F9"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Dark vertical scrollbar -->
+        <Style x:Key="DarkScrollBar" TargetType="ScrollBar">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="#1E1F29">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ScrollBarThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
 
         <!-- Editor area (EditorCanvas manages its own scrolling internally) -->
-        <rendering:EditorCanvas x:Name="Canvas" Grid.Row="0"
+        <rendering:EditorCanvas x:Name="Canvas" Grid.Row="0" Grid.Column="0"
                                 HorizontalAlignment="Stretch"
                                 VerticalAlignment="Stretch"
                                 ClipToBounds="True"/>
 
+        <!-- Vertical scrollbar -->
+        <ScrollBar x:Name="VScrollBar" Grid.Row="0" Grid.Column="1"
+                   Style="{StaticResource DarkScrollBar}"
+                   Orientation="Vertical"
+                   Minimum="0"
+                   Maximum="0"
+                   Value="0"
+                   SmallChange="1"
+                   LargeChange="10"
+                   ViewportSize="10"
+                   Scroll="VScrollBar_Scroll"/>
+
         <!-- Status bar -->
-        <local:VimStatusBar x:Name="StatusBar" Grid.Row="1"/>
+        <local:VimStatusBar x:Name="StatusBar" Grid.Row="1" Grid.ColumnSpan="2"/>
     </Grid>
 </UserControl>

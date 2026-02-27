@@ -90,6 +90,34 @@ public class VimEngine
         _syntaxEngine.Invalidate();
     }
 
+    // Move cursor to an arbitrary position (used for mouse click).
+    public IReadOnlyList<VimEvent> SetCursorPosition(CursorPosition pos)
+    {
+        var buf = CurrentBuffer;
+        int line = Math.Clamp(pos.Line, 0, buf.Text.LineCount - 1);
+        int lineLen = buf.Text.GetLine(line).Length;
+        bool insertMode = _mode == VimMode.Insert;
+        int maxCol = insertMode ? lineLen : Math.Max(0, lineLen - 1);
+        int col = Math.Clamp(pos.Column, 0, maxCol);
+        _cursor = new CursorPosition(line, col);
+        _preferredColumn = col;
+
+        var events = new List<VimEvent> { VimEvent.CursorMoved(_cursor) };
+
+        if (_mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock)
+        {
+            _selection = new Selection(_visualStart, _cursor, _mode switch
+            {
+                VimMode.VisualLine => SelectionType.Line,
+                VimMode.VisualBlock => SelectionType.Block,
+                _ => SelectionType.Character,
+            });
+            events.Add(VimEvent.SelectionChanged(_selection));
+        }
+
+        return events;
+    }
+
     // Process a key stroke and return events to update the UI
     public IReadOnlyList<VimEvent> ProcessKey(string key, bool ctrl = false, bool shift = false, bool alt = false)
     {
