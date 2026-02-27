@@ -99,4 +99,18 @@ public class ExCommandProcessorTests
         var evt = Assert.IsType<SaveRequestedEvent>(result.Event);
         Assert.Null(evt.FilePath);
     }
+
+    [Theory]
+    [InlineData("w!")]
+    [InlineData("write!")]
+    public void ForceWriteWithoutPath_OnUnnamedBuffer_ProducesSaveRequestedEvent(string command)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<SaveRequestedEvent>(result.Event);
+        Assert.Null(evt.FilePath);
+    }
 }

@@ -90,20 +90,16 @@ public class ExCommandProcessor
             return new ExResult(true, null, VimEvent.QuitRequested(cmd.EndsWith('!')));
 
         // :w [file] :write [file]
-        if (cmd == "w" || cmd == "write" || cmd.StartsWith("w ") || cmd.StartsWith("write "))
+        if (TryParseWriteCommand(cmd, out var writePath))
         {
             var buf = _bufferManager.Current;
-            var path = cmd.StartsWith("write ", StringComparison.Ordinal)
-                ? cmd[6..].Trim()
-                : cmd.StartsWith("w ", StringComparison.Ordinal)
-                    ? cmd[2..].Trim()
-                    : buf.FilePath;
-            if (string.IsNullOrWhiteSpace(path))
+            var targetPath = string.IsNullOrWhiteSpace(writePath) ? buf.FilePath : writePath;
+            if (string.IsNullOrWhiteSpace(targetPath))
             {
                 // Delegate unnamed-buffer saves to UI so it can prompt with SaveFileDialog.
                 return new ExResult(true, null, VimEvent.SaveRequested(null));
             }
-            try { buf.Save(path); return new ExResult(true, $"\"{path}\" written"); }
+            try { buf.Save(targetPath); return new ExResult(true, $"\"{targetPath}\" written"); }
             catch (Exception ex) { return new ExResult(false, ex.Message); }
         }
 
@@ -261,5 +257,23 @@ public class ExCommandProcessor
         }
 
         return new ExResult(true, count > 0 ? $"{count} substitution(s) made" : "No matches");
+    }
+
+    private static bool TryParseWriteCommand(string cmd, out string? path)
+    {
+        path = null;
+        var trimmed = cmd.Trim();
+        if (trimmed.Length == 0) return false;
+
+        var firstSpace = trimmed.IndexOf(' ');
+        var token = firstSpace >= 0 ? trimmed[..firstSpace] : trimmed;
+        var remainder = firstSpace >= 0 ? trimmed[(firstSpace + 1)..].Trim() : null;
+
+        var baseToken = token.EndsWith('!') ? token[..^1] : token;
+        if (baseToken != "w" && baseToken != "write")
+            return false;
+
+        path = string.IsNullOrWhiteSpace(remainder) ? null : remainder;
+        return true;
     }
 }
