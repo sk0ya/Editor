@@ -51,6 +51,21 @@
                     <Setter Property="Padding" Value="12,4"/>
                     <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
                     <Setter Property="FontSize" Value="12"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="TabItem">
+                                <Border Name="Border"
+                                        Background="{TemplateBinding Background}"
+                                        Padding="{TemplateBinding Padding}"
+                                        BorderThickness="0">
+                                    <ContentPresenter ContentSource="Header"
+                                                      TextBlock.Foreground="{TemplateBinding Foreground}"
+                                                      TextBlock.FontFamily="{TemplateBinding FontFamily}"
+                                                      TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
                     <Style.Triggers>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter Property="Background" Value="#282A36"/>
