@@ -1230,13 +1230,43 @@ public partial class MainWindow : Window
         return results;
     }
 
+    private static readonly HashSet<string> _excludedDirNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "obj", "bin", ".git", ".vs", ".idea", ".vscode",
+        "node_modules", "__pycache__", "dist", "build", "out",
+        "target", "packages", ".nuget", ".gradle", "vendor",
+    };
+
+    private static IEnumerable<string> EnumerateSourceFiles(string root)
+    {
+        var dirs = new Stack<string>();
+        dirs.Push(root);
+        while (dirs.Count > 0)
+        {
+            var dir = dirs.Pop();
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(dir); }
+            catch { continue; }
+            foreach (var f in files)
+                yield return f;
+
+            IEnumerable<string> subDirs;
+            try { subDirs = Directory.EnumerateDirectories(dir); }
+            catch { continue; }
+            foreach (var sub in subDirs)
+            {
+                if (!_excludedDirNames.Contains(Path.GetFileName(sub)))
+                    dirs.Push(sub);
+            }
+        }
+    }
+
     private List<SearchResultItem> SearchFiles(string query)
     {
         if (_currentFolderPath == null) return [];
         try
         {
-            return Directory
-                .EnumerateFiles(_currentFolderPath, "*", SearchOption.AllDirectories)
+            return EnumerateSourceFiles(_currentFolderPath)
                 .Where(f => string.IsNullOrEmpty(query) ||
                             Path.GetFileName(f).Contains(query, StringComparison.OrdinalIgnoreCase))
                 .Take(50)
@@ -1259,8 +1289,7 @@ public partial class MainWindow : Window
         var results = new List<SearchResultItem>();
         try
         {
-            foreach (var f in Directory.EnumerateFiles(_currentFolderPath, "*",
-                         SearchOption.AllDirectories))
+            foreach (var f in EnumerateSourceFiles(_currentFolderPath))
             {
                 if (results.Count >= 50) break;
                 var info = new FileInfo(f);
