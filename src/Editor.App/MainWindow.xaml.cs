@@ -318,17 +318,36 @@ public partial class MainWindow : Window
         if (tabInfo == null) return;
         var buf = tabInfo.Editor.Engine.CurrentBuffer;
 
-        if (buf.FilePath == null || e.FilePath != null)
+        if (e.FilePath != null)
+        {
+            try { buf.Save(e.FilePath); }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            tabInfo.FilePath = e.FilePath;
+        }
+        else if (buf.FilePath == null)
         {
             var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "All Files|*.*", Title = "Save File" };
-            if (e.FilePath != null) dlg.FileName = e.FilePath;
             if (dlg.ShowDialog() != true) return;
-            buf.Save(dlg.FileName);
+            try { buf.Save(dlg.FileName); }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
             tabInfo.FilePath = dlg.FileName;
         }
         else
         {
-            buf.Save();
+            try { buf.Save(); }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
         }
         tabInfo.UpdateHeader();
     }

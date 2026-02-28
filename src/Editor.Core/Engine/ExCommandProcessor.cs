@@ -99,8 +99,7 @@ public class ExCommandProcessor
                 // Delegate unnamed-buffer saves to UI so it can prompt with SaveFileDialog.
                 return new ExResult(true, null, VimEvent.SaveRequested(null));
             }
-            try { buf.Save(targetPath); return new ExResult(true, $"\"{targetPath}\" written"); }
-            catch (Exception ex) { return new ExResult(false, ex.Message); }
+            return new ExResult(true, $"\"{targetPath}\" written", VimEvent.SaveRequested(targetPath));
         }
 
         // :e [file] :edit [file]
