@@ -46,11 +46,20 @@ The Vim engine is driven by `VimEngine.ProcessKey(string key, bool ctrl, bool sh
 - `'v'` is **not** an operator — it goes through `ParseMotion` and becomes a complete single-key command.
 - `FindNext` searches from `column + 1` (Vim `n` semantics — skips current position).
 
-**Clipboard is abstracted** via `IClipboardProvider` (in `Editor.Core.Registers`) so the core has no WPF dependency. The WPF implementation `WpfClipboardProvider` lives in `Editor.Controls`.
+**Buffer system:** `BufferManager` manages multiple `VimBuffer` instances (each wraps a `TextBuffer` + `FilePath` + `UndoManager`). `UndoManager` stores snapshots (lines + cursor, max 1000 entries) and is driven by `VimEngine` — it calls `Snapshot()` before mutating operations and `Undo()`/`Redo()` on `u`/`Ctrl+R`.
+
+**Registers:** `RegisterManager` (in `Editor.Core.Registers`) manages named registers `a–z`, unnamed `"`, clipboard `+`/`*`, and blackhole `_`. Uppercase register names (e.g. `"A`) append to the lowercase register. Clipboard is abstracted via `IClipboardProvider` so the core has no WPF dependency. The WPF implementation `WpfClipboardProvider` lives in `Editor.Controls`.
+
+**Marks & Macros:** `MarkManager` stores marks by letter and a jump list (max 100, navigated via `Ctrl+O`/`Ctrl+I`). `MacroManager` records `VimKeyStroke` sequences into named registers and replays them.
+
+**Config:** `VimConfig` loads `.vimrc`/`_vimrc` from home or the project directory on startup. It parses `set` options via `VimOptions` (30+ toggles and key=value settings like `tabstop=4`) and registers normal/insert/visual remaps (`nmap`, `imap`, `vmap`, `nnoremap`, etc.).
+
+**VimEventType enum** (all values — needed when adding new events or handling them in `VimEditorControl`):
+`ModeChanged`, `TextChanged`, `CursorMoved`, `SelectionChanged`, `SaveRequested`, `QuitRequested`, `OpenFileRequested`, `NewTabRequested`, `SplitRequested`, `NextTabRequested`, `PrevTabRequested`, `CloseTabRequested`, `ViewportAlignRequested`, `StatusMessage`, `SearchResultChanged`, `CommandLineChanged`
 
 ### Editor.Controls (net9.0-windows, WPF)
 
-`VimEditorControl` is the public-facing `UserControl`. It owns a `VimEngine` instance and bridges WPF key events to `VimEngine.ProcessKey`, then processes the returned `VimEvent` list to update the UI.
+`VimEditorControl` is the public-facing `UserControl`. It owns a `VimEngine` instance and bridges WPF key events to `VimEngine.ProcessKey`, then processes the returned `VimEvent` list to update the UI. It includes extensive IME (Input Method Editor) support for international text input.
 
 **Rendering:** `EditorCanvas` extends `FrameworkElement` and overrides `OnRender(DrawingContext)` — it does **not** use a `ScrollViewer` (passing Infinity to a FrameworkElement crashes). All scrolling is handled internally via `_scrollOffsetY`/`_scrollOffsetX`. `MeasureOverride` must clamp infinite sizes to finite fallback values.
 
@@ -62,6 +71,8 @@ Key events are translated from `System.Windows.Input.Key` → vim key strings in
 
 Thin host: `MainWindow` wires `VimEditorControl` events (`SaveRequested`, `QuitRequested`, `OpenFileRequested`) to file dialogs and tab management. Command-line arguments are read in `Window_Loaded` — the first arg is treated as a file path to open.
 
+The layout is: Title bar (30 px) → main area with Activity Bar (48 px vertical strip of icon toggle buttons) → collapsible Sidebar (220 px default, resizable via `GridSplitter`) → `TabControl` editor area. The Sidebar hosts a `TreeView` bound to `FileTreeItem` (nested class in `MainWindow.xaml.cs`) which lazy-loads directory children using a placeholder pattern.
+
 ## Adding a New Vim Command
 
 1. **Normal mode motion** — add a case to `MotionEngine.Calculate(string, CursorPosition, int)` and handle the resulting `Motion` in `VimEngine.ExecuteNormalCommand`.
@@ -71,4 +82,10 @@ Thin host: `MainWindow` wires `VimEditorControl` events (`SaveRequested`, `QuitR
 
 ## Adding Syntax Highlighting for a New Language
 
-Implement `ISyntaxLanguage` (in `Editor.Core.Syntax`) and register the instance in the array inside `SyntaxEngine`. The interface requires `Name`, `Extensions`, and `Tokenize(string[] lines) → LineTokens[]`.
+Implement `ISyntaxLanguage` (in `Editor.Core.Syntax`) and register the instance in the array inside `SyntaxEngine`. The interface requires `Name`, `Extensions`, and `Tokenize(string[] lines) → LineTokens[]`. Available `TokenKind` values: `Text`, `Keyword`, `Type`, `String`, `Comment`, `Number`, `Operator`, `Preprocessor`, `Identifier`, `Attribute`.
+
+## Tests
+
+Tests live in `tests/Editor.Core.Tests/`. Key files: `VimEngineTests.cs` (core vim ops), `TextBufferTests.cs` (buffer mutations), `ExCommandProcessorTests.cs` (`:` commands).
+
+Test naming convention: `Subject_Behavior()` (e.g. `DD_DeletesLine`). Engine tests use a `CreateEngine(string text, VimConfig? config = null)` factory helper that returns a configured `VimEngine` with the given initial text. Assertions check `engine.Mode`, `engine.Cursor`, `engine.CurrentBuffer.GetText()`, and event lists via `events.Any(e => e.Type == VimEventType.X)`.
