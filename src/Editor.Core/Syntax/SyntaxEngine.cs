@@ -17,6 +17,10 @@ public class SyntaxEngine
         new PythonSyntax(),
         new XmlSyntax(),
         new MarkdownSyntax(),
+        new JavaScriptSyntax(),
+        new TypeScriptSyntax(),
+        new RustSyntax(),
+        new JsonSyntax(),
     ];
 
     private ISyntaxLanguage? _currentLanguage;
