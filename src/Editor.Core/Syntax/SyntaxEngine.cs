@@ -21,6 +21,13 @@ public class SyntaxEngine
         new TypeScriptSyntax(),
         new RustSyntax(),
         new JsonSyntax(),
+        new TomlSyntax(),
+        new YamlSyntax(),
+        new ShellSyntax(),
+        new CssSyntax(),
+        new SqlSyntax(),
+        new CppSyntax(),
+        new GoSyntax(),
     ];
 
     private ISyntaxLanguage? _currentLanguage;
