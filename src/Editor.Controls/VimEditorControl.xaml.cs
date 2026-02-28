@@ -165,6 +165,7 @@ public partial class VimEditorControl : UserControl
     public event EventHandler? PrevTabRequested;
     public event EventHandler<CloseTabRequestedEventArgs>? CloseTabRequested;
     public event EventHandler<ModeChangedEventArgs>? ModeChanged;
+    public event EventHandler? BufferChanged;
 
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
@@ -1438,6 +1439,7 @@ public partial class VimEditorControl : UserControl
             {
                 case VimEventType.TextChanged:
                     needFullUpdate = true;
+                    BufferChanged?.Invoke(this, EventArgs.Empty);
                     break;
                 case VimEventType.CursorMoved when evt is CursorMovedEvent ce:
                     needCursorUpdate = true;

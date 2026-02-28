@@ -218,6 +218,7 @@ public partial class MainWindow : Window
         var tabItem = new TabItem { Header = header, Content = editor };
         var tabInfo = new TabInfo { Item = tabItem, Editor = editor, HeaderLabel = label, FilePath = filePath };
         closeBtn.Click += (_, _) => CloseTab(tabInfo, force: false);
+        header.MouseDown += (_, e) => { if (e.ChangedButton == MouseButton.Middle) CloseTab(tabInfo, force: false); };
 
         if (filePath != null && File.Exists(filePath))
             editor.LoadFile(filePath);
@@ -242,6 +243,13 @@ public partial class MainWindow : Window
         editor.NextTabRequested  += Editor_NextTabRequested;
         editor.PrevTabRequested  += Editor_PrevTabRequested;
         editor.CloseTabRequested += Editor_CloseTabRequested;
+        editor.BufferChanged     += Editor_BufferChanged;
+    }
+
+    private void Editor_BufferChanged(object? sender, EventArgs e)
+    {
+        var tabInfo = FindTabInfo(sender!);
+        tabInfo?.UpdateHeader();
     }
 
     private void CloseTab(TabInfo tabInfo, bool force)
