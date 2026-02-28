@@ -28,6 +28,8 @@ public class SyntaxEngine
         new SqlSyntax(),
         new CppSyntax(),
         new GoSyntax(),
+        new BatchSyntax(),
+        new PowerShellSyntax(),
     ];
 
     private ISyntaxLanguage? _currentLanguage;
