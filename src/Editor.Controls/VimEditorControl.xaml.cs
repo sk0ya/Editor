@@ -215,7 +215,7 @@ public partial class VimEditorControl : UserControl
     private void OnLspStateChanged()
     {
         Canvas.SetDiagnostics(_lspManager.CurrentDiagnostics);
-        Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection);
+        Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection, _lspManager.CompletionScrollOffset);
     }
 
     private void OnLspStatusMessage(string msg)

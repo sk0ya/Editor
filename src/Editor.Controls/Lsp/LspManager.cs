@@ -25,11 +25,15 @@ public sealed class LspManager : IDisposable
     private IReadOnlyList<LspCompletionItem> _rawCompletionItems = [];  // full server response
     private IReadOnlyList<LspCompletionItem> _completionItems = [];     // filtered view
     private int _completionSelection = -1;
+    private int _completionScrollOffset = 0;
     private bool _completionVisible;
+
+    private const int MaxVisibleCompletion = 10;
 
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => _diagnostics;
     public IReadOnlyList<LspCompletionItem> CompletionItems => _completionItems;
     public int CompletionSelection => _completionSelection;
+    public int CompletionScrollOffset => _completionScrollOffset;
     public bool CompletionVisible => _completionVisible;
 
     /// <summary>True when the server is running for the current file.</summary>
@@ -147,6 +151,7 @@ public sealed class LspManager : IDisposable
             _rawCompletionItems = items;
             _completionItems = items;
             _completionSelection = items.Count > 0 ? 0 : -1;
+            _completionScrollOffset = 0;
             _completionVisible = items.Count > 0;
             StateChanged?.Invoke();
         });
@@ -175,6 +180,11 @@ public sealed class LspManager : IDisposable
     {
         if (!_completionVisible || _completionItems.Count == 0) return;
         _completionSelection = (_completionSelection + delta + _completionItems.Count) % _completionItems.Count;
+        // Adjust scroll offset to keep the selection visible
+        if (_completionSelection < _completionScrollOffset)
+            _completionScrollOffset = _completionSelection;
+        else if (_completionSelection >= _completionScrollOffset + MaxVisibleCompletion)
+            _completionScrollOffset = _completionSelection - MaxVisibleCompletion + 1;
         StateChanged?.Invoke();
     }
 
@@ -206,6 +216,7 @@ public sealed class LspManager : IDisposable
         _completionItems = filtered;
         _completionVisible = true;
         _completionSelection = 0;
+        _completionScrollOffset = 0;
         StateChanged?.Invoke();
     }
 
@@ -216,6 +227,7 @@ public sealed class LspManager : IDisposable
         _rawCompletionItems = [];
         _completionItems = [];
         _completionSelection = -1;
+        _completionScrollOffset = 0;
         StateChanged?.Invoke();
     }
 

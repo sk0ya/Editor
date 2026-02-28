@@ -40,6 +40,7 @@ public class EditorCanvas : FrameworkElement
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
     private IReadOnlyList<LspCompletionItem> _completionItems = [];
     private int _completionSelection = -1;
+    private int _completionScrollOffset = 0;
 
     public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
 
@@ -90,10 +91,11 @@ public class EditorCanvas : FrameworkElement
         InvalidateVisual();
     }
 
-    public void SetCompletionItems(IReadOnlyList<LspCompletionItem> items, int selection)
+    public void SetCompletionItems(IReadOnlyList<LspCompletionItem> items, int selection, int scrollOffset = 0)
     {
         _completionItems = items;
         _completionSelection = selection;
+        _completionScrollOffset = scrollOffset;
         InvalidateVisual();
     }
 
@@ -322,13 +324,14 @@ public class EditorCanvas : FrameworkElement
         if (_completionItems.Count == 0) return;
 
         const int maxVisible = 10;
-        int count = Math.Min(maxVisible, _completionItems.Count);
+        int scrollOffset = Math.Max(0, Math.Min(_completionScrollOffset, _completionItems.Count - 1));
+        int count = Math.Min(maxVisible, _completionItems.Count - scrollOffset);
 
         var texts = new FormattedText[count];
         double maxW = 0;
         for (int i = 0; i < count; i++)
         {
-            var item = _completionItems[i];
+            var item = _completionItems[scrollOffset + i];
             var label = item.Detail != null ? $"{item.Label}  {item.Detail}" : item.Label;
             var ft = FormatText(label, Theme.Foreground);
             texts[i] = ft;
@@ -354,12 +357,13 @@ public class EditorCanvas : FrameworkElement
 
         for (int i = 0; i < count; i++)
         {
+            int itemIndex = scrollOffset + i;
             double rowY = y + padY + rowH * i;
-            if (i == _completionSelection)
+            if (itemIndex == _completionSelection)
                 dc.DrawRectangle(Theme.SelectionBg, null, new Rect(x + 1, rowY, popupW - 2, rowH));
 
             // Kind indicator dot
-            var kindBrush = GetCompletionKindBrush(_completionItems[i].Kind);
+            var kindBrush = GetCompletionKindBrush(_completionItems[itemIndex].Kind);
             dc.DrawEllipse(kindBrush, null, new Point(x + padX + 4, rowY + rowH / 2), 4, 4);
 
             dc.DrawText(texts[i], new Point(x + padX + 16, rowY + (rowH - texts[i].Height) / 2));
