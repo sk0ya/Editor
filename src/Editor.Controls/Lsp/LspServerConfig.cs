@@ -21,6 +21,8 @@ public static class LspServerConfig
         { ".h",    new LspServerDef("clangd",                         [],             "c") },
         { ".hpp",  new LspServerDef("clangd",                         [],             "cpp") },
         { ".rb",   new LspServerDef("solargraph",                     ["stdio"],      "ruby") },
+        { ".md",   new LspServerDef("marksman",                      ["server"],     "markdown") },
+        { ".markdown", new LspServerDef("marksman",                  ["server"],     "markdown") },
     };
 
     public static LspServerDef? GetForExtension(string extension) =>

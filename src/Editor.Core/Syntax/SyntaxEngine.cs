@@ -16,6 +16,7 @@ public class SyntaxEngine
         new CSharpSyntax(),
         new PythonSyntax(),
         new XmlSyntax(),
+        new MarkdownSyntax(),
     ];
 
     private ISyntaxLanguage? _currentLanguage;

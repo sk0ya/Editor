@@ -97,7 +97,7 @@ LSP support lives in two layers:
 - `Escape` — dismiss completion
 
 **Supported servers** (auto-detected by file extension, must be installed separately):
-`csharp-ls` (.cs), `pylsp` (.py), `typescript-language-server` (.ts/.js), `rust-analyzer` (.rs), `gopls` (.go), `clangd` (.c/.cpp), `lua-language-server` (.lua)
+`csharp-ls` (.cs), `pylsp` (.py), `typescript-language-server` (.ts/.js), `rust-analyzer` (.rs), `gopls` (.go), `clangd` (.c/.cpp), `lua-language-server` (.lua), `marksman` (.md/.markdown)
 
 **Adding a new server:** Add an entry to `LspServerConfig._byExtension` in `Editor.Controls/Lsp/LspServerConfig.cs`.
 
