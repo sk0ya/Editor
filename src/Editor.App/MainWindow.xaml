@@ -266,6 +266,109 @@
             </Setter>
         </Style>
 
+        <!-- ── File tree context menu styles ── -->
+        <Style x:Key="FileTreeContextMenuStyle" TargetType="ContextMenu">
+            <Setter Property="HasDropShadow" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContextMenu">
+                        <Border Background="#1E1E1E"
+                                BorderBrush="#3A3D46"
+                                BorderThickness="1"
+                                Padding="0,4"
+                                SnapsToDevicePixels="True">
+                            <ItemsPresenter SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="FileTreeMenuItemStyle" TargetType="MenuItem">
+            <Setter Property="Background" Value="#1E1E1E"/>
+            <Setter Property="Foreground" Value="#E6E6E6"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Grid>
+                            <Border x:Name="Bd"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="26"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="14"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ContentPresenter Grid.Column="1"
+                                                      ContentSource="Header"
+                                                      VerticalAlignment="Center"
+                                                      Margin="0,4,4,4"
+                                                      RecognizesAccessKey="True"
+                                                      TextBlock.Foreground="{TemplateBinding Foreground}"
+                                                      TextBlock.FontFamily="Cascadia Code, Consolas"
+                                                      TextBlock.FontSize="12"/>
+                                    <TextBlock x:Name="SubArrow"
+                                               Grid.Column="2"
+                                               Text="&#x276F;"
+                                               FontSize="8"
+                                               Foreground="#888888"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Visibility="Collapsed"/>
+                                </Grid>
+                            </Border>
+                            <Popup x:Name="PART_Popup"
+                                   AllowsTransparency="True"
+                                   Focusable="False"
+                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
+                                   Placement="Right"
+                                   PopupAnimation="{DynamicResource {x:Static SystemParameters.MenuPopupAnimationKey}}">
+                                <Border Background="#1E1E1E"
+                                        BorderBrush="#3A3D46"
+                                        BorderThickness="1"
+                                        Padding="0,4"
+                                        SnapsToDevicePixels="True">
+                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"
+                                                    KeyboardNavigation.TabNavigation="Cycle"
+                                                    SnapsToDevicePixels="True"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Role" Value="SubmenuHeader">
+                                <Setter TargetName="SubArrow" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#3A3D46"/>
+                            </Trigger>
+                            <Trigger Property="IsSubmenuOpen" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#3A3D46"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#8A8A8A"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="FileTreeSeparatorStyle" TargetType="Separator">
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Separator">
+                        <Border Height="1" Background="#3A3D46" Margin="5,0"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- ── FileTreeItem data template ── -->
         <HierarchicalDataTemplate DataType="{x:Type local:FileTreeItem}"
                                   ItemsSource="{Binding Children}">
@@ -578,7 +681,8 @@
                           ScrollViewer.HorizontalScrollBarVisibility="Auto"
                           VirtualizingStackPanel.IsVirtualizing="True"
                           VirtualizingStackPanel.VirtualizationMode="Recycling"
-                          SelectedItemChanged="FileTree_SelectedItemChanged"/>
+                          SelectedItemChanged="FileTree_SelectedItemChanged"
+                          MouseRightButtonUp="FileTree_MouseRightButtonUp"/>
             </Grid>
 
             <!-- Sidebar: Settings -->

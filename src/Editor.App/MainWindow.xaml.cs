@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private double _sidebarWidth = 220;
     private string? _currentFolderPath;
     private SidebarPanel _activeSidebarPanel = SidebarPanel.None;
+    private System.Windows.Point _shellMenuScreenPos;
 
     private VimEditorControl? CurrentEditor =>
         TabCtrl.SelectedItem is TabItem ti ? ti.Content as VimEditorControl : null;
@@ -199,6 +200,244 @@ public partial class MainWindow : Window
     {
         if (e.NewValue is FileTreeItem { IsDirectory: false } item)
             OpenOrFocusFile(item.FullPath);
+    }
+
+    // ─────────── File tree context menu ────────────────────────
+
+    private void FileTree_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        var tvi = FindVisualAncestor<TreeViewItem>((DependencyObject)e.OriginalSource);
+        if (tvi == null) return;
+        if (tvi.DataContext is not FileTreeItem item) return;
+
+        tvi.IsSelected = true;
+        _shellMenuScreenPos = PointToScreen(e.GetPosition(this));
+
+        var cm = BuildFileTreeContextMenu(item);
+        cm.PlacementTarget = tvi;
+        cm.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+        cm.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private ContextMenu BuildFileTreeContextMenu(FileTreeItem item)
+    {
+        var cmStyle  = (Style)FindResource("FileTreeContextMenuStyle");
+        var miStyle  = (Style)FindResource("FileTreeMenuItemStyle");
+        var sepStyle = (Style)FindResource("FileTreeSeparatorStyle");
+
+        var cm = new ContextMenu { Style = cmStyle };
+
+        if (item.IsDirectory)
+        {
+            cm.Items.Add(FtMi("新規ファイル...",   miStyle, () => ContextMenu_NewFile(item)));
+            cm.Items.Add(FtMi("新規フォルダー...", miStyle, () => ContextMenu_NewFolder(item)));
+            cm.Items.Add(new Separator { Style = sepStyle });
+        }
+        else
+        {
+            cm.Items.Add(FtMi("開く",             miStyle, () => OpenOrFocusFile(item.FullPath)));
+            cm.Items.Add(FtMi("新しいタブで開く", miStyle, () => AddTab(item.FullPath)));
+            cm.Items.Add(new Separator { Style = sepStyle });
+        }
+
+        cm.Items.Add(FtMi("名前の変更", miStyle, () => ContextMenu_Rename(item)));
+        cm.Items.Add(FtMi("削除",       miStyle, () => ContextMenu_Delete(item)));
+        cm.Items.Add(new Separator { Style = sepStyle });
+
+        var explorerLabel = item.IsDirectory ? "エクスプローラーで開く" : "エクスプローラーで表示";
+        cm.Items.Add(FtMi(explorerLabel, miStyle, () => ContextMenu_OpenInExplorer(item)));
+        cm.Items.Add(new Separator { Style = sepStyle });
+        cm.Items.Add(FtMi("Windowsのコンテキストメニュー", miStyle, () => ContextMenu_ShowWindowsMenu(item)));
+
+        return cm;
+    }
+
+    private void ContextMenu_ShowWindowsMenu(FileTreeItem item)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        ShellMenuContext.ShowDirect(hwnd, item.FullPath,
+            (int)_shellMenuScreenPos.X, (int)_shellMenuScreenPos.Y);
+    }
+
+    private static MenuItem FtMi(string header, Style style, Action handler)
+    {
+        var mi = new MenuItem { Header = header, Style = style };
+        mi.Click += (_, _) => handler();
+        return mi;
+    }
+
+    private void ContextMenu_NewFile(FileTreeItem folder)
+    {
+        var targetDir = folder.IsDirectory
+            ? folder.FullPath
+            : Path.GetDirectoryName(folder.FullPath) ?? _currentFolderPath ?? "";
+
+        var name = ShowInputDialog("新規ファイル", "ファイル名:", "newfile.txt");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var path = Path.Combine(targetDir, name);
+        try
+        {
+            File.WriteAllText(path, "");
+            RefreshCurrentFolder();
+            OpenOrFocusFile(path);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"ファイルの作成に失敗しました: {ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ContextMenu_NewFolder(FileTreeItem folder)
+    {
+        var targetDir = folder.IsDirectory
+            ? folder.FullPath
+            : Path.GetDirectoryName(folder.FullPath) ?? _currentFolderPath ?? "";
+
+        var name = ShowInputDialog("新規フォルダー", "フォルダー名:", "新しいフォルダー");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var path = Path.Combine(targetDir, name);
+        try
+        {
+            Directory.CreateDirectory(path);
+            RefreshCurrentFolder();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"フォルダーの作成に失敗しました: {ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ContextMenu_Rename(FileTreeItem item)
+    {
+        var newName = ShowInputDialog("名前の変更", "新しい名前:", item.Name);
+        if (string.IsNullOrWhiteSpace(newName) || newName == item.Name) return;
+
+        var dir     = Path.GetDirectoryName(item.FullPath) ?? "";
+        var newPath = Path.Combine(dir, newName);
+        try
+        {
+            if (item.IsDirectory) Directory.Move(item.FullPath, newPath);
+            else                  File.Move(item.FullPath, newPath);
+            RefreshCurrentFolder();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"名前の変更に失敗しました: {ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ContextMenu_Delete(FileTreeItem item)
+    {
+        var result = MessageBox.Show(
+            $"「{item.Name}」を削除しますか？",
+            "削除の確認",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (result != MessageBoxResult.Yes) return;
+
+        try
+        {
+            if (item.IsDirectory) Directory.Delete(item.FullPath, recursive: true);
+            else                  File.Delete(item.FullPath);
+            RefreshCurrentFolder();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"削除に失敗しました: {ex.Message}", "エラー",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ContextMenu_OpenInExplorer(FileTreeItem item)
+    {
+        var path = item.IsDirectory
+            ? item.FullPath
+            : Path.GetDirectoryName(item.FullPath) ?? item.FullPath;
+        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+    }
+
+    private void RefreshCurrentFolder()
+    {
+        if (_currentFolderPath == null) return;
+        FileTree.ItemsSource = FileTreeItem.LoadChildren(_currentFolderPath);
+    }
+
+    private string? ShowInputDialog(string title, string message, string defaultValue = "")
+    {
+        var dlg = new Window
+        {
+            Title = title,
+            Width = 380,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = this,
+            ResizeMode = ResizeMode.NoResize,
+            Background = new SolidColorBrush(Color.FromRgb(0x25, 0x25, 0x26)),
+            WindowStyle = WindowStyle.ToolWindow
+        };
+
+        var textBox = new TextBox
+        {
+            Text = defaultValue,
+            Margin = new Thickness(12, 4, 12, 0),
+            Background = new SolidColorBrush(Color.FromRgb(0x3C, 0x3C, 0x3C)),
+            Foreground = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x5A, 0x5A, 0x5A)),
+            CaretBrush = new SolidColorBrush(Colors.White),
+            SelectionBrush = new SolidColorBrush(Color.FromRgb(0x09, 0x47, 0x71)),
+            FontFamily = new FontFamily("Cascadia Code, Consolas"),
+            FontSize = 13,
+            Padding = new Thickness(6, 4, 6, 4)
+        };
+
+        var okBtn     = new Button { Content = "OK",       Width = 80, Height = 26, IsDefault = true, Margin = new Thickness(4) };
+        var cancelBtn = new Button { Content = "キャンセル", Width = 80, Height = 26, IsCancel = true,  Margin = new Thickness(4) };
+
+        string? result = null;
+        okBtn.Click     += (_, _) => { result = textBox.Text; dlg.Close(); };
+        cancelBtn.Click += (_, _) => dlg.Close();
+
+        var btnPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(8, 8, 8, 10)
+        };
+        btnPanel.Children.Add(okBtn);
+        btnPanel.Children.Add(cancelBtn);
+
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock
+        {
+            Text = message,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)),
+            Margin = new Thickness(12, 10, 12, 4),
+            FontFamily = new FontFamily("Cascadia Code, Consolas"),
+            FontSize = 12
+        });
+        panel.Children.Add(textBox);
+        panel.Children.Add(btnPanel);
+        dlg.Content = panel;
+        dlg.Loaded += (_, _) => { textBox.Focus(); textBox.SelectAll(); };
+        dlg.ShowDialog();
+
+        return result;
+    }
+
+    private static T? FindVisualAncestor<T>(DependencyObject? obj) where T : DependencyObject
+    {
+        while (obj != null)
+        {
+            if (obj is T t) return t;
+            obj = VisualTreeHelper.GetParent(obj);
+        }
+        return null;
     }
 
     private void OpenOrFocusFile(string path)
@@ -757,6 +996,15 @@ public sealed class FileTreeItem
         catch { /* access denied, etc. */ }
     }
 
+    public void Refresh()
+    {
+        if (!IsDirectory) return;
+        _expanded = false;
+        Children.Clear();
+        Children.Add(Placeholder);
+        Expand();
+    }
+
     /// <summary>Load top-level children of a folder (eager, for root display).</summary>
     public static ObservableCollection<FileTreeItem> LoadChildren(string folderPath)
     {
@@ -846,5 +1094,178 @@ internal static class NativeFolderPicker
         void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
         void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
         void Compare([MarshalAs(UnmanagedType.Interface)] IShellItem psi, uint hint, out int piOrder);
+    }
+}
+
+// ─────────── Shell menu item model ───────────────────────────
+
+// ─────────── Shell context menu (COM IContextMenu) ───────────
+
+internal sealed class ShellMenuContext : IDisposable
+{
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHParseDisplayName(
+        string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
+
+    [DllImport("shell32.dll")]
+    private static extern int SHBindToParent(
+        IntPtr pidl, ref Guid riid, out IntPtr ppv, out IntPtr ppidlLast);
+
+    [DllImport("shell32.dll")]
+    private static extern void ILFree(IntPtr pidl);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr CreatePopupMenu();
+
+    [DllImport("user32.dll")]
+    private static extern bool DestroyMenu(IntPtr hMenu);
+
+    [DllImport("user32.dll")]
+    private static extern uint TrackPopupMenuEx(
+        IntPtr hmenu, uint fuFlags, int x, int y, IntPtr hwnd, IntPtr lptpm);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CMINVOKECOMMANDINFO
+    {
+        public uint   cbSize;
+        public uint   fMask;
+        public IntPtr hwnd;
+        public IntPtr lpVerb;
+        public IntPtr lpParameters;
+        public IntPtr lpDirectory;
+        public int    nShow;
+        public uint   dwHotKey;
+        public IntPtr hIcon;
+    }
+
+    private const uint CMF_NORMAL      = 0x00000000;
+    private const uint CMF_EXPLORE     = 0x00000020;
+    private const uint TPM_RETURNCMD   = 0x0100;
+    private const uint TPM_RIGHTBUTTON = 0x0002;
+
+    [ComImport, Guid("000214e4-0000-0000-c000-000000000046"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IContextMenuCom
+    {
+        [PreserveSig] int QueryContextMenu(IntPtr hmenu, uint indexMenu, uint idCmdFirst, uint idCmdLast, uint uFlags);
+        [PreserveSig] int InvokeCommand(IntPtr pici);
+        [PreserveSig] int GetCommandString(UIntPtr idCmd, uint uType, IntPtr pReserved, IntPtr pszName, uint cchMax);
+    }
+
+    [ComImport, Guid("000214E6-0000-0000-C000-000000000046"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellFolderCom
+    {
+        void ParseDisplayName(IntPtr hwnd, IntPtr pbc, [MarshalAs(UnmanagedType.LPWStr)] string pszDisplayName, out uint pchEaten, out IntPtr ppidl, ref uint pdwAttributes);
+        void EnumObjects(IntPtr hwnd, uint grfFlags, out IntPtr ppenumIDList);
+        void BindToObject(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
+        void BindToStorage(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int CompareIDs(IntPtr lParam, IntPtr pidl1, IntPtr pidl2);
+        void CreateViewObject(IntPtr hwnd, ref Guid riid, out IntPtr ppv);
+        void GetAttributesOf(uint cidl, [MarshalAs(UnmanagedType.LPArray)] IntPtr[] apidl, ref uint rgfInOut);
+        [PreserveSig] int GetUIObjectOf(IntPtr hwndOwner, uint cidl, [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] IntPtr[] apidl, ref Guid riid, uint rgfReserved, out IntPtr ppv);
+        void GetDisplayNameOf(IntPtr pidl, uint uFlags, out IntPtr pName);
+        void SetNameOf(IntPtr hwnd, IntPtr pidl, [MarshalAs(UnmanagedType.LPWStr)] string pszName, uint uFlags, out IntPtr ppidlOut);
+    }
+
+    private object? _ctxObj;
+    private object? _folderObj;
+    private IntPtr  _pidlFull;
+    private IntPtr  _hMenu;
+    private IContextMenuCom? _ctx;
+
+    private ShellMenuContext(object ctxObj, object folderObj, IntPtr pidlFull,
+        IntPtr hMenu, IContextMenuCom ctx)
+    {
+        _ctxObj    = ctxObj;
+        _folderObj = folderObj;
+        _pidlFull  = pidlFull;
+        _hMenu     = hMenu;
+        _ctx       = ctx;
+    }
+
+    private static ShellMenuContext? Create(IntPtr hwnd, string path)
+    {
+        IntPtr pidlFull   = IntPtr.Zero;
+        IntPtr hMenu      = IntPtr.Zero;
+        object? ctxObj    = null;
+        object? folderObj = null;
+
+        try
+        {
+            int hr = SHParseDisplayName(path, IntPtr.Zero, out pidlFull, 0, out _);
+            if (hr != 0 || pidlFull == IntPtr.Zero) return null;
+
+            var iidFolder = new Guid("000214E6-0000-0000-C000-000000000046");
+            hr = SHBindToParent(pidlFull, ref iidFolder, out IntPtr psfParent, out IntPtr pidlChild);
+            if (hr != 0 || psfParent == IntPtr.Zero) return null;
+
+            folderObj = Marshal.GetObjectForIUnknown(psfParent);
+            Marshal.Release(psfParent);
+
+            var iidCtx = new Guid("000214e4-0000-0000-c000-000000000046");
+            IntPtr[] pidls = [pidlChild];
+            hr = ((IShellFolderCom)folderObj).GetUIObjectOf(hwnd, 1, pidls, ref iidCtx, 0, out IntPtr pCtx);
+            if (hr != 0 || pCtx == IntPtr.Zero) return null;
+
+            ctxObj = Marshal.GetObjectForIUnknown(pCtx);
+            Marshal.Release(pCtx);
+            var ctx = (IContextMenuCom)ctxObj;
+
+            hMenu = CreatePopupMenu();
+            ctx.QueryContextMenu(hMenu, 0, 1, 0x7FFF, CMF_NORMAL | CMF_EXPLORE);
+
+            return new ShellMenuContext(ctxObj, folderObj, pidlFull, hMenu, ctx);
+        }
+        catch
+        {
+            if (hMenu     != IntPtr.Zero) DestroyMenu(hMenu);
+            if (pidlFull  != IntPtr.Zero) ILFree(pidlFull);
+            if (ctxObj    != null) Marshal.ReleaseComObject(ctxObj);
+            if (folderObj != null) Marshal.ReleaseComObject(folderObj);
+            return null;
+        }
+    }
+
+    // Show the Win32 popup and invoke the selected command.
+    private void Show(IntPtr hwnd, int x, int y)
+    {
+        if (_ctx == null || _hMenu == IntPtr.Zero) return;
+
+        uint cmd = TrackPopupMenuEx(_hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, hwnd, IntPtr.Zero);
+        if (cmd == 0) return;
+
+        var ici = new CMINVOKECOMMANDINFO
+        {
+            cbSize       = (uint)Marshal.SizeOf<CMINVOKECOMMANDINFO>(),
+            hwnd         = hwnd,
+            lpVerb       = new IntPtr((int)(cmd - 1)),
+            lpParameters = IntPtr.Zero,
+            lpDirectory  = IntPtr.Zero,
+            nShow        = 1
+        };
+        IntPtr pIci = Marshal.AllocHGlobal(Marshal.SizeOf<CMINVOKECOMMANDINFO>());
+        try
+        {
+            Marshal.StructureToPtr(ici, pIci, false);
+            _ctx.InvokeCommand(pIci);
+        }
+        catch { /* best-effort */ }
+        finally { Marshal.FreeHGlobal(pIci); }
+    }
+
+    public static void ShowDirect(IntPtr hwnd, string path, int x, int y)
+    {
+        using var ctx = Create(hwnd, path);
+        ctx?.Show(hwnd, x, y);
+    }
+
+    public void Dispose()
+    {
+        if (_hMenu    != IntPtr.Zero) { DestroyMenu(_hMenu);   _hMenu    = IntPtr.Zero; }
+        if (_pidlFull != IntPtr.Zero) { ILFree(_pidlFull);     _pidlFull = IntPtr.Zero; }
+        if (_ctxObj    != null) { Marshal.ReleaseComObject(_ctxObj);    _ctxObj    = null; }
+        if (_folderObj != null) { Marshal.ReleaseComObject(_folderObj); _folderObj = null; }
+        _ctx = null;
     }
 }
