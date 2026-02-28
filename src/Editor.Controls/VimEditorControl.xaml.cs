@@ -217,6 +217,7 @@ public partial class VimEditorControl : UserControl
     {
         Canvas.SetDiagnostics(_lspManager.CurrentDiagnostics);
         Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection, _lspManager.CompletionScrollOffset);
+        Canvas.SetSignatureHelp(_lspManager.CurrentSignatureHelp);
     }
 
     private void OnLspStatusMessage(string msg)
@@ -1059,6 +1060,7 @@ public partial class VimEditorControl : UserControl
             if (key == Key.Escape)
             {
                 _lspManager.HideCompletion();
+                _lspManager.HideSignatureHelp();
                 // Also exit insert mode
                 ProcessKey("Escape", false, false, false);
                 e.Handled = true;
@@ -1229,11 +1231,26 @@ public partial class VimEditorControl : UserControl
                     _completionDebounce.Stop();
                 }
             }
+
+            // Signature help triggers: ( and ,
+            if (ch == '(' || ch == ',')
+            {
+                var cur = _engine.Cursor;
+                _ = _lspManager.RequestSignatureHelpAsync(cur.Line, cur.Column);
+            }
+            else if (ch == ')')
+            {
+                _lspManager.HideSignatureHelp();
+            }
         }
-        else if (hadCompletion && _engine.Mode != VimMode.Insert)
+        else if (_engine.Mode != VimMode.Insert)
         {
-            _lspManager.HideCompletion();
-            _completionDebounce.Stop();
+            if (hadCompletion)
+            {
+                _lspManager.HideCompletion();
+                _completionDebounce.Stop();
+            }
+            _lspManager.HideSignatureHelp();
         }
         else if (!ctrl && !alt && (key == "Back" || key == "Delete"))
         {
@@ -1312,6 +1329,73 @@ public partial class VimEditorControl : UserControl
         var insertText = item.InsertText ?? item.Label;
         foreach (var ch in insertText)
             ProcessKey(ch.ToString(), false, false, false);
+    }
+
+    private async Task HandleGoToDefinitionAsync()
+    {
+        var cursor = _engine.Cursor;
+        var filePath = await _lspManager.RequestDefinitionAsync(cursor.Line, cursor.Column);
+        if (filePath == null)
+        {
+            StatusBar.UpdateStatus("LSP: definition not found");
+            return;
+        }
+        if (!System.IO.File.Exists(filePath))
+        {
+            StatusBar.UpdateStatus($"LSP: definition in non-navigable location");
+            return;
+        }
+        OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(filePath));
+    }
+
+    private async Task HandleFormatDocumentAsync()
+    {
+        var tabSize = _engine.Options.TabStop;
+        var insertSpaces = _engine.Options.ExpandTab;
+        var edits = await _lspManager.RequestFormattingAsync(tabSize, insertSpaces);
+        if (edits.Count == 0)
+        {
+            StatusBar.UpdateStatus("Format: no changes");
+            return;
+        }
+        var original = _engine.CurrentBuffer.Text.GetText();
+        var formatted = ApplyTextEdits(original, edits);
+        _engine.SetText(formatted);
+        UpdateAll();
+        _lspManager.OnTextChanged(formatted);
+        StatusBar.UpdateStatus("Format: document formatted");
+    }
+
+    private static string ApplyTextEdits(string originalText, IReadOnlyList<Editor.Core.Lsp.LspTextEdit> edits)
+    {
+        if (edits.Count == 0) return originalText;
+        var lines = originalText.Split('\n').ToList();
+        var sorted = edits
+            .OrderByDescending(e => e.Range.Start.Line)
+            .ThenByDescending(e => e.Range.Start.Character)
+            .ToList();
+
+        foreach (var edit in sorted)
+        {
+            int sl = Math.Min(edit.Range.Start.Line, lines.Count - 1);
+            int sc = Math.Min(edit.Range.Start.Character, lines[sl].Length);
+            int el = Math.Min(edit.Range.End.Line, lines.Count - 1);
+            int ec = Math.Min(edit.Range.End.Character, lines[el].Length);
+            var newText = edit.NewText.Replace("\r\n", "\n").Replace("\r", "\n");
+
+            if (sl == el)
+            {
+                lines[sl] = lines[sl][..sc] + newText + lines[sl][ec..];
+            }
+            else
+            {
+                var merged = lines[sl][..sc] + newText + lines[el][ec..];
+                var newLines = merged.Split('\n').ToList();
+                lines.RemoveRange(sl, el - sl + 1);
+                lines.InsertRange(sl, newLines);
+            }
+        }
+        return string.Join('\n', lines);
     }
 
     /// <summary>
@@ -1505,6 +1589,12 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.SearchResultChanged when evt is SearchResultChangedEvent srce:
                     UpdateSearchHighlights(srce.Pattern);
+                    break;
+                case VimEventType.GoToDefinitionRequested:
+                    _ = HandleGoToDefinitionAsync();
+                    break;
+                case VimEventType.FormatDocumentRequested:
+                    _ = HandleFormatDocumentAsync();
                     break;
             }
         }

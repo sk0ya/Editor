@@ -41,6 +41,7 @@ public class EditorCanvas : FrameworkElement
     private IReadOnlyList<LspCompletionItem> _completionItems = [];
     private int _completionSelection = -1;
     private int _completionScrollOffset = 0;
+    private LspSignatureHelp? _signatureHelp;
 
     public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
 
@@ -96,6 +97,12 @@ public class EditorCanvas : FrameworkElement
         _completionItems = items;
         _completionSelection = selection;
         _completionScrollOffset = scrollOffset;
+        InvalidateVisual();
+    }
+
+    public void SetSignatureHelp(LspSignatureHelp? help)
+    {
+        _signatureHelp = help;
         InvalidateVisual();
     }
 
@@ -270,6 +277,7 @@ public class EditorCanvas : FrameworkElement
         }
 
         DrawImeCandidatePopup(dc, textLeft, size);
+        DrawSignatureHelp(dc, textLeft, size);
         DrawCompletionPopup(dc, textLeft, size);
 
         // Gutter border
@@ -317,6 +325,66 @@ public class EditorCanvas : FrameworkElement
             dc.DrawLine(pen, new Point(x + step / 2, yBase - amp),
                              new Point(x + step,     yBase + amp));
         }
+    }
+
+    private void DrawSignatureHelp(DrawingContext dc, double textLeft, Size size)
+    {
+        if (_signatureHelp == null || _signatureHelp.Signatures.Count == 0) return;
+
+        int sigIdx = Math.Clamp(_signatureHelp.ActiveSignature, 0, _signatureHelp.Signatures.Count - 1);
+        var sig = _signatureHelp.Signatures[sigIdx];
+        if (string.IsNullOrEmpty(sig.Label)) return;
+
+        int activeParam = _signatureHelp.ActiveParameter;
+
+        // Find active parameter substring offsets within sig.Label
+        int hlStart = -1, hlEnd = -1;
+        if (activeParam >= 0 && activeParam < sig.Parameters.Count)
+        {
+            var paramLabel = sig.Parameters[activeParam].Label;
+            if (!string.IsNullOrEmpty(paramLabel))
+            {
+                int idx = sig.Label.IndexOf(paramLabel, StringComparison.Ordinal);
+                if (idx >= 0) { hlStart = idx; hlEnd = idx + paramLabel.Length; }
+            }
+        }
+
+        const double padX = 8, padY = 3;
+
+        // Build formatted text pieces
+        var before = hlStart > 0 ? sig.Label[..hlStart] : (hlStart < 0 ? sig.Label : "");
+        var hl     = hlStart >= 0 ? sig.Label[hlStart..hlEnd] : "";
+        var after  = hlEnd > 0 && hlEnd < sig.Label.Length ? sig.Label[hlEnd..] : "";
+
+        var ftBefore = FormatText(before, Theme.Foreground);
+        var ftHl     = string.IsNullOrEmpty(hl) ? null : FormatText(hl, Theme.TokenKeyword);
+        var ftAfter  = FormatText(after, Theme.Foreground);
+
+        double totalW = ftBefore.Width + (ftHl?.Width ?? 0) + ftAfter.Width + padX * 2;
+        double totalH = _lineHeight + padY * 2;
+
+        var cursor = GetCursorPixelPosition();
+        double x = cursor.X;
+        // Prefer above the cursor; fall back to below if no room
+        double y = cursor.Y - totalH - 2;
+        if (y < 0) y = cursor.Y + _lineHeight + 2;
+        if (x + totalW > size.Width) x = Math.Max(textLeft, size.Width - totalW - 2);
+
+        var bg     = new SolidColorBrush(Color.FromArgb(0xF0, 0x25, 0x26, 0x33));
+        var border = new Pen(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)), 1);
+        dc.DrawRectangle(bg, border, new Rect(x, y, totalW, totalH));
+
+        double tx = x + padX;
+        double ty = y + padY + (_lineHeight - ftBefore.Height) / 2;
+
+        dc.DrawText(ftBefore, new Point(tx, ty));
+        tx += ftBefore.Width;
+        if (ftHl != null)
+        {
+            dc.DrawText(ftHl, new Point(tx, ty));
+            tx += ftHl.Width;
+        }
+        dc.DrawText(ftAfter, new Point(tx, ty));
     }
 
     private void DrawCompletionPopup(DrawingContext dc, double textLeft, Size size)

@@ -182,6 +182,10 @@ public class ExCommandProcessor
         if (cmd is "tabc!" or "tabclose!")
             return new ExResult(true, null, VimEvent.CloseTabRequested(true));
 
+        // :Format — format document via LSP
+        if (cmd is "Format" or "format")
+            return new ExResult(true, null, VimEvent.FormatDocumentRequested());
+
         // :split :vsplit
         if (cmd == "split" || cmd == "sp" || cmd == "new")
             return new ExResult(true, null, VimEvent.SplitRequested(false));

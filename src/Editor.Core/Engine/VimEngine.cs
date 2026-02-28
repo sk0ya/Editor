@@ -578,6 +578,9 @@ public class VimEngine
                 for (int i = 0; i < count; i++)
                     events.Add(VimEvent.PrevTabRequested());
                 break;
+            case "gd":
+                events.Add(VimEvent.GoToDefinitionRequested());
+                break;
             case "+":
                 MoveLineAndFirstNonBlank(count, events);
                 break;

@@ -30,11 +30,14 @@ public sealed class LspManager : IDisposable
 
     private const int MaxVisibleCompletion = 10;
 
+    private LspSignatureHelp? _signatureHelp;
+
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => _diagnostics;
     public IReadOnlyList<LspCompletionItem> CompletionItems => _completionItems;
     public int CompletionSelection => _completionSelection;
     public int CompletionScrollOffset => _completionScrollOffset;
     public bool CompletionVisible => _completionVisible;
+    public LspSignatureHelp? CurrentSignatureHelp => _signatureHelp;
 
     /// <summary>True when the server is running for the current file.</summary>
     public bool IsConnected => _currentClient?.IsRunning == true && _currentUri != null;
@@ -229,6 +232,33 @@ public sealed class LspManager : IDisposable
         _completionSelection = -1;
         _completionScrollOffset = 0;
         StateChanged?.Invoke();
+    }
+
+    /// <summary>Request signature help at the given position.</summary>
+    public async Task RequestSignatureHelpAsync(int line, int character)
+    {
+        if (_currentClient?.IsRunning != true || _currentUri == null || !_documentReady) return;
+        var help = await _currentClient.GetSignatureHelpAsync(
+            _currentUri, new LspPosition(line, character));
+        await _dispatcher.InvokeAsync(() =>
+        {
+            _signatureHelp = help?.Signatures.Count > 0 ? help : null;
+            StateChanged?.Invoke();
+        });
+    }
+
+    public void HideSignatureHelp()
+    {
+        if (_signatureHelp == null) return;
+        _signatureHelp = null;
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>Request formatting edits for the current document.</summary>
+    public async Task<IReadOnlyList<LspTextEdit>> RequestFormattingAsync(int tabSize = 4, bool insertSpaces = true)
+    {
+        if (_currentClient?.IsRunning != true || _currentUri == null || !_documentReady) return [];
+        return await _currentClient.GetFormattingEditsAsync(_currentUri, tabSize, insertSpaces);
     }
 
     // ── Async helpers ──────────────────────────────────────────────────────

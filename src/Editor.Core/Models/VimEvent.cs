@@ -20,6 +20,8 @@ public enum VimEventType
     StatusMessage,
     SearchResultChanged,
     CommandLineChanged,
+    GoToDefinitionRequested,
+    FormatDocumentRequested,
 }
 
 public enum ViewportAlign
@@ -78,6 +80,12 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent ViewportAlignRequested(ViewportAlign align) =>
         new ViewportAlignRequestedEvent(align);
+
+    public static VimEvent GoToDefinitionRequested() =>
+        new(VimEventType.GoToDefinitionRequested);
+
+    public static VimEvent FormatDocumentRequested() =>
+        new(VimEventType.FormatDocumentRequested);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);

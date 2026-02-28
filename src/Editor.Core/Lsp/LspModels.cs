@@ -27,3 +27,11 @@ public record LspCompletionItem(
     string? FilterText = null);
 
 public record LspHover(string Value);
+
+// Signature Help
+public record LspParameterInfo(string? Label);
+public record LspSignatureInfo(string Label, string? Documentation, IReadOnlyList<LspParameterInfo> Parameters);
+public record LspSignatureHelp(IReadOnlyList<LspSignatureInfo> Signatures, int ActiveSignature, int ActiveParameter);
+
+// Text edits (for formatting)
+public record LspTextEdit(LspRange Range, string NewText);

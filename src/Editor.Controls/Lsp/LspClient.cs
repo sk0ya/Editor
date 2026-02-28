@@ -31,7 +31,9 @@ public sealed class LspClient : ILspClient
                     publishDiagnostics = new { relatedInformation = false },
                     completion = new { completionItem = new { snippetSupport = false } },
                     hover = new { contentFormat = new[] { "plaintext", "markdown" } },
-                    definition = new { }
+                    definition = new { },
+                    signatureHelp = new { signatureInformation = new { documentationFormat = new[] { "plaintext" } } },
+                    formatting = new { }
                 }
             },
             workspaceFolders = (object?)null
@@ -122,6 +124,49 @@ public sealed class LspClient : ILspClient
         catch { return null; }
     }
 
+    public async Task<LspSignatureHelp?> GetSignatureHelpAsync(
+        string uri, LspPosition position, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/signatureHelp", new
+            {
+                textDocument = new { uri },
+                position = new { line = position.Line, character = position.Character }
+            }, ct);
+
+            return result is null || result.Value.ValueKind == JsonValueKind.Null
+                ? null
+                : ParseSignatureHelpResult(result.Value);
+        }
+        catch { return null; }
+    }
+
+    public async Task<IReadOnlyList<LspTextEdit>> GetFormattingEditsAsync(
+        string uri, int tabSize, bool insertSpaces, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/formatting", new
+            {
+                textDocument = new { uri },
+                options = new { tabSize, insertSpaces }
+            }, ct);
+
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
+            var list = new List<LspTextEdit>();
+            foreach (var item in result.Value.EnumerateArray())
+            {
+                if (!item.TryGetProperty("range", out var rangeEl) ||
+                    !item.TryGetProperty("newText", out var textEl)) continue;
+                var range = ParseRange(rangeEl);
+                list.Add(new LspTextEdit(range, textEl.GetString() ?? ""));
+            }
+            return list;
+        }
+        catch { return []; }
+    }
+
     private void OnNotification(string method, JsonElement @params)
     {
         if (method != "textDocument/publishDiagnostics") return;
@@ -175,6 +220,41 @@ public sealed class LspClient : ILspClient
             if (list.Count >= 500) break;
         }
         return list;
+    }
+
+    private static LspSignatureHelp? ParseSignatureHelpResult(JsonElement result)
+    {
+        if (!result.TryGetProperty("signatures", out var sigsEl) ||
+            sigsEl.ValueKind != JsonValueKind.Array) return null;
+
+        int activeSig = result.TryGetProperty("activeSignature", out var asEl) ? asEl.GetInt32() : 0;
+        int activeParam = result.TryGetProperty("activeParameter", out var apEl) ? apEl.GetInt32() : 0;
+
+        var sigs = new List<LspSignatureInfo>();
+        foreach (var sigEl in sigsEl.EnumerateArray())
+        {
+            var label = sigEl.TryGetProperty("label", out var lEl) ? lEl.GetString() ?? "" : "";
+            var doc = sigEl.TryGetProperty("documentation", out var dEl)
+                ? (dEl.ValueKind == JsonValueKind.String ? dEl.GetString()
+                   : dEl.TryGetProperty("value", out var dv) ? dv.GetString() : null)
+                : null;
+
+            var parms = new List<LspParameterInfo>();
+            if (sigEl.TryGetProperty("parameters", out var parmsEl) &&
+                parmsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var pEl in parmsEl.EnumerateArray())
+                {
+                    string? pLabel = null;
+                    if (pEl.TryGetProperty("label", out var plEl))
+                        pLabel = plEl.ValueKind == JsonValueKind.String ? plEl.GetString() : null;
+                    parms.Add(new LspParameterInfo(pLabel));
+                }
+            }
+            sigs.Add(new LspSignatureInfo(label, doc, parms));
+        }
+
+        return sigs.Count == 0 ? null : new LspSignatureHelp(sigs, activeSig, activeParam);
     }
 
     private static LspHover? ParseHoverResult(JsonElement result)
