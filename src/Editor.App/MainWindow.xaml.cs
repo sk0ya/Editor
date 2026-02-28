@@ -1,8 +1,11 @@
+using System.Collections.ObjectModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
-using Microsoft.Win32;
 using Editor.Controls;
 using Editor.Controls.Themes;
 
@@ -27,6 +30,8 @@ public partial class MainWindow : Window
 
     private readonly List<TabInfo> _tabs = [];
     private EditorTheme _currentTheme = EditorTheme.Dracula;
+    private bool _sidebarVisible;
+    private double _sidebarWidth = 220;
 
     private VimEditorControl? CurrentEditor =>
         TabCtrl.SelectedItem is TabItem ti ? ti.Content as VimEditorControl : null;
@@ -47,9 +52,104 @@ public partial class MainWindow : Window
         AddTab(null);
 
         var args = Environment.GetCommandLineArgs();
-        if (args.Length > 1 && File.Exists(args[1]))
-            OpenFile(args[1]);
+        if (args.Length > 1)
+        {
+            if (Directory.Exists(args[1]))
+                LoadFolder(args[1]);
+            else if (File.Exists(args[1]))
+                OpenFile(args[1]);
+        }
     }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Key == Key.B && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            ToggleSidebar();
+            e.Handled = true;
+        }
+    }
+
+    // ─────────── Sidebar ───────────────────────────────────
+
+    private void ShowSidebar()
+    {
+        SidebarCol.Width = new GridLength(_sidebarWidth, GridUnitType.Pixel);
+        SidebarCol.MinWidth = 80;
+        SplitterCol.Width = new GridLength(4, GridUnitType.Pixel);
+        SplitterCol.MinWidth = 4;
+        ExplorerBtn.IsChecked = true;
+        _sidebarVisible = true;
+    }
+
+    private void HideSidebar()
+    {
+        _sidebarWidth = SidebarCol.ActualWidth > 0 ? SidebarCol.ActualWidth : _sidebarWidth;
+        SidebarCol.Width = new GridLength(0);
+        SidebarCol.MinWidth = 0;
+        SplitterCol.Width = new GridLength(0);
+        SplitterCol.MinWidth = 0;
+        ExplorerBtn.IsChecked = false;
+        _sidebarVisible = false;
+    }
+
+    private void ToggleSidebar()
+    {
+        if (_sidebarVisible)
+            HideSidebar();
+        else
+            ShowSidebar();
+    }
+
+    private void LoadFolder(string folderPath)
+    {
+        FolderNameLabel.Text = Path.GetFileName(folderPath) is { Length: > 0 } n ? n : folderPath;
+        FileTree.ItemsSource = FileTreeItem.LoadChildren(folderPath);
+        if (!_sidebarVisible)
+            ShowSidebar();
+    }
+
+    // ─────────── File tree events ──────────────────────────
+
+    private void TreeViewItem_Expanded(object sender, RoutedEventArgs e)
+    {
+        if (sender is TreeViewItem { DataContext: FileTreeItem item })
+        {
+            item.Expand();
+            e.Handled = true;
+        }
+    }
+
+    private void FileTree_SelectedItemChanged(object sender,
+        RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is FileTreeItem { IsDirectory: false } item)
+            OpenOrFocusFile(item.FullPath);
+    }
+
+    private void OpenOrFocusFile(string path)
+    {
+        // Already open in a tab?
+        var existing = _tabs.FirstOrDefault(t =>
+            string.Equals(t.FilePath, path, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            TabCtrl.SelectedItem = existing.Item;
+            existing.Editor.Focus();
+            return;
+        }
+
+        // Replace empty tab or open new
+        var current = CurrentTabInfo;
+        if (current != null && current.FilePath == null &&
+            !current.Editor.Engine.CurrentBuffer.Text.IsModified)
+            OpenFile(path);
+        else
+            AddTab(path);
+    }
+
+    // ─────────── Tab management ────────────────────────────
 
     private void AddTab(string? filePath)
     {
@@ -157,7 +257,7 @@ public partial class MainWindow : Window
 
         if (buf.FilePath == null || e.FilePath != null)
         {
-            var dlg = new SaveFileDialog { Filter = "All Files|*.*", Title = "Save File" };
+            var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "All Files|*.*", Title = "Save File" };
             if (e.FilePath != null) dlg.FileName = e.FilePath;
             if (dlg.ShowDialog() != true) return;
             buf.Save(dlg.FileName);
@@ -241,16 +341,29 @@ public partial class MainWindow : Window
 
     private void OpenFile_Click(object sender, RoutedEventArgs e)
     {
-        var dlg = new OpenFileDialog { Filter = "All Files|*.*|Text Files|*.txt|C# Files|*.cs|Python|*.py", Title = "Open File" };
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "All Files|*.*|Text Files|*.txt|C# Files|*.cs|Python|*.py",
+            Title = "Open File"
+        };
         if (dlg.ShowDialog() != true) return;
 
-        // 現在タブが空の [No Name] なら置き換え、そうでなければ新規タブで開く
         var current = CurrentTabInfo;
         if (current != null && current.FilePath == null && !current.Editor.Engine.CurrentBuffer.Text.IsModified)
             OpenFile(dlg.FileName);
         else
             AddTab(dlg.FileName);
     }
+
+    private void OpenFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        var path = NativeFolderPicker.Show(hwnd, "フォルダーを開く");
+        if (path != null)
+            LoadFolder(path);
+    }
+
+    private void ExplorerBtn_Click(object sender, RoutedEventArgs e) => ToggleSidebar();
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
@@ -262,7 +375,7 @@ public partial class MainWindow : Window
     {
         var tabInfo = CurrentTabInfo;
         if (tabInfo == null) return;
-        var dlg = new SaveFileDialog { Filter = "All Files|*.*", Title = "Save File As" };
+        var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "All Files|*.*", Title = "Save File As" };
         if (dlg.ShowDialog() == true)
         {
             tabInfo.Editor.Engine.CurrentBuffer.Save(dlg.FileName);
@@ -321,8 +434,8 @@ public partial class MainWindow : Window
         base.OnStateChanged(e);
         MaxRestoreButton.Content = WindowState == WindowState.Maximized ? "3" : "2";
         RootPanel.Margin = WindowState == WindowState.Maximized
-            ? new System.Windows.Thickness(6)
-            : new System.Windows.Thickness(0);
+            ? new Thickness(6)
+            : new Thickness(0);
     }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
@@ -339,5 +452,155 @@ public partial class MainWindow : Window
                 e.Cancel = true;
         }
         base.OnClosing(e);
+    }
+}
+
+// ─────────── File tree model ─────────────────────────────────
+
+public sealed class FileTreeItem
+{
+    private bool _expanded;
+    private readonly bool _isPlaceholder;
+
+    public string FullPath { get; }
+    public string Name { get; }
+    public bool IsDirectory { get; }
+    public string Icon { get; }
+    public Brush IconBrush { get; }
+    public ObservableCollection<FileTreeItem> Children { get; } = [];
+
+    public FileTreeItem(string path)
+    {
+        FullPath = path;
+        Name = Path.GetFileName(path) is { Length: > 0 } n ? n : path;
+        IsDirectory = Directory.Exists(path);
+        Icon = IsDirectory ? "\uED41" : "\uE7C3";
+        IconBrush = IsDirectory
+            ? new SolidColorBrush(Color.FromRgb(0xE6, 0xC0, 0x7B))
+            : new SolidColorBrush(Color.FromRgb(0x99, 0xBB, 0xDD));
+
+        if (IsDirectory)
+            Children.Add(Placeholder);
+    }
+
+    private FileTreeItem()
+    {
+        _isPlaceholder = true;
+        FullPath = string.Empty;
+        Name = string.Empty;
+        Icon = string.Empty;
+        IconBrush = Brushes.Transparent;
+        _expanded = true;
+    }
+
+    private static readonly FileTreeItem Placeholder = new();
+
+    public void Expand()
+    {
+        if (_expanded || _isPlaceholder) return;
+        _expanded = true;
+        Children.Clear();
+        if (!Directory.Exists(FullPath)) return;
+        try
+        {
+            foreach (var d in Directory.GetDirectories(FullPath)
+                         .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+                Children.Add(new FileTreeItem(d));
+            foreach (var f in Directory.GetFiles(FullPath)
+                         .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+                Children.Add(new FileTreeItem(f));
+        }
+        catch { /* access denied, etc. */ }
+    }
+
+    /// <summary>Load top-level children of a folder (eager, for root display).</summary>
+    public static ObservableCollection<FileTreeItem> LoadChildren(string folderPath)
+    {
+        var items = new ObservableCollection<FileTreeItem>();
+        try
+        {
+            foreach (var d in Directory.GetDirectories(folderPath)
+                         .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+                items.Add(new FileTreeItem(d));
+            foreach (var f in Directory.GetFiles(folderPath)
+                         .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+                items.Add(new FileTreeItem(f));
+        }
+        catch { }
+        return items;
+    }
+}
+
+// ─────────── Native folder picker (COM IFileOpenDialog) ──────
+
+internal static class NativeFolderPicker
+{
+    public static string? Show(IntPtr ownerHandle, string title = "Select Folder")
+    {
+        var dialog = (IFileOpenDialog)new FileOpenDialogCoClass();
+        try
+        {
+            dialog.SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+            dialog.SetTitle(title);
+            int hr = dialog.Show(ownerHandle);
+            if (hr != 0) return null;   // cancelled or error
+            dialog.GetResult(out IShellItem item);
+            item.GetDisplayName(SIGDN_FILESYSPATH, out string path);
+            return path;
+        }
+        catch { return null; }
+        finally { Marshal.ReleaseComObject(dialog); }
+    }
+
+    private const uint FOS_PICKFOLDERS    = 0x00000020;
+    private const uint FOS_FORCEFILESYSTEM = 0x00000040;
+    private const uint FOS_PATHMUSTEXIST  = 0x00000800;
+    private const uint SIGDN_FILESYSPATH  = 0x80058000;
+
+    [ComImport, ClassInterface(ClassInterfaceType.None),
+     Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
+    private class FileOpenDialogCoClass { }
+
+    [ComImport, Guid("42F85136-DB7E-439C-85F1-E4075D135FC8"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IFileOpenDialog
+    {
+        [PreserveSig] int Show([In] IntPtr hwndOwner);
+        void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
+        void SetFileTypeIndex(uint iFileType);
+        void GetFileTypeIndex(out uint piFileType);
+        void Advise(IntPtr pfde, out uint pdwCookie);
+        void Unadvise(uint dwCookie);
+        void SetOptions(uint fos);
+        void GetOptions(out uint pfos);
+        void SetDefaultFolder([MarshalAs(UnmanagedType.Interface)] IShellItem psi);
+        void SetFolder([MarshalAs(UnmanagedType.Interface)] IShellItem psi);
+        void GetFolder([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
+        void GetCurrentSelection([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
+        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
+        void GetResult([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
+        void AddPlace([MarshalAs(UnmanagedType.Interface)] IShellItem psi, int fdap);
+        void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);
+        void Close(int hr);
+        void SetClientGuid(ref Guid guid);
+        void ClearClientData();
+        void SetFilter(IntPtr pFilter);
+        void GetResults(out IntPtr ppenum);
+        void GetSelectedItems(out IntPtr ppenum);
+    }
+
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItem
+    {
+        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+        void GetParent([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
+        void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
+        void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+        void Compare([MarshalAs(UnmanagedType.Interface)] IShellItem psi, uint hint, out int piOrder);
     }
 }
