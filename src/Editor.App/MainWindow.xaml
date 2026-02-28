@@ -311,22 +311,114 @@
                     <Style TargetType="{x:Type MenuItem}">
                         <Setter Property="Background" Value="#1E1E1E"/>
                         <Setter Property="Foreground" Value="#E6E6E6"/>
-                        <Setter Property="TextElement.Foreground" Value="#E6E6E6"/>
-                        <Setter Property="BorderBrush" Value="#1E1E1E"/>
+                        <Setter Property="BorderBrush" Value="Transparent"/>
                         <Setter Property="BorderThickness" Value="0"/>
                         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-                        <Style.Triggers>
-                            <Trigger Property="IsHighlighted" Value="True">
-                                <Setter Property="Background" Value="#3A3D46"/>
-                                <Setter Property="Foreground" Value="#FFFFFF"/>
-                                <Setter Property="TextElement.Foreground" Value="#FFFFFF"/>
-                                <Setter Property="BorderBrush" Value="#3A3D46"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Foreground" Value="#8A8A8A"/>
-                                <Setter Property="TextElement.Foreground" Value="#8A8A8A"/>
-                            </Trigger>
-                        </Style.Triggers>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="{x:Type MenuItem}">
+                                    <Border x:Name="templateRoot"
+                                            Background="{TemplateBinding Background}"
+                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                            SnapsToDevicePixels="True">
+                                        <Grid>
+                                            <!-- Top-level menu bar item header -->
+                                            <ContentPresenter x:Name="TopLevelContent"
+                                                              ContentSource="Header"
+                                                              HorizontalAlignment="Center"
+                                                              VerticalAlignment="Center"
+                                                              Margin="8,4"
+                                                              RecognizesAccessKey="True"
+                                                              TextBlock.Foreground="{TemplateBinding Foreground}"/>
+
+                                            <!-- Submenu item layout: icon | text | gesture | arrow -->
+                                            <Grid x:Name="SubmenuContent" Visibility="Collapsed">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="26"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="14"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock x:Name="GlyphPanel"
+                                                           Grid.Column="0"
+                                                           Text="&#x2714;"
+                                                           FontSize="10"
+                                                           Foreground="{TemplateBinding Foreground}"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Visibility="Collapsed"/>
+
+                                                <ContentPresenter Grid.Column="1"
+                                                                  ContentSource="Header"
+                                                                  VerticalAlignment="Center"
+                                                                  Margin="2,4,6,4"
+                                                                  RecognizesAccessKey="True"
+                                                                  TextBlock.Foreground="{TemplateBinding Foreground}"/>
+
+                                                <TextBlock Grid.Column="2"
+                                                           Text="{TemplateBinding InputGestureText}"
+                                                           Foreground="#888888"
+                                                           VerticalAlignment="Center"
+                                                           Margin="0,4,6,4"/>
+
+                                                <TextBlock x:Name="SubArrow"
+                                                           Grid.Column="3"
+                                                           Text="&#x276F;"
+                                                           FontSize="8"
+                                                           Foreground="#888888"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Visibility="Collapsed"/>
+                                            </Grid>
+
+                                            <!-- Popup for submenus -->
+                                            <Popup x:Name="PART_Popup"
+                                                   AllowsTransparency="True"
+                                                   Focusable="False"
+                                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
+                                                   Placement="Bottom"
+                                                   PopupAnimation="{DynamicResource {x:Static SystemParameters.MenuPopupAnimationKey}}">
+                                                <Border Background="#1E1E1E"
+                                                        BorderBrush="#3A3D46"
+                                                        BorderThickness="1"
+                                                        Padding="0,4">
+                                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"
+                                                                    KeyboardNavigation.TabNavigation="Cycle"
+                                                                    SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                                                </Border>
+                                            </Popup>
+                                        </Grid>
+                                    </Border>
+
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="Role" Value="SubmenuItem">
+                                            <Setter TargetName="TopLevelContent" Property="Visibility" Value="Collapsed"/>
+                                            <Setter TargetName="SubmenuContent" Property="Visibility" Value="Visible"/>
+                                        </Trigger>
+                                        <Trigger Property="Role" Value="SubmenuHeader">
+                                            <Setter TargetName="TopLevelContent" Property="Visibility" Value="Collapsed"/>
+                                            <Setter TargetName="SubmenuContent" Property="Visibility" Value="Visible"/>
+                                            <Setter TargetName="SubArrow" Property="Visibility" Value="Visible"/>
+                                            <Setter TargetName="PART_Popup" Property="Placement" Value="Right"/>
+                                        </Trigger>
+                                        <Trigger Property="IsHighlighted" Value="True">
+                                            <Setter TargetName="templateRoot" Property="Background" Value="#3A3D46"/>
+                                        </Trigger>
+                                        <Trigger Property="IsSubmenuOpen" Value="True">
+                                            <Setter TargetName="templateRoot" Property="Background" Value="#3A3D46"/>
+                                        </Trigger>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter Property="Foreground" Value="#8A8A8A"/>
+                                        </Trigger>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter TargetName="GlyphPanel" Property="Visibility" Value="Visible"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
                     </Style>
                 </Menu.Resources>
 
