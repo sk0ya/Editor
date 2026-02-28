@@ -24,6 +24,9 @@ internal sealed class RecentItemsManager
         public List<string> Files { get; set; } = [];
         public SessionState? LastSession { get; set; }
         public string TabPlacement { get; set; } = "Top";
+        public string ThemeName { get; set; } = "Dracula";
+        public string? CustomBackground { get; set; }
+        public string? CustomAccent { get; set; }
     }
 
     private RecentData _data;
@@ -37,6 +40,9 @@ internal sealed class RecentItemsManager
     public IReadOnlyList<string> RecentFiles => _data.Files;
     public SessionState? LastSession => _data.LastSession;
     public string TabPlacement => _data.TabPlacement;
+    public string ThemeName => _data.ThemeName;
+    public string? CustomBackground => _data.CustomBackground;
+    public string? CustomAccent => _data.CustomAccent;
 
     public void AddFolder(string path)
     {
@@ -53,6 +59,14 @@ internal sealed class RecentItemsManager
     public void SaveTabPlacement(string placement)
     {
         _data.TabPlacement = placement;
+        Save();
+    }
+
+    public void SaveTheme(string themeName, string? customBackground, string? customAccent)
+    {
+        _data.ThemeName = themeName;
+        _data.CustomBackground = customBackground;
+        _data.CustomAccent = customAccent;
         Save();
     }
 

@@ -86,4 +86,80 @@ public class EditorTheme
         "dracula" => Dracula,
         _ => Dark
     };
+
+    public EditorTheme WithBackground(Color bg)
+    {
+        var darker = Color.FromRgb(
+            (byte)(bg.R > 12 ? bg.R - 12 : 0),
+            (byte)(bg.G > 12 ? bg.G - 12 : 0),
+            (byte)(bg.B > 12 ? bg.B - 12 : 0));
+        var lighter = Color.FromRgb(
+            (byte)Math.Min(bg.R + 14, 255),
+            (byte)Math.Min(bg.G + 14, 255),
+            (byte)Math.Min(bg.B + 14, 255));
+        return new EditorTheme
+        {
+            Background = new SolidColorBrush(bg),
+            Foreground = Foreground,
+            CursorBackground = CursorBackground,
+            CursorForeground = new SolidColorBrush(bg),
+            InsertCursor = InsertCursor,
+            LineNumberFg = LineNumberFg,
+            LineNumberBg = new SolidColorBrush(darker),
+            CurrentLineBg = new SolidColorBrush(lighter),
+            SelectionBg = SelectionBg,
+            SearchHighlightBg = SearchHighlightBg,
+            StatusBarNormal = StatusBarNormal,
+            StatusBarInsert = StatusBarInsert,
+            StatusBarVisual = StatusBarVisual,
+            StatusBarReplace = StatusBarReplace,
+            StatusBarFg = StatusBarFg,
+            DiagnosticError = DiagnosticError,
+            DiagnosticWarning = DiagnosticWarning,
+            DiagnosticInfo = DiagnosticInfo,
+            DiagnosticHint = DiagnosticHint,
+            TokenKeyword = TokenKeyword,
+            TokenString = TokenString,
+            TokenComment = TokenComment,
+            TokenNumber = TokenNumber,
+            TokenPreprocessor = TokenPreprocessor,
+            TokenType = TokenType,
+            TokenAttribute = TokenAttribute,
+            TokenIdentifier = TokenIdentifier,
+        };
+    }
+
+    public EditorTheme WithAccent(Color accent)
+    {
+        return new EditorTheme
+        {
+            Background = Background,
+            Foreground = Foreground,
+            CursorBackground = CursorBackground,
+            CursorForeground = CursorForeground,
+            InsertCursor = InsertCursor,
+            LineNumberFg = LineNumberFg,
+            LineNumberBg = LineNumberBg,
+            CurrentLineBg = CurrentLineBg,
+            SelectionBg = SelectionBg,
+            SearchHighlightBg = SearchHighlightBg,
+            StatusBarNormal = new SolidColorBrush(accent),
+            StatusBarInsert = StatusBarInsert,
+            StatusBarVisual = StatusBarVisual,
+            StatusBarReplace = StatusBarReplace,
+            StatusBarFg = StatusBarFg,
+            DiagnosticError = DiagnosticError,
+            DiagnosticWarning = DiagnosticWarning,
+            DiagnosticInfo = DiagnosticInfo,
+            DiagnosticHint = DiagnosticHint,
+            TokenKeyword = TokenKeyword,
+            TokenString = TokenString,
+            TokenComment = TokenComment,
+            TokenNumber = TokenNumber,
+            TokenPreprocessor = TokenPreprocessor,
+            TokenType = TokenType,
+            TokenAttribute = TokenAttribute,
+            TokenIdentifier = TokenIdentifier,
+        };
+    }
 }

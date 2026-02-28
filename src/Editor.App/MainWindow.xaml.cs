@@ -35,6 +35,9 @@ public partial class MainWindow : Window
     private readonly List<TabInfo> _tabs = [];
     private readonly RecentItemsManager _recentItems = new();
     private EditorTheme _currentTheme = EditorTheme.Dracula;
+    private string _baseThemeName = "Dracula";
+    private string? _customBackground;
+    private string? _customAccent;
     private bool _sidebarVisible;
     private double _sidebarWidth = 220;
     private string? _currentFolderPath;
@@ -74,6 +77,8 @@ public partial class MainWindow : Window
         RefreshRecentMenus();
         RefreshJumpList();
         ApplyTabPlacement(_recentItems.TabPlacement);
+        ApplyColorTheme(_recentItems.ThemeName, _recentItems.CustomBackground, _recentItems.CustomAccent);
+        InitColorPalettes();
     }
 
     private void RestoreSession()
@@ -874,15 +879,151 @@ public partial class MainWindow : Window
     }
 
     private void ThemeDracula_Click(object sender, RoutedEventArgs e)
-    {
-        _currentTheme = EditorTheme.Dracula;
-        foreach (var t in _tabs) t.Editor.SetTheme(_currentTheme);
-    }
+        => ApplyColorTheme("Dracula", _customBackground, _customAccent);
 
     private void ThemeDark_Click(object sender, RoutedEventArgs e)
+        => ApplyColorTheme("Dark", _customBackground, _customAccent);
+
+    private void ColorTheme_Checked(object sender, RoutedEventArgs e)
     {
-        _currentTheme = EditorTheme.Dark;
+        if (!IsLoaded) return;
+        if (sender is not System.Windows.Controls.RadioButton rb || rb.Tag is not string name) return;
+        ApplyColorTheme(name, _customBackground, _customAccent);
+    }
+
+    private static readonly string[] BgPaletteColors =
+    [
+        "#282A36", "#1E1E1E", "#0D1117", "#1A1B26",
+        "#1E1E2E", "#2B2B2B", "#1B2738", "#0F0E17",
+        "#202020", "#1C1F26",
+    ];
+
+    private static readonly string[] AccentPaletteColors =
+    [
+        "#6148DE", "#BD93F9", "#FF79C6", "#50FA7B",
+        "#8BE9FD", "#FFB86C", "#0078D4", "#E06C75",
+        "#61AFEF", "#98C379", "#C678DD", "#F1FA8C",
+    ];
+
+    private void InitColorPalettes()
+    {
+        var style = (Style)FindResource("ColorSwatchButton");
+        foreach (var hex in BgPaletteColors)
+            BgColorPalette.Children.Add(MakeColorSwatch(hex, style, BgSwatch_Click));
+        foreach (var hex in AccentPaletteColors)
+            AccentColorPalette.Children.Add(MakeColorSwatch(hex, style, AccentSwatch_Click));
+        UpdatePaletteSelection();
+    }
+
+    private static Button MakeColorSwatch(string hex, Style style, RoutedEventHandler handler)
+    {
+        var btn = new Button
+        {
+            Style = style,
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)),
+            Tag = hex,
+            ToolTip = hex,
+        };
+        btn.Click += handler;
+        return btn;
+    }
+
+    private void UpdatePaletteSelection()
+    {
+        if (!IsLoaded) return;
+        var baseTheme = EditorTheme.GetByName(_baseThemeName);
+        var currentBg = _customBackground ?? ColorToHex(GetThemeBackgroundColor(baseTheme));
+        var currentAccent = _customAccent ?? ColorToHex(GetThemeAccentColor(baseTheme));
+
+        foreach (Button btn in BgColorPalette.Children)
+        {
+            bool sel = string.Equals(btn.Tag as string, currentBg, StringComparison.OrdinalIgnoreCase);
+            btn.BorderBrush = sel ? Brushes.White : new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
+            btn.BorderThickness = new Thickness(sel ? 2 : 1);
+        }
+        foreach (Button btn in AccentColorPalette.Children)
+        {
+            bool sel = string.Equals(btn.Tag as string, currentAccent, StringComparison.OrdinalIgnoreCase);
+            btn.BorderBrush = sel ? Brushes.White : new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
+            btn.BorderThickness = new Thickness(sel ? 2 : 1);
+        }
+    }
+
+    private void BgSwatch_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not string hex) return;
+        _customBackground = hex;
+        ApplyColorTheme(_baseThemeName, _customBackground, _customAccent);
+    }
+
+    private void AccentSwatch_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not string hex) return;
+        _customAccent = hex;
+        ApplyColorTheme(_baseThemeName, _customBackground, _customAccent);
+    }
+
+    private void ApplyColorTheme(string themeName, string? bgHex, string? accentHex)
+    {
+        _baseThemeName = themeName;
+        _customBackground = bgHex;
+        _customAccent = accentHex;
+
+        var theme = EditorTheme.GetByName(themeName);
+        if (TryParseHexColor(bgHex, out var bg))
+            theme = theme.WithBackground(bg);
+        if (TryParseHexColor(accentHex, out var accent))
+            theme = theme.WithAccent(accent);
+
+        _currentTheme = theme;
         foreach (var t in _tabs) t.Editor.SetTheme(_currentTheme);
+
+        // Update dynamic accent resource (affects tabs, activity bar)
+        var resolvedAccent = accentHex ?? ColorToHex(GetThemeAccentColor(EditorTheme.GetByName(themeName)));
+        if (TryParseHexColor(resolvedAccent, out var accentColor))
+            Resources["AccentBrush"] = new SolidColorBrush(accentColor);
+
+        // Sync settings panel UI if it's loaded
+        if (!IsLoaded) return;
+
+        // Update theme radio buttons
+        if (ThemeDraculaRb != null) ThemeDraculaRb.IsChecked = themeName == "Dracula";
+        if (ThemeDarkRb != null) ThemeDarkRb.IsChecked = themeName == "Dark";
+
+        // Update current-color swatches
+        var baseTheme = EditorTheme.GetByName(themeName);
+        var resolvedBgHex = bgHex ?? ColorToHex(GetThemeBackgroundColor(baseTheme));
+        var resolvedAccentHex = accentHex ?? ColorToHex(GetThemeAccentColor(baseTheme));
+
+        if (TryParseHexColor(resolvedBgHex, out var swatchBg))
+            BgColorSwatch.Background = new SolidColorBrush(swatchBg);
+        if (TryParseHexColor(resolvedAccentHex, out var swatchAccent))
+            AccentColorSwatch.Background = new SolidColorBrush(swatchAccent);
+
+        UpdatePaletteSelection();
+        _recentItems.SaveTheme(themeName, bgHex, accentHex);
+    }
+
+    private static Color GetThemeBackgroundColor(EditorTheme theme)
+        => theme.Background is SolidColorBrush b ? b.Color : Colors.Black;
+
+    private static Color GetThemeAccentColor(EditorTheme theme)
+        => theme.StatusBarNormal is SolidColorBrush b ? b.Color : Colors.DarkBlue;
+
+    private static string ColorToHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+
+    private static bool TryParseHexColor(string? hex, out Color color)
+    {
+        color = default;
+        if (string.IsNullOrWhiteSpace(hex)) return false;
+        hex = hex.Trim();
+        if (!hex.StartsWith('#')) hex = "#" + hex;
+        try
+        {
+            color = (Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
+            return true;
+        }
+        catch { return false; }
     }
 
     private void TabCtrl_SelectionChanged(object sender, SelectionChangedEventArgs e)

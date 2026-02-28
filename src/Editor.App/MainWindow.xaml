@@ -22,6 +22,8 @@
 
     <Window.Resources>
 
+        <SolidColorBrush x:Key="AccentBrush" Color="#6148DE"/>
+
         <!-- ── Title bar buttons ── -->
         <Style x:Key="TitleBarButton" TargetType="Button">
             <Setter Property="Foreground" Value="#CCCCCC"/>
@@ -102,6 +104,33 @@
             </Setter>
         </Style>
 
+        <!-- ── Color swatch button ── -->
+        <Style x:Key="ColorSwatchButton" TargetType="Button">
+            <Setter Property="Width" Value="22"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="Margin" Value="0,0,5,5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="BorderBrush" Value="#555555"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="3"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="White"/>
+                                <Setter TargetName="Bd" Property="BorderThickness" Value="2"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- ── Settings radio button ── -->
         <Style x:Key="SettingRadioButton" TargetType="RadioButton">
             <Setter Property="Foreground" Value="#CCCCCC"/>
@@ -165,7 +194,7 @@
                                 <Setter TargetName="Bd" Property="Background" Value="#2A2D36"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Bd" Property="BorderBrush" Value="#CCCCCC"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                 <Setter Property="Foreground" Value="#CCCCCC"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -734,6 +763,64 @@
                                      Style="{StaticResource SettingRadioButton}"
                                      Checked="TabPosition_Checked"/>
 
+                        <!-- Separator -->
+                        <Border Height="1" Background="#3A3D46" Margin="0,14,0,14"/>
+
+                        <!-- ── Color Theme ── -->
+                        <TextBlock Text="カラーテーマ"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="#888888"
+                                   FontFamily="Cascadia Code, Consolas"
+                                   Margin="0,0,0,6"/>
+                        <RadioButton x:Name="ThemeDraculaRb"
+                                     Content="Dracula"
+                                     Tag="Dracula"
+                                     GroupName="ColorTheme"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="ColorTheme_Checked"/>
+                        <RadioButton x:Name="ThemeDarkRb"
+                                     Content="Dark"
+                                     Tag="Dark"
+                                     GroupName="ColorTheme"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="ColorTheme_Checked"/>
+
+                        <!-- Separator -->
+                        <Border Height="1" Background="#3A3D46" Margin="0,14,0,14"/>
+
+                        <!-- ── Background color ── -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock Text="背景色"
+                                       FontSize="11" FontWeight="SemiBold"
+                                       Foreground="#888888"
+                                       FontFamily="Cascadia Code, Consolas"
+                                       VerticalAlignment="Center"/>
+                            <Border x:Name="BgColorSwatch"
+                                    Width="12" Height="12" CornerRadius="2"
+                                    Background="#282A36"
+                                    BorderBrush="#666666" BorderThickness="1"
+                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <WrapPanel x:Name="BgColorPalette"/>
+
+                        <!-- Separator -->
+                        <Border Height="1" Background="#3A3D46" Margin="0,14,0,14"/>
+
+                        <!-- ── Accent color ── -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock Text="アクセントカラー"
+                                       FontSize="11" FontWeight="SemiBold"
+                                       Foreground="#888888"
+                                       FontFamily="Cascadia Code, Consolas"
+                                       VerticalAlignment="Center"/>
+                            <Border x:Name="AccentColorSwatch"
+                                    Width="12" Height="12" CornerRadius="2"
+                                    Background="#6148DE"
+                                    BorderBrush="#666666" BorderThickness="1"
+                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <WrapPanel x:Name="AccentColorPalette"/>
+
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
@@ -753,7 +840,7 @@
                 <TabControl.ItemContainerStyle>
                     <Style TargetType="TabItem">
                         <Setter Property="Background" Value="#2D2D30"/>
-                        <Setter Property="Foreground" Value="#CCCCCC"/>
+                        <Setter Property="Foreground" Value="#888888"/>
                         <Setter Property="BorderThickness" Value="0"/>
                         <Setter Property="Padding" Value="12,4"/>
                         <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
@@ -761,24 +848,34 @@
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="TabItem">
-                                    <Border Name="Border"
-                                            Background="{TemplateBinding Background}"
-                                            Padding="{TemplateBinding Padding}"
-                                            BorderThickness="0">
-                                        <ContentPresenter ContentSource="Header"
-                                                          TextBlock.Foreground="{TemplateBinding Foreground}"
-                                                          TextBlock.FontFamily="{TemplateBinding FontFamily}"
-                                                          TextBlock.FontSize="{TemplateBinding FontSize}"/>
-                                    </Border>
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="2"/>
+                                        </Grid.RowDefinitions>
+                                        <Border x:Name="Border" Grid.Row="0"
+                                                Background="{TemplateBinding Background}"
+                                                Padding="{TemplateBinding Padding}"
+                                                BorderThickness="0">
+                                            <ContentPresenter ContentSource="Header"
+                                                              TextBlock.Foreground="{TemplateBinding Foreground}"
+                                                              TextBlock.FontFamily="{TemplateBinding FontFamily}"
+                                                              TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                                        </Border>
+                                        <Border x:Name="AccentBar" Grid.Row="1"
+                                                Background="{DynamicResource AccentBrush}"
+                                                Visibility="Collapsed"/>
+                                    </Grid>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter TargetName="Border" Property="Background" Value="#282A36"/>
+                                            <Setter TargetName="AccentBar" Property="Visibility" Value="Visible"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </Setter.Value>
                         </Setter>
-                        <Style.Triggers>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter Property="Background" Value="#282A36"/>
-                                <Setter Property="Foreground" Value="White"/>
-                            </Trigger>
-                        </Style.Triggers>
                     </Style>
                 </TabControl.ItemContainerStyle>
             </TabControl>
