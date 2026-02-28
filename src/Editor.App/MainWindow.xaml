@@ -427,6 +427,9 @@
                     <MenuItem Header="_Open File..." Click="OpenFile_Click" InputGestureText=":e"/>
                     <MenuItem Header="Open _Folder..." Click="OpenFolder_Click"/>
                     <Separator/>
+                    <MenuItem x:Name="RecentFilesMenu" Header="Recent _Files"/>
+                    <MenuItem x:Name="RecentFoldersMenu" Header="Recent Fo_lders"/>
+                    <Separator/>
                     <MenuItem Header="_Save" Click="Save_Click" InputGestureText=":w"/>
                     <MenuItem Header="Save _As..." Click="SaveAs_Click"/>
                     <Separator/>

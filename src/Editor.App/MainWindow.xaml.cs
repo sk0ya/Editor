@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -6,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Shell;
 using Editor.Controls;
 using Editor.Controls.Themes;
 
@@ -29,9 +31,11 @@ public partial class MainWindow : Window
     }
 
     private readonly List<TabInfo> _tabs = [];
+    private readonly RecentItemsManager _recentItems = new();
     private EditorTheme _currentTheme = EditorTheme.Dracula;
     private bool _sidebarVisible;
     private double _sidebarWidth = 220;
+    private string? _currentFolderPath;
 
     private VimEditorControl? CurrentEditor =>
         TabCtrl.SelectedItem is TabItem ti ? ti.Content as VimEditorControl : null;
@@ -49,15 +53,59 @@ public partial class MainWindow : Window
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        AddTab(null);
-
         var args = Environment.GetCommandLineArgs();
         if (args.Length > 1)
         {
+            AddTab(null);
             if (Directory.Exists(args[1]))
                 LoadFolder(args[1]);
             else if (File.Exists(args[1]))
                 OpenFile(args[1]);
+        }
+        else
+        {
+            RestoreSession();
+        }
+
+        RefreshRecentMenus();
+        RefreshJumpList();
+    }
+
+    private void RestoreSession()
+    {
+        var session = _recentItems.LastSession;
+        if (session == null || (session.TabFiles.Count == 0 && session.FolderPath == null))
+        {
+            AddTab(null);
+            return;
+        }
+
+        // Restore tabs (skip files that no longer exist)
+        foreach (var file in session.TabFiles)
+        {
+            if (File.Exists(file))
+                AddTab(file);
+        }
+        if (_tabs.Count == 0)
+            AddTab(null);
+
+        // Restore active tab
+        if (session.ActiveFile != null)
+        {
+            var active = _tabs.FirstOrDefault(t =>
+                string.Equals(t.FilePath, session.ActiveFile, StringComparison.OrdinalIgnoreCase));
+            if (active != null)
+                TabCtrl.SelectedItem = active.Item;
+        }
+
+        // Restore sidebar folder
+        if (session.FolderPath != null && Directory.Exists(session.FolderPath))
+        {
+            _currentFolderPath = session.FolderPath;
+            FolderNameLabel.Text = Path.GetFileName(session.FolderPath) is { Length: > 0 } n
+                ? n : session.FolderPath;
+            FileTree.ItemsSource = FileTreeItem.LoadChildren(session.FolderPath);
+            ShowSidebar();
         }
     }
 
@@ -104,10 +152,14 @@ public partial class MainWindow : Window
 
     private void LoadFolder(string folderPath)
     {
+        _currentFolderPath = folderPath;
         FolderNameLabel.Text = Path.GetFileName(folderPath) is { Length: > 0 } n ? n : folderPath;
         FileTree.ItemsSource = FileTreeItem.LoadChildren(folderPath);
         if (!_sidebarVisible)
             ShowSidebar();
+        _recentItems.AddFolder(folderPath);
+        RefreshRecentMenus();
+        RefreshJumpList();
     }
 
     // ─────────── File tree events ──────────────────────────
@@ -235,6 +287,9 @@ public partial class MainWindow : Window
         tabInfo.FilePath = path;
         tabInfo.UpdateHeader();
         Title = $"Editor — {Path.GetFileName(path)}";
+        _recentItems.AddFile(path);
+        RefreshRecentMenus();
+        RefreshJumpList();
     }
 
     private string ResolvePath(string path)
@@ -333,6 +388,85 @@ public partial class MainWindow : Window
         var tabInfo = FindTabInfo(sender);
         if (tabInfo != null)
             CloseTab(tabInfo, e.Force);
+    }
+
+    // ─────────── Recent items ──────────────────────────────────
+
+    private void RefreshRecentMenus()
+    {
+        PopulateRecentMenu(RecentFilesMenu, _recentItems.RecentFiles, isFolder: false);
+        PopulateRecentMenu(RecentFoldersMenu, _recentItems.RecentFolders, isFolder: true);
+    }
+
+    private void PopulateRecentMenu(MenuItem menu, IReadOnlyList<string> items, bool isFolder)
+    {
+        menu.Items.Clear();
+        if (items.Count == 0)
+        {
+            var empty = new MenuItem { Header = "(なし)", IsEnabled = false };
+            menu.Items.Add(empty);
+            return;
+        }
+
+        foreach (var path in items)
+        {
+            var header = isFolder
+                ? Path.GetFileName(path) is { Length: > 0 } n ? n : path
+                : Path.GetFileName(path);
+            var item = new MenuItem { Header = header, ToolTip = path };
+            var captured = path;
+            item.Click += (_, _) =>
+            {
+                if (isFolder)
+                {
+                    if (Directory.Exists(captured))
+                        LoadFolder(captured);
+                }
+                else
+                {
+                    if (File.Exists(captured))
+                        OpenOrFocusFile(captured);
+                }
+            };
+            menu.Items.Add(item);
+        }
+    }
+
+    private void RefreshJumpList()
+    {
+        try
+        {
+            var exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+            var jumpList = new JumpList();
+
+            foreach (var folder in _recentItems.RecentFolders)
+            {
+                jumpList.JumpItems.Add(new JumpTask
+                {
+                    Title = Path.GetFileName(folder) is { Length: > 0 } n ? n : folder,
+                    Description = folder,
+                    ApplicationPath = exePath,
+                    Arguments = $"\"{folder}\"",
+                    CustomCategory = "最近のフォルダー"
+                });
+            }
+
+            foreach (var file in _recentItems.RecentFiles)
+            {
+                jumpList.JumpItems.Add(new JumpTask
+                {
+                    Title = Path.GetFileName(file),
+                    Description = file,
+                    ApplicationPath = exePath,
+                    Arguments = $"\"{file}\"",
+                    CustomCategory = "最近のファイル"
+                });
+            }
+
+            JumpList.SetJumpList(Application.Current, jumpList);
+            jumpList.Apply();
+        }
+        catch { /* Jump List is best-effort */ }
     }
 
     // ─────────── Menu handlers ───────────────
@@ -449,8 +583,19 @@ public partial class MainWindow : Window
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
             if (result != MessageBoxResult.Yes)
+            {
                 e.Cancel = true;
+                base.OnClosing(e);
+                return;
+            }
         }
+
+        var tabFiles = _tabs
+            .Where(t => t.FilePath != null)
+            .Select(t => t.FilePath!);
+        var activeFile = CurrentTabInfo?.FilePath;
+        _recentItems.SaveSession(_currentFolderPath, tabFiles, activeFile);
+
         base.OnClosing(e);
     }
 }
