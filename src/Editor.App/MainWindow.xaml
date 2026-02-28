@@ -609,17 +609,6 @@
                     <MenuItem Header="_Undo" Click="Undo_Click" InputGestureText="u"/>
                     <MenuItem Header="_Redo" Click="Redo_Click" InputGestureText="Ctrl+r"/>
                 </MenuItem>
-                <MenuItem Header="_View">
-                    <MenuItem Header="_Explorer" Click="ExplorerBtn_Click" InputGestureText="Ctrl+B"/>
-                    <Separator/>
-                    <MenuItem Header="Line _Numbers" x:Name="LineNumMenu" IsCheckable="True" IsChecked="True"
-                              Click="LineNumbers_Click"/>
-                    <MenuItem Header="Syntax _Highlighting" x:Name="SyntaxMenu" IsCheckable="True" IsChecked="True"
-                              Click="Syntax_Click"/>
-                    <Separator/>
-                    <MenuItem Header="Theme: Dracula" Click="ThemeDracula_Click"/>
-                    <MenuItem Header="Theme: Dark" Click="ThemeDark_Click"/>
-                </MenuItem>
             </Menu>
 
             <StackPanel Grid.Column="2" Orientation="Horizontal"

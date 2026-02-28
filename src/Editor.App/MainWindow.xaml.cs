@@ -866,24 +866,6 @@ public partial class MainWindow : Window
     private void Undo_Click(object sender, RoutedEventArgs e) => CurrentEditor?.Engine.ProcessKey("u");
     private void Redo_Click(object sender, RoutedEventArgs e) => CurrentEditor?.Engine.ProcessKey("r", ctrl: true);
 
-    private void LineNumbers_Click(object sender, RoutedEventArgs e)
-    {
-        var mi = (MenuItem)sender;
-        CurrentEditor?.ExecuteCommand(mi.IsChecked ? "set number" : "set nonumber");
-    }
-
-    private void Syntax_Click(object sender, RoutedEventArgs e)
-    {
-        var mi = (MenuItem)sender;
-        CurrentEditor?.ExecuteCommand(mi.IsChecked ? "syntax on" : "syntax off");
-    }
-
-    private void ThemeDracula_Click(object sender, RoutedEventArgs e)
-        => ApplyColorTheme("Dracula", _customBackground, _customAccent);
-
-    private void ThemeDark_Click(object sender, RoutedEventArgs e)
-        => ApplyColorTheme("Dark", _customBackground, _customAccent);
-
     private void ColorTheme_Checked(object sender, RoutedEventArgs e)
     {
         if (!IsLoaded) return;
