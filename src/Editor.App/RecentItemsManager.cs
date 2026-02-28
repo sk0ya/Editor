@@ -23,6 +23,7 @@ internal sealed class RecentItemsManager
         public List<string> Folders { get; set; } = [];
         public List<string> Files { get; set; } = [];
         public SessionState? LastSession { get; set; }
+        public string TabPlacement { get; set; } = "Top";
     }
 
     private RecentData _data;
@@ -35,6 +36,7 @@ internal sealed class RecentItemsManager
     public IReadOnlyList<string> RecentFolders => _data.Folders;
     public IReadOnlyList<string> RecentFiles => _data.Files;
     public SessionState? LastSession => _data.LastSession;
+    public string TabPlacement => _data.TabPlacement;
 
     public void AddFolder(string path)
     {
@@ -45,6 +47,12 @@ internal sealed class RecentItemsManager
     public void AddFile(string path)
     {
         AddItem(_data.Files, path);
+        Save();
+    }
+
+    public void SaveTabPlacement(string placement)
+    {
+        _data.TabPlacement = placement;
         Save();
     }
 

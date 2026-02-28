@@ -30,12 +30,15 @@ public partial class MainWindow : Window
         }
     }
 
+    private enum SidebarPanel { None, Explorer, Settings }
+
     private readonly List<TabInfo> _tabs = [];
     private readonly RecentItemsManager _recentItems = new();
     private EditorTheme _currentTheme = EditorTheme.Dracula;
     private bool _sidebarVisible;
     private double _sidebarWidth = 220;
     private string? _currentFolderPath;
+    private SidebarPanel _activeSidebarPanel = SidebarPanel.None;
 
     private VimEditorControl? CurrentEditor =>
         TabCtrl.SelectedItem is TabItem ti ? ti.Content as VimEditorControl : null;
@@ -69,6 +72,7 @@ public partial class MainWindow : Window
 
         RefreshRecentMenus();
         RefreshJumpList();
+        ApplyTabPlacement(_recentItems.TabPlacement);
     }
 
     private void RestoreSession()
@@ -121,14 +125,29 @@ public partial class MainWindow : Window
 
     // ─────────── Sidebar ───────────────────────────────────
 
-    private void ShowSidebar()
+    private void ShowSidebar(SidebarPanel panel = SidebarPanel.Explorer)
     {
         SidebarCol.Width = new GridLength(_sidebarWidth, GridUnitType.Pixel);
         SidebarCol.MinWidth = 80;
         SplitterCol.Width = new GridLength(4, GridUnitType.Pixel);
         SplitterCol.MinWidth = 4;
-        ExplorerBtn.IsChecked = true;
         _sidebarVisible = true;
+        _activeSidebarPanel = panel;
+
+        if (panel == SidebarPanel.Settings)
+        {
+            ExplorerPanel.Visibility = Visibility.Collapsed;
+            SettingsPanel.Visibility = Visibility.Visible;
+            ExplorerBtn.IsChecked = false;
+            SettingsBtn.IsChecked = true;
+        }
+        else
+        {
+            SettingsPanel.Visibility = Visibility.Collapsed;
+            ExplorerPanel.Visibility = Visibility.Visible;
+            ExplorerBtn.IsChecked = true;
+            SettingsBtn.IsChecked = false;
+        }
     }
 
     private void HideSidebar()
@@ -139,15 +158,17 @@ public partial class MainWindow : Window
         SplitterCol.Width = new GridLength(0);
         SplitterCol.MinWidth = 0;
         ExplorerBtn.IsChecked = false;
+        SettingsBtn.IsChecked = false;
         _sidebarVisible = false;
+        _activeSidebarPanel = SidebarPanel.None;
     }
 
     private void ToggleSidebar()
     {
-        if (_sidebarVisible)
+        if (_sidebarVisible && _activeSidebarPanel == SidebarPanel.Explorer)
             HideSidebar();
         else
-            ShowSidebar();
+            ShowSidebar(SidebarPanel.Explorer);
     }
 
     private void LoadFolder(string folderPath)
@@ -524,7 +545,58 @@ public partial class MainWindow : Window
             LoadFolder(path);
     }
 
-    private void ExplorerBtn_Click(object sender, RoutedEventArgs e) => ToggleSidebar();
+    private void ExplorerBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_sidebarVisible && _activeSidebarPanel == SidebarPanel.Explorer)
+            HideSidebar();
+        else
+            ShowSidebar(SidebarPanel.Explorer);
+    }
+
+    private void SettingsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_sidebarVisible && _activeSidebarPanel == SidebarPanel.Settings)
+            HideSidebar();
+        else
+            ShowSidebar(SidebarPanel.Settings);
+    }
+
+    private void TabPosition_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (sender is not RadioButton rb || rb.Tag is not string placementStr) return;
+
+        var placement = placementStr switch
+        {
+            "Bottom" => Dock.Bottom,
+            "Left"   => Dock.Left,
+            "Right"  => Dock.Right,
+            _        => Dock.Top
+        };
+        TabCtrl.TabStripPlacement = placement;
+        _recentItems.SaveTabPlacement(placementStr);
+    }
+
+    private void ApplyTabPlacement(string placement)
+    {
+        var dock = placement switch
+        {
+            "Bottom" => Dock.Bottom,
+            "Left"   => Dock.Left,
+            "Right"  => Dock.Right,
+            _        => Dock.Top
+        };
+        TabCtrl.TabStripPlacement = dock;
+
+        var rb = placement switch
+        {
+            "Bottom" => TabPositionBottom,
+            "Left"   => TabPositionLeft,
+            "Right"  => TabPositionRight,
+            _        => TabPositionTop
+        };
+        rb.IsChecked = true;
+    }
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {

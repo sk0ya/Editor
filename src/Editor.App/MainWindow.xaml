@@ -102,6 +102,44 @@
             </Setter>
         </Style>
 
+        <!-- ── Settings radio button ── -->
+        <Style x:Key="SettingRadioButton" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid Grid.Column="0" Width="14" Height="14"
+                                  VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <Ellipse x:Name="Outer" Stroke="#666666" StrokeThickness="1.5" Fill="Transparent"/>
+                                <Ellipse x:Name="Inner" Width="6" Height="6" Fill="#CCCCCC" Visibility="Collapsed"/>
+                            </Grid>
+                            <ContentPresenter Grid.Column="1" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Inner" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="Outer" Property="Stroke" Value="#CCCCCC"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Outer" Property="Stroke" Value="#AAAAAA"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- ── Activity Bar toggle button ── -->
         <Style x:Key="ActivityBarButton" TargetType="ToggleButton">
             <Setter Property="Width" Value="48"/>
@@ -475,8 +513,9 @@
             <!-- Activity Bar -->
             <Border Grid.Column="0" Background="#1E1E1E"
                     BorderBrush="#2D2D30" BorderThickness="0,0,1,0">
-                <StackPanel Orientation="Vertical">
+                <DockPanel LastChildFill="False">
                     <ToggleButton x:Name="ExplorerBtn"
+                                  DockPanel.Dock="Top"
                                   Style="{StaticResource ActivityBarButton}"
                                   Click="ExplorerBtn_Click"
                                   ToolTip="Explorer (Ctrl+B)">
@@ -486,11 +525,22 @@
                                    Foreground="{Binding Foreground,
                                        RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                     </ToggleButton>
-                </StackPanel>
+                    <ToggleButton x:Name="SettingsBtn"
+                                  DockPanel.Dock="Bottom"
+                                  Style="{StaticResource ActivityBarButton}"
+                                  Click="SettingsBtn_Click"
+                                  ToolTip="設定">
+                        <TextBlock Text="&#xE713;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="22"
+                                   Foreground="{Binding Foreground,
+                                       RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
+                    </ToggleButton>
+                </DockPanel>
             </Border>
 
-            <!-- Sidebar -->
-            <Grid Grid.Column="1" Background="#252526"
+            <!-- Sidebar: Explorer -->
+            <Grid x:Name="ExplorerPanel" Grid.Column="1" Background="#252526"
                   ClipToBounds="True">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="35"/>
@@ -529,6 +579,59 @@
                           VirtualizingStackPanel.IsVirtualizing="True"
                           VirtualizingStackPanel.VirtualizationMode="Recycling"
                           SelectedItemChanged="FileTree_SelectedItemChanged"/>
+            </Grid>
+
+            <!-- Sidebar: Settings -->
+            <Grid x:Name="SettingsPanel" Grid.Column="1" Background="#252526"
+                  ClipToBounds="True" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="35"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Padding="12,0,4,0">
+                    <TextBlock Text="設定"
+                               FontSize="11" FontWeight="Bold"
+                               Foreground="#BBBBBB"
+                               FontFamily="Cascadia Code, Consolas"
+                               VerticalAlignment="Center"/>
+                </Border>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12,12,12,12">
+
+                        <TextBlock Text="タブの位置"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="#888888"
+                                   FontFamily="Cascadia Code, Consolas"
+                                   Margin="0,0,0,6"/>
+                        <RadioButton x:Name="TabPositionTop"
+                                     Content="上 (Top)"
+                                     Tag="Top"
+                                     GroupName="TabPosition"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="TabPosition_Checked"/>
+                        <RadioButton x:Name="TabPositionBottom"
+                                     Content="下 (Bottom)"
+                                     Tag="Bottom"
+                                     GroupName="TabPosition"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="TabPosition_Checked"/>
+                        <RadioButton x:Name="TabPositionLeft"
+                                     Content="左 (Left)"
+                                     Tag="Left"
+                                     GroupName="TabPosition"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="TabPosition_Checked"/>
+                        <RadioButton x:Name="TabPositionRight"
+                                     Content="右 (Right)"
+                                     Tag="Right"
+                                     GroupName="TabPosition"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="TabPosition_Checked"/>
+
+                    </StackPanel>
+                </ScrollViewer>
             </Grid>
 
             <!-- Resizable splitter -->
