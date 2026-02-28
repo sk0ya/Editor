@@ -398,6 +398,37 @@
             </Setter>
         </Style>
 
+        <!-- ── Search popup list item ── -->
+        <Style x:Key="SearchItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#094771"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#2A2D36"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- ── FileTreeItem data template ── -->
         <HierarchicalDataTemplate DataType="{x:Type local:FileTreeItem}"
                                   ItemsSource="{Binding Children}">
@@ -868,6 +899,90 @@
                     </Style>
                 </TabControl.ItemContainerStyle>
             </TabControl>
+        </Grid>
+
+        <!-- ── Search overlay (Ctrl+N "Go to Anything") ── -->
+        <Grid x:Name="SearchOverlay"
+              Grid.Row="0" Grid.RowSpan="2"
+              Panel.ZIndex="100"
+              Visibility="Collapsed"
+              Background="#80000000"
+              MouseDown="SearchOverlay_MouseDown">
+            <Border x:Name="SearchPopupBox"
+                    Width="600" MaxHeight="440"
+                    VerticalAlignment="Top" HorizontalAlignment="Center"
+                    Margin="0,50,0,0"
+                    MouseDown="SearchPopupBox_MouseDown"
+                    Background="#252526"
+                    BorderBrush="#454545"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <Border.Effect>
+                    <DropShadowEffect Color="Black" BlurRadius="18" ShadowDepth="5" Opacity="0.65"/>
+                </Border.Effect>
+                <StackPanel>
+                    <!-- Mode tabs row -->
+                    <Border Background="#1A1A1A" CornerRadius="4,4,0,0" Padding="8,6,8,0">
+                        <StackPanel x:Name="SearchModeTabs" Orientation="Horizontal"/>
+                    </Border>
+                    <!-- Search input row -->
+                    <Border Background="#1E1E1E" Padding="12,8">
+                        <TextBox x:Name="SearchBox"
+                                 Background="Transparent"
+                                 Foreground="#F8F8F2"
+                                 CaretBrush="White"
+                                 SelectionBrush="#094771"
+                                 BorderThickness="0"
+                                 FontFamily="Cascadia Code, Consolas"
+                                 FontSize="14"
+                                 VerticalAlignment="Center"
+                                 Padding="0,2"
+                                 TextChanged="SearchBox_TextChanged"
+                                 KeyDown="SearchBox_KeyDown"/>
+                    </Border>
+                    <!-- Divider -->
+                    <Border Height="1" Background="#3A3D46"/>
+                    <!-- Results list -->
+                    <ListBox x:Name="SearchResultList"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingStackPanel.IsVirtualizing="True"
+                             ItemContainerStyle="{StaticResource SearchItemStyle}"
+                             MaxHeight="360"
+                             MouseLeftButtonUp="SearchResultList_MouseLeftButtonUp">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="22"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Icon}"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="13"
+                                               Foreground="{Binding IconColor}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding DisplayName}"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding Detail}"
+                                               Foreground="#888888"
+                                               FontSize="11"
+                                               VerticalAlignment="Center"
+                                               Margin="8,0,4,0"
+                                               MaxWidth="200"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </StackPanel>
+            </Border>
         </Grid>
 
     </Grid>

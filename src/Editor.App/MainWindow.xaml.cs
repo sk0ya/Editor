@@ -32,6 +32,42 @@ public partial class MainWindow : Window
 
     private enum SidebarPanel { None, Explorer, Settings }
 
+    // ── Search popup ────────────────────────────────────────
+
+    private enum SearchMode { All, Class, File, Symbol, Action, Text }
+
+    private sealed class SearchResultItem
+    {
+        public required string DisplayName { get; init; }
+        public string Detail   { get; init; } = "";
+        public string Icon     { get; init; } = "\uE7C3";
+        public string IconColor{ get; init; } = "#99BBDD";
+        public string? FilePath          { get; init; }
+        public Action? ActionCallback    { get; init; }
+    }
+
+    private static readonly SearchMode[] SearchModeOrder =
+    [
+        SearchMode.All, SearchMode.Class, SearchMode.File,
+        SearchMode.Symbol, SearchMode.Action, SearchMode.Text
+    ];
+
+    private static readonly (string Label, string Color)[] SearchModeDisplays =
+    [
+        ("すべて",    "#BD93F9"),
+        ("クラス名",  "#50FA7B"),
+        ("ファイル名","#8BE9FD"),
+        ("シンボル",  "#FFB86C"),
+        ("アクション","#FF79C6"),
+        ("テキスト",  "#F1FA8C"),
+    ];
+
+    private SearchMode _searchMode = SearchMode.All;
+    private bool _searchActive;
+    private bool _searchTabsInitialized;
+
+    // ────────────────────────────────────────────────────────
+
     private readonly List<TabInfo> _tabs = [];
     private readonly RecentItemsManager _recentItems = new();
     private EditorTheme _currentTheme = EditorTheme.Dracula;
@@ -116,6 +152,43 @@ public partial class MainWindow : Window
                 ? n : session.FolderPath;
             FileTree.ItemsSource = FileTreeItem.LoadChildren(session.FolderPath);
             ShowSidebar();
+        }
+    }
+
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        base.OnPreviewKeyDown(e);
+
+        if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            if (!_searchActive)
+                OpenSearch();
+            else
+                CycleSearchMode();
+            e.Handled = true;
+            return;
+        }
+
+        if (!_searchActive) return;
+
+        switch (e.Key)
+        {
+            case Key.Escape:
+                CloseSearch();
+                e.Handled = true;
+                break;
+            case Key.Down:
+                MoveSelection(+1);
+                e.Handled = true;
+                break;
+            case Key.Up:
+                MoveSelection(-1);
+                e.Handled = true;
+                break;
+            case Key.Enter:
+                ExecuteSelectedResult();
+                e.Handled = true;
+                break;
         }
     }
 
@@ -1032,6 +1105,292 @@ public partial class MainWindow : Window
             ? new Thickness(6)
             : new Thickness(0);
     }
+
+    // ─────────── Search popup ────────────────────────────────
+
+    private void OpenSearch()
+    {
+        if (!_searchTabsInitialized)
+        {
+            InitSearchModeTabs();
+            _searchTabsInitialized = true;
+        }
+        _searchMode = SearchMode.All;
+        UpdateSearchModeUI();
+        SearchBox.Text = "";
+        SearchResultList.ItemsSource = null;
+        SearchOverlay.Visibility = Visibility.Visible;
+        _searchActive = true;
+        SearchBox.Focus();
+        RunSearch("");
+    }
+
+    private void InitSearchModeTabs()
+    {
+        SearchModeTabs.Children.Clear();
+        for (var i = 0; i < SearchModeOrder.Length; i++)
+        {
+            var (label, _) = SearchModeDisplays[i];
+            var idx = i;
+
+            var text = new TextBlock
+            {
+                Text       = label,
+                FontFamily = new FontFamily("Cascadia Code, Consolas"),
+                FontSize   = 11,
+                FontWeight = FontWeights.SemiBold,
+            };
+
+            var tab = new Border
+            {
+                Child           = text,
+                CornerRadius    = new CornerRadius(3, 3, 0, 0),
+                Padding         = new Thickness(10, 4, 10, 4),
+                Margin          = new Thickness(0, 0, 2, 0),
+                Cursor          = Cursors.Hand,
+                Tag             = idx,
+            };
+
+            tab.MouseDown += (_, e) =>
+            {
+                _searchMode = SearchModeOrder[idx];
+                UpdateSearchModeUI();
+                RunSearch(SearchBox.Text);
+                SearchBox.Focus();
+                e.Handled = true;
+            };
+
+            SearchModeTabs.Children.Add(tab);
+        }
+    }
+
+    private void CloseSearch()
+    {
+        SearchOverlay.Visibility = Visibility.Collapsed;
+        _searchActive = false;
+        CurrentEditor?.Focus();
+    }
+
+    private void CycleSearchMode()
+    {
+        var idx = Array.IndexOf(SearchModeOrder, _searchMode);
+        _searchMode = SearchModeOrder[(idx + 1) % SearchModeOrder.Length];
+        UpdateSearchModeUI();
+        RunSearch(SearchBox.Text);
+    }
+
+    private void UpdateSearchModeUI()
+    {
+        var activeIdx = (int)_searchMode;
+        for (var i = 0; i < SearchModeTabs.Children.Count; i++)
+        {
+            var tab  = (Border)SearchModeTabs.Children[i];
+            var text = (TextBlock)tab.Child;
+            var (_, colorHex) = SearchModeDisplays[i];
+            var accent = (Color)ColorConverter.ConvertFromString(colorHex);
+
+            if (i == activeIdx)
+            {
+                tab.Background    = new SolidColorBrush(Color.FromArgb(0x30, accent.R, accent.G, accent.B));
+                tab.BorderBrush   = new SolidColorBrush(accent);
+                tab.BorderThickness = new Thickness(0, 0, 0, 2);
+                text.Foreground   = new SolidColorBrush(accent);
+            }
+            else
+            {
+                tab.Background    = Brushes.Transparent;
+                tab.BorderBrush   = Brushes.Transparent;
+                tab.BorderThickness = new Thickness(0);
+                text.Foreground   = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66));
+            }
+        }
+    }
+
+    private void RunSearch(string query)
+    {
+        var results = _searchMode switch
+        {
+            SearchMode.File   => SearchFiles(query),
+            SearchMode.Text   => SearchText(query),
+            SearchMode.Action => SearchActions(query),
+            SearchMode.Class  => SearchLspSymbols(query, isClass: true),
+            SearchMode.Symbol => SearchLspSymbols(query, isClass: false),
+            _                 => SearchAll(query),
+        };
+        SearchResultList.ItemsSource = results;
+        if (results.Count > 0)
+            SearchResultList.SelectedIndex = 0;
+    }
+
+    private List<SearchResultItem> SearchAll(string query)
+    {
+        var results = new List<SearchResultItem>();
+        results.AddRange(SearchFiles(query).Take(8));
+        results.AddRange(SearchActions(query));
+        return results;
+    }
+
+    private List<SearchResultItem> SearchFiles(string query)
+    {
+        if (_currentFolderPath == null) return [];
+        try
+        {
+            return Directory
+                .EnumerateFiles(_currentFolderPath, "*", SearchOption.AllDirectories)
+                .Where(f => string.IsNullOrEmpty(query) ||
+                            Path.GetFileName(f).Contains(query, StringComparison.OrdinalIgnoreCase))
+                .Take(50)
+                .Select(f => new SearchResultItem
+                {
+                    DisplayName = Path.GetFileName(f),
+                    Detail      = Path.GetRelativePath(_currentFolderPath, f),
+                    Icon        = "\uE7C3",
+                    IconColor   = "#99BBDD",
+                    FilePath    = f
+                })
+                .ToList();
+        }
+        catch { return []; }
+    }
+
+    private List<SearchResultItem> SearchText(string query)
+    {
+        if (_currentFolderPath == null || string.IsNullOrWhiteSpace(query)) return [];
+        var results = new List<SearchResultItem>();
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(_currentFolderPath, "*",
+                         SearchOption.AllDirectories))
+            {
+                if (results.Count >= 50) break;
+                var info = new FileInfo(f);
+                if (info.Length > 1_000_000) continue;
+                try
+                {
+                    var lineNum = 0;
+                    foreach (var line in File.ReadLines(f))
+                    {
+                        lineNum++;
+                        if (line.Contains(query, StringComparison.OrdinalIgnoreCase))
+                        {
+                            results.Add(new SearchResultItem
+                            {
+                                DisplayName = $"{Path.GetFileName(f)}:{lineNum}",
+                                Detail      = line.Trim(),
+                                Icon        = "\uE721",
+                                IconColor   = "#F1FA8C",
+                                FilePath    = f
+                            });
+                            if (results.Count >= 50) break;
+                        }
+                    }
+                }
+                catch { /* skip unreadable */ }
+            }
+        }
+        catch { }
+        return results;
+    }
+
+    private List<SearchResultItem> SearchActions(string query)
+    {
+        var all = new (string Name, string Icon, string Color, Action Act)[]
+        {
+            ("新しいタブを開く",        "\uE710", "#50FA7B", () => { CloseSearch(); AddTab(null); }),
+            ("ファイルを開く...",        "\uED25", "#8BE9FD", () => { CloseSearch(); OpenFile_Click(this, new RoutedEventArgs()); }),
+            ("フォルダーを開く...",      "\uED41", "#E6C07B", () => { CloseSearch(); OpenFolder_Click(this, new RoutedEventArgs()); }),
+            ("ファイルを保存",           "\uE74E", "#BD93F9", () => { CloseSearch(); Save_Click(this, new RoutedEventArgs()); }),
+            ("エクスプローラーを切替",   "\uE8B7", "#AAAAAA", () => { CloseSearch(); ToggleSidebar(); }),
+            ("設定を開く",               "\uE713", "#AAAAAA", () => { CloseSearch(); ShowSidebar(SidebarPanel.Settings); }),
+            ("ウィンドウを閉じる",       "\uE8BB", "#FF79C6", () => { CloseSearch(); Close(); }),
+        };
+        return all
+            .Where(a => string.IsNullOrEmpty(query) ||
+                        a.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Select(a => new SearchResultItem
+            {
+                DisplayName   = a.Name,
+                Icon          = a.Icon,
+                IconColor     = a.Color,
+                ActionCallback = a.Act
+            })
+            .ToList();
+    }
+
+    private static List<SearchResultItem> SearchLspSymbols(string query, bool isClass)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return [new SearchResultItem
+            {
+                DisplayName = isClass
+                    ? "クラス名検索: キーワードを入力してください"
+                    : "シンボル検索: キーワードを入力してください",
+                Icon      = "\uE721",
+                IconColor = "#888888"
+            }];
+        return [];
+    }
+
+    private void ExecuteSelectedResult()
+    {
+        if (SearchResultList.SelectedItem is not SearchResultItem item) return;
+        if (item.ActionCallback != null)
+        {
+            item.ActionCallback();
+        }
+        else if (item.FilePath != null)
+        {
+            CloseSearch();
+            OpenOrFocusFile(item.FilePath);
+        }
+    }
+
+    // Search event handlers
+
+    private void SearchOverlay_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        CloseSearch();
+        e.Handled = true;
+    }
+
+    private void SearchPopupBox_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true; // prevent overlay from closing
+    }
+
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_searchActive)
+            RunSearch(SearchBox.Text);
+    }
+
+    private void SearchBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        // Tab / Shift+Tab: handled here because Tab focus-traversal runs
+        // after PreviewKeyDown bubbles, so we intercept it at the TextBox level.
+        if (e.Key == Key.Tab)
+        {
+            MoveSelection(Keyboard.Modifiers == ModifierKeys.Shift ? -1 : +1);
+            e.Handled = true;
+        }
+    }
+
+    private void SearchResultList_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (SearchResultList.SelectedItem != null)
+            ExecuteSelectedResult();
+    }
+
+    private void MoveSelection(int delta)
+    {
+        var count = SearchResultList.Items.Count;
+        if (count == 0) return;
+        var next = Math.Clamp(SearchResultList.SelectedIndex + delta, 0, count - 1);
+        SearchResultList.SelectedIndex = next;
+        SearchResultList.ScrollIntoView(SearchResultList.SelectedItem);
+    }
+
+    // ─────────────────────────────────────────────────────────
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
