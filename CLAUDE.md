@@ -80,6 +80,29 @@ The layout is: Title bar (30 px) → main area with Activity Bar (48 px vertical
 3. **Ex command** — add a branch in `ExCommandProcessor.Execute`. Return `new ExResult(true, null, VimEvent.XxxRequested(...))` to communicate with the host app.
 4. **New VimEvent type** — add to the `VimEventType` enum in `VimEvent.cs`, add a factory method and record subclass, then handle it in `VimEditorControl.ProcessVimEvents`.
 
+## LSP (Language Server Protocol)
+
+LSP support lives in two layers:
+
+- **`Editor.Core/Lsp/`** — `ILspClient`, `LspModels` (pure .NET, no WPF)
+- **`Editor.Controls/Lsp/`** — `LspProcess` (JSON-RPC 2.0 over stdio), `LspClient` (implements `ILspClient`), `LspServerConfig` (extension → server command map), `LspManager` (bridges `VimEditorControl` with LSP)
+
+`LspManager` is owned by `VimEditorControl`. It starts/shares language server processes per executable, syncs documents, and fires `StateChanged` to update `EditorCanvas` diagnostics and completion popup.
+
+**Key bindings:**
+- `K` (Normal mode) — hover info shown in status bar
+- `Ctrl+Space` (Insert mode) — trigger completion popup
+- `↓`/`Ctrl+N`, `↑`/`Ctrl+P` — navigate completion list
+- `Tab`/`Enter` — insert selected completion item
+- `Escape` — dismiss completion
+
+**Supported servers** (auto-detected by file extension, must be installed separately):
+`csharp-ls` (.cs), `pylsp` (.py), `typescript-language-server` (.ts/.js), `rust-analyzer` (.rs), `gopls` (.go), `clangd` (.c/.cpp), `lua-language-server` (.lua)
+
+**Adding a new server:** Add an entry to `LspServerConfig._byExtension` in `Editor.Controls/Lsp/LspServerConfig.cs`.
+
+**Diagnostics** are rendered as wavy underlines on `EditorCanvas`. Colors are defined on `EditorTheme` (`DiagnosticError`, `DiagnosticWarning`, `DiagnosticInfo`, `DiagnosticHint`).
+
 ## Adding Syntax Highlighting for a New Language
 
 Implement `ISyntaxLanguage` (in `Editor.Core.Syntax`) and register the instance in the array inside `SyntaxEngine`. The interface requires `Name`, `Extensions`, and `Tokenize(string[] lines) → LineTokens[]`. Available `TokenKind` values: `Text`, `Keyword`, `Type`, `String`, `Comment`, `Number`, `Operator`, `Preprocessor`, `Identifier`, `Attribute`.

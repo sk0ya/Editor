@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Media;
 using Editor.Controls.Themes;
 using Editor.Core.Engine;
+using Editor.Core.Lsp;
 using Editor.Core.Models;
 using Editor.Core.Syntax;
 
@@ -35,6 +36,10 @@ public class EditorCanvas : FrameworkElement
     private string _imeCompositionText = string.Empty;
     private string[] _imeCandidates = [];
     private int _imeCandidateSelection = -1;
+    // LSP
+    private IReadOnlyList<LspDiagnostic> _diagnostics = [];
+    private IReadOnlyList<LspCompletionItem> _completionItems = [];
+    private int _completionSelection = -1;
 
     public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
 
@@ -79,6 +84,19 @@ public class EditorCanvas : FrameworkElement
     public void SetTokens(LineTokens[] tokens) { _tokens = tokens; InvalidateVisual(); }
     public void SetSearchMatches(List<CursorPosition> matches, string pattern) { _searchMatches = matches; _searchPattern = pattern; InvalidateVisual(); }
     public void ShowLineNumbers(bool show) { _showLineNumbers = show; InvalidateVisual(); }
+    public void SetDiagnostics(IReadOnlyList<LspDiagnostic> diagnostics)
+    {
+        _diagnostics = diagnostics;
+        InvalidateVisual();
+    }
+
+    public void SetCompletionItems(IReadOnlyList<LspCompletionItem> items, int selection)
+    {
+        _completionItems = items;
+        _completionSelection = selection;
+        InvalidateVisual();
+    }
+
     public void SetImeCompositionText(string text)
     {
         text ??= string.Empty;
@@ -242,11 +260,15 @@ public class EditorCanvas : FrameworkElement
             // Text with syntax coloring
             DrawLineText(dc, l, lineText, y, textLeft);
 
+            // LSP diagnostics (wavy underlines)
+            DrawDiagnostics(dc, l, y, textLeft, lineText);
+
             // Cursor
             DrawCursor(dc, l, y, textLeft, lineText);
         }
 
         DrawImeCandidatePopup(dc, textLeft, size);
+        DrawCompletionPopup(dc, textLeft, size);
 
         // Gutter border
         if (_showLineNumbers)
@@ -255,6 +277,104 @@ public class EditorCanvas : FrameworkElement
             dc.DrawLine(pen, new Point(lineNumGutter - 1, 0), new Point(lineNumGutter - 1, size.Height));
         }
     }
+
+    private void DrawDiagnostics(DrawingContext dc, int line, double y, double textLeft, string lineText)
+    {
+        foreach (var diag in _diagnostics)
+        {
+            if (diag.Range.Start.Line > line || diag.Range.End.Line < line) continue;
+
+            var brush = diag.Severity switch
+            {
+                DiagnosticSeverity.Error       => Theme.DiagnosticError,
+                DiagnosticSeverity.Warning     => Theme.DiagnosticWarning,
+                DiagnosticSeverity.Information => Theme.DiagnosticInfo,
+                _                              => Theme.DiagnosticHint
+            };
+
+            int startCol = line == diag.Range.Start.Line ? diag.Range.Start.Character : 0;
+            int endCol   = line == diag.Range.End.Line   ? diag.Range.End.Character   : lineText.Length;
+            endCol = Math.Max(startCol + 1, Math.Min(endCol, lineText.Length));
+
+            double xStart = textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX;
+            double xEnd   = textLeft + GetVisualX(lineText, endCol)   - _scrollOffsetX;
+            double yBase  = y + _lineHeight - 2;
+
+            DrawWavyLine(dc, new Pen(brush, 1.0), xStart, xEnd, yBase);
+        }
+    }
+
+    private static void DrawWavyLine(DrawingContext dc, Pen pen, double x1, double x2, double yBase)
+    {
+        const double step = 4.0;
+        const double amp  = 1.5;
+        for (double x = x1; x < x2 - step; x += step)
+        {
+            dc.DrawLine(pen, new Point(x,            yBase + amp),
+                             new Point(x + step / 2, yBase - amp));
+            dc.DrawLine(pen, new Point(x + step / 2, yBase - amp),
+                             new Point(x + step,     yBase + amp));
+        }
+    }
+
+    private void DrawCompletionPopup(DrawingContext dc, double textLeft, Size size)
+    {
+        if (_completionItems.Count == 0) return;
+
+        const int maxVisible = 10;
+        int count = Math.Min(maxVisible, _completionItems.Count);
+
+        var texts = new FormattedText[count];
+        double maxW = 0;
+        for (int i = 0; i < count; i++)
+        {
+            var item = _completionItems[i];
+            var label = item.Detail != null ? $"{item.Label}  {item.Detail}" : item.Label;
+            var ft = FormatText(label, Theme.Foreground);
+            texts[i] = ft;
+            maxW = Math.Max(maxW, ft.Width);
+        }
+
+        double rowH   = Math.Max(_lineHeight, texts.Max(static t => t.Height));
+        double padX   = 8;
+        double padY   = 4;
+        double popupW = maxW + padX * 2 + 24; // 24px for kind icon column
+        double popupH = rowH * count + padY * 2;
+
+        var cursor = GetCursorPixelPosition();
+        double x = cursor.X;
+        double y = cursor.Y + _lineHeight + 2;
+
+        if (x + popupW > size.Width)  x = Math.Max(textLeft, size.Width - popupW - 2);
+        if (y + popupH > size.Height) y = Math.Max(0, cursor.Y - popupH - 2);
+
+        var bg     = new SolidColorBrush(Color.FromArgb(0xF0, 0x1E, 0x1F, 0x29));
+        var border = new Pen(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)), 1);
+        dc.DrawRectangle(bg, border, new Rect(x, y, popupW, popupH));
+
+        for (int i = 0; i < count; i++)
+        {
+            double rowY = y + padY + rowH * i;
+            if (i == _completionSelection)
+                dc.DrawRectangle(Theme.SelectionBg, null, new Rect(x + 1, rowY, popupW - 2, rowH));
+
+            // Kind indicator dot
+            var kindBrush = GetCompletionKindBrush(_completionItems[i].Kind);
+            dc.DrawEllipse(kindBrush, null, new Point(x + padX + 4, rowY + rowH / 2), 4, 4);
+
+            dc.DrawText(texts[i], new Point(x + padX + 16, rowY + (rowH - texts[i].Height) / 2));
+        }
+    }
+
+    private Brush GetCompletionKindBrush(CompletionItemKind kind) => kind switch
+    {
+        CompletionItemKind.Class or CompletionItemKind.Interface => Theme.TokenType,
+        CompletionItemKind.Method or CompletionItemKind.Function or CompletionItemKind.Constructor => Theme.TokenKeyword,
+        CompletionItemKind.Field or CompletionItemKind.Property or CompletionItemKind.Variable => Theme.TokenAttribute,
+        CompletionItemKind.Keyword => Theme.TokenKeyword,
+        CompletionItemKind.Snippet => Theme.TokenString,
+        _ => Theme.TokenIdentifier
+    };
 
     private void DrawSelection(DrawingContext dc, int line, double y, double textLeft, string lineText)
     {

@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using Editor.Controls.Lsp;
 using Editor.Controls.Themes;
 using Editor.Core.Config;
 using Editor.Core.Engine;
@@ -138,6 +139,8 @@ public partial class VimEditorControl : UserControl
     private EditorTheme _theme = EditorTheme.Dracula;
     private bool _keyDownHandledByVim;
     private bool _isDragSelecting = false;
+    private LspManager _lspManager = null!;
+    private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
 
     // Buffer that tracks ImeProcessed key characters typed in Insert mode.
     // Used to detect imap sequences (e.g. "jj" → <Esc>) even when IME is ON.
@@ -176,6 +179,22 @@ public partial class VimEditorControl : UserControl
         _engine = new VimEngine(config);
         _engine.SetClipboardProvider(new WpfClipboardProvider());
 
+        _lspManager = new LspManager(Dispatcher);
+        _lspManager.StateChanged += OnLspStateChanged;
+        _lspManager.StatusMessage += OnLspStatusMessage;
+
+        _completionDebounce = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+        _completionDebounce.Tick += (_, _) =>
+        {
+            _completionDebounce.Stop();
+            if (_engine.Mode != VimMode.Insert || _lspManager.CompletionVisible) return;
+            var cur = _engine.Cursor;
+            _ = TriggerCompletionAsync(cur.Line, cur.Column);
+        };
+
         Focusable = true;
         KeyDown += OnKeyDown;
         TextInput += OnTextInput;
@@ -193,6 +212,17 @@ public partial class VimEditorControl : UserControl
         ApplyTheme();
     }
 
+    private void OnLspStateChanged()
+    {
+        Canvas.SetDiagnostics(_lspManager.CurrentDiagnostics);
+        Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection);
+    }
+
+    private void OnLspStatusMessage(string msg)
+    {
+        StatusBar.UpdateStatus(msg);
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         Focus();
@@ -202,6 +232,12 @@ public partial class VimEditorControl : UserControl
         TextCompositionManager.AddPreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
         if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
             hwndSource.AddHook(ImeWndProc);
+        // LSP: notify for files already loaded before Loaded fired (e.g. command-line arg).
+        // Guard against double-open: LoadFile already called OnFileOpened if the
+        // file was opened after the control was constructed.
+        var fp = _engine.CurrentBuffer.FilePath;
+        if (fp != null && _lspManager.CurrentUri == null)
+            _lspManager.OnFileOpened(fp, _engine.CurrentBuffer.Text.GetText());
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -214,6 +250,8 @@ public partial class VimEditorControl : UserControl
         DetachTsfUiElementSink();
         if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
             hwndSource.RemoveHook(ImeWndProc);
+        _completionDebounce.Stop();
+        _lspManager.Dispose();
     }
 
     /// <summary>
@@ -601,6 +639,7 @@ public partial class VimEditorControl : UserControl
     {
         _engine.LoadFile(path);
         UpdateAll();
+        _lspManager.OnFileOpened(path, _engine.CurrentBuffer.Text.GetText());
     }
 
     public void SetText(string text)
@@ -902,11 +941,15 @@ public partial class VimEditorControl : UserControl
             {
                 if (actualKey == Key.Tab)
                 {
+                    // Let OnKeyDown handle Tab when completion popup is visible.
+                    if (_lspManager.CompletionVisible) return;
                     ProcessKey("Tab", false, false, false);
                     e.Handled = true;
                 }
                 else if (actualKey == Key.Return)
                 {
+                    // Let OnKeyDown handle Enter when completion popup is visible.
+                    if (_lspManager.CompletionVisible) return;
                     ProcessKey("Return", false, false, false);
                     e.Handled = true;
                 }
@@ -980,6 +1023,47 @@ public partial class VimEditorControl : UserControl
 
         // In normal/visual/command mode, handle all key presses as vim keys
         var mode = _engine.Mode;
+
+        // LSP: Ctrl+Space triggers completion in Insert mode
+        if (ctrl && key == Key.Space && mode == VimMode.Insert)
+        {
+            var cursor = _engine.Cursor;
+            _ = TriggerCompletionAsync(cursor.Line, cursor.Column);
+            e.Handled = true;
+            return;
+        }
+
+        // LSP: completion popup navigation
+        if (_lspManager.CompletionVisible && mode == VimMode.Insert)
+        {
+            if (key == Key.Down || (ctrl && key == Key.N))
+            {
+                _lspManager.MoveCompletionSelection(1);
+                e.Handled = true;
+                return;
+            }
+            if (key == Key.Up || (ctrl && key == Key.P))
+            {
+                _lspManager.MoveCompletionSelection(-1);
+                e.Handled = true;
+                return;
+            }
+            if (key == Key.Tab || key == Key.Return)
+            {
+                InsertLspCompletion();
+                e.Handled = true;
+                _keyDownHandledByVim = true;
+                return;
+            }
+            if (key == Key.Escape)
+            {
+                _lspManager.HideCompletion();
+                // Also exit insert mode
+                ProcessKey("Escape", false, false, false);
+                e.Handled = true;
+                return;
+            }
+        }
 
         // Ctrl combinations are valid in every mode for the subset the engine supports.
         if (ctrl)
@@ -1081,8 +1165,152 @@ public partial class VimEditorControl : UserControl
     private void ProcessKey(string key, bool ctrl, bool shift, bool alt)
     {
         Canvas.ResetCursorBlink();
+
+        // LSP: K in Normal mode shows hover info
+        if (key == "K" && !ctrl && !shift && !alt && _engine.Mode == VimMode.Normal)
+        {
+            _ = ShowLspHoverAsync();
+            return;
+        }
+
+        bool hadCompletion = _lspManager.CompletionVisible;
+
         var events = _engine.ProcessKey(key, ctrl, shift, alt);
         ProcessVimEvents(events);
+
+        // LSP: notify text changes
+        if (events.Any(e => e.Type == VimEventType.TextChanged))
+            _lspManager.OnTextChanged(_engine.CurrentBuffer.Text.GetText());
+
+        // LSP: update completion popup after each Insert-mode keypress
+        if (_engine.Mode == VimMode.Insert && !ctrl && !alt && key.Length == 1)
+        {
+            char ch = key[0];
+            if (hadCompletion)
+            {
+                // Popup already visible — re-filter or close
+                var cursor = _engine.Cursor;
+                var bufLine = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
+                int col = cursor.Column;
+                int wordStart = col;
+                while (wordStart > 0 && (char.IsLetterOrDigit(bufLine[wordStart - 1]) || bufLine[wordStart - 1] == '_'))
+                    wordStart--;
+
+                if (ch == '.')
+                {
+                    // Dot = new member-access context: fresh completion
+                    _lspManager.HideCompletion();
+                    _completionDebounce.Stop();
+                    var cur = _engine.Cursor;
+                    _ = TriggerCompletionAsync(cur.Line, cur.Column);
+                }
+                else
+                {
+                    _lspManager.FilterCompletion(bufLine[wordStart..col]);
+                }
+            }
+            else
+            {
+                // Popup not visible — schedule auto-trigger
+                if (ch == '.')
+                {
+                    _completionDebounce.Stop();
+                    var cur = _engine.Cursor;
+                    _ = TriggerCompletionAsync(cur.Line, cur.Column);
+                }
+                else if (char.IsLetter(ch) || ch == '_')
+                {
+                    _completionDebounce.Stop();
+                    _completionDebounce.Start();
+                }
+                else
+                {
+                    _completionDebounce.Stop();
+                }
+            }
+        }
+        else if (hadCompletion && _engine.Mode != VimMode.Insert)
+        {
+            _lspManager.HideCompletion();
+            _completionDebounce.Stop();
+        }
+        else if (!ctrl && !alt && (key == "Back" || key == "Delete"))
+        {
+            // Backspace/Delete in insert with popup: re-filter
+            if (hadCompletion && _engine.Mode == VimMode.Insert)
+            {
+                var cursor = _engine.Cursor;
+                var bufLine = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
+                int col = cursor.Column;
+                int wordStart = col;
+                while (wordStart > 0 && (char.IsLetterOrDigit(bufLine[wordStart - 1]) || bufLine[wordStart - 1] == '_'))
+                    wordStart--;
+                _lspManager.FilterCompletion(bufLine[wordStart..col]);
+            }
+        }
+    }
+
+    private async Task TriggerCompletionAsync(int line, int col)
+    {
+        var msg = await _lspManager.RequestCompletionAsync(line, col);
+        if (!string.IsNullOrEmpty(msg))
+        {
+            StatusBar.UpdateStatus(msg);
+            return;
+        }
+
+        // Apply filter for any prefix already typed at (or since) the trigger position.
+        // Use the current cursor position, not the trigger position, since the user
+        // may have typed more while the async request was in flight.
+        if (_lspManager.CompletionVisible)
+        {
+            var cursor = _engine.Cursor;
+            var bufLine = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
+            int c = cursor.Column;
+            int wordStart = c;
+            while (wordStart > 0 && (char.IsLetterOrDigit(bufLine[wordStart - 1]) || bufLine[wordStart - 1] == '_'))
+                wordStart--;
+            _lspManager.FilterCompletion(bufLine[wordStart..c]);
+        }
+    }
+
+    private async Task ShowLspHoverAsync()
+    {
+        var cursor = _engine.Cursor;
+        var text = await _lspManager.RequestHoverAsync(cursor.Line, cursor.Column);
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            // Show first non-empty line of hover in status bar
+            var firstLine = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? text;
+            StatusBar.UpdateStatus(firstLine.Trim());
+        }
+    }
+
+    private void InsertLspCompletion()
+    {
+        var item = _lspManager.GetSelectedCompletion();
+        if (item == null) return;
+
+        _lspManager.HideCompletion();
+
+        // Delete partial word before cursor and insert completion
+        var cursor = _engine.Cursor;
+        var line = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
+        int col = cursor.Column;
+
+        // Find start of current word (walk back over word chars)
+        int wordStart = col;
+        while (wordStart > 0 && (char.IsLetterOrDigit(line[wordStart - 1]) || line[wordStart - 1] == '_'))
+            wordStart--;
+
+        // Delete the partial prefix with Backspace keys, then insert completion
+        int deleteCount = col - wordStart;
+        for (int i = 0; i < deleteCount; i++)
+            ProcessKey("Back", false, false, false);
+
+        var insertText = item.InsertText ?? item.Label;
+        foreach (var ch in insertText)
+            ProcessKey(ch.ToString(), false, false, false);
     }
 
     /// <summary>

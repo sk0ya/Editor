@@ -21,6 +21,12 @@ public class EditorTheme
     public Brush StatusBarReplace { get; init; } = new SolidColorBrush(Color.FromRgb(0x87, 0x00, 0x00));
     public Brush StatusBarFg { get; init; } = Brushes.White;
 
+    // Diagnostic colors
+    public Brush DiagnosticError   { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0x00));
+    public Brush DiagnosticWarning { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0xA5, 0x00));
+    public Brush DiagnosticInfo    { get; init; } = new SolidColorBrush(Color.FromRgb(0x00, 0xBF, 0xFF));
+    public Brush DiagnosticHint    { get; init; } = new SolidColorBrush(Color.FromRgb(0x90, 0x90, 0x90));
+
     // Token colors
     public Brush TokenKeyword { get; init; } = new SolidColorBrush(Color.FromRgb(0x56, 0x9C, 0xD6));
     public Brush TokenString { get; init; } = new SolidColorBrush(Color.FromRgb(0xCE, 0x91, 0x78));
@@ -67,6 +73,10 @@ public class EditorTheme
         TokenIdentifier = new SolidColorBrush(Color.FromRgb(0xF8, 0xF8, 0xF2)),
         StatusBarFg = new SolidColorBrush(Color.FromRgb(0x28, 0x2A, 0x36)),
         SearchHighlightBg = new SolidColorBrush(Color.FromArgb(0xA0, 0xFF, 0xB8, 0x6C)),
+        DiagnosticError   = new SolidColorBrush(Color.FromRgb(0xFF, 0x55, 0x55)),
+        DiagnosticWarning = new SolidColorBrush(Color.FromRgb(0xFF, 0xB8, 0x6C)),
+        DiagnosticInfo    = new SolidColorBrush(Color.FromRgb(0x8B, 0xE9, 0xFD)),
+        DiagnosticHint    = new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)),
     };
 
     public static EditorTheme Dark { get; } = new();
