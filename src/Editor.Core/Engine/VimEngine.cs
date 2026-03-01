@@ -187,6 +187,14 @@ public class VimEngine
             var literal = _pendingMappedInput[0];
             _pendingMappedInput.RemoveAt(0);
             ProcessStroke(literal, events, allowMapping: false);
+
+            // If the command parser is now mid-sequence (e.g. buffer == "g" after
+            // flushing the first 'g'), the remaining pending keys must also be
+            // dispatched immediately as literals.  Without this, a user map that
+            // starts with 'g' (like nnoremap gf …) causes the second 'g' of 'gg'
+            // to be re-held as a potential map prefix, requiring an extra keypress.
+            if (!string.IsNullOrEmpty(_commandParser.Buffer))
+                FlushPendingMappedInput(events);
         }
 
         return true;
