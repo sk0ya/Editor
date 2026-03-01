@@ -147,7 +147,7 @@ public class TextBuffer
     }
 
     // Find next occurrence of pattern from position
-    public CursorPosition? FindNext(string pattern, CursorPosition from, bool forward, bool ignoreCase = false)
+    public CursorPosition? FindNext(string pattern, CursorPosition from, bool forward, bool ignoreCase = false, bool wrapScan = true)
     {
         if (string.IsNullOrEmpty(pattern)) return null;
         var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
@@ -162,6 +162,7 @@ public class TextBuffer
                 var idx = line.IndexOf(pattern, startCol, comparison);
                 if (idx >= 0) return new CursorPosition(l, idx);
             }
+            if (!wrapScan) return null;
             // Wrap around
             for (int l = 0; l <= from.Line; l++)
             {
@@ -181,6 +182,7 @@ public class TextBuffer
                 var idx = line.LastIndexOf(pattern, Math.Max(0, endCol - 1), comparison);
                 if (idx >= 0) return new CursorPosition(l, idx);
             }
+            if (!wrapScan) return null;
             // Wrap
             for (int l = _lines.Count - 1; l >= from.Line; l--)
             {

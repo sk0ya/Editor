@@ -117,6 +117,7 @@ public class CommandParser
                 't' => Finalize(count, null, "gt"),
                 'T' => Finalize(count, null, "gT"),
                 'd' => Finalize(count, null, "gd"),
+                '_' => Finalize(count, null, "g_"),
                 _ => (CommandState.Invalid, null)
             };
         }
@@ -163,6 +164,7 @@ public class CommandParser
                     'k' => Finalize(count, null, "gk"),
                     't' => Finalize(count, null, "gt"),
                     'T' => Finalize(count, null, "gT"),
+                    '_' => Finalize(count, null, "g_"),
                     _ => (CommandState.Invalid, null)
                 };
             }

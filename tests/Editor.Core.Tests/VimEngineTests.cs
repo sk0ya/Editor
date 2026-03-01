@@ -655,4 +655,106 @@ public class VimEngineTests
         Assert.Equal(VimMode.Insert, engine.Mode);
         Assert.Equal("jk", engine.CurrentBuffer.Text.GetText());
     }
+
+    // ── VimConfig / vimrc parsing tests ──────────────────────────────────
+
+    [Fact]
+    public void VimConfig_ParseLeader_SpaceLeader()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["let mapleader=\"\\<Space>\""]);
+        Assert.Equal(" ", cfg.Leader);
+    }
+
+    [Fact]
+    public void VimConfig_ParseMap_ExpandsLeader()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines([
+            "let mapleader=\"\\<Space>\"",
+            "nnoremap <Leader>w :w<CR>",
+        ]);
+        Assert.True(cfg.NormalMaps.ContainsKey(" w"), "Leader+w map should be registered with space");
+        Assert.Equal(":w<CR>", cfg.NormalMaps[" w"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseMap_StripsSilentFlag()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["nnoremap <silent>J 15j"]);
+        Assert.True(cfg.NormalMaps.ContainsKey("J"), "J should be mapped after stripping <silent>");
+        Assert.Equal("15j", cfg.NormalMaps["J"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseMap_CmdReplacement()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["nnoremap t, <Cmd>bp<CR>"]);
+        Assert.True(cfg.NormalMaps.ContainsKey("t,"));
+        Assert.Equal(":bp<CR>", cfg.NormalMaps["t,"]);
+    }
+
+    [Fact]
+    public void VimConfig_xnoremap_MapsToVisual()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["xnoremap Q :qa<CR>"]);
+        Assert.True(cfg.VisualMaps.ContainsKey("Q"));
+    }
+
+    [Fact]
+    public void VimOptions_WrapScan_ParsedFromVimrc()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["set nowrapscan"]);
+        Assert.False(cfg.Options.WrapScan);
+    }
+
+    [Fact]
+    public void VimOptions_NoopOptions_ParsedSilently()
+    {
+        var cfg = new VimConfig();
+        // Should not throw and should silently accept all these
+        cfg.ParseLines([
+            "set mouse=a",
+            "set noswapfile",
+            "set nobackup",
+            "set autoread",
+            "set wildmenu",
+            "set showmatch",
+            "set breakindent",
+            "set laststatus=2",
+            "set history=10000",
+            "set visualbell t_vb=",
+        ]);
+        Assert.Equal(10000, cfg.Options.History);
+    }
+
+    [Fact]
+    public void G_Motion_MovesToLastNonBlank()
+    {
+        var engine = CreateEngine("  hello  ");
+        engine.ProcessKey("g");
+        engine.ProcessKey("_");
+        Assert.Equal(6, engine.Cursor.Column); // 'o' in "hello"
+    }
+
+    [Fact]
+    public void WrapScan_False_SearchStopsAtEnd()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["set nowrapscan"]);
+        var engine = CreateEngine("abc\nabc", cfg);
+        // Go to second line where "abc" is
+        engine.ProcessKey("j");
+        // Start searching forward — should not wrap back to line 0
+        engine.ProcessKey("/");
+        foreach (var ch in "abc") engine.ProcessKey(ch.ToString());
+        engine.ProcessKey("Return");
+        // We're on line 1. Now press n — should NOT move to line 0
+        engine.ProcessKey("n");
+        Assert.Equal(1, engine.Cursor.Line);
+    }
 }

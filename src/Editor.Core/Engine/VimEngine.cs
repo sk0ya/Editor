@@ -573,6 +573,10 @@ public class VimEngine
             case "ge": MoveCursor(WordEndBackward(count), events); break;
             case "gj": MoveVertical(count, events); break;
             case "gk": MoveVertical(-count, events); break;
+            case "g_":
+                var g_m = motion.Calculate("g_", _cursor, count);
+                if (g_m.HasValue) MoveCursor(g_m.Value.Target, events);
+                break;
             case "gg": MoveCursor(new CursorPosition(0, 0), events); break;
             case "G":
                 var lastLine = count == 1 ? buf.LineCount - 1 : count - 1;
@@ -1132,6 +1136,10 @@ public class VimEngine
                 for (int i = 0; i < count; i++)
                     _cursor = motion.MoveUp(_cursor);
                 return true;
+            case "g_":
+                var g_vm = motion.Calculate("g_", _cursor, count);
+                if (g_vm.HasValue) _cursor = g_vm.Value.Target;
+                return true;
             case "gg":
                 _cursor = new CursorPosition(0, 0);
                 _preferredColumn = 0;
@@ -1355,7 +1363,7 @@ public class VimEngine
             ? !_searchPattern.Any(char.IsUpper)
             : _config.Options.IgnoreCase;
 
-        var found = buf.FindNext(_searchPattern, _cursor, forward, ignoreCase);
+        var found = buf.FindNext(_searchPattern, _cursor, forward, ignoreCase, _config.Options.WrapScan);
         if (found.HasValue)
         {
             _markManager.AddJump(_cursor);
@@ -1365,7 +1373,10 @@ public class VimEngine
         }
         else
         {
-            EmitStatus(events, $"Pattern not found: {_searchPattern}");
+            var msg = _config.Options.WrapScan
+                ? $"Pattern not found: {_searchPattern}"
+                : $"Search hit {(forward ? "BOTTOM" : "TOP")}, continuing at {(forward ? "TOP" : "BOTTOM")} not done (no wrapscan)";
+            EmitStatus(events, msg);
         }
     }
 

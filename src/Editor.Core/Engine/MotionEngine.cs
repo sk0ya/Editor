@@ -38,6 +38,7 @@ public class MotionEngine
             "H" => ScreenTop(cursor),
             "M" => ScreenMiddle(cursor),
             "L" => ScreenBottom(cursor),
+            "g_" => LastNonBlank(cursor),
             _ => null
         };
     }
@@ -89,6 +90,14 @@ public class MotionEngine
         int col = 0;
         while (col < line.Length && char.IsWhiteSpace(line[col])) col++;
         return new Motion(cursor with { Column = col }, MotionType.Exclusive);
+    }
+
+    private Motion LastNonBlank(CursorPosition cursor)
+    {
+        var line = _buffer.GetLine(cursor.Line);
+        int col = line.Length - 1;
+        while (col > 0 && char.IsWhiteSpace(line[col])) col--;
+        return new Motion(cursor with { Column = Math.Max(0, col) }, MotionType.Inclusive);
     }
 
     private Motion EndOfLine(CursorPosition cursor, int lineOffset)
