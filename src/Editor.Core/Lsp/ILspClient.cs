@@ -17,7 +17,7 @@ public interface ILspClient : IDisposable
     Task CloseDocumentAsync(string uri);
     Task<IReadOnlyList<LspCompletionItem>> GetCompletionAsync(string uri, LspPosition position, CancellationToken ct = default);
     Task<LspHover?> GetHoverAsync(string uri, LspPosition position, CancellationToken ct = default);
-    Task<string?> GetDefinitionUriAsync(string uri, LspPosition position, CancellationToken ct = default);
+    Task<(string Uri, int Line, int Column)?> GetDefinitionAsync(string uri, LspPosition position, CancellationToken ct = default);
     Task<LspSignatureHelp?> GetSignatureHelpAsync(string uri, LspPosition position, CancellationToken ct = default);
     Task<IReadOnlyList<LspTextEdit>> GetFormattingEditsAsync(string uri, int tabSize, bool insertSpaces, CancellationToken ct = default);
 }

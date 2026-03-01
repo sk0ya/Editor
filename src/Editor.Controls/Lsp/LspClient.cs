@@ -98,7 +98,7 @@ public sealed class LspClient : ILspClient
         catch { return null; }
     }
 
-    public async Task<string?> GetDefinitionUriAsync(
+    public async Task<(string Uri, int Line, int Column)?> GetDefinitionAsync(
         string uri, LspPosition position, CancellationToken ct = default)
     {
         try
@@ -111,13 +111,42 @@ public sealed class LspClient : ILspClient
 
             if (result is null || result.Value.ValueKind == JsonValueKind.Null) return null;
 
+            JsonElement loc;
             if (result.Value.ValueKind == JsonValueKind.Array)
             {
-                var first = result.Value.EnumerateArray().FirstOrDefault();
-                return first.TryGetProperty("uri", out var u) ? u.GetString() : null;
+                loc = result.Value.EnumerateArray().FirstOrDefault();
+                if (loc.ValueKind == JsonValueKind.Undefined) return null;
             }
-            if (result.Value.ValueKind == JsonValueKind.Object)
-                return result.Value.TryGetProperty("uri", out var u) ? u.GetString() : null;
+            else if (result.Value.ValueKind == JsonValueKind.Object)
+                loc = result.Value;
+            else
+                return null;
+
+            // LocationLink: targetUri + targetSelectionRange
+            if (loc.TryGetProperty("targetUri", out var tu) && tu.GetString() is string targetUri)
+            {
+                int line = 0, col = 0;
+                if (loc.TryGetProperty("targetSelectionRange", out var tsr) &&
+                    tsr.TryGetProperty("start", out var start))
+                {
+                    line = start.TryGetProperty("line", out var l) ? l.GetInt32() : 0;
+                    col  = start.TryGetProperty("character", out var c) ? c.GetInt32() : 0;
+                }
+                return (targetUri, line, col);
+            }
+
+            // Location: uri + range
+            if (loc.TryGetProperty("uri", out var u) && u.GetString() is string locUri)
+            {
+                int line = 0, col = 0;
+                if (loc.TryGetProperty("range", out var range) &&
+                    range.TryGetProperty("start", out var start))
+                {
+                    line = start.TryGetProperty("line", out var l) ? l.GetInt32() : 0;
+                    col  = start.TryGetProperty("character", out var c) ? c.GetInt32() : 0;
+                }
+                return (locUri, line, col);
+            }
 
             return null;
         }

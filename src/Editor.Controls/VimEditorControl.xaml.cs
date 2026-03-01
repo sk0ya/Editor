@@ -20,9 +20,11 @@ public class QuitRequestedEventArgs(bool force) : EventArgs
 {
     public bool Force { get; } = force;
 }
-public class OpenFileRequestedEventArgs(string filePath) : EventArgs
+public class OpenFileRequestedEventArgs(string filePath, int line = 0, int column = 0) : EventArgs
 {
     public string FilePath { get; } = filePath;
+    public int Line { get; } = line;
+    public int Column { get; } = column;
 }
 public class NewTabRequestedEventArgs(string? filePath) : EventArgs
 {
@@ -642,6 +644,12 @@ public partial class VimEditorControl : UserControl
         _engine.LoadFile(path);
         UpdateAll();
         _lspManager.OnFileOpened(path, _engine.CurrentBuffer.Text.GetText());
+    }
+
+    public void NavigateTo(int line, int column)
+    {
+        var events = _engine.SetCursorPosition(new CursorPosition(line, column));
+        ProcessVimEvents(events);
     }
 
     public void SetText(string text)
@@ -1334,18 +1342,26 @@ public partial class VimEditorControl : UserControl
     private async Task HandleGoToDefinitionAsync()
     {
         var cursor = _engine.Cursor;
-        var filePath = await _lspManager.RequestDefinitionAsync(cursor.Line, cursor.Column);
-        if (filePath == null)
+        var result = await _lspManager.RequestDefinitionAsync(cursor.Line, cursor.Column);
+        if (result == null)
         {
             StatusBar.UpdateStatus("LSP: definition not found");
             return;
         }
+        var (filePath, line, col) = result.Value;
         if (!System.IO.File.Exists(filePath))
         {
-            StatusBar.UpdateStatus($"LSP: definition in non-navigable location");
+            StatusBar.UpdateStatus("LSP: definition in non-navigable location");
             return;
         }
-        OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(filePath));
+        // Same file: just move the cursor without reopening
+        if (string.Equals(filePath, _engine.CurrentBuffer.FilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            var events = _engine.SetCursorPosition(new CursorPosition(line, col));
+            ProcessVimEvents(events);
+            return;
+        }
+        OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(filePath, line, col));
     }
 
     private async Task HandleFormatDocumentAsync()

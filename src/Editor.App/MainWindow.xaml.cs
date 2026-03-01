@@ -712,6 +712,10 @@ public partial class MainWindow : Window
         }
 
         OpenFile(path);
+
+        // Navigate to the target position if provided (e.g. from go-to-definition)
+        if ((e.Line > 0 || e.Column > 0) && sender is VimEditorControl editor)
+            editor.NavigateTo(e.Line, e.Column);
     }
 
     private void Editor_NewTabRequested(object? sender, NewTabRequestedEventArgs e)

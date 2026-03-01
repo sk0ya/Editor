@@ -96,7 +96,7 @@ public sealed class LspManager : IDisposable
         {
             try
             {
-                client = new LspClient(def.Executable, def.Args, Path.GetDirectoryName(filePath));
+                client = new LspClient(def.Executable, def.Args, FindWorkspaceRoot(filePath));
                 client.DiagnosticsChanged += OnDiagnosticsChanged;
                 _clients[def.Executable] = client;
                 Log($"[LSP] Process started: {def.Executable}");
@@ -170,13 +170,19 @@ public sealed class LspManager : IDisposable
         return hover?.Value;
     }
 
-    /// <summary>Request go-to-definition and return the target file path (or null).</summary>
-    public async Task<string?> RequestDefinitionAsync(int line, int character)
+    /// <summary>Request go-to-definition. Returns (localFilePath, line, column) or null.</summary>
+    public async Task<(string FilePath, int Line, int Column)?> RequestDefinitionAsync(int line, int character)
     {
         if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return null;
-        var uri = await _currentClient.GetDefinitionUriAsync(_currentUri, new LspPosition(line, character));
-        if (uri == null) return null;
-        try { return new Uri(uri).LocalPath; } catch { return null; }
+        var result = await _currentClient.GetDefinitionAsync(_currentUri, new LspPosition(line, character));
+        if (result == null) return null;
+        try
+        {
+            var parsed = new Uri(result.Value.Uri);
+            if (!parsed.IsFile) return null;
+            return (parsed.LocalPath, result.Value.Line, result.Value.Column);
+        }
+        catch { return null; }
     }
 
     public void MoveCompletionSelection(int delta)
@@ -268,7 +274,7 @@ public sealed class LspManager : IDisposable
         await _dispatcher.InvokeAsync(() => StatusMessage?.Invoke("LSP: initializing…"));
         try
         {
-            var rootUri = PathToUri(Path.GetDirectoryName(filePath) ?? Environment.CurrentDirectory);
+            var rootUri = PathToUri(FindWorkspaceRoot(filePath));
             Log($"[LSP] initialize rootUri={rootUri}");
             await client.InitializeAsync(rootUri);
             Log($"[LSP] initialize OK");
@@ -327,6 +333,42 @@ public sealed class LspManager : IDisposable
 
     private static string PathToUri(string path) =>
         new Uri(Path.GetFullPath(path)).AbsoluteUri;
+
+    /// <summary>
+    /// Walk up from the file's directory to find the workspace root.
+    /// Checks for .sln, .git, or common project root markers.
+    /// Falls back to the directory containing the nearest project file, then the file's own directory.
+    /// </summary>
+    private static string FindWorkspaceRoot(string filePath)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(filePath));
+        if (dir == null) return Environment.CurrentDirectory;
+
+        var current = dir;
+        while (current != null)
+        {
+            if (Directory.EnumerateFiles(current, "*.sln").Any()) return current;
+            if (Directory.Exists(Path.Combine(current, ".git"))) return current;
+            if (File.Exists(Path.Combine(current, "package.json")) ||
+                File.Exists(Path.Combine(current, "Cargo.toml"))   ||
+                File.Exists(Path.Combine(current, "go.mod"))        ||
+                File.Exists(Path.Combine(current, "pyproject.toml")))
+                return current;
+            current = Path.GetDirectoryName(current);
+        }
+
+        // Fallback: directory containing the nearest project file
+        current = dir;
+        while (current != null)
+        {
+            if (Directory.EnumerateFiles(current, "*.csproj").Any() ||
+                Directory.EnumerateFiles(current, "*.fsproj").Any())
+                return current;
+            current = Path.GetDirectoryName(current);
+        }
+
+        return dir;
+    }
 
     // ── Debug log ──────────────────────────────────────────────────────────
 
