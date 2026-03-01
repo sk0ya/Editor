@@ -35,6 +35,7 @@ public class VimOptions
     public int History { get; set; } = 1000;
     public bool Ruler { get; set; } = true;
     public string BackSpace { get; set; } = "indent,eol,start";
+    public string Clipboard { get; set; } = ""; // "unnamed" or "unnamedplus"
 
     // Apply a setting string like "number", "nonu", "tabstop=4"
     public string? Apply(string setting)
@@ -91,6 +92,7 @@ public class VimOptions
             "colorscheme" or "cs" => Set(() => ColorScheme = value),
             "fontfamily" => Set(() => FontFamily = value),
             "fontsize" when double.TryParse(value, out var d) => Set(() => FontSize = d),
+            "clipboard" or "cb" => Set(() => Clipboard = value),
             _ => $"Invalid value for: {key}"
         };
     }

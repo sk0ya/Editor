@@ -62,7 +62,7 @@ public class VimEngine
     {
         _config = config ?? new VimConfig();
         _bufferManager = new BufferManager();
-        _registerManager = new RegisterManager();
+        _registerManager = new RegisterManager(_config.Options);
         _markManager = new MarkManager();
         _macroManager = new MacroManager();
         _syntaxEngine = new SyntaxEngine();

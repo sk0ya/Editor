@@ -1,3 +1,5 @@
+using Editor.Core.Config;
+
 namespace Editor.Core.Registers;
 
 public interface IClipboardProvider
@@ -11,10 +13,11 @@ public class RegisterManager
     private readonly Dictionary<char, Register> _registers = [];
     private Register _unnamed = Register.Empty;
     private IClipboardProvider? _clipboard;
+    private VimOptions? _options;
 
-    public RegisterManager(IClipboardProvider? clipboard = null)
+    public RegisterManager(VimOptions? options = null)
     {
-        _clipboard = clipboard;
+        _options = options;
     }
 
     public void SetClipboardProvider(IClipboardProvider provider) => _clipboard = provider;
@@ -61,6 +64,14 @@ public class RegisterManager
     {
         _registers['0'] = register;
         Set(name == '\0' ? '"' : name, register);
+
+        // If clipboard=unnamed/unnamedplus, mirror unnamed yanks to the system clipboard.
+        if (name == '\0' || name == '"')
+        {
+            var cb = _options?.Clipboard ?? "";
+            if (cb.Contains("unnamed", StringComparison.OrdinalIgnoreCase))
+                try { _clipboard?.SetText(register.Text); } catch { }
+        }
     }
 
     public Register Get(char name)
