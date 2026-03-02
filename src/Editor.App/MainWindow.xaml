@@ -1090,6 +1090,13 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                    <!-- Hint bar -->
+                    <Border Background="#1A1A1A" Padding="12,5" CornerRadius="0,0,4,4">
+                        <TextBlock Text="Ctrl+Enter — すべての結果をパネルに表示"
+                                   FontFamily="Cascadia Code, Consolas"
+                                   FontSize="11"
+                                   Foreground="#555766"/>
+                    </Border>
                 </StackPanel>
             </Border>
         </Grid>

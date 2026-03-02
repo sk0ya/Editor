@@ -42,8 +42,11 @@ public partial class MainWindow : Window
         public string Detail   { get; init; } = "";
         public string Icon     { get; init; } = "\uE7C3";
         public string IconColor{ get; init; } = "#99BBDD";
-        public string? FilePath          { get; init; }
-        public Action? ActionCallback    { get; init; }
+        public string? FilePath       { get; init; }
+        public Action? ActionCallback { get; init; }
+        /// <summary>0-indexed line number; -1 = no line info (file-only result).</summary>
+        public int Line { get; init; } = -1;
+        public int Col  { get; init; } = 0;
     }
 
     private static readonly SearchMode[] SearchModeOrder =
@@ -186,7 +189,10 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 break;
             case Key.Enter:
-                ExecuteSelectedResult();
+                if (Keyboard.Modifiers == ModifierKeys.Control)
+                    SendSearchResultsToPanel();
+                else
+                    ExecuteSelectedResult();
                 e.Handled = true;
                 break;
         }
@@ -1404,7 +1410,8 @@ public partial class MainWindow : Window
                                 Detail      = line.Trim(),
                                 Icon        = "\uE721",
                                 IconColor   = "#F1FA8C",
-                                FilePath    = f
+                                FilePath    = f,
+                                Line        = lineNum - 1   // convert to 0-indexed
                             });
                             if (results.Count >= 50) break;
                         }
@@ -1467,6 +1474,8 @@ public partial class MainWindow : Window
         {
             CloseSearch();
             OpenOrFocusFile(item.FilePath);
+            if (item.Line >= 0)
+                CurrentEditor?.NavigateTo(item.Line, item.Col);
         }
     }
 
@@ -1513,6 +1522,41 @@ public partial class MainWindow : Window
         var next = Math.Clamp(SearchResultList.SelectedIndex + delta, 0, count - 1);
         SearchResultList.SelectedIndex = next;
         SearchResultList.ScrollIntoView(SearchResultList.SelectedItem);
+    }
+
+    private void SendSearchResultsToPanel()
+    {
+        var query = SearchBox.Text;
+        if (SearchResultList.ItemsSource is not IEnumerable<SearchResultItem> sourceItems) return;
+
+        var fileItems = sourceItems
+            .Where(i => i.FilePath != null && i.ActionCallback == null)
+            .ToList();
+        if (fileItems.Count == 0) return;
+
+        CloseSearch();
+
+        var panelItems = fileItems.Select(i => new ReferenceListItem
+        {
+            FilePath = i.FilePath!,
+            FileName = Path.GetFileName(i.FilePath!),
+            LineCol  = i.Line >= 0 ? $":{i.Line + 1}:{i.Col + 1}" : "",
+            Preview  = i.Detail,
+            Line     = Math.Max(0, i.Line),
+            Col      = i.Col
+        }).ToList();
+
+        RefList.SelectionChanged -= RefList_SelectionChanged;
+        RefList.ItemsSource = panelItems;
+        RefList.SelectedIndex = -1;
+        RefList.SelectionChanged += RefList_SelectionChanged;
+
+        int fileCount = panelItems.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        RefPanelTitle.Text = string.IsNullOrWhiteSpace(query)
+            ? $"SEARCH ({panelItems.Count} results) [{fileCount} file(s)]"
+            : $"SEARCH \"{query}\" ({panelItems.Count} results) [{fileCount} file(s)]";
+
+        ShowReferencesPanel();
     }
 
     // ─────────────────────────────────────────────────────────
