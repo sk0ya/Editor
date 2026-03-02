@@ -49,6 +49,8 @@ public partial class MainWindow : Window
         /// <summary>0-indexed line number; -1 = no line info (file-only result).</summary>
         public int Line { get; init; } = -1;
         public int Col  { get; init; } = 0;
+        /// <summary>The active search query used to highlight matching characters.</summary>
+        public string SearchQuery { get; set; } = "";
     }
 
     private static readonly SearchMode[] SearchModeOrder =
@@ -1361,6 +1363,7 @@ public partial class MainWindow : Window
             SearchMode.Action => SearchActions(query),
             _                 => SearchAll(query),
         };
+        foreach (var r in results) r.SearchQuery = query;
         SearchResultList.ItemsSource = results;
         if (results.Count > 0)
             SearchResultList.SelectedIndex = 0;
@@ -1546,11 +1549,12 @@ public partial class MainWindow : Window
                 Detail      = s.ContainerName != null
                     ? $"{s.ContainerName} • {SymbolUriToPath(s.Location.Uri)}"
                     : SymbolUriToPath(s.Location.Uri),
-                Icon      = GetSymbolIcon(s.Kind),
-                IconColor = GetSymbolColor(s.Kind),
-                FilePath  = TryUriToLocalPath(s.Location.Uri),
-                Line      = s.Location.Range.Start.Line,
-                Col       = s.Location.Range.Start.Character,
+                Icon        = GetSymbolIcon(s.Kind),
+                IconColor   = GetSymbolColor(s.Kind),
+                FilePath    = TryUriToLocalPath(s.Location.Uri),
+                Line        = s.Location.Range.Start.Line,
+                Col         = s.Location.Range.Start.Character,
+                SearchQuery = query,
             })
             .ToList();
 

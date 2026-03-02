@@ -1085,11 +1085,13 @@
                                                Foreground="{Binding IconColor}"
                                                VerticalAlignment="Center"/>
                                     <TextBlock Grid.Column="1"
-                                               Text="{Binding DisplayName}"
+                                               local:HighlightHelper.Text="{Binding DisplayName}"
+                                               local:HighlightHelper.Query="{Binding SearchQuery}"
                                                VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis"/>
                                     <TextBlock Grid.Column="2"
-                                               Text="{Binding Detail}"
+                                               local:HighlightHelper.Text="{Binding Detail}"
+                                               local:HighlightHelper.Query="{Binding SearchQuery}"
                                                Foreground="#888888"
                                                FontSize="11"
                                                VerticalAlignment="Center"
