@@ -1,4 +1,5 @@
 using System.IO;
+using System.Threading;
 using System.Windows.Threading;
 using Editor.Core.Lsp;
 
@@ -294,6 +295,16 @@ public sealed class LspManager : IDisposable
     {
         if (_currentClient?.IsRunning != true || _currentUri == null || !_documentReady) return [];
         return await _currentClient.GetFormattingEditsAsync(_currentUri, tabSize, insertSpaces);
+    }
+
+    /// <summary>Search workspace symbols by query; when isClass=true, restricts to type-definition kinds.</summary>
+    public async Task<IReadOnlyList<LspSymbolInformation>> GetWorkspaceSymbolsAsync(
+        string query, bool isClass, CancellationToken ct = default)
+    {
+        var client = _currentClient;
+        if (client?.IsRunning != true) return [];
+        var symbols = await client.GetWorkspaceSymbolsAsync(query, ct);
+        return SymbolSearchFilter.FilterByKind(symbols, isClass);
     }
 
     // ── Async helpers ──────────────────────────────────────────────────────

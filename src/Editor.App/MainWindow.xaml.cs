@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -10,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Shell;
 using Editor.Controls;
 using Editor.Controls.Themes;
+using Editor.Core.Lsp;
 
 namespace Editor.App;
 
@@ -68,6 +70,7 @@ public partial class MainWindow : Window
     private SearchMode _searchMode = SearchMode.All;
     private bool _searchActive;
     private bool _searchTabsInitialized;
+    private CancellationTokenSource? _searchCts;
 
     // ────────────────────────────────────────────────────────
 
@@ -1342,13 +1345,20 @@ public partial class MainWindow : Window
 
     private void RunSearch(string query)
     {
+        _searchCts?.Cancel();
+        _searchCts = new CancellationTokenSource();
+
+        if (_searchMode is SearchMode.Class or SearchMode.Symbol)
+        {
+            RunSearchLspAsync(query, _searchMode == SearchMode.Class, _searchCts.Token);
+            return;
+        }
+
         var results = _searchMode switch
         {
             SearchMode.File   => SearchFiles(query),
             SearchMode.Text   => SearchText(query),
             SearchMode.Action => SearchActions(query),
-            SearchMode.Class  => SearchLspSymbols(query, isClass: true),
-            SearchMode.Symbol => SearchLspSymbols(query, isClass: false),
             _                 => SearchAll(query),
         };
         SearchResultList.ItemsSource = results;
@@ -1481,19 +1491,121 @@ public partial class MainWindow : Window
             .ToList();
     }
 
-    private static List<SearchResultItem> SearchLspSymbols(string query, bool isClass)
+    private async void RunSearchLspAsync(string query, bool isClass, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(query))
-            return [new SearchResultItem
+        {
+            SearchResultList.ItemsSource = new[]
             {
-                DisplayName = isClass
-                    ? "クラス名検索: キーワードを入力してください"
-                    : "シンボル検索: キーワードを入力してください",
-                Icon      = "\uE721",
-                IconColor = "#888888"
-            }];
-        return [];
+                new SearchResultItem
+                {
+                    DisplayName = isClass
+                        ? "クラス名検索: キーワードを入力してください"
+                        : "シンボル検索: キーワードを入力してください",
+                    Icon      = "\uE721",
+                    IconColor = "#888888"
+                }
+            };
+            return;
+        }
+
+        SearchResultList.ItemsSource = new[]
+        {
+            new SearchResultItem { DisplayName = "検索中...", Icon = "\uE721", IconColor = "#888888" }
+        };
+
+        IReadOnlyList<LspSymbolInformation> symbols;
+        try
+        {
+            symbols = await (CurrentEditor?.SearchWorkspaceSymbolsAsync(query, isClass, ct)
+                             ?? Task.FromResult<IReadOnlyList<LspSymbolInformation>>([]));
+        }
+        catch (OperationCanceledException) { return; }
+        catch { symbols = []; }
+
+        if (ct.IsCancellationRequested) return;
+
+        if (symbols.Count == 0)
+        {
+            SearchResultList.ItemsSource = new[]
+            {
+                new SearchResultItem
+                {
+                    DisplayName = "結果が見つかりませんでした",
+                    Icon      = "\uE721",
+                    IconColor = "#888888"
+                }
+            };
+            return;
+        }
+
+        var results = symbols
+            .Select(s => new SearchResultItem
+            {
+                DisplayName = s.Name,
+                Detail      = s.ContainerName != null
+                    ? $"{s.ContainerName} • {SymbolUriToPath(s.Location.Uri)}"
+                    : SymbolUriToPath(s.Location.Uri),
+                Icon      = GetSymbolIcon(s.Kind),
+                IconColor = GetSymbolColor(s.Kind),
+                FilePath  = TryUriToLocalPath(s.Location.Uri),
+                Line      = s.Location.Range.Start.Line,
+                Col       = s.Location.Range.Start.Character,
+            })
+            .ToList();
+
+        SearchResultList.ItemsSource = results;
+        if (results.Count > 0)
+            SearchResultList.SelectedIndex = 0;
     }
+
+    private static string SymbolUriToPath(string uri)
+    {
+        try { return Path.GetFileName(new Uri(uri).LocalPath); }
+        catch { return uri; }
+    }
+
+    private static string? TryUriToLocalPath(string uri)
+    {
+        try { return new Uri(uri).LocalPath; }
+        catch { return null; }
+    }
+
+    private static string GetSymbolIcon(SymbolKind kind) => kind switch
+    {
+        SymbolKind.Class         => "\uE8F4",
+        SymbolKind.Interface     => "\uE8EC",
+        SymbolKind.Enum          => "\uE8D2",
+        SymbolKind.Struct        => "\uE8F5",
+        SymbolKind.Method        => "\uE8F2",
+        SymbolKind.Function      => "\uE8F2",
+        SymbolKind.Constructor   => "\uE8F2",
+        SymbolKind.Field         => "\uE8F1",
+        SymbolKind.Property      => "\uE8F1",
+        SymbolKind.Variable      => "\uE8EF",
+        SymbolKind.Constant      => "\uE8EF",
+        SymbolKind.Namespace     => "\uE943",
+        SymbolKind.Module        => "\uE943",
+        _                        => "\uE8CB",
+    };
+
+    private static string GetSymbolColor(SymbolKind kind) => kind switch
+    {
+        SymbolKind.Class         => "#50FA7B",
+        SymbolKind.Interface     => "#8BE9FD",
+        SymbolKind.Enum          => "#FFB86C",
+        SymbolKind.Struct        => "#50FA7B",
+        SymbolKind.Method        => "#BD93F9",
+        SymbolKind.Function      => "#BD93F9",
+        SymbolKind.Constructor   => "#BD93F9",
+        SymbolKind.Field         => "#F8F8F2",
+        SymbolKind.Property      => "#F8F8F2",
+        SymbolKind.Variable      => "#F1FA8C",
+        SymbolKind.Constant      => "#FF79C6",
+        SymbolKind.Namespace     => "#AAAAAA",
+        SymbolKind.Module        => "#AAAAAA",
+        _                        => "#CCCCCC",
+    };
 
     private void ExecuteSelectedResult()
     {

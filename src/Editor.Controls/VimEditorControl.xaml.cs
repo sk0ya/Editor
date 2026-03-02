@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -724,6 +725,14 @@ public partial class VimEditorControl : UserControl
         _theme = theme;
         ApplyTheme();
     }
+
+    /// <summary>
+    /// Search workspace symbols via LSP. When isClass=true, returns only type-definition kinds
+    /// (Class/Interface/Enum/Struct/TypeParameter).
+    /// </summary>
+    public Task<IReadOnlyList<LspSymbolInformation>> SearchWorkspaceSymbolsAsync(
+        string query, bool isClass, CancellationToken ct = default)
+        => _lspManager.GetWorkspaceSymbolsAsync(query, isClass, ct);
 
     private void ApplyTheme()
     {

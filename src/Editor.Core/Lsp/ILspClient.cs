@@ -11,6 +11,8 @@ public interface ILspClient : IDisposable
     bool IsRunning { get; }
     /// <summary>サーバーが textDocument/foldingRange をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsFoldingRange { get; }
+    /// <summary>サーバーが workspace/symbol をサポートしているか。InitializeAsync 後に確定する。</summary>
+    bool SupportsWorkspaceSymbol { get; }
     event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
 
     Task InitializeAsync(string rootUri);
@@ -25,4 +27,5 @@ public interface ILspClient : IDisposable
     Task<LspWorkspaceEdit?> GetRenameAsync(string uri, LspPosition position, string newName, CancellationToken ct = default);
     Task<IReadOnlyList<LspLocation>> GetReferencesAsync(string uri, LspPosition position, bool includeDeclaration = true, CancellationToken ct = default);
     Task<IReadOnlyList<LspFoldingRange>> GetFoldingRangesAsync(string uri, CancellationToken ct = default);
+    Task<IReadOnlyList<LspSymbolInformation>> GetWorkspaceSymbolsAsync(string query, CancellationToken ct = default);
 }

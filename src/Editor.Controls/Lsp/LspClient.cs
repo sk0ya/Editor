@@ -11,6 +11,7 @@ public sealed class LspClient : ILspClient
     public event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
     public bool IsRunning => _process.IsRunning;
     public bool SupportsFoldingRange { get; private set; }
+    public bool SupportsWorkspaceSymbol { get; private set; }
 
     public LspClient(string executable, IEnumerable<string> args, string? workingDir = null)
     {
@@ -38,6 +39,10 @@ public sealed class LspClient : ILspClient
                     rename = new { },
                     references = new { },
                     foldingRange = new { }
+                },
+                workspace = new
+                {
+                    symbol = new { }
                 }
             },
             workspaceFolders = (object?)null
@@ -47,10 +52,12 @@ public sealed class LspClient : ILspClient
         // サーバーの capabilities を解析して対応機能を確定する
         if (result.HasValue &&
             result.Value.ValueKind == JsonValueKind.Object &&
-            result.Value.TryGetProperty("capabilities", out var caps) &&
-            caps.TryGetProperty("foldingRangeProvider", out var frp))
+            result.Value.TryGetProperty("capabilities", out var caps))
         {
-            SupportsFoldingRange = frp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            if (caps.TryGetProperty("foldingRangeProvider", out var frp))
+                SupportsFoldingRange = frp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            if (caps.TryGetProperty("workspaceSymbolProvider", out var wsp))
+                SupportsWorkspaceSymbol = wsp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
         }
     }
 
@@ -225,6 +232,38 @@ public sealed class LspClient : ILspClient
             return ParseWorkspaceEdit(result.Value);
         }
         catch { return null; }
+    }
+
+    public async Task<IReadOnlyList<LspSymbolInformation>> GetWorkspaceSymbolsAsync(
+        string query, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("workspace/symbol", new { query }, ct);
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
+            var list = new List<LspSymbolInformation>();
+            foreach (var item in result.Value.EnumerateArray())
+            {
+                if (!item.TryGetProperty("name", out var nameEl)) continue;
+                var name = nameEl.GetString() ?? "";
+                var kind = item.TryGetProperty("kind", out var kindEl)
+                    ? (SymbolKind)kindEl.GetInt32()
+                    : SymbolKind.Variable;
+                string? container = item.TryGetProperty("containerName", out var cn) ? cn.GetString() : null;
+
+                if (!item.TryGetProperty("location", out var locEl)) continue;
+                if (!locEl.TryGetProperty("uri", out var uriEl)) continue;
+                var uri = uriEl.GetString() ?? "";
+                var range = locEl.TryGetProperty("range", out var rangeEl)
+                    ? ParseRange(rangeEl)
+                    : new LspRange(new LspPosition(0, 0), new LspPosition(0, 0));
+
+                list.Add(new LspSymbolInformation(name, kind, new LspLocation(uri, range), container));
+                if (list.Count >= 200) break;
+            }
+            return list;
+        }
+        catch { return []; }
     }
 
     public async Task<IReadOnlyList<LspFoldingRange>> GetFoldingRangesAsync(
