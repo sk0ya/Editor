@@ -1419,21 +1419,115 @@ public partial class MainWindow : Window
         if (_currentFolderPath == null) return [];
         try
         {
-            return EnumerateSourceFiles(_currentFolderPath)
-                .Where(f => string.IsNullOrEmpty(query) ||
-                            Path.GetFileName(f).Contains(query, StringComparison.OrdinalIgnoreCase))
-                .Take(50)
-                .Select(f => new SearchResultItem
+            var q = query.Trim();
+            var ranked = new List<(string FilePath, string FileName, string RelativePath, int Score)>();
+            foreach (var f in EnumerateSourceFiles(_currentFolderPath))
+            {
+                var fileName = Path.GetFileName(f);
+                var relativePath = Path.GetRelativePath(_currentFolderPath, f);
+
+                if (string.IsNullOrEmpty(q))
                 {
-                    DisplayName = Path.GetFileName(f),
-                    Detail      = Path.GetRelativePath(_currentFolderPath, f),
+                    ranked.Add((f, fileName, relativePath, 0));
+                    continue;
+                }
+
+                var nameMatched = TryFuzzyMatch(fileName, q, out var nameScore);
+                var pathMatched = TryFuzzyMatch(relativePath, q, out var pathScore);
+                if (!nameMatched && !pathMatched)
+                    continue;
+
+                // Prefer direct file-name hits over path-only hits.
+                var score = nameMatched ? nameScore + 500 : pathScore;
+                ranked.Add((f, fileName, relativePath, score));
+            }
+
+            return ranked
+                .OrderByDescending(r => r.Score)
+                .ThenBy(r => r.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .Take(50)
+                .Select(r => new SearchResultItem
+                {
+                    DisplayName = r.FileName,
+                    Detail      = r.RelativePath,
                     Icon        = "\uE7C3",
                     IconColor   = "#99BBDD",
-                    FilePath    = f
+                    FilePath    = r.FilePath
                 })
                 .ToList();
         }
         catch { return []; }
+    }
+
+    private static bool TryFuzzyMatch(string candidate, string query, out int score)
+    {
+        score = 0;
+        if (string.IsNullOrWhiteSpace(query))
+            return true;
+
+        if (candidate.Contains(query, StringComparison.OrdinalIgnoreCase))
+        {
+            var idx = candidate.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+            score = 4000 - (idx * 40) - (candidate.Length - query.Length);
+            return true;
+        }
+
+        var qi = 0;
+        var firstMatch = -1;
+        var prevMatch = -1;
+        var consecutiveRun = 0;
+
+        for (var ci = 0; ci < candidate.Length && qi < query.Length; ci++)
+        {
+            if (char.ToUpperInvariant(candidate[ci]) != char.ToUpperInvariant(query[qi]))
+                continue;
+
+            if (firstMatch < 0) firstMatch = ci;
+            score += 90;
+
+            if (ci == 0 || IsBoundaryMatch(candidate, ci))
+                score += 70;
+
+            if (prevMatch >= 0)
+            {
+                if (ci == prevMatch + 1)
+                {
+                    consecutiveRun++;
+                    score += 55 + Math.Min(consecutiveRun, 4) * 10;
+                }
+                else
+                {
+                    score -= Math.Min((ci - prevMatch - 1) * 7, 70);
+                    consecutiveRun = 0;
+                }
+            }
+
+            prevMatch = ci;
+            qi++;
+        }
+
+        if (qi != query.Length)
+        {
+            score = 0;
+            return false;
+        }
+
+        if (firstMatch > 0)
+            score -= Math.Min(firstMatch * 8, 120);
+        score -= Math.Min((candidate.Length - query.Length) * 3, 120);
+        return true;
+    }
+
+    private static bool IsBoundaryMatch(string text, int index)
+    {
+        if (index <= 0 || index >= text.Length)
+            return true;
+
+        var prev = text[index - 1];
+        var cur = text[index];
+        if (!char.IsLetterOrDigit(prev))
+            return true;
+        return char.IsLower(prev) && char.IsUpper(cur);
     }
 
     private List<SearchResultItem> SearchText(string query)
@@ -1519,6 +1613,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        var q = query.Trim();
         SearchResultList.ItemsSource = new[]
         {
             new SearchResultItem { DisplayName = "検索中...", Icon = "\uE721", IconColor = "#888888" }
@@ -1527,7 +1622,7 @@ public partial class MainWindow : Window
         IReadOnlyList<LspSymbolInformation> symbols;
         try
         {
-            symbols = await (CurrentEditor?.SearchWorkspaceSymbolsAsync(query, isClass, ct)
+            symbols = await (CurrentEditor?.SearchWorkspaceSymbolsAsync(q, isClass, ct)
                              ?? Task.FromResult<IReadOnlyList<LspSymbolInformation>>([]));
         }
         catch (OperationCanceledException) { return; }
@@ -1535,7 +1630,26 @@ public partial class MainWindow : Window
 
         if (ct.IsCancellationRequested) return;
 
-        if (symbols.Count == 0)
+        var rankedSymbols = RankSymbolsForQuery(symbols, q);
+        if (rankedSymbols.Count == 0)
+        {
+            var fallbackQuery = BuildSymbolFallbackQuery(q);
+            if (!string.Equals(fallbackQuery, q, StringComparison.Ordinal))
+            {
+                try
+                {
+                    symbols = await (CurrentEditor?.SearchWorkspaceSymbolsAsync(fallbackQuery, isClass, ct)
+                                     ?? Task.FromResult<IReadOnlyList<LspSymbolInformation>>([]));
+                }
+                catch (OperationCanceledException) { return; }
+                catch { symbols = []; }
+
+                if (ct.IsCancellationRequested) return;
+                rankedSymbols = RankSymbolsForQuery(symbols, q);
+            }
+        }
+
+        if (rankedSymbols.Count == 0)
         {
             SearchResultList.ItemsSource = new[]
             {
@@ -1549,7 +1663,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var results = symbols
+        var results = rankedSymbols
             .Select(s => new SearchResultItem
             {
                 DisplayName = s.Name,
@@ -1568,6 +1682,62 @@ public partial class MainWindow : Window
         SearchResultList.ItemsSource = results;
         if (results.Count > 0)
             SearchResultList.SelectedIndex = 0;
+    }
+
+    private static string BuildSymbolFallbackQuery(string query)
+    {
+        foreach (var c in query)
+        {
+            if (char.IsLetterOrDigit(c))
+                return c.ToString();
+        }
+        return "";
+    }
+
+    private static List<LspSymbolInformation> RankSymbolsForQuery(
+        IReadOnlyList<LspSymbolInformation> symbols, string query)
+    {
+        var ranked = new List<(LspSymbolInformation Symbol, int Score, string FileName)>();
+        foreach (var symbol in symbols)
+        {
+            if (!TryScoreSymbol(symbol, query, out var score))
+                continue;
+
+            ranked.Add((symbol, score, SymbolUriToPath(symbol.Location.Uri)));
+        }
+
+        return ranked
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Symbol.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.FileName, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.Symbol)
+            .ToList();
+    }
+
+    private static bool TryScoreSymbol(LspSymbolInformation symbol, string query, out int score)
+    {
+        score = 0;
+        if (string.IsNullOrWhiteSpace(query))
+            return true;
+
+        var bestScore = int.MinValue;
+
+        if (TryFuzzyMatch(symbol.Name, query, out var nameScore))
+            bestScore = Math.Max(bestScore, nameScore + 1200);
+
+        if (!string.IsNullOrEmpty(symbol.ContainerName) &&
+            TryFuzzyMatch(symbol.ContainerName, query, out var containerScore))
+            bestScore = Math.Max(bestScore, containerScore + 300);
+
+        var fileName = SymbolUriToPath(symbol.Location.Uri);
+        if (TryFuzzyMatch(fileName, query, out var fileScore))
+            bestScore = Math.Max(bestScore, fileScore + 150);
+
+        if (bestScore == int.MinValue)
+            return false;
+
+        score = bestScore;
+        return true;
     }
 
     private static string SymbolUriToPath(string uri)
