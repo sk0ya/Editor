@@ -1033,11 +1033,11 @@
                 <!-- Grid layout: fixed header rows + stretchy results + fixed hint bar -->
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>            <!-- mode tabs -->
-                        <RowDefinition Height="Auto"/>            <!-- search input -->
-                        <RowDefinition Height="Auto"/>            <!-- divider -->
-                        <RowDefinition Height="*" MaxHeight="360"/> <!-- results list -->
-                        <RowDefinition Height="Auto"/>            <!-- hint bar -->
+                        <RowDefinition Height="Auto"/>  <!-- mode tabs -->
+                        <RowDefinition Height="Auto"/>  <!-- search input -->
+                        <RowDefinition Height="Auto"/>  <!-- divider -->
+                        <RowDefinition Height="Auto"/>  <!-- results list -->
+                        <RowDefinition Height="Auto"/>  <!-- hint bar -->
                     </Grid.RowDefinitions>
                     <!-- Mode tabs row -->
                     <Border Grid.Row="0" Background="#1A1A1A" CornerRadius="4,4,0,0" Padding="8,6,8,0">
@@ -1065,6 +1065,7 @@
                              Grid.Row="3"
                              Background="Transparent"
                              BorderThickness="0"
+                             MaxHeight="360"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              VirtualizingStackPanel.IsVirtualizing="True"
                              ItemContainerStyle="{StaticResource SearchItemStyle}"
