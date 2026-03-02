@@ -20,6 +20,10 @@ namespace Editor.App;
 
 public partial class MainWindow : Window
 {
+    private const int WM_MOUSEHWHEEL = 0x020E;
+    private const int WheelDelta = 120;
+    private HwndSource? _windowSource;
+
     private sealed class TabInfo
     {
         public required TabItem Item { get; init; }
@@ -107,6 +111,13 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        _windowSource = PresentationSource.FromVisual(this) as HwndSource;
+        _windowSource?.AddHook(WindowMessageProc);
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -531,6 +542,61 @@ public partial class MainWindow : Window
         while (obj != null)
         {
             if (obj is T t) return t;
+            obj = VisualTreeHelper.GetParent(obj);
+        }
+        return null;
+    }
+
+    private IntPtr WindowMessageProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != WM_MOUSEHWHEEL)
+            return IntPtr.Zero;
+
+        if (TryHandleHorizontalWheelMessage(wParam, lParam))
+            handled = true;
+
+        return IntPtr.Zero;
+    }
+
+    private bool TryHandleHorizontalWheelMessage(IntPtr wParam, IntPtr lParam)
+    {
+        short wheelDelta = unchecked((short)((long)wParam >> 16));
+        if (wheelDelta == 0)
+            return false;
+
+        long packedPoint = lParam.ToInt64();
+        int screenX = unchecked((short)(packedPoint & 0xFFFF));
+        int screenY = unchecked((short)((packedPoint >> 16) & 0xFFFF));
+        var pointInWindow = PointFromScreen(new Point(screenX, screenY));
+        if (InputHitTest(pointInWindow) is not DependencyObject hit)
+            return false;
+
+        var editor = FindVisualAncestor<VimEditorControl>(hit);
+        if (editor != null && editor.ScrollHorizontalByWheelDelta(wheelDelta))
+            return true;
+
+        var scrollViewer = FindHorizontalScrollViewer(hit);
+        if (scrollViewer == null)
+            return false;
+
+        double step = scrollViewer.ViewportWidth > 0
+            ? Math.Max(24.0, scrollViewer.ViewportWidth * 0.08)
+            : 48.0;
+        double delta = (wheelDelta / (double)WheelDelta) * step;
+        double target = Math.Clamp(scrollViewer.HorizontalOffset + delta, 0.0, scrollViewer.ScrollableWidth);
+        if (Math.Abs(target - scrollViewer.HorizontalOffset) < 0.01)
+            return false;
+
+        scrollViewer.ScrollToHorizontalOffset(target);
+        return true;
+    }
+
+    private static ScrollViewer? FindHorizontalScrollViewer(DependencyObject? obj)
+    {
+        while (obj != null)
+        {
+            if (obj is ScrollViewer sv && sv.ScrollableWidth > 0)
+                return sv;
             obj = VisualTreeHelper.GetParent(obj);
         }
         return null;
@@ -2068,6 +2134,12 @@ public partial class MainWindow : Window
             .Select(t => t.FilePath!);
         var activeFile = CurrentTabInfo?.FilePath;
         _recentItems.SaveSession(_currentFolderPath, tabFiles, activeFile);
+
+        if (_windowSource != null)
+        {
+            _windowSource.RemoveHook(WindowMessageProc);
+            _windowSource = null;
+        }
 
         base.OnClosing(e);
     }

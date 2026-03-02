@@ -784,6 +784,27 @@ public partial class VimEditorControl : UserControl
         Focus();
     }
 
+    public bool ScrollHorizontalByWheelDelta(int wheelDelta)
+    {
+        if (wheelDelta == 0 || Canvas.WrapLines)
+            return false;
+
+        double maxOffsetX = Math.Max(0, Canvas.TotalContentWidth - Canvas.ViewportWidth);
+        if (maxOffsetX <= 0)
+            return false;
+
+        // Keep wheel movement predictable: 1 notch = about 8 characters.
+        double step = Math.Max(Canvas.CharWidth * 8, 32);
+        double deltaX = (wheelDelta / 120.0) * step;
+        double target = Math.Clamp(Canvas.HorizontalOffset + deltaX, 0, maxOffsetX);
+        if (Math.Abs(target - Canvas.HorizontalOffset) < 0.01)
+            return false;
+
+        Canvas.ScrollTo(Canvas.VerticalOffset, target);
+        Focus();
+        return true;
+    }
+
     private void OnCanvasScrollChanged(double offsetY, double offsetX)
     {
         UpdateScrollbars(offsetY, offsetX);
