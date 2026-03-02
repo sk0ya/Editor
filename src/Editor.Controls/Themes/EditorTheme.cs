@@ -11,6 +11,7 @@ public class EditorTheme
     public Brush CursorForeground { get; init; } = Brushes.Black;
     public Brush InsertCursor { get; init; } = Brushes.White;
     public Brush LineNumberFg { get; init; } = Brushes.Gray;
+    public Brush CurrentLineNumberFg { get; init; } = Brushes.White;
     public Brush LineNumberBg { get; init; } = Brushes.Black;
     public Brush CurrentLineBg { get; init; } = new SolidColorBrush(Color.FromRgb(0x30, 0x30, 0x30));
     public Brush SelectionBg { get; init; } = new SolidColorBrush(Color.FromArgb(0x80, 0x44, 0x88, 0xCC));
@@ -58,6 +59,7 @@ public class EditorTheme
         CursorForeground = new SolidColorBrush(Color.FromRgb(0x28, 0x2A, 0x36)),
         InsertCursor = new SolidColorBrush(Color.FromRgb(0xF8, 0xF8, 0xF2)),
         LineNumberFg = new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)),
+        CurrentLineNumberFg = new SolidColorBrush(Color.FromRgb(0xF8, 0xF8, 0xF2)),
         LineNumberBg = new SolidColorBrush(Color.FromRgb(0x21, 0x22, 0x2C)),
         CurrentLineBg = new SolidColorBrush(Color.FromRgb(0x35, 0x37, 0x46)),
         SelectionBg = new SolidColorBrush(Color.FromArgb(0x80, 0x44, 0x47, 0x5A)),
@@ -105,6 +107,7 @@ public class EditorTheme
             CursorForeground = new SolidColorBrush(bg),
             InsertCursor = InsertCursor,
             LineNumberFg = LineNumberFg,
+            CurrentLineNumberFg = CurrentLineNumberFg,
             LineNumberBg = new SolidColorBrush(darker),
             CurrentLineBg = new SolidColorBrush(lighter),
             SelectionBg = SelectionBg,
@@ -139,6 +142,7 @@ public class EditorTheme
             CursorForeground = CursorForeground,
             InsertCursor = InsertCursor,
             LineNumberFg = LineNumberFg,
+            CurrentLineNumberFg = CurrentLineNumberFg,
             LineNumberBg = LineNumberBg,
             CurrentLineBg = CurrentLineBg,
             SelectionBg = SelectionBg,

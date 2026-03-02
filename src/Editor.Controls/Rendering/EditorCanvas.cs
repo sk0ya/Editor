@@ -575,7 +575,8 @@ public class EditorCanvas : FrameworkElement
                 dc.DrawRectangle(Theme.LineNumberBg, null, new Rect(0, y, gutterWidth, _lineHeight));
                 if (drawNumberAndFold)
                 {
-                    var numText = FormatText((l + 1).ToString().PadLeft(_lineNumberWidth), Theme.LineNumberFg);
+                    var lineNumberBrush = l == _cursor.Line ? Theme.CurrentLineNumberFg : Theme.LineNumberFg;
+                    var numText = FormatText((l + 1).ToString().PadLeft(_lineNumberWidth), lineNumberBrush);
                     dc.DrawText(numText, new Point(2, y + (_lineHeight - numText.Height) / 2));
 
                     // Fold indicator in dedicated fold column (▶ closed, ▼ open)
