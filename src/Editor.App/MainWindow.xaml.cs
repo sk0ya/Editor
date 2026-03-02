@@ -5,13 +5,16 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shell;
+using System.Windows.Threading;
 using Editor.Controls;
 using Editor.Controls.Themes;
 using Editor.Core.Lsp;
+using Editor.Core.Syntax;
 
 namespace Editor.App;
 
@@ -51,6 +54,8 @@ public partial class MainWindow : Window
         public int Col  { get; init; } = 0;
         /// <summary>The active search query used to highlight matching characters.</summary>
         public string SearchQuery { get; set; } = "";
+        /// <summary>True only for text-content search results — highlights query matches in the file preview.</summary>
+        public bool HighlightQueryInPreview { get; init; } = false;
     }
 
     private static readonly SearchMode[] SearchModeOrder =
@@ -73,6 +78,7 @@ public partial class MainWindow : Window
     private bool _searchActive;
     private bool _searchTabsInitialized;
     private CancellationTokenSource? _searchCts;
+    private readonly SyntaxEngine _previewSyntaxEngine = new();
 
     // ────────────────────────────────────────────────────────
 
@@ -1451,12 +1457,13 @@ public partial class MainWindow : Window
                         {
                             results.Add(new SearchResultItem
                             {
-                                DisplayName = $"{Path.GetFileName(f)}:{lineNum}",
-                                Detail      = line.Trim(),
-                                Icon        = "\uE721",
-                                IconColor   = "#F1FA8C",
-                                FilePath    = f,
-                                Line        = lineNum - 1   // convert to 0-indexed
+                                DisplayName             = $"{Path.GetFileName(f)}:{lineNum}",
+                                Detail                  = line.Trim(),
+                                Icon                    = "\uE721",
+                                IconColor               = "#F1FA8C",
+                                FilePath                = f,
+                                Line                    = lineNum - 1,   // convert to 0-indexed
+                                HighlightQueryInPreview = true,
                             });
                             if (results.Count >= 50) break;
                         }
@@ -1670,6 +1677,142 @@ public partial class MainWindow : Window
         var next = Math.Clamp(SearchResultList.SelectedIndex + delta, 0, count - 1);
         SearchResultList.SelectedIndex = next;
         SearchResultList.ScrollIntoView(SearchResultList.SelectedItem);
+    }
+
+    private void SearchResultList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateSearchPreview(SearchResultList.SelectedItem as SearchResultItem);
+    }
+
+    private void UpdateSearchPreview(SearchResultItem? item)
+    {
+        PreviewPanel.Children.Clear();
+        if (item == null || item.ActionCallback != null || item.FilePath == null)
+            return;
+        try { RenderFilePreview(item.FilePath, item.Line, item.SearchQuery, item.HighlightQueryInPreview); }
+        catch { /* silently ignore unreadable files */ }
+    }
+
+    private void RenderFilePreview(string filePath, int targetLine, string query, bool highlightQuery)
+    {
+        string[] allLines;
+        try { allLines = File.ReadAllLines(filePath); }
+        catch { return; }
+        if (allLines.Length == 0) return;
+
+        const int context = 29;
+        int center    = Math.Max(0, targetLine < 0 ? 0 : targetLine);
+        int startLine = Math.Max(0, center - context);
+        int endLine   = Math.Min(allLines.Length - 1, center + context);
+
+        _previewSyntaxEngine.DetectLanguage(filePath);
+        var allTokens = _previewSyntaxEngine.Tokenize(allLines);
+
+        var theme        = _currentTheme;
+        var lineNumBrush = theme.LineNumberFg;
+        // ヒット行の背景: SearchHighlightBg を薄くした色
+        var hitLineBg = theme.SearchHighlightBg is SolidColorBrush scb
+            ? new SolidColorBrush(Color.FromArgb(0x35, scb.Color.R, scb.Color.G, scb.Color.B))
+            : new SolidColorBrush(Color.FromArgb(0x35, 0xFF, 0xB8, 0x6C));
+
+        int digits        = (endLine + 1).ToString().Length;
+        double lineNumW   = Math.Max(30, digits * 8.5 + 12);
+
+        int hitRowIdx = -1;
+        for (int li = startLine; li <= endLine; li++)
+        {
+            bool isHit  = li == targetLine;
+            if (isHit) hitRowIdx = li - startLine;
+
+            var tokens  = li < allTokens.Length ? allTokens[li].Tokens : [];
+
+            var row = new DockPanel { LastChildFill = true };
+            if (isHit) row.Background = hitLineBg;
+
+            var lineNumTB = new TextBlock
+            {
+                Text              = (li + 1).ToString(),
+                Foreground        = lineNumBrush,
+                Width             = lineNumW,
+                TextAlignment     = TextAlignment.Right,
+                Padding           = new Thickness(4, 1, 8, 1),
+                FontFamily        = new FontFamily("Cascadia Code, Consolas"),
+                FontSize          = 12,
+                VerticalAlignment = VerticalAlignment.Top,
+            };
+            DockPanel.SetDock(lineNumTB, Dock.Left);
+            row.Children.Add(lineNumTB);
+
+            var contentTB = new TextBlock
+            {
+                FontFamily   = new FontFamily("Cascadia Code, Consolas"),
+                FontSize     = 12,
+                Foreground   = theme.Foreground,
+                Padding      = new Thickness(0, 1, 4, 1),
+                TextWrapping = TextWrapping.NoWrap,
+            };
+            BuildLineInlines(contentTB, allLines[li], tokens, highlightQuery ? query : "", theme);
+            row.Children.Add(contentTB);
+
+            PreviewPanel.Children.Add(row);
+        }
+
+        if (hitRowIdx >= 0)
+        {
+            var idx = hitRowIdx;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+            {
+                if (idx < PreviewPanel.Children.Count)
+                    (PreviewPanel.Children[idx] as FrameworkElement)?.BringIntoView();
+            });
+        }
+    }
+
+    private static void BuildLineInlines(TextBlock tb, string text,
+        SyntaxToken[] tokens, string query, EditorTheme theme)
+    {
+        if (text.Length == 0) return;
+
+        // Build per-character foreground color array from tokens
+        var colors = new Brush[text.Length];
+        Array.Fill(colors, theme.Foreground);
+        foreach (var tok in tokens)
+        {
+            var brush = theme.GetTokenBrush(tok.Kind);
+            int end   = Math.Min(tok.StartColumn + tok.Length, text.Length);
+            for (int i = Math.Max(0, tok.StartColumn); i < end; i++)
+                colors[i] = brush;
+        }
+
+        // Build per-character search-hit mask
+        var hit = new bool[text.Length];
+        if (!string.IsNullOrEmpty(query))
+        {
+            int idx = 0;
+            while (true)
+            {
+                int pos = text.IndexOf(query, idx, StringComparison.OrdinalIgnoreCase);
+                if (pos < 0) break;
+                for (int i = pos; i < pos + query.Length; i++) hit[i] = true;
+                idx = pos + query.Length;
+            }
+        }
+
+        // Merge consecutive chars with same (color, isHit) into Runs
+        var hitBg = theme.SearchHighlightBg;
+        int cur   = 0;
+        while (cur < text.Length)
+        {
+            var fg     = colors[cur];
+            bool isHit = hit[cur];
+            int  end   = cur + 1;
+            while (end < text.Length && colors[end] == fg && hit[end] == isHit)
+                end++;
+            var run = new Run(text[cur..end]) { Foreground = fg };
+            if (isHit) run.Background = hitBg;
+            tb.Inlines.Add(run);
+            cur = end;
+        }
     }
 
     private void SendSearchResultsToPanel()
