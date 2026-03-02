@@ -124,11 +124,32 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- Dark horizontal scrollbar -->
+        <Style x:Key="DarkHScrollBar" TargetType="ScrollBar">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="Height" Value="10"/>
+            <Setter Property="MinHeight" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="#1E1F29">
+                            <Track x:Name="PART_Track">
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ScrollBarThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
@@ -154,7 +175,25 @@
                    ViewportSize="10"
                    Scroll="VScrollBar_Scroll"/>
 
+        <!-- Horizontal scrollbar -->
+        <ScrollBar x:Name="HScrollBar" Grid.Row="1" Grid.Column="0"
+                   Style="{StaticResource DarkHScrollBar}"
+                   Orientation="Horizontal"
+                   Minimum="0"
+                   Maximum="0"
+                   Value="0"
+                   SmallChange="20"
+                   LargeChange="120"
+                   ViewportSize="100"
+                   Visibility="Collapsed"
+                   Scroll="HScrollBar_Scroll"/>
+
+        <Border x:Name="ScrollCorner" Grid.Row="1" Grid.Column="1"
+                Width="10" Height="10"
+                Background="#1E1F29"
+                Visibility="Collapsed"/>
+
         <!-- Status bar -->
-        <local:VimStatusBar x:Name="StatusBar" Grid.Row="1" Grid.ColumnSpan="2"/>
+        <local:VimStatusBar x:Name="StatusBar" Grid.Row="2" Grid.ColumnSpan="2"/>
     </Grid>
 </UserControl>

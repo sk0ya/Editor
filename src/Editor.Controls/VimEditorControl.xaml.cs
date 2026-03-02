@@ -202,6 +202,7 @@ public partial class VimEditorControl : UserControl
         var config = VimConfig.LoadDefault();
         _engine = new VimEngine(config);
         _engine.SetClipboardProvider(new WpfClipboardProvider());
+        Canvas.WrapLines = _engine.Options.Wrap;
 
         _lspManager = new LspManager(Dispatcher);
         _lspManager.StateChanged += OnLspStateChanged;
@@ -234,6 +235,7 @@ public partial class VimEditorControl : UserControl
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.ScrollChanged += OnCanvasScrollChanged;
         Canvas.VisibleLinesChanged += OnCanvasVisibleLinesChanged;
+        Canvas.ScrollMetricsChanged += OnCanvasScrollMetricsChanged;
         Canvas.FoldGutterClicked += OnFoldGutterClicked;
 
         ApplyTheme();
@@ -743,38 +745,68 @@ public partial class VimEditorControl : UserControl
 
     // ─────────────── Scrollbar ───────────────
 
-    private void UpdateScrollbar(double offsetY)
+    private void UpdateScrollbars(double offsetY, double offsetX)
     {
-        double lineH = Canvas.LineHeight;
-        if (lineH <= 0) return;
-        int totalLines = _engine.CurrentBuffer.Text.LineCount;
-        int visibleLines = Canvas.VisibleLines;
-        int maxFirst = Math.Max(0, totalLines - visibleLines);
-
+        double maxOffsetY = Math.Max(0, Canvas.TotalContentHeight - Canvas.ViewportHeight);
         VScrollBar.Minimum = 0;
-        VScrollBar.Maximum = maxFirst;
-        VScrollBar.ViewportSize = visibleLines;
-        VScrollBar.LargeChange = Math.Max(1, visibleLines);
-        VScrollBar.SmallChange = 1;
-        VScrollBar.Value = Math.Clamp(offsetY / lineH, 0, maxFirst);
+        VScrollBar.Maximum = maxOffsetY;
+        VScrollBar.ViewportSize = Math.Max(0, Canvas.ViewportHeight);
+        VScrollBar.SmallChange = Math.Max(1, Canvas.LineHeight);
+        VScrollBar.LargeChange = Math.Max(Canvas.LineHeight, Canvas.ViewportHeight);
+        VScrollBar.Value = Math.Clamp(offsetY, 0, maxOffsetY);
+
+        double maxOffsetX = Canvas.WrapLines
+            ? 0
+            : Math.Max(0, Canvas.TotalContentWidth - Canvas.ViewportWidth);
+        HScrollBar.Minimum = 0;
+        HScrollBar.Maximum = maxOffsetX;
+        HScrollBar.ViewportSize = Math.Max(0, Canvas.ViewportWidth);
+        HScrollBar.SmallChange = Math.Max(4, Canvas.CharWidth);
+        HScrollBar.LargeChange = Math.Max(Canvas.CharWidth * 8, Canvas.ViewportWidth * 0.8);
+        HScrollBar.Value = Math.Clamp(offsetX, 0, maxOffsetX);
+
+        bool showV = maxOffsetY > 0;
+        bool showH = !Canvas.WrapLines && maxOffsetX > 0;
+        VScrollBar.Visibility = showV ? Visibility.Visible : Visibility.Collapsed;
+        HScrollBar.Visibility = showH ? Visibility.Visible : Visibility.Collapsed;
+        ScrollCorner.Visibility = showV && showH ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void VScrollBar_Scroll(object sender, ScrollEventArgs e)
     {
-        double lineH = Canvas.LineHeight;
-        if (lineH <= 0) return;
-        Canvas.ScrollTo(e.NewValue * lineH);
+        Canvas.ScrollTo(e.NewValue, Canvas.HorizontalOffset);
+        Focus();
+    }
+
+    private void HScrollBar_Scroll(object sender, ScrollEventArgs e)
+    {
+        Canvas.ScrollTo(Canvas.VerticalOffset, e.NewValue);
         Focus();
     }
 
     private void OnCanvasScrollChanged(double offsetY, double offsetX)
     {
-        UpdateScrollbar(offsetY);
+        UpdateScrollbars(offsetY, offsetX);
     }
 
     private void OnCanvasVisibleLinesChanged(int visibleLines)
     {
-        UpdateScrollbar(Canvas.FirstVisibleLine * Canvas.LineHeight);
+        UpdateScrollbars(Canvas.VerticalOffset, Canvas.HorizontalOffset);
+    }
+
+    private void OnCanvasScrollMetricsChanged()
+    {
+        UpdateScrollbars(Canvas.VerticalOffset, Canvas.HorizontalOffset);
+    }
+
+    private void ToggleWordWrap()
+    {
+        bool enabled = !Canvas.WrapLines;
+        Canvas.WrapLines = enabled;
+        _engine.Options.Wrap = enabled;
+        Canvas.ScrollTo(Canvas.VerticalOffset, enabled ? 0 : Canvas.HorizontalOffset);
+        UpdateScrollbars(Canvas.VerticalOffset, Canvas.HorizontalOffset);
+        StatusBar.UpdateStatus(enabled ? "Wrap: ON" : "Wrap: OFF");
     }
 
     // ─────────────── Mouse handling ───────────────
@@ -896,6 +928,12 @@ public partial class VimEditorControl : UserControl
             ProcessKey("V", false, false, false);
             ProcessKey("G", false, false, false);
         }));
+
+        menu.Items.Add(new Separator { Style = sep });
+        menu.Items.Add(MakeItem(
+            Canvas.WrapLines ? "Word Wrap: Off" : "Word Wrap: On",
+            "Alt+Z",
+            ToggleWordWrap));
 
         // ── LSP operations (only when a language server is connected) ──
         if (_lspManager.IsConnected)
@@ -1235,6 +1273,14 @@ public partial class VimEditorControl : UserControl
                 e.Handled = true;
                 return;
             }
+        }
+
+        if (!ctrl && alt && !shift && key == Key.Z)
+        {
+            ToggleWordWrap();
+            _keyDownHandledByVim = true;
+            e.Handled = true;
+            return;
         }
 
         // Ctrl combinations are valid in every mode for the subset the engine supports.
@@ -2014,7 +2060,7 @@ public partial class VimEditorControl : UserControl
         StatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified);
         StatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount);
 
-        UpdateScrollbar(Canvas.FirstVisibleLine * Canvas.LineHeight);
+        UpdateScrollbars(Canvas.VerticalOffset, Canvas.HorizontalOffset);
     }
 
     private void UpdateSearchHighlights(string pattern)
