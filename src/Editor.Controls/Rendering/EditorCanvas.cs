@@ -595,8 +595,7 @@ public class EditorCanvas : FrameworkElement
                 }
             }
 
-            if (_wrapLines)
-                dc.PushClip(new RectangleGeometry(new Rect(textLeft, y, Math.Max(0, size.Width - textLeft), _lineHeight)));
+            dc.PushClip(new RectangleGeometry(new Rect(textLeft, y, Math.Max(0, size.Width - textLeft), _lineHeight)));
 
             // Selection highlight
             DrawSelection(dc, l, y, textLeft, lineText);
@@ -613,8 +612,7 @@ public class EditorCanvas : FrameworkElement
             // Cursor
             DrawCursor(dc, l, y, textLeft, lineText);
 
-            if (_wrapLines)
-                dc.Pop();
+            dc.Pop();
         }
 
         _scrollOffsetX = baseOffsetX;
