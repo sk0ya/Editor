@@ -123,15 +123,7 @@ public class CommandParser
         }
         if (rest == "z") return (CommandState.Incomplete, null);
         if (rest.StartsWith("z") && rest.Length >= 2)
-        {
-            return rest[1] switch
-            {
-                'z' => Finalize(count, null, "zz"),
-                't' => Finalize(count, null, "zt"),
-                'b' => Finalize(count, null, "zb"),
-                _ => (CommandState.Invalid, null)
-            };
-        }
+            return FinalizeZMotion(rest[1], count);
 
         if (op != null)
         {
@@ -171,15 +163,7 @@ public class CommandParser
 
             // z-prefix
             if (op == "z")
-            {
-                return afterOp[0] switch
-                {
-                    'z' => Finalize(count, null, "zz"),
-                    't' => Finalize(count, null, "zt"),
-                    'b' => Finalize(count, null, "zb"),
-                    _ => (CommandState.Invalid, null)
-                };
-            }
+                return FinalizeZMotion(afterOp[0], count);
 
             // Motion after operator
             return ParseMotion(afterOp, count, op);
@@ -260,6 +244,20 @@ public class CommandParser
 
         return Finalize(count, op, motion);
     }
+
+    private (CommandState, ParsedCommand?) FinalizeZMotion(char ch, int count) => ch switch
+    {
+        'z' => Finalize(count, null, "zz"),
+        't' => Finalize(count, null, "zt"),
+        'b' => Finalize(count, null, "zb"),
+        'a' => Finalize(count, null, "za"),
+        'c' => Finalize(count, null, "zc"),
+        'o' => Finalize(count, null, "zo"),
+        'M' => Finalize(count, null, "zM"),
+        'R' => Finalize(count, null, "zR"),
+        'f' => Finalize(count, null, "zf"),
+        _ => (CommandState.Invalid, null)
+    };
 
     private (CommandState, ParsedCommand?) Finalize(int count = 1, string? op = null, string motion = "",
         bool linewise = false, char? findChar = null)

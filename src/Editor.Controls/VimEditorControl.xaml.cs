@@ -4,10 +4,13 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.IO;
 using Editor.Controls.Lsp;
 using Editor.Controls.Themes;
 using Editor.Core.Config;
 using Editor.Core.Engine;
+using Editor.Core.Folds;
+using Editor.Core.Lsp;
 using Editor.Core.Models;
 
 namespace Editor.Controls;
@@ -202,6 +205,7 @@ public partial class VimEditorControl : UserControl
         _lspManager = new LspManager(Dispatcher);
         _lspManager.StateChanged += OnLspStateChanged;
         _lspManager.StatusMessage += OnLspStatusMessage;
+        _lspManager.FoldingRangesChanged += OnLspFoldingRangesChanged;
 
         _completionDebounce = new System.Windows.Threading.DispatcherTimer
         {
@@ -229,6 +233,7 @@ public partial class VimEditorControl : UserControl
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.ScrollChanged += OnCanvasScrollChanged;
         Canvas.VisibleLinesChanged += OnCanvasVisibleLinesChanged;
+        Canvas.FoldGutterClicked += OnFoldGutterClicked;
 
         ApplyTheme();
     }
@@ -243,6 +248,31 @@ public partial class VimEditorControl : UserControl
     private void OnLspStatusMessage(string msg)
     {
         StatusBar.UpdateStatus(msg);
+    }
+
+    private void OnLspFoldingRangesChanged(IReadOnlyList<LspFoldingRange> ranges)
+    {
+        if (ranges.Count > 0)
+        {
+            // LSP がフォールド範囲を返した → そのまま使用
+            _engine.LoadFoldRanges(ranges.Select(r => (r.StartLine, r.EndLine)));
+        }
+        else
+        {
+            // LSP が空リストを返した（非対応 or まだ未解析）→ シンタックスベースの検出にフォールバック
+            ApplySyntaxFolds();
+        }
+        UpdateAll();
+    }
+
+    private void ApplySyntaxFolds()
+    {
+        var fp = _engine.CurrentBuffer.FilePath;
+        if (fp == null) return;
+        var ext = Path.GetExtension(fp);
+        var lines = _engine.CurrentBuffer.Text.Snapshot();
+        var ranges = SyntaxFoldDetector.Detect(ext, lines);
+        _engine.LoadFoldRanges(ranges);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -773,6 +803,13 @@ public partial class VimEditorControl : UserControl
     private void OnCanvasMouseDragEnded()
     {
         _isDragSelecting = false;
+    }
+
+    private void OnFoldGutterClicked(int bufferLine)
+    {
+        _engine.CurrentBuffer.Folds.ToggleFold(bufferLine);
+        UpdateAll();
+        Focus();
     }
 
     private void OnCanvasMouseRightClicked(int line, int col)
@@ -1922,6 +1959,9 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.QuickfixGotoRequested when evt is QuickfixGotoEvent qge:
                     QuickfixGotoRequested?.Invoke(this, qge.Index);
                     break;
+                case VimEventType.FoldsChanged:
+                    needFullUpdate = true;
+                    break;
             }
         }
 
@@ -1938,6 +1978,14 @@ public partial class VimEditorControl : UserControl
             .Select(i => buf.Text.GetLine(i)).ToArray();
 
         Canvas.SetLines(lines);
+
+        // Push fold state to canvas
+        var folds = buf.Folds;
+        var visMap = folds.BuildVisibleLineMap(buf.Text.LineCount);
+        var closedStarts = folds.Folds.Where(f => f.IsClosed).Select(f => f.StartLine);
+        var openStarts = folds.Folds.Where(f => !f.IsClosed).Select(f => f.StartLine);
+        Canvas.SetFolds(visMap, closedStarts, openStarts);
+
         Canvas.SetCursor(_engine.Cursor);
         Canvas.SetMode(_engine.Mode);
         Canvas.ShowLineNumbers(_engine.Options.Number);
@@ -1979,16 +2027,23 @@ public partial class VimEditorControl : UserControl
     {
         if (Canvas.LineHeight <= 0) return;
 
+        var buf = _engine.CurrentBuffer;
+        var folds = buf.Folds;
+        var visMap = folds.BuildVisibleLineMap(buf.Text.LineCount);
+        int cursorVisual = folds.BufferToVisualLine(_engine.Cursor.Line, visMap);
+        if (cursorVisual < 0) cursorVisual = _engine.Cursor.Line;
+        int totalVisible = visMap.Length > 0 ? visMap.Length : buf.Text.LineCount;
+
         var visible = Canvas.VisibleLines;
         var targetTopLine = align switch
         {
-            ViewportAlign.Top => _engine.Cursor.Line,
-            ViewportAlign.Center => _engine.Cursor.Line - (visible / 2),
-            ViewportAlign.Bottom => _engine.Cursor.Line - visible + 1,
-            _ => _engine.Cursor.Line
+            ViewportAlign.Top => cursorVisual,
+            ViewportAlign.Center => cursorVisual - (visible / 2),
+            ViewportAlign.Bottom => cursorVisual - visible + 1,
+            _ => cursorVisual
         };
 
-        targetTopLine = Math.Clamp(targetTopLine, 0, Math.Max(0, _engine.CurrentBuffer.Text.LineCount - 1));
+        targetTopLine = Math.Clamp(targetTopLine, 0, Math.Max(0, totalVisible - 1));
         Canvas.ScrollTo(targetTopLine * Canvas.LineHeight);
         Canvas.SetCursor(_engine.Cursor);
     }

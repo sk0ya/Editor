@@ -10,6 +10,7 @@ public sealed class LspClient : ILspClient
 
     public event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
     public bool IsRunning => _process.IsRunning;
+    public bool SupportsFoldingRange { get; private set; }
 
     public LspClient(string executable, IEnumerable<string> args, string? workingDir = null)
     {
@@ -19,7 +20,7 @@ public sealed class LspClient : ILspClient
 
     public async Task InitializeAsync(string rootUri)
     {
-        await _process.SendRequestAsync("initialize", new
+        var result = await _process.SendRequestAsync("initialize", new
         {
             processId = Environment.ProcessId,
             rootUri,
@@ -35,12 +36,22 @@ public sealed class LspClient : ILspClient
                     signatureHelp = new { signatureInformation = new { documentationFormat = new[] { "plaintext" } } },
                     formatting = new { },
                     rename = new { },
-                    references = new { }
+                    references = new { },
+                    foldingRange = new { }
                 }
             },
             workspaceFolders = (object?)null
         });
         _process.SendNotification("initialized", new { });
+
+        // サーバーの capabilities を解析して対応機能を確定する
+        if (result.HasValue &&
+            result.Value.ValueKind == JsonValueKind.Object &&
+            result.Value.TryGetProperty("capabilities", out var caps) &&
+            caps.TryGetProperty("foldingRangeProvider", out var frp))
+        {
+            SupportsFoldingRange = frp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+        }
     }
 
     public Task OpenDocumentAsync(string uri, string languageId, string text)
@@ -214,6 +225,30 @@ public sealed class LspClient : ILspClient
             return ParseWorkspaceEdit(result.Value);
         }
         catch { return null; }
+    }
+
+    public async Task<IReadOnlyList<LspFoldingRange>> GetFoldingRangesAsync(
+        string uri, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/foldingRange", new
+            {
+                textDocument = new { uri }
+            }, ct);
+
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
+            var list = new List<LspFoldingRange>();
+            foreach (var item in result.Value.EnumerateArray())
+            {
+                if (!item.TryGetProperty("startLine", out var startEl) ||
+                    !item.TryGetProperty("endLine", out var endEl)) continue;
+                string? kind = item.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null;
+                list.Add(new LspFoldingRange(startEl.GetInt32(), endEl.GetInt32(), kind));
+            }
+            return list;
+        }
+        catch { return []; }
     }
 
     public async Task<IReadOnlyList<LspLocation>> GetReferencesAsync(

@@ -19,6 +19,9 @@ public sealed class LspManager : IDisposable
     private LspClient? _currentClient;
     private int _docVersion = 1;
     private bool _documentReady;   // didOpen sent and acknowledged
+    // Set after didOpen so that the first publishDiagnostics triggers a fold range retry.
+    // (Some servers are not ready to answer foldingRange immediately after didOpen.)
+    private volatile string? _pendingFoldRangeUri;
 
     // State visible to the UI (always accessed on dispatcher thread)
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
@@ -45,11 +48,17 @@ public sealed class LspManager : IDisposable
     /// <summary>True when initialization + didOpen completed for the current file.</summary>
     public bool IsDocumentReady => _documentReady;
 
+    /// <summary>現在のサーバーが textDocument/foldingRange をサポートしているか。</summary>
+    public bool ServerSupportsFoldingRange => _currentClient?.SupportsFoldingRange == true;
+
     /// <summary>Fired on the dispatcher thread for status bar messages.</summary>
     public event Action<string>? StatusMessage;
 
     /// <summary>Fired on the dispatcher thread whenever LSP state changes.</summary>
     public event Action? StateChanged;
+
+    /// <summary>Fired on the dispatcher thread when LSP returns folding ranges for the current file.</summary>
+    public event Action<IReadOnlyList<LspFoldingRange>>? FoldingRangesChanged;
 
     public string? CurrentUri => _currentUri;
 
@@ -61,6 +70,7 @@ public sealed class LspManager : IDisposable
         HideCompletion();
         _diagnostics = [];
         _documentReady = false;
+        _pendingFoldRangeUri = null;
 
         if (filePath == null)
         {
@@ -77,6 +87,7 @@ public sealed class LspManager : IDisposable
             _currentUri = null;
             _currentClient = null;
             StateChanged?.Invoke();
+            FoldingRangesChanged?.Invoke([]);   // LSP サーバーなし → シンタックスフォールドへフォールバック
             return;
         }
 
@@ -106,6 +117,7 @@ public sealed class LspManager : IDisposable
                 Log($"[LSP] Failed to start {def.Executable}: {ex.Message}");
                 _currentUri = null;
                 _currentClient = null;
+                FoldingRangesChanged?.Invoke([]);   // サーバー起動失敗 → シンタックスフォールドへフォールバック
                 return;
             }
         }
@@ -121,7 +133,10 @@ public sealed class LspManager : IDisposable
         else if (!alreadyOpen)
             _ = OpenSafeAsync(client!, uri, def.LanguageId, text);
         else
+        {
             _documentReady = true; // already open from a previous visit
+            _ = RequestFoldingRangesInternalAsync(client!, uri);
+        }
 
         StateChanged?.Invoke();
     }
@@ -321,11 +336,54 @@ public sealed class LspManager : IDisposable
                     Log($"[LSP] document ready");
                 }
             });
+
+            // Request folding ranges after document is ready.
+            // Also set _pendingFoldRangeUri so that the first publishDiagnostics triggers a
+            // retry — some servers (e.g. csharp-ls) are not ready to answer foldingRange
+            // immediately after didOpen and will return an empty list.
+            await RequestFoldingRangesInternalAsync(client, uri);
+            _pendingFoldRangeUri = uri;
         }
         catch (Exception ex)
         {
             Log($"[LSP] didOpen failed: {ex.Message}");
         }
+    }
+
+    private async Task RequestFoldingRangesInternalAsync(LspClient client, string uri)
+    {
+        if (!client.SupportsFoldingRange)
+        {
+            Log($"[LSP] foldingRange: server does not support textDocument/foldingRange, skipping");
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (_currentUri == uri)
+                    FoldingRangesChanged?.Invoke([]);   // VimEditorControl 側でフォールバックを適用する
+            });
+            return;
+        }
+
+        try
+        {
+            var ranges = await client.GetFoldingRangesAsync(uri);
+            Log($"[LSP] foldingRange: {ranges.Count} ranges");
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (_currentUri == uri)
+                    FoldingRangesChanged?.Invoke(ranges);
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"[LSP] foldingRange failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Re-request folding ranges for the current document (e.g. after saving).</summary>
+    public void RequestFoldingRanges()
+    {
+        if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return;
+        _ = RequestFoldingRangesInternalAsync(_currentClient, _currentUri);
     }
 
     private static async Task CloseSafeAsync(LspClient client, string uri)
@@ -336,6 +394,14 @@ public sealed class LspManager : IDisposable
 
     private void OnDiagnosticsChanged(object? sender, DiagnosticsChangedEventArgs e)
     {
+        // publishDiagnostics means the server has finished analyzing the file — use this as
+        // the signal to retry a fold range request if the initial one came back empty.
+        if (e.Uri == _pendingFoldRangeUri && _currentClient?.IsRunning == true)
+        {
+            _pendingFoldRangeUri = null;
+            _ = RequestFoldingRangesInternalAsync(_currentClient, e.Uri);
+        }
+
         _dispatcher.InvokeAsync(() =>
         {
             if (e.Uri != _currentUri) return;

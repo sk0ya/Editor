@@ -1,3 +1,5 @@
+using Editor.Core.Folds;
+
 namespace Editor.Core.Buffer;
 
 public class VimBuffer
@@ -7,6 +9,7 @@ public class VimBuffer
     public string Name => FilePath != null ? Path.GetFileName(FilePath) : $"[No Name]";
     public TextBuffer Text { get; } = new();
     public UndoManager Undo { get; } = new();
+    public FoldManager Folds { get; } = new();
 
     private static int _nextId = 1;
     public VimBuffer() => Id = _nextId++;

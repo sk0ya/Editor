@@ -75,6 +75,15 @@ public class VimEngine
         _registerManager.SetClipboardProvider(provider);
     }
 
+    /// <summary>
+    /// LSPのfoldingRangeレスポンスを現在のバッファに適用する。
+    /// 既存の開閉状態は同じ範囲のフォールドに引き継がれる。
+    /// </summary>
+    public void LoadFoldRanges(IEnumerable<(int StartLine, int EndLine)> ranges)
+    {
+        CurrentBuffer.Folds.SetLspRanges(ranges);
+    }
+
     public void LoadFile(string path)
     {
         _bufferManager.OpenFile(path);
@@ -620,6 +629,42 @@ public class VimEngine
             case "zz": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Center)); break;
             case "zt": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Top)); break;
             case "zb": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Bottom)); break;
+            case "za":
+                CurrentBuffer.Folds.ToggleFold(_cursor.Line);
+                _cursor = ClampCursorToVisible(_cursor);
+                EmitCursor(events);
+                events.Add(VimEvent.FoldsChanged());
+                break;
+            case "zo":
+                CurrentBuffer.Folds.OpenFold(_cursor.Line);
+                events.Add(VimEvent.FoldsChanged());
+                break;
+            case "zc":
+                CurrentBuffer.Folds.CloseFold(_cursor.Line);
+                _cursor = ClampCursorToVisible(_cursor);
+                EmitCursor(events);
+                events.Add(VimEvent.FoldsChanged());
+                break;
+            case "zM":
+                CurrentBuffer.Folds.CloseAll();
+                _cursor = ClampCursorToVisible(_cursor);
+                EmitCursor(events);
+                events.Add(VimEvent.FoldsChanged());
+                break;
+            case "zR":
+                CurrentBuffer.Folds.OpenAll();
+                events.Add(VimEvent.FoldsChanged());
+                break;
+            case "zf":
+            {
+                int foldEnd = Math.Min(CurrentBuffer.Text.LineCount - 1, _cursor.Line + count - 1);
+                if (foldEnd > _cursor.Line)
+                {
+                    CurrentBuffer.Folds.CreateFold(_cursor.Line, foldEnd);
+                    events.Add(VimEvent.FoldsChanged());
+                }
+                break;
+            }
 
             // Editing
             case "x":
@@ -1224,6 +1269,24 @@ public class VimEngine
             case var r when r?.StartsWith('r') == true && r.Length == 2:
                 ExecuteVisualReplace(r[1], events);
                 return true;
+            case "za": CurrentBuffer.Folds.ToggleFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); return false;
+            case "zo": CurrentBuffer.Folds.OpenFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); return false;
+            case "zc": CurrentBuffer.Folds.CloseFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); return false;
+            case "zM": CurrentBuffer.Folds.CloseAll(); events.Add(VimEvent.FoldsChanged()); return false;
+            case "zR": CurrentBuffer.Folds.OpenAll(); events.Add(VimEvent.FoldsChanged()); return false;
+            case "zf":
+            {
+                if (_selection != null)
+                {
+                    var selStart = Math.Min(_selection.Value.Start.Line, _selection.Value.End.Line);
+                    var selEnd = Math.Max(_selection.Value.Start.Line, _selection.Value.End.Line);
+                    if (selEnd > selStart)
+                        CurrentBuffer.Folds.CreateFold(selStart, selEnd);
+                    events.Add(VimEvent.FoldsChanged());
+                    ExitVisualMode(events);
+                }
+                return false;
+            }
             default:
                 return false;
         }
@@ -1568,11 +1631,27 @@ public class VimEngine
     private void MoveVertical(int delta, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
-        var newLine = Math.Clamp(_cursor.Line + delta, 0, buf.LineCount - 1);
-        var maxCol = Math.Max(0, buf.GetLineLength(newLine) - 1);
-        var col = Math.Min(_preferredColumn, maxCol);
-        _cursor = new CursorPosition(newLine, col);
+        var folds = CurrentBuffer.Folds;
+        int[] visMap = folds.BuildVisibleLineMap(buf.LineCount);
+        int currentVis = folds.BufferToVisualLine(_cursor.Line, visMap);
+        if (currentVis < 0) currentVis = 0;
+        int targetVis = Math.Clamp(currentVis + delta, 0, visMap.Length - 1);
+        int newLine = visMap[targetVis];
+        int maxCol = Math.Max(0, buf.GetLineLength(newLine) - 1);
+        _cursor = new CursorPosition(newLine, Math.Min(_preferredColumn, maxCol));
         EmitCursor(events);
+    }
+
+    private CursorPosition ClampCursorToVisible(CursorPosition cursor)
+    {
+        var hiding = CurrentBuffer.Folds.GetHidingFold(cursor.Line);
+        if (hiding.HasValue)
+        {
+            int foldStart = hiding.Value.StartLine;
+            int maxCol = Math.Max(0, CurrentBuffer.Text.GetLineLength(foldStart) - 1);
+            return new CursorPosition(foldStart, Math.Min(cursor.Column, maxCol));
+        }
+        return cursor;
     }
 
     private void GoToLineEnd(bool insertMode, List<VimEvent> events)
@@ -1721,6 +1800,7 @@ public class VimEngine
         Snapshot();
         var buf = _bufferManager.Current.Text;
         var indent = GetAutoIndent(buf, _cursor.Line);
+        CurrentBuffer.Folds.OnLinesInserted(_cursor.Line, 1);
         buf.InsertLines(_cursor.Line, [indent]);
         _cursor = new CursorPosition(_cursor.Line + 1, indent.Length);
         EmitText(events);
@@ -1731,6 +1811,7 @@ public class VimEngine
         Snapshot();
         var buf = _bufferManager.Current.Text;
         var indent = GetAutoIndent(buf, _cursor.Line);
+        CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, 1);
         buf.InsertLineAbove(_cursor.Line, indent);
         _cursor = _cursor with { Column = indent.Length };
         EmitText(events);
@@ -1779,6 +1860,7 @@ public class VimEngine
     {
         var buf = _bufferManager.Current.Text;
         YankLines(start, end, '"', events);
+        CurrentBuffer.Folds.OnLinesDeleted(start, end);
         buf.DeleteLines(start, end);
         _cursor = buf.ClampCursor(new CursorPosition(start, 0));
         EmitText(events);
@@ -1821,6 +1903,7 @@ public class VimEngine
         if (reg.Type == RegisterType.Line)
         {
             var lines = reg.GetLines();
+            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line, lines.Length);
             buf.InsertLines(_cursor.Line, lines);
             _cursor = new CursorPosition(_cursor.Line + 1, 0);
         }
@@ -1843,6 +1926,7 @@ public class VimEngine
         if (reg.Type == RegisterType.Line)
         {
             var lines = reg.GetLines();
+            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, 1);
             buf.InsertLineAbove(_cursor.Line);
             for (int i = 0; i < lines.Length; i++)
                 buf.ReplaceLine(_cursor.Line + i, lines[i]);
@@ -1875,7 +1959,9 @@ public class VimEngine
         if (state != null)
         {
             _cursor = vbuf.Text.ClampCursor(state.Cursor);
+            vbuf.Folds.Clear();
             EmitText(events);
+            events.Add(VimEvent.FoldsChanged());
             EmitStatus(events, "1 change undone");
         }
         else EmitStatus(events, "Already at oldest change");
@@ -1888,7 +1974,9 @@ public class VimEngine
         if (state != null)
         {
             _cursor = vbuf.Text.ClampCursor(state.Cursor);
+            vbuf.Folds.Clear();
             EmitText(events);
+            events.Add(VimEvent.FoldsChanged());
             EmitStatus(events, "1 change redone");
         }
         else EmitStatus(events, "Already at newest change");

@@ -9,6 +9,8 @@ public class DiagnosticsChangedEventArgs(string uri, IReadOnlyList<LspDiagnostic
 public interface ILspClient : IDisposable
 {
     bool IsRunning { get; }
+    /// <summary>サーバーが textDocument/foldingRange をサポートしているか。InitializeAsync 後に確定する。</summary>
+    bool SupportsFoldingRange { get; }
     event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
 
     Task InitializeAsync(string rootUri);
@@ -22,4 +24,5 @@ public interface ILspClient : IDisposable
     Task<IReadOnlyList<LspTextEdit>> GetFormattingEditsAsync(string uri, int tabSize, bool insertSpaces, CancellationToken ct = default);
     Task<LspWorkspaceEdit?> GetRenameAsync(string uri, LspPosition position, string newName, CancellationToken ct = default);
     Task<IReadOnlyList<LspLocation>> GetReferencesAsync(string uri, LspPosition position, bool includeDeclaration = true, CancellationToken ct = default);
+    Task<IReadOnlyList<LspFoldingRange>> GetFoldingRangesAsync(string uri, CancellationToken ct = default);
 }

@@ -27,6 +27,7 @@ public enum VimEventType
     QuickfixNextRequested,
     QuickfixPrevRequested,
     QuickfixGotoRequested,
+    FoldsChanged,
 }
 
 public enum ViewportAlign
@@ -106,6 +107,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent QuickfixGoto(int index) =>
         new QuickfixGotoEvent(index);
+
+    public static VimEvent FoldsChanged() =>
+        new(VimEventType.FoldsChanged);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);

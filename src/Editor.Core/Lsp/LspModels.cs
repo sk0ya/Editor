@@ -41,3 +41,6 @@ public record LspLocation(string Uri, LspRange Range);
 
 // Workspace edit (for rename — maps file URI → list of edits)
 public record LspWorkspaceEdit(IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> Changes);
+
+// Folding ranges
+public record LspFoldingRange(int StartLine, int EndLine, string? Kind = null);

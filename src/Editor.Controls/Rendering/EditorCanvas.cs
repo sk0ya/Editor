@@ -36,6 +36,12 @@ public class EditorCanvas : FrameworkElement
     private string _imeCompositionText = string.Empty;
     private string[] _imeCandidates = [];
     private int _imeCandidateSelection = -1;
+    // Folds
+    private int[] _visibleLineMap = [];
+    private HashSet<int> _closedFoldStarts = [];   // buffer lines with closed fold (▶)
+    private HashSet<int> _openFoldStarts = [];     // buffer lines with open fold (▼)
+    private int _hoveredFoldLine = -1;             // buffer line currently hovered in fold gutter
+
     // LSP
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
     private IReadOnlyList<LspCompletionItem> _completionItems = [];
@@ -51,6 +57,7 @@ public class EditorCanvas : FrameworkElement
     public event Action<int, int>? MouseRightClicked;  // (line, col)
     public event Action<int, int>? MouseDragging;      // (line, col) during drag
     public event Action? MouseDragEnded;
+    public event Action<int>? FoldGutterClicked;       // (bufferLine) fold indicator clicked
 
     public EditorCanvas()
     {
@@ -61,7 +68,8 @@ public class EditorCanvas : FrameworkElement
 
     // ─────────────── Public scroll info ───────────────
 
-    public double TotalContentHeight => _lines.Length * _lineHeight;
+    private int TotalVisualLines => _visibleLineMap.Length > 0 ? _visibleLineMap.Length : _lines.Length;
+    public double TotalContentHeight => TotalVisualLines * _lineHeight;
     public double ViewportHeight => RenderSize.Height;
 
     public void UpdateFont(string family, double size)
@@ -84,6 +92,14 @@ public class EditorCanvas : FrameworkElement
     public void SetCursor(CursorPosition cursor) { _cursor = cursor; EnsureCursorVisible(); InvalidateVisual(); }
     public void SetSelection(Selection? sel) { _selection = sel; InvalidateVisual(); }
     public void SetMode(VimMode mode) { _mode = mode; InvalidateVisual(); }
+
+    public void SetFolds(int[] visibleLineMap, IEnumerable<int> closedFoldStarts, IEnumerable<int> openFoldStarts)
+    {
+        _visibleLineMap = visibleLineMap;
+        _closedFoldStarts = [.. closedFoldStarts];
+        _openFoldStarts = [.. openFoldStarts];
+        InvalidateVisual();
+    }
     public void SetTokens(LineTokens[] tokens) { _tokens = tokens; InvalidateVisual(); }
     public void SetSearchMatches(List<CursorPosition> matches, string pattern) { _searchMatches = matches; _searchPattern = pattern; InvalidateVisual(); }
     public void ShowLineNumbers(bool show) { _showLineNumbers = show; InvalidateVisual(); }
@@ -134,7 +150,7 @@ public class EditorCanvas : FrameworkElement
     public double LineHeight => _lineHeight;
     public int VisibleLines => Math.Max(1, _visibleLines);
     public int FirstVisibleLine => (int)(_scrollOffsetY / _lineHeight);
-    public int LastVisibleLine => Math.Min(_lines.Length - 1, FirstVisibleLine + _visibleLines);
+    public int LastVisibleLine => Math.Min(TotalVisualLines - 1, FirstVisibleLine + _visibleLines);
 
     public void ScrollTo(double offsetY, double offsetX = 0)
     {
@@ -160,8 +176,27 @@ public class EditorCanvas : FrameworkElement
     {
         base.OnMouseLeftButtonDown(e);
         CaptureMouse();
-        var (line, col) = HitTest(e.GetPosition(this));
         _isDragging = false;
+
+        var point = e.GetPosition(this);
+        int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
+        double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
+        int gutterWidth = (int)(lineNumWidth + foldColWidth);
+
+        if (_showLineNumbers && point.X < gutterWidth)
+        {
+            // Fold column click — check for fold indicator
+            if (point.X >= lineNumWidth)
+            {
+                int bufferLine = HitTestGutterLine(point);
+                if (bufferLine >= 0 && (_closedFoldStarts.Contains(bufferLine) || _openFoldStarts.Contains(bufferLine)))
+                    FoldGutterClicked?.Invoke(bufferLine);
+            }
+            e.Handled = true;
+            return;
+        }
+
+        var (line, col) = HitTest(point);
         MouseClicked?.Invoke(line, col);
         e.Handled = true;
     }
@@ -169,11 +204,40 @@ public class EditorCanvas : FrameworkElement
     protected override void OnMouseMove(System.Windows.Input.MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        var point = e.GetPosition(this);
+
         if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed && IsMouseCaptured)
         {
             _isDragging = true;
-            var (line, col) = HitTest(e.GetPosition(this));
+            var (line, col) = HitTest(point);
             MouseDragging?.Invoke(line, col);
+            return;
+        }
+
+        // Update fold indicator hover state
+        int lineNumWidth2 = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
+        double foldColWidth2 = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
+        int gutterWidth2 = (int)(lineNumWidth2 + foldColWidth2);
+        if (_showLineNumbers && point.X >= lineNumWidth2 && point.X < gutterWidth2)
+        {
+            // Hovering in fold column
+            int bufferLine = HitTestGutterLine(point);
+            bool onFold = bufferLine >= 0 && (_closedFoldStarts.Contains(bufferLine) || _openFoldStarts.Contains(bufferLine));
+            Cursor = onFold ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
+            int prev = _hoveredFoldLine;
+            _hoveredFoldLine = onFold ? bufferLine : -1;
+            if (_hoveredFoldLine != prev) InvalidateVisual();
+        }
+        else if (_showLineNumbers && point.X < lineNumWidth2)
+        {
+            // Hovering in line number area
+            if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+            Cursor = System.Windows.Input.Cursors.Arrow;
+        }
+        else
+        {
+            if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+            Cursor = System.Windows.Input.Cursors.IBeam;
         }
     }
 
@@ -188,6 +252,13 @@ public class EditorCanvas : FrameworkElement
         }
     }
 
+    protected override void OnMouseLeave(System.Windows.Input.MouseEventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+        Cursor = System.Windows.Input.Cursors.IBeam;
+    }
+
     protected override void OnMouseRightButtonDown(System.Windows.Input.MouseButtonEventArgs e)
     {
         base.OnMouseRightButtonDown(e);
@@ -196,17 +267,44 @@ public class EditorCanvas : FrameworkElement
         // Do not mark as Handled — WPF needs the event to bubble to trigger ContextMenu on MouseRightButtonUp
     }
 
+    // Y座標からバッファ行インデックスを返す（fold-aware）
+    private int BufferLineFromY(double y)
+    {
+        int visualLine = (int)((y + _scrollOffsetY) / _lineHeight);
+        visualLine = Math.Clamp(visualLine, 0, Math.Max(0, TotalVisualLines - 1));
+        return _visibleLineMap.Length > 0
+            ? _visibleLineMap[Math.Min(visualLine, _visibleLineMap.Length - 1)]
+            : Math.Clamp(visualLine, 0, Math.Max(0, _lines.Length - 1));
+    }
+
+    // Y座標からバッファ行インデックスを返す（ガタークリック用）
+    private int HitTestGutterLine(System.Windows.Point point)
+    {
+        if (_lineHeight <= 0) return -1;
+        return BufferLineFromY(point.Y);
+    }
+
+    // カーソルのビジュアル行インデックスを返す（fold-aware）
+    private int GetCursorVisualLine()
+    {
+        if (_visibleLineMap.Length == 0) return _cursor.Line;
+        int idx = Array.IndexOf(_visibleLineMap, _cursor.Line);
+        return idx >= 0 ? idx : _cursor.Line;
+    }
+
     private (int line, int col) HitTest(System.Windows.Point point)
     {
         if (_lineHeight <= 0 || _charWidth <= 0) return (0, 0);
 
-        int lineNumGutter = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
+        int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
+        double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
+        int gutterWidth = (int)(lineNumWidth + foldColWidth);
 
-        int line = (int)((point.Y + _scrollOffsetY) / _lineHeight);
+        int line = BufferLineFromY(point.Y);
         line = Math.Clamp(line, 0, Math.Max(0, _lines.Length - 1));
 
         string hitLine = line < _lines.Length ? _lines[line] : "";
-        double visualX = point.X - lineNumGutter + _scrollOffsetX;
+        double visualX = point.X - gutterWidth + _scrollOffsetX;
         int col = VisualXToCol(hitLine, visualX);
         int maxCol = Math.Max(0, hitLine.Length - 1);
         col = Math.Clamp(col, 0, maxCol);
@@ -243,16 +341,19 @@ public class EditorCanvas : FrameworkElement
         // Background
         dc.DrawRectangle(Theme.Background, null, new Rect(size));
 
-        int lineNumGutter = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
-        double textLeft = lineNumGutter;
+        int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
+        double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
+        int gutterWidth = (int)(lineNumWidth + foldColWidth);
+        double textLeft = gutterWidth;
 
         int firstLine = (int)(_scrollOffsetY / _lineHeight);
-        int lastLine = Math.Min(_lines.Length - 1, firstLine + _visibleLines + 1);
+        int lastLine = Math.Min(TotalVisualLines - 1, firstLine + _visibleLines + 1);
 
-        // Draw each visible line
-        for (int l = firstLine; l <= lastLine; l++)
+        // Draw each visible line (vi = visual index, l = buffer line)
+        for (int vi = firstLine; vi <= lastLine; vi++)
         {
-            double y = l * _lineHeight - _scrollOffsetY;
+            int l = _visibleLineMap.Length > 0 ? _visibleLineMap[vi] : vi;
+            double y = vi * _lineHeight - _scrollOffsetY;
             if (y + _lineHeight < 0 || y > size.Height) continue;
 
             var lineText = l < _lines.Length ? _lines[l] : "";
@@ -264,9 +365,24 @@ public class EditorCanvas : FrameworkElement
             // Line number gutter
             if (_showLineNumbers)
             {
-                dc.DrawRectangle(Theme.LineNumberBg, null, new Rect(0, y, lineNumGutter, _lineHeight));
+                dc.DrawRectangle(Theme.LineNumberBg, null, new Rect(0, y, gutterWidth, _lineHeight));
                 var numText = FormatText((l + 1).ToString().PadLeft(_lineNumberWidth), Theme.LineNumberFg);
                 dc.DrawText(numText, new Point(2, y + (_lineHeight - numText.Height) / 2));
+
+                // Fold indicator in dedicated fold column (▶ closed, ▼ open)
+                bool isClosed = _closedFoldStarts.Contains(l);
+                bool isOpen = _openFoldStarts.Contains(l);
+                if (isClosed || isOpen)
+                {
+                    bool hovered = _hoveredFoldLine == l;
+                    var indicatorColor = hovered ? Theme.Foreground : Theme.LineNumberFg;
+                    if (hovered)
+                        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)), null,
+                            new Rect(lineNumWidth, y, foldColWidth, _lineHeight));
+                    var marker = FormatText(isClosed ? "▶" : "▼", indicatorColor);
+                    double mx = lineNumWidth + (foldColWidth - marker.Width) / 2;
+                    dc.DrawText(marker, new Point(mx, y + (_lineHeight - marker.Height) / 2));
+                }
             }
 
             // Selection highlight
@@ -293,7 +409,7 @@ public class EditorCanvas : FrameworkElement
         if (_showLineNumbers)
         {
             var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)), 1);
-            dc.DrawLine(pen, new Point(lineNumGutter - 1, 0), new Point(lineNumGutter - 1, size.Height));
+            dc.DrawLine(pen, new Point(gutterWidth - 1, 0), new Point(gutterWidth - 1, size.Height));
         }
     }
 
@@ -673,11 +789,14 @@ public class EditorCanvas : FrameworkElement
     public Point GetCursorPixelPosition()
     {
         MeasureChar();
-        int lineNumGutter = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
+        int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
+        double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
+        int gutterWidth = (int)(lineNumWidth + foldColWidth);
         string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : "";
-        double x = lineNumGutter + GetVisualX(line, _cursor.Column) - _scrollOffsetX;
-        double y = _cursor.Line * _lineHeight - _scrollOffsetY;
-        return new Point(Math.Max(lineNumGutter, x), y);
+        double x = gutterWidth + GetVisualX(line, _cursor.Column) - _scrollOffsetX;
+
+        double y = GetCursorVisualLine() * _lineHeight - _scrollOffsetY;
+        return new Point(Math.Max(gutterWidth, x), y);
     }
 
     // ─────────────── Full-width character helpers ───────────────
@@ -768,7 +887,7 @@ public class EditorCanvas : FrameworkElement
         MeasureChar();
         if (_lineHeight == 0) return;
 
-        double cursorY = _cursor.Line * _lineHeight;
+        double cursorY = GetCursorVisualLine() * _lineHeight;
         double viewHeight = RenderSize.Height;
         double margin = 5 * _lineHeight;
 
