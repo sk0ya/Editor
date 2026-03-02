@@ -1762,10 +1762,32 @@ public partial class MainWindow : Window
             var idx = hitRowIdx;
             Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
             {
-                if (idx < PreviewPanel.Children.Count)
-                    (PreviewPanel.Children[idx] as FrameworkElement)?.BringIntoView();
+                CenterPreviewRowInViewport(idx);
             });
         }
+    }
+
+    private void CenterPreviewRowInViewport(int rowIndex)
+    {
+        if (rowIndex < 0 || rowIndex >= PreviewPanel.Children.Count) return;
+        if (PreviewPanel.Children[rowIndex] is not FrameworkElement row) return;
+
+        // Ensure actual sizes/offsets are measured before computing target scroll.
+        PreviewScrollViewer.UpdateLayout();
+        row.UpdateLayout();
+
+        double viewportHeight = PreviewScrollViewer.ViewportHeight;
+        if (viewportHeight <= 0 || double.IsNaN(viewportHeight))
+        {
+            row.BringIntoView();
+            return;
+        }
+
+        double rowTop      = row.TransformToAncestor(PreviewPanel).Transform(new Point(0, 0)).Y;
+        double rowCenter   = rowTop + row.ActualHeight / 2.0;
+        double target      = rowCenter - viewportHeight / 2.0;
+        double targetClamp = Math.Clamp(target, 0.0, PreviewScrollViewer.ScrollableHeight);
+        PreviewScrollViewer.ScrollToVerticalOffset(targetClamp);
     }
 
     private static void BuildLineInlines(TextBlock tb, string text,
