@@ -33,5 +33,11 @@ public record LspParameterInfo(string? Label);
 public record LspSignatureInfo(string Label, string? Documentation, IReadOnlyList<LspParameterInfo> Parameters);
 public record LspSignatureHelp(IReadOnlyList<LspSignatureInfo> Signatures, int ActiveSignature, int ActiveParameter);
 
-// Text edits (for formatting)
+// Text edits (for formatting / rename)
 public record LspTextEdit(LspRange Range, string NewText);
+
+// Location (for find references)
+public record LspLocation(string Uri, LspRange Range);
+
+// Workspace edit (for rename — maps file URI → list of edits)
+public record LspWorkspaceEdit(IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> Changes);

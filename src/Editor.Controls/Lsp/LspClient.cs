@@ -33,7 +33,9 @@ public sealed class LspClient : ILspClient
                     hover = new { contentFormat = new[] { "plaintext", "markdown" } },
                     definition = new { },
                     signatureHelp = new { signatureInformation = new { documentationFormat = new[] { "plaintext" } } },
-                    formatting = new { }
+                    formatting = new { },
+                    rename = new { },
+                    references = new { }
                 }
             },
             workspaceFolders = (object?)null
@@ -196,6 +198,50 @@ public sealed class LspClient : ILspClient
         catch { return []; }
     }
 
+    public async Task<LspWorkspaceEdit?> GetRenameAsync(
+        string uri, LspPosition position, string newName, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/rename", new
+            {
+                textDocument = new { uri },
+                position = new { line = position.Line, character = position.Character },
+                newName
+            }, ct);
+
+            if (result is null || result.Value.ValueKind == JsonValueKind.Null) return null;
+            return ParseWorkspaceEdit(result.Value);
+        }
+        catch { return null; }
+    }
+
+    public async Task<IReadOnlyList<LspLocation>> GetReferencesAsync(
+        string uri, LspPosition position, bool includeDeclaration = true, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/references", new
+            {
+                textDocument = new { uri },
+                position = new { line = position.Line, character = position.Character },
+                context = new { includeDeclaration }
+            }, ct);
+
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
+
+            var list = new List<LspLocation>();
+            foreach (var item in result.Value.EnumerateArray())
+            {
+                if (!item.TryGetProperty("uri", out var uriEl) ||
+                    !item.TryGetProperty("range", out var rangeEl)) continue;
+                list.Add(new LspLocation(uriEl.GetString() ?? "", ParseRange(rangeEl)));
+            }
+            return list;
+        }
+        catch { return []; }
+    }
+
     private void OnNotification(string method, JsonElement @params)
     {
         if (method != "textDocument/publishDiagnostics") return;
@@ -216,6 +262,46 @@ public sealed class LspClient : ILspClient
             DiagnosticsChanged?.Invoke(this, new DiagnosticsChangedEventArgs(uri, diags));
         }
         catch { }
+    }
+
+    private static LspWorkspaceEdit? ParseWorkspaceEdit(JsonElement el)
+    {
+        var changes = new Dictionary<string, IReadOnlyList<LspTextEdit>>();
+
+        // "changes": { "file:///...": [ {range, newText}, ... ] }
+        if (el.TryGetProperty("changes", out var changesEl) &&
+            changesEl.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in changesEl.EnumerateObject())
+            {
+                var edits = new List<LspTextEdit>();
+                if (prop.Value.ValueKind == JsonValueKind.Array)
+                    foreach (var e in prop.Value.EnumerateArray())
+                        if (e.TryGetProperty("range", out var r) && e.TryGetProperty("newText", out var t))
+                            edits.Add(new LspTextEdit(ParseRange(r), t.GetString() ?? ""));
+                changes[prop.Name] = edits;
+            }
+        }
+        // "documentChanges": [ { textDocument: {uri}, edits: [...] } ]
+        else if (el.TryGetProperty("documentChanges", out var dcEl) &&
+                 dcEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var dc in dcEl.EnumerateArray())
+            {
+                if (!dc.TryGetProperty("textDocument", out var td) ||
+                    !td.TryGetProperty("uri", out var uriEl)) continue;
+                var fileUri = uriEl.GetString() ?? "";
+                var edits = new List<LspTextEdit>();
+                if (dc.TryGetProperty("edits", out var editsEl) &&
+                    editsEl.ValueKind == JsonValueKind.Array)
+                    foreach (var e in editsEl.EnumerateArray())
+                        if (e.TryGetProperty("range", out var r) && e.TryGetProperty("newText", out var t))
+                            edits.Add(new LspTextEdit(ParseRange(r), t.GetString() ?? ""));
+                changes[fileUri] = edits;
+            }
+        }
+
+        return changes.Count == 0 ? null : new LspWorkspaceEdit(changes);
     }
 
     private static LspRange ParseRange(JsonElement el)

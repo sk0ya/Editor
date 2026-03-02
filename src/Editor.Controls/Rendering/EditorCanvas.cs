@@ -47,8 +47,9 @@ public class EditorCanvas : FrameworkElement
 
     public event Action<double, double>? ScrollChanged;
     public event Action<int>? VisibleLinesChanged;
-    public event Action<int, int>? MouseClicked;    // (line, col)
-    public event Action<int, int>? MouseDragging;   // (line, col) during drag
+    public event Action<int, int>? MouseClicked;       // (line, col)
+    public event Action<int, int>? MouseRightClicked;  // (line, col)
+    public event Action<int, int>? MouseDragging;      // (line, col) during drag
     public event Action? MouseDragEnded;
 
     public EditorCanvas()
@@ -185,6 +186,14 @@ public class EditorCanvas : FrameworkElement
             _isDragging = false;
             MouseDragEnded?.Invoke();
         }
+    }
+
+    protected override void OnMouseRightButtonDown(System.Windows.Input.MouseButtonEventArgs e)
+    {
+        base.OnMouseRightButtonDown(e);
+        var (line, col) = HitTest(e.GetPosition(this));
+        MouseRightClicked?.Invoke(line, col);
+        // Do not mark as Handled — WPF needs the event to bubble to trigger ContextMenu on MouseRightButtonUp
     }
 
     private (int line, int col) HitTest(System.Windows.Point point)

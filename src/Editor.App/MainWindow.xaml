@@ -853,52 +853,161 @@
                           BorderBrush="#3A3D46"
                           BorderThickness="0,0,1,0"/>
 
-            <!-- Editor area -->
-            <TabControl x:Name="TabCtrl" Grid.Column="3"
-                        Background="#282A36" BorderThickness="0"
-                        SelectionChanged="TabCtrl_SelectionChanged">
-                <TabControl.ItemContainerStyle>
-                    <Style TargetType="TabItem">
-                        <Setter Property="Background" Value="#2D2D30"/>
-                        <Setter Property="Foreground" Value="#888888"/>
-                        <Setter Property="BorderThickness" Value="0"/>
-                        <Setter Property="Padding" Value="12,4"/>
-                        <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
-                        <Setter Property="FontSize" Value="12"/>
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="TabItem">
-                                    <Grid>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="*"/>
-                                            <RowDefinition Height="2"/>
-                                        </Grid.RowDefinitions>
-                                        <Border x:Name="Border" Grid.Row="0"
-                                                Background="{TemplateBinding Background}"
-                                                Padding="{TemplateBinding Padding}"
-                                                BorderThickness="0">
-                                            <ContentPresenter ContentSource="Header"
-                                                              TextBlock.Foreground="{TemplateBinding Foreground}"
-                                                              TextBlock.FontFamily="{TemplateBinding FontFamily}"
-                                                              TextBlock.FontSize="{TemplateBinding FontSize}"/>
-                                        </Border>
-                                        <Border x:Name="AccentBar" Grid.Row="1"
-                                                Background="{DynamicResource AccentBrush}"
-                                                Visibility="Collapsed"/>
-                                    </Grid>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsSelected" Value="True">
-                                            <Setter TargetName="Border" Property="Background" Value="#282A36"/>
-                                            <Setter TargetName="AccentBar" Property="Visibility" Value="Visible"/>
-                                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                    </Style>
-                </TabControl.ItemContainerStyle>
-            </TabControl>
+            <!-- Editor area + References panel -->
+            <Grid Grid.Column="3">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition x:Name="RefSplitterRow" Height="0" MinHeight="0"/>
+                    <RowDefinition x:Name="RefPanelRow" Height="0" MinHeight="0"/>
+                </Grid.RowDefinitions>
+
+                <TabControl x:Name="TabCtrl" Grid.Row="0"
+                            Background="#282A36" BorderThickness="0"
+                            SelectionChanged="TabCtrl_SelectionChanged">
+                    <TabControl.ItemContainerStyle>
+                        <Style TargetType="TabItem">
+                            <Setter Property="Background" Value="#2D2D30"/>
+                            <Setter Property="Foreground" Value="#888888"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Padding" Value="12,4"/>
+                            <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
+                            <Setter Property="FontSize" Value="12"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="TabItem">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="*"/>
+                                                <RowDefinition Height="2"/>
+                                            </Grid.RowDefinitions>
+                                            <Border x:Name="Border" Grid.Row="0"
+                                                    Background="{TemplateBinding Background}"
+                                                    Padding="{TemplateBinding Padding}"
+                                                    BorderThickness="0">
+                                                <ContentPresenter ContentSource="Header"
+                                                                  TextBlock.Foreground="{TemplateBinding Foreground}"
+                                                                  TextBlock.FontFamily="{TemplateBinding FontFamily}"
+                                                                  TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                                            </Border>
+                                            <Border x:Name="AccentBar" Grid.Row="1"
+                                                    Background="{DynamicResource AccentBrush}"
+                                                    Visibility="Collapsed"/>
+                                        </Grid>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Border" Property="Background" Value="#282A36"/>
+                                                <Setter TargetName="AccentBar" Property="Visibility" Value="Visible"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </TabControl.ItemContainerStyle>
+                </TabControl>
+
+                <!-- Splitter between editor and References panel -->
+                <GridSplitter x:Name="RefSplitter" Grid.Row="1"
+                              Height="4"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              Background="#2D2D30"
+                              Cursor="SizeNS"
+                              Visibility="Collapsed"/>
+
+                <!-- References panel -->
+                <Border x:Name="ReferencesPanel" Grid.Row="2"
+                        Background="#1E1E1E"
+                        BorderBrush="#3A3D46" BorderThickness="0,1,0,0"
+                        Visibility="Collapsed">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="26"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Panel header -->
+                        <Border Grid.Row="0" Background="#1A1A1A" Padding="10,0">
+                            <DockPanel>
+                                <Button x:Name="CloseRefPanelBtn"
+                                        DockPanel.Dock="Right"
+                                        Content="✕"
+                                        Click="CloseRefPanel_Click"
+                                        Background="Transparent"
+                                        Foreground="#888888"
+                                        BorderThickness="0"
+                                        FontSize="11"
+                                        Padding="6,0"
+                                        Cursor="Hand"
+                                        ToolTip="パネルを閉じる"/>
+                                <TextBlock x:Name="RefPanelTitle"
+                                           Text="REFERENCES"
+                                           FontFamily="Cascadia Code, Consolas"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Foreground="#888888"
+                                           VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- Reference list -->
+                        <ListBox x:Name="RefList" Grid.Row="1"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 Foreground="#CCCCCC"
+                                 FontFamily="Cascadia Code, Consolas"
+                                 FontSize="12"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                 SelectionChanged="RefList_SelectionChanged">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="10,5"/>
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="Bd"
+                                                        Background="{TemplateBinding Background}"
+                                                        Padding="{TemplateBinding Padding}">
+                                                    <ContentPresenter/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Bd" Property="Background" Value="#2A2D36"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="Bd" Property="Background" Value="#094771"/>
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel>
+                                        <TextBlock>
+                                            <Run Text="{Binding FileName}" Foreground="#8BE9FD" FontWeight="SemiBold"/>
+                                            <Run Text=" "/>
+                                            <Run Text="{Binding LineCol}" Foreground="#6272A4"/>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding Preview}"
+                                                   Foreground="#AAAAAA"
+                                                   FontSize="11"
+                                                   Margin="0,2,0,0"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Border>
+            </Grid>
         </Grid>
 
         <!-- ── Search overlay (Ctrl+N "Go to Anything") ── -->

@@ -580,14 +580,106 @@ public partial class MainWindow : Window
         editor.SplitRequested    += Editor_SplitRequested;
         editor.NextTabRequested  += Editor_NextTabRequested;
         editor.PrevTabRequested  += Editor_PrevTabRequested;
-        editor.CloseTabRequested += Editor_CloseTabRequested;
-        editor.BufferChanged     += Editor_BufferChanged;
+        editor.CloseTabRequested    += Editor_CloseTabRequested;
+        editor.BufferChanged        += Editor_BufferChanged;
+        editor.FindReferencesResult += Editor_FindReferencesResult;
     }
 
     private void Editor_BufferChanged(object? sender, EventArgs e)
     {
         var tabInfo = FindTabInfo(sender!);
         tabInfo?.UpdateHeader();
+    }
+
+    // ─────────────── References panel ───────────────
+
+    private sealed class ReferenceListItem
+    {
+        public required string FilePath  { get; init; }
+        public required string FileName  { get; init; }
+        public required string LineCol   { get; init; }
+        public required string Preview   { get; init; }
+        public required int    Line      { get; init; }
+        public required int    Col       { get; init; }
+    }
+
+    private void Editor_FindReferencesResult(object? sender, FindReferencesResultEventArgs e)
+    {
+        var items = e.Items.Select(r =>
+        {
+            string fileName = Path.GetFileName(r.FilePath);
+            string lineCol  = $":{r.Line + 1}:{r.Col + 1}";
+            string preview  = ReadSourceLine(r.FilePath, r.Line);
+            return new ReferenceListItem
+            {
+                FilePath = r.FilePath,
+                FileName = fileName,
+                LineCol  = lineCol,
+                Preview  = preview,
+                Line     = r.Line,
+                Col      = r.Col
+            };
+        }).ToList();
+
+        RefList.SelectionChanged -= RefList_SelectionChanged;
+        RefList.ItemsSource = items;
+        RefList.SelectedIndex = -1;
+        RefList.SelectionChanged += RefList_SelectionChanged;
+
+        int fileCount = items.Select(i => i.FilePath).Distinct().Count();
+        RefPanelTitle.Text = $"REFERENCES ({items.Count}) — {e.SymbolName}  [{fileCount} file(s)]";
+
+        ShowReferencesPanel();
+    }
+
+    private static string ReadSourceLine(string filePath, int line)
+    {
+        try
+        {
+            using var reader = new StreamReader(filePath);
+            for (int i = 0; i < line; i++)
+                if (reader.ReadLine() == null) return "";
+            return (reader.ReadLine() ?? "").Trim();
+        }
+        catch { return ""; }
+    }
+
+    private void ShowReferencesPanel()
+    {
+        RefPanelRow.Height     = new System.Windows.GridLength(200);
+        RefSplitterRow.Height  = new System.Windows.GridLength(4);
+        ReferencesPanel.Visibility = Visibility.Visible;
+        RefSplitter.Visibility     = Visibility.Visible;
+    }
+
+    private void CloseRefPanel_Click(object sender, RoutedEventArgs e)
+    {
+        ReferencesPanel.Visibility = Visibility.Collapsed;
+        RefSplitter.Visibility     = Visibility.Collapsed;
+        RefPanelRow.Height    = new System.Windows.GridLength(0);
+        RefSplitterRow.Height = new System.Windows.GridLength(0);
+        // Return focus to editor
+        CurrentEditor?.Focus();
+    }
+
+    private void RefList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (RefList.SelectedItem is not ReferenceListItem item) return;
+
+        var editor = CurrentEditor;
+        if (editor == null) return;
+
+        if (string.Equals(item.FilePath, editor.Engine.CurrentBuffer.FilePath,
+                          StringComparison.OrdinalIgnoreCase))
+        {
+            editor.NavigateTo(item.Line, item.Col);
+            editor.Focus();
+        }
+        else
+        {
+            OpenFile(item.FilePath);
+            CurrentEditor?.NavigateTo(item.Line, item.Col);
+        }
     }
 
     private void CloseTab(TabInfo tabInfo, bool force)

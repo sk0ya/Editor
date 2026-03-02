@@ -42,6 +42,17 @@ public class ModeChangedEventArgs(VimMode mode) : EventArgs
 {
     public VimMode Mode { get; } = mode;
 }
+public class FindReferenceItem(string filePath, int line, int col)
+{
+    public string FilePath { get; } = filePath;
+    public int Line { get; } = line;
+    public int Col { get; } = col;
+}
+public class FindReferencesResultEventArgs(IReadOnlyList<FindReferenceItem> items, string symbolName) : EventArgs
+{
+    public IReadOnlyList<FindReferenceItem> Items { get; } = items;
+    public string SymbolName { get; } = symbolName;
+}
 
 public partial class VimEditorControl : UserControl
 {
@@ -168,6 +179,7 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<CloseTabRequestedEventArgs>? CloseTabRequested;
     public event EventHandler<ModeChangedEventArgs>? ModeChanged;
     public event EventHandler? BufferChanged;
+    public event EventHandler<FindReferencesResultEventArgs>? FindReferencesResult;
 
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
@@ -207,6 +219,7 @@ public partial class VimEditorControl : UserControl
 
         // Mouse and scroll wiring
         Canvas.MouseClicked += OnCanvasMouseClicked;
+        Canvas.MouseRightClicked += OnCanvasMouseRightClicked;
         Canvas.MouseDragging += OnCanvasMouseDragging;
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.ScrollChanged += OnCanvasScrollChanged;
@@ -755,6 +768,103 @@ public partial class VimEditorControl : UserControl
     private void OnCanvasMouseDragEnded()
     {
         _isDragSelecting = false;
+    }
+
+    private void OnCanvasMouseRightClicked(int line, int col)
+    {
+        Focus();
+        // In Normal/Insert mode: move cursor to the click position
+        if (_engine.Mode is not (VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock))
+        {
+            // Escape insert mode first
+            if (_engine.Mode is VimMode.Insert or VimMode.Replace)
+            {
+                var escEvents = _engine.ProcessKey("Escape");
+                ProcessVimEvents(escEvents);
+            }
+            var moveEvents = _engine.SetCursorPosition(new CursorPosition(line, col));
+            ProcessVimEvents(moveEvents);
+        }
+        Canvas.ContextMenu = BuildContextMenu();
+    }
+
+    private ContextMenu BuildContextMenu()
+    {
+        bool isVisual = _engine.Mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock;
+        var sep = (Style)FindResource("DarkMenuSeparator");
+        var itemStyle = (Style)FindResource("DarkMenuItem");
+
+        var menu = new ContextMenu { Style = (Style)FindResource("DarkContextMenu") };
+
+        MenuItem MakeItem(string header, string gesture, Action onClick)
+        {
+            var item = new MenuItem { Header = header, InputGestureText = gesture, Style = itemStyle };
+            item.Click += (_, _) => onClick();
+            return item;
+        }
+
+        // ── Vim editing operations ──────────────────────────────
+        menu.Items.Add(MakeItem(
+            isVisual ? "Copy Selection" : "Copy Line",
+            isVisual ? "y" : "yy",
+            () =>
+            {
+                if (isVisual)
+                    ProcessKey("y", false, false, false);
+                else
+                { ProcessKey("y", false, false, false); ProcessKey("y", false, false, false); }
+            }));
+
+        menu.Items.Add(MakeItem(
+            isVisual ? "Cut Selection" : "Cut Line",
+            isVisual ? "d" : "dd",
+            () =>
+            {
+                if (isVisual)
+                    ProcessKey("d", false, false, false);
+                else
+                { ProcessKey("d", false, false, false); ProcessKey("d", false, false, false); }
+            }));
+
+        menu.Items.Add(MakeItem("Paste", "p",
+            () => ProcessKey("p", false, false, false)));
+
+        menu.Items.Add(new Separator { Style = sep });
+
+        menu.Items.Add(MakeItem("Undo", "u",
+            () => ProcessKey("u", false, false, false)));
+        menu.Items.Add(MakeItem("Redo", "Ctrl+R",
+            () => ProcessKey("r", true, false, false)));
+
+        menu.Items.Add(new Separator { Style = sep });
+
+        menu.Items.Add(MakeItem("Select All", "ggVG", () =>
+        {
+            ProcessKey("g", false, false, false);
+            ProcessKey("g", false, false, false);
+            ProcessKey("V", false, false, false);
+            ProcessKey("G", false, false, false);
+        }));
+
+        // ── LSP operations (only when a language server is connected) ──
+        if (_lspManager.IsConnected)
+        {
+            menu.Items.Add(new Separator { Style = sep });
+
+            menu.Items.Add(MakeItem("Go to Definition", "gd",
+                () => _ = HandleGoToDefinitionAsync()));
+            menu.Items.Add(MakeItem("Find References", "LSP",
+                () => _ = HandleFindReferencesAsync()));
+            menu.Items.Add(MakeItem("Rename Symbol", "LSP",
+                () => _ = HandleRenameAsync()));
+            menu.Items.Add(new Separator { Style = sep });
+            menu.Items.Add(MakeItem("Hover Info", "K",
+                () => _ = ShowLspHoverAsync()));
+            menu.Items.Add(MakeItem("Format Document", ":Format",
+                () => _ = HandleFormatDocumentAsync()));
+        }
+
+        return menu;
     }
 
     private void OnPreviewTextInputStart(object sender, TextCompositionEventArgs e)
@@ -1380,6 +1490,186 @@ public partial class VimEditorControl : UserControl
         UpdateAll();
         _lspManager.OnTextChanged(formatted);
         StatusBar.UpdateStatus("Format: document formatted");
+    }
+
+    private async Task HandleRenameAsync()
+    {
+        var currentWord = GetWordAtCursor();
+        var newName = ShowRenameDialog(currentWord);
+        if (string.IsNullOrWhiteSpace(newName) || newName == currentWord) return;
+
+        var cursor = _engine.Cursor;
+        var edit = await _lspManager.RequestRenameAsync(cursor.Line, cursor.Column, newName);
+        if (edit == null || edit.Changes.Count == 0)
+        {
+            StatusBar.UpdateStatus("Rename: no changes returned by server");
+            return;
+        }
+
+        // Apply edits to the current file; report other changed files by count
+        var currentPath = _engine.CurrentBuffer.FilePath ?? "";
+        int otherFileCount = 0;
+        foreach (var (fileUri, fileEdits) in edit.Changes)
+        {
+            string localPath = "";
+            try { localPath = new Uri(fileUri).LocalPath; } catch { }
+            bool isCurrent = string.Equals(localPath, currentPath, StringComparison.OrdinalIgnoreCase);
+            if (isCurrent)
+            {
+                var formatted = ApplyTextEdits(_engine.CurrentBuffer.Text.GetText(), fileEdits);
+                _engine.SetText(formatted);
+                UpdateAll();
+                _lspManager.OnTextChanged(formatted);
+            }
+            else if (fileEdits.Count > 0)
+                otherFileCount++;
+        }
+
+        string msg = otherFileCount > 0
+            ? $"Renamed to '{newName}' ({otherFileCount} other file(s) may need saving)"
+            : $"Renamed to '{newName}'";
+        StatusBar.UpdateStatus(msg);
+    }
+
+    private async Task HandleFindReferencesAsync()
+    {
+        var symbol = GetWordAtCursor();
+        StatusBar.UpdateStatus("References: searching…");
+
+        var cursor = _engine.Cursor;
+        var refs = await _lspManager.RequestReferencesAsync(cursor.Line, cursor.Column);
+        if (refs.Count == 0)
+        {
+            StatusBar.UpdateStatus("References: none found");
+            return;
+        }
+
+        int fileCount = refs.Select(r => r.Uri).Distinct().Count();
+        StatusBar.UpdateStatus($"{refs.Count} reference(s) in {fileCount} file(s)");
+
+        var items = refs.Select(r =>
+        {
+            try { return new FindReferenceItem(new Uri(r.Uri).LocalPath, r.Range.Start.Line, r.Range.Start.Character); }
+            catch { return new FindReferenceItem(r.Uri, r.Range.Start.Line, r.Range.Start.Character); }
+        }).ToList();
+
+        FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(items, symbol));
+    }
+
+    private string GetWordAtCursor()
+    {
+        var cursor = _engine.Cursor;
+        var line = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
+        int col = Math.Min(cursor.Column, line.Length - 1);
+        if (col < 0 || line.Length == 0) return "";
+        int start = col, end = col;
+        while (start > 0 && (char.IsLetterOrDigit(line[start - 1]) || line[start - 1] == '_'))
+            start--;
+        while (end < line.Length && (char.IsLetterOrDigit(line[end]) || line[end] == '_'))
+            end++;
+        return line[start..end];
+    }
+
+    private string? ShowRenameDialog(string currentName)
+    {
+        var bg = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(0x28, 0x2A, 0x36));
+        var fg = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(0xF8, 0xF8, 0xF2));
+        var inputBg = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(0x1E, 0x1F, 0x29));
+        var accent = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(0x44, 0x47, 0x5A));
+
+        var textBox = new TextBox
+        {
+            Text = currentName,
+            Background = inputBg,
+            Foreground = fg,
+            CaretBrush = fg,
+            BorderBrush = accent,
+            BorderThickness = new Thickness(1),
+            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+            FontSize = 13,
+            Padding = new Thickness(6, 4, 6, 4),
+            Margin = new Thickness(0, 6, 0, 10),
+            SelectionBrush = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromArgb(0x80, 0xBD, 0x93, 0xF9))
+        };
+
+        var okBtn = new Button
+        {
+            Content = "Rename",
+            Width = 80,
+            Height = 26,
+            Margin = new Thickness(0, 0, 8, 0),
+            Background = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0x50, 0xFA, 0x7B)),
+            Foreground = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0x28, 0x2A, 0x36)),
+            BorderThickness = new Thickness(0),
+            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+            FontSize = 12,
+            IsDefault = true
+        };
+        var cancelBtn = new Button
+        {
+            Content = "Cancel",
+            Width = 70,
+            Height = 26,
+            Background = accent,
+            Foreground = fg,
+            BorderThickness = new Thickness(0),
+            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+            FontSize = 12,
+            IsCancel = true
+        };
+
+        var btnRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        btnRow.Children.Add(okBtn);
+        btnRow.Children.Add(cancelBtn);
+
+        var panel = new StackPanel { Margin = new Thickness(14) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "New name:",
+            Foreground = fg,
+            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+            FontSize = 12
+        });
+        panel.Children.Add(textBox);
+        panel.Children.Add(btnRow);
+
+        var win = new Window
+        {
+            Title = "Rename Symbol",
+            Content = panel,
+            Background = bg,
+            Width = 300,
+            Height = 140,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            Owner = Window.GetWindow(this)
+        };
+
+        okBtn.Click += (_, _) => win.DialogResult = true;
+        textBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Return) win.DialogResult = true;
+        };
+
+        win.Loaded += (_, _) =>
+        {
+            textBox.Focus();
+            textBox.SelectAll();
+        };
+
+        return win.ShowDialog() == true ? textBox.Text.Trim() : null;
     }
 
     private static string ApplyTextEdits(string originalText, IReadOnlyList<Editor.Core.Lsp.LspTextEdit> edits)

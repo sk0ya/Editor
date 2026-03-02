@@ -260,6 +260,20 @@ public sealed class LspManager : IDisposable
         StateChanged?.Invoke();
     }
 
+    /// <summary>Request rename workspace edit.</summary>
+    public async Task<LspWorkspaceEdit?> RequestRenameAsync(int line, int character, string newName)
+    {
+        if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return null;
+        return await _currentClient.GetRenameAsync(_currentUri, new LspPosition(line, character), newName);
+    }
+
+    /// <summary>Request all references at the given position.</summary>
+    public async Task<IReadOnlyList<LspLocation>> RequestReferencesAsync(int line, int character)
+    {
+        if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return [];
+        return await _currentClient.GetReferencesAsync(_currentUri, new LspPosition(line, character));
+    }
+
     /// <summary>Request formatting edits for the current document.</summary>
     public async Task<IReadOnlyList<LspTextEdit>> RequestFormattingAsync(int tabSize = 4, bool insertSpaces = true)
     {
