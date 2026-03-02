@@ -24,6 +24,65 @@
 
         <SolidColorBrush x:Key="AccentBrush" Color="#6148DE"/>
 
+        <!-- ── Shared scrollbar style (same look as editor area) ── -->
+        <Style x:Key="ScrollBarThumb" TargetType="Thumb">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border CornerRadius="2"
+                                Background="#555766"
+                                Margin="2,1"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#7C7F8E"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter Property="Background" Value="#BD93F9"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <ControlTemplate x:Key="DarkVScrollBarTemplate" TargetType="ScrollBar">
+            <Grid Background="#1E1F29">
+                <Track x:Name="PART_Track" IsDirectionReversed="True">
+                    <Track.Thumb>
+                        <Thumb Style="{StaticResource ScrollBarThumb}"/>
+                    </Track.Thumb>
+                </Track>
+            </Grid>
+        </ControlTemplate>
+
+        <ControlTemplate x:Key="DarkHScrollBarTemplate" TargetType="ScrollBar">
+            <Grid Background="#1E1F29">
+                <Track x:Name="PART_Track">
+                    <Track.Thumb>
+                        <Thumb Style="{StaticResource ScrollBarThumb}"/>
+                    </Track.Thumb>
+                </Track>
+            </Grid>
+        </ControlTemplate>
+
+        <Style TargetType="ScrollBar">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Template" Value="{StaticResource DarkVScrollBarTemplate}"/>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="MinWidth" Value="0"/>
+                    <Setter Property="Height" Value="10"/>
+                    <Setter Property="MinHeight" Value="10"/>
+                    <Setter Property="Template" Value="{StaticResource DarkHScrollBarTemplate}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- ── Title bar buttons ── -->
         <Style x:Key="TitleBarButton" TargetType="Button">
             <Setter Property="Foreground" Value="#CCCCCC"/>
