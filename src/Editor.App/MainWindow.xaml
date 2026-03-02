@@ -1018,7 +1018,8 @@
               Background="#80000000"
               MouseDown="SearchOverlay_MouseDown">
             <Border x:Name="SearchPopupBox"
-                    Width="600" MaxHeight="440"
+                    Width="600"
+                    MaxHeight="520"
                     VerticalAlignment="Top" HorizontalAlignment="Center"
                     Margin="0,50,0,0"
                     MouseDown="SearchPopupBox_MouseDown"
@@ -1029,13 +1030,21 @@
                 <Border.Effect>
                     <DropShadowEffect Color="Black" BlurRadius="18" ShadowDepth="5" Opacity="0.65"/>
                 </Border.Effect>
-                <StackPanel>
+                <!-- Grid layout: fixed header rows + stretchy results + fixed hint bar -->
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>            <!-- mode tabs -->
+                        <RowDefinition Height="Auto"/>            <!-- search input -->
+                        <RowDefinition Height="Auto"/>            <!-- divider -->
+                        <RowDefinition Height="*" MaxHeight="360"/> <!-- results list -->
+                        <RowDefinition Height="Auto"/>            <!-- hint bar -->
+                    </Grid.RowDefinitions>
                     <!-- Mode tabs row -->
-                    <Border Background="#1A1A1A" CornerRadius="4,4,0,0" Padding="8,6,8,0">
+                    <Border Grid.Row="0" Background="#1A1A1A" CornerRadius="4,4,0,0" Padding="8,6,8,0">
                         <StackPanel x:Name="SearchModeTabs" Orientation="Horizontal"/>
                     </Border>
                     <!-- Search input row -->
-                    <Border Background="#1E1E1E" Padding="12,8">
+                    <Border Grid.Row="1" Background="#1E1E1E" Padding="12,8">
                         <TextBox x:Name="SearchBox"
                                  Background="Transparent"
                                  Foreground="#F8F8F2"
@@ -1050,15 +1059,15 @@
                                  KeyDown="SearchBox_KeyDown"/>
                     </Border>
                     <!-- Divider -->
-                    <Border Height="1" Background="#3A3D46"/>
-                    <!-- Results list -->
+                    <Border Grid.Row="2" Height="1" Background="#3A3D46"/>
+                    <!-- Results list (fills remaining space, capped at 360px) -->
                     <ListBox x:Name="SearchResultList"
+                             Grid.Row="3"
                              Background="Transparent"
                              BorderThickness="0"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              VirtualizingStackPanel.IsVirtualizing="True"
                              ItemContainerStyle="{StaticResource SearchItemStyle}"
-                             MaxHeight="360"
                              MouseLeftButtonUp="SearchResultList_MouseLeftButtonUp">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
@@ -1090,14 +1099,14 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
-                    <!-- Hint bar -->
-                    <Border Background="#1A1A1A" Padding="12,5" CornerRadius="0,0,4,4">
+                    <!-- Hint bar (always visible at bottom) -->
+                    <Border Grid.Row="4" Background="#1A1A1A" Padding="12,5" CornerRadius="0,0,4,4">
                         <TextBlock Text="Ctrl+Enter — すべての結果をパネルに表示"
                                    FontFamily="Cascadia Code, Consolas"
                                    FontSize="11"
                                    Foreground="#555766"/>
                     </Border>
-                </StackPanel>
+                </Grid>
             </Border>
         </Grid>
 
