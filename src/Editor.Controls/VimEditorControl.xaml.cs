@@ -180,6 +180,11 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<ModeChangedEventArgs>? ModeChanged;
     public event EventHandler? BufferChanged;
     public event EventHandler<FindReferencesResultEventArgs>? FindReferencesResult;
+    public event EventHandler? QuickfixOpenRequested;
+    public event EventHandler? QuickfixCloseRequested;
+    public event EventHandler<int>? QuickfixNextRequested;
+    public event EventHandler<int>? QuickfixPrevRequested;
+    public event EventHandler<int>? QuickfixGotoRequested;
 
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
@@ -1901,6 +1906,21 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.FormatDocumentRequested:
                     _ = HandleFormatDocumentAsync();
+                    break;
+                case VimEventType.QuickfixOpenRequested:
+                    QuickfixOpenRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case VimEventType.QuickfixCloseRequested:
+                    QuickfixCloseRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case VimEventType.QuickfixNextRequested when evt is QuickfixNextEvent qne:
+                    QuickfixNextRequested?.Invoke(this, qne.Count);
+                    break;
+                case VimEventType.QuickfixPrevRequested when evt is QuickfixPrevEvent qpe:
+                    QuickfixPrevRequested?.Invoke(this, qpe.Count);
+                    break;
+                case VimEventType.QuickfixGotoRequested when evt is QuickfixGotoEvent qge:
+                    QuickfixGotoRequested?.Invoke(this, qge.Index);
                     break;
             }
         }

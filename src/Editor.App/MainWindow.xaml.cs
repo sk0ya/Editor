@@ -80,6 +80,7 @@ public partial class MainWindow : Window
     private bool _sidebarVisible;
     private double _sidebarWidth = 220;
     private string? _currentFolderPath;
+    private int _quickfixCurrentIndex = -1;
     private SidebarPanel _activeSidebarPanel = SidebarPanel.None;
     private System.Windows.Point _shellMenuScreenPos;
 
@@ -589,6 +590,11 @@ public partial class MainWindow : Window
         editor.CloseTabRequested    += Editor_CloseTabRequested;
         editor.BufferChanged        += Editor_BufferChanged;
         editor.FindReferencesResult += Editor_FindReferencesResult;
+        editor.QuickfixOpenRequested  += (_, _) => ShowReferencesPanel();
+        editor.QuickfixCloseRequested += (_, _) => CloseRefPanel_Click(editor, new RoutedEventArgs());
+        editor.QuickfixNextRequested  += (_, count) => QuickfixNavigate(count);
+        editor.QuickfixPrevRequested  += (_, count) => QuickfixNavigate(-count);
+        editor.QuickfixGotoRequested  += (_, index) => QuickfixNavigateTo(index);
     }
 
     private void Editor_BufferChanged(object? sender, EventArgs e)
@@ -630,6 +636,7 @@ public partial class MainWindow : Window
         RefList.SelectionChanged -= RefList_SelectionChanged;
         RefList.ItemsSource = items;
         RefList.SelectedIndex = -1;
+        _quickfixCurrentIndex = -1;
         RefList.SelectionChanged += RefList_SelectionChanged;
 
         int fileCount = items.Select(i => i.FilePath).Distinct().Count();
@@ -656,6 +663,31 @@ public partial class MainWindow : Window
         RefSplitterRow.Height  = new System.Windows.GridLength(4);
         ReferencesPanel.Visibility = Visibility.Visible;
         RefSplitter.Visibility     = Visibility.Visible;
+    }
+
+    private void QuickfixNavigate(int delta)
+    {
+        var count = RefList.Items.Count;
+        if (count == 0) return;
+        ShowReferencesPanel();
+        _quickfixCurrentIndex = Math.Clamp(_quickfixCurrentIndex + delta, 0, count - 1);
+        RefList.SelectedIndex = _quickfixCurrentIndex;
+        RefList.ScrollIntoView(RefList.SelectedItem);
+        CurrentEditor?.Focus();
+    }
+
+    private void QuickfixNavigateTo(int index)
+    {
+        var count = RefList.Items.Count;
+        if (count == 0) return;
+        ShowReferencesPanel();
+        // index == -1 means :cc with no arg — go to current item (or first)
+        _quickfixCurrentIndex = index < 0
+            ? Math.Max(0, _quickfixCurrentIndex)
+            : Math.Clamp(index, 0, count - 1);
+        RefList.SelectedIndex = _quickfixCurrentIndex;
+        RefList.ScrollIntoView(RefList.SelectedItem);
+        CurrentEditor?.Focus();
     }
 
     private void CloseRefPanel_Click(object sender, RoutedEventArgs e)
@@ -1549,6 +1581,7 @@ public partial class MainWindow : Window
         RefList.SelectionChanged -= RefList_SelectionChanged;
         RefList.ItemsSource = panelItems;
         RefList.SelectedIndex = -1;
+        _quickfixCurrentIndex = -1;
         RefList.SelectionChanged += RefList_SelectionChanged;
 
         int fileCount = panelItems.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();

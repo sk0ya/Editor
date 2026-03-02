@@ -22,6 +22,11 @@ public enum VimEventType
     CommandLineChanged,
     GoToDefinitionRequested,
     FormatDocumentRequested,
+    QuickfixOpenRequested,
+    QuickfixCloseRequested,
+    QuickfixNextRequested,
+    QuickfixPrevRequested,
+    QuickfixGotoRequested,
 }
 
 public enum ViewportAlign
@@ -86,6 +91,21 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent FormatDocumentRequested() =>
         new(VimEventType.FormatDocumentRequested);
+
+    public static VimEvent QuickfixOpen() =>
+        new(VimEventType.QuickfixOpenRequested);
+
+    public static VimEvent QuickfixClose() =>
+        new(VimEventType.QuickfixCloseRequested);
+
+    public static VimEvent QuickfixNext(int count = 1) =>
+        new QuickfixNextEvent(count);
+
+    public static VimEvent QuickfixPrev(int count = 1) =>
+        new QuickfixPrevEvent(count);
+
+    public static VimEvent QuickfixGoto(int index) =>
+        new QuickfixGotoEvent(index);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -103,3 +123,6 @@ public record NextTabRequestedEvent() : VimEvent(VimEventType.NextTabRequested);
 public record PrevTabRequestedEvent() : VimEvent(VimEventType.PrevTabRequested);
 public record CloseTabRequestedEvent(bool Force) : VimEvent(VimEventType.CloseTabRequested);
 public record ViewportAlignRequestedEvent(ViewportAlign Align) : VimEvent(VimEventType.ViewportAlignRequested);
+public record QuickfixNextEvent(int Count) : VimEvent(VimEventType.QuickfixNextRequested);
+public record QuickfixPrevEvent(int Count) : VimEvent(VimEventType.QuickfixPrevRequested);
+public record QuickfixGotoEvent(int Index) : VimEvent(VimEventType.QuickfixGotoRequested);

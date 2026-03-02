@@ -186,6 +186,19 @@ public class ExCommandProcessor
         if (cmd is "Format" or "format")
             return new ExResult(true, null, VimEvent.FormatDocumentRequested());
 
+        // Quickfix commands
+        if (cmd is "copen" or "cope" or "clist" or "cl")
+            return new ExResult(true, null, VimEvent.QuickfixOpen());
+        if (cmd is "cclose" or "ccl")
+            return new ExResult(true, null, VimEvent.QuickfixClose());
+        if (TryParseQuickfixNav(cmd, "cn", "cnext", out var cnCount))
+            return new ExResult(true, null, VimEvent.QuickfixNext(cnCount));
+        if (TryParseQuickfixNav(cmd, "cp", "cprev", out var cpCount) ||
+            TryParseQuickfixNav(cmd, "cp", "cprevious", out cpCount))
+            return new ExResult(true, null, VimEvent.QuickfixPrev(cpCount));
+        if (TryParseQuickfixGoto(cmd, out var ccIndex))
+            return new ExResult(true, null, VimEvent.QuickfixGoto(ccIndex));
+
         // :split :vsplit
         if (cmd == "split" || cmd == "sp" || cmd == "new")
             return new ExResult(true, null, VimEvent.SplitRequested(false));
@@ -260,6 +273,36 @@ public class ExCommandProcessor
         }
 
         return new ExResult(true, count > 0 ? $"{count} substitution(s) made" : "No matches");
+    }
+
+    private static bool TryParseQuickfixNav(string cmd, string shortName, string longName, out int count)
+    {
+        count = 1;
+        // :cn or :cnext
+        if (cmd == shortName || cmd == longName) return true;
+        // :3cn or :3cnext (count prefix)
+        foreach (var name in new[] { shortName, longName })
+        {
+            if (cmd.EndsWith(name, StringComparison.Ordinal))
+            {
+                var prefix = cmd[..^name.Length];
+                if (int.TryParse(prefix, out var n) && n > 0) { count = n; return true; }
+            }
+        }
+        return false;
+    }
+
+    private static bool TryParseQuickfixGoto(string cmd, out int index)
+    {
+        index = 0;
+        // :cc or :cc N
+        if (cmd == "cc") { index = -1; return true; }
+        if (cmd.StartsWith("cc ") || cmd.StartsWith("cc\t"))
+        {
+            var rest = cmd[2..].Trim();
+            if (int.TryParse(rest, out var n) && n >= 1) { index = n - 1; return true; }
+        }
+        return false;
     }
 
     private static bool TryParseWriteCommand(string cmd, out string? path)
