@@ -987,6 +987,37 @@ public class VimEngine
                 case "h": DeleteCharBack(events); return;
                 case "j": InsertNewline(events); return;
                 case "m": InsertNewline(events); return;
+                case "a": // Ctrl+A = Select All
+                    SelectAllVisualLine(events);
+                    return;
+                case "c": // Ctrl+C = Copy current line to clipboard
+                    YankLines(_cursor.Line, _cursor.Line, '+', events);
+                    return;
+                case "v": // Ctrl+V = Paste from clipboard
+                    PasteAtCursorInsertMode(events);
+                    return;
+                case "x": // Ctrl+X = Cut current line to clipboard
+                {
+                    Snapshot();
+                    var bufX = _bufferManager.Current.Text;
+                    var lineX = bufX.GetLine(_cursor.Line);
+                    _registerManager.Set('+', new Register(lineX, RegisterType.Line));
+                    if (bufX.LineCount > 1)
+                    {
+                        CurrentBuffer.Folds.OnLinesDeleted(_cursor.Line, 1);
+                        bufX.DeleteLines(_cursor.Line, _cursor.Line);
+                        var newLine = Math.Min(_cursor.Line, bufX.LineCount - 1);
+                        _cursor = new CursorPosition(newLine, 0);
+                    }
+                    else
+                    {
+                        bufX.ReplaceLine(0, "");
+                        _cursor = new CursorPosition(0, 0);
+                    }
+                    EmitText(events);
+                    EmitStatus(events, "1 line cut");
+                    return;
+                }
             }
         }
 
@@ -1083,6 +1114,24 @@ public class VimEngine
                     ChangeMode(VimMode.VisualBlock, events);
                     UpdateSelection(events);
                 }
+                return;
+            }
+            if (key == "c") // Ctrl+C = Copy selection to clipboard
+            {
+                _commandParser.Reset();
+                ExecuteVisualYank('+', events);
+                return;
+            }
+            if (key == "x") // Ctrl+X = Cut selection to clipboard
+            {
+                _commandParser.Reset();
+                ExecuteVisualDelete('+', events);
+                return;
+            }
+            if (key == "a") // Ctrl+A = Select All
+            {
+                _commandParser.Reset();
+                SelectAllVisualLine(events);
                 return;
             }
             HandleNormalCtrl(key, events);
@@ -2146,6 +2195,46 @@ public class VimEngine
         {
             buf.InsertText(_cursor.Line, _cursor.Column, reg.Text);
             _cursor = _cursor with { Column = _cursor.Column + reg.Text.Length - 1 };
+        }
+        EmitText(events);
+    }
+
+    private void SelectAllVisualLine(List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        _visualStart = new CursorPosition(0, 0);
+        _cursor = new CursorPosition(buf.LineCount - 1, 0);
+        if (_mode != VimMode.VisualLine) ChangeMode(VimMode.VisualLine, events);
+        UpdateSelection(events);
+    }
+
+    private void PasteAtCursorInsertMode(List<VimEvent> events)
+    {
+        var reg = _registerManager.Get('+');
+        if (reg.IsEmpty) return;
+        Snapshot();
+        var buf = _bufferManager.Current.Text;
+        var text = reg.Text.Replace("\r\n", "\n").Replace("\r", "\n");
+        var parts = text.Split('\n');
+        if (parts.Length == 1)
+        {
+            buf.InsertText(_cursor.Line, _cursor.Column, text);
+            _cursor = _cursor with { Column = _cursor.Column + text.Length };
+        }
+        else
+        {
+            buf.InsertText(_cursor.Line, _cursor.Column, parts[0]);
+            int line = _cursor.Line;
+            int col = _cursor.Column + parts[0].Length;
+            for (int i = 1; i < parts.Length; i++)
+            {
+                buf.BreakLine(line, col);
+                line++;
+                buf.InsertText(line, 0, parts[i]);
+                col = parts[i].Length;
+            }
+            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line, parts.Length - 1);
+            _cursor = new CursorPosition(line, col);
         }
         EmitText(events);
     }

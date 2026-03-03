@@ -2411,6 +2411,9 @@ public partial class VimEditorControl : UserControl
         Key.H => "h",
         Key.J => "j",
         Key.M => "m",
+        Key.A => "a",
+        Key.C => "c",
+        Key.X => "x",
         Key.OemOpenBrackets => "[",
         _ => null
     };
