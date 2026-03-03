@@ -1300,6 +1300,17 @@ public partial class VimEditorControl : UserControl
             }
         }
 
+        // In Command mode, intercept Tab for completion cycling (prevent WPF focus traversal)
+        if (actualKey == Key.Tab && mode == VimMode.Command)
+        {
+            bool ctrl = (e.KeyboardDevice.Modifiers & ModifierKeys.Control) != 0;
+            bool shift = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
+            bool alt = (e.KeyboardDevice.Modifiers & ModifierKeys.Alt) != 0;
+            ProcessKey("Tab", ctrl, shift, alt);
+            e.Handled = true;
+            return;
+        }
+
         // Handle Escape — but not when IME is composing (ImeProcessed Escape cancels
         // the composition; a subsequent Escape will then exit Insert mode normally).
         if (actualKey == Key.Escape && e.Key != Key.ImeProcessed)
@@ -2149,6 +2160,15 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.CommandLineChanged when evt is CommandLineChangedEvent cle:
                     ActiveStatusBar.UpdateCommandLine(cle.Text);
+                    // Hide completions when command line is cleared
+                    if (string.IsNullOrEmpty(cle.Text))
+                        ActiveStatusBar.HideCompletions();
+                    break;
+                case VimEventType.CommandCompletionChanged when evt is CommandCompletionChangedEvent cce:
+                    if (cce.Items.Length > 0)
+                        ActiveStatusBar.ShowCompletions(cce.Items, cce.SelectedIndex);
+                    else
+                        ActiveStatusBar.HideCompletions();
                     break;
                 case VimEventType.SaveRequested when evt is SaveRequestedEvent sre:
                     SaveRequested?.Invoke(this, new SaveRequestedEventArgs(sre.FilePath));

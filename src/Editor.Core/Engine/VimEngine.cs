@@ -26,6 +26,8 @@ public class VimEngine
 
     private string _cmdLine = "";   // For : / ? modes
     private string _statusMsg = "";
+    private string[] _completions = [];     // Tab completion candidates
+    private int _completionIndex = -1;      // Currently selected completion (-1 = none)
     private string _searchPattern = "";
     private bool _searchForward = true;
     private CursorPosition _preSearchCursor;
@@ -1354,6 +1356,22 @@ public class VimEngine
     private void HandleCommandLine(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         bool isSearch = _mode == VimMode.SearchForward || _mode == VimMode.SearchBackward;
+
+        // Tab completion only in command (ex) mode, not search
+        if (key == "Tab" && !isSearch)
+        {
+            CycleCompletion(!shift, events);
+            return;
+        }
+
+        // Any key other than Tab resets completion state
+        if (_completions.Length > 0)
+        {
+            _completions = [];
+            _completionIndex = -1;
+            events.Add(VimEvent.CommandCompletionChanged([], -1));
+        }
+
         switch (key)
         {
             case "Escape":
@@ -1421,6 +1439,34 @@ public class VimEngine
                 EmitCmdLine(events);
                 break;
         }
+    }
+
+    private void CycleCompletion(bool forward, List<VimEvent> events)
+    {
+        if (_completions.Length == 0)
+        {
+            // Compute completions for the current cmdLine
+            var dir = _bufferManager.Current.FilePath is { } fp
+                ? System.IO.Path.GetDirectoryName(fp)
+                : null;
+            _completions = _exProcessor.GetCompletions(_cmdLine, dir);
+            _completionIndex = -1;
+        }
+
+        if (_completions.Length == 0)
+        {
+            EmitCmdLine(events);
+            return;
+        }
+
+        if (forward)
+            _completionIndex = (_completionIndex + 1) % _completions.Length;
+        else
+            _completionIndex = (_completionIndex - 1 + _completions.Length) % _completions.Length;
+
+        _cmdLine = _completions[_completionIndex];
+        EmitCmdLine(events);
+        events.Add(VimEvent.CommandCompletionChanged(_completions, _completionIndex));
     }
 
     private void ExecuteCommandLine(List<VimEvent> events)

@@ -66,4 +66,26 @@ public partial class VimStatusBar : UserControl
             FileText.Visibility = System.Windows.Visibility.Collapsed;
         }
     }
+
+    public void ShowCompletions(string[] items, int selectedIndex)
+    {
+        if (items.Length == 0) { HideCompletions(); return; }
+
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < items.Length; i++)
+        {
+            if (i > 0) sb.Append("  ");
+            if (i == selectedIndex)
+                sb.Append($"[{items[i]}]");
+            else
+                sb.Append(items[i]);
+        }
+        WildmenuText.Text = sb.ToString();
+        WildmenuBorder.Visibility = System.Windows.Visibility.Visible;
+    }
+
+    public void HideCompletions()
+    {
+        WildmenuBorder.Visibility = System.Windows.Visibility.Collapsed;
+    }
 }

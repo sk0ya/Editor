@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.RegularExpressions;
 using Editor.Core.Buffer;
 using Editor.Core.Config;
@@ -412,6 +413,188 @@ public class ExCommandProcessor
 
         // Fallback: no delimiter → treat whole thing as pattern
         pattern = rest;
+    }
+
+    // ─────────────── TAB COMPLETION ───────────────
+
+    private static readonly string[] AllCommandNames =
+    [
+        "q", "quit", "q!", "quit!",
+        "wq", "wq!", "x", "x!", "xit", "exit",
+        "qa", "qa!", "qall", "qall!",
+        "w", "write",
+        "e", "edit",
+        "set",
+        "colorscheme", "colo",
+        "syntax",
+        "bn", "bnext", "bp", "bprev",
+        "b", "bd", "bdelete",
+        "tabnew", "tabedit", "tabe",
+        "tabn", "tabnext", "tabp", "tabprev", "tabprevious",
+        "tabc", "tabc!", "tabclose", "tabclose!",
+        "split", "sp", "new",
+        "vsplit", "vs", "vnew",
+        "Format", "Rename",
+        "Git blame", "Gblame",
+        "copen", "cope", "clist", "cl",
+        "cclose", "ccl",
+        "cn", "cnext", "cp", "cprev",
+        "grep", "vimgrep",
+        "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",
+    ];
+
+    private static readonly HashSet<string> FileCommands = new(StringComparer.Ordinal)
+        { "e", "edit", "w", "write", "split", "sp", "vsplit", "vs", "new", "vnew", "tabnew", "tabedit", "tabe" };
+
+    private static readonly string[] KnownColorschemes = ["dracula", "dark", "light"];
+
+    private static readonly string[] SetOptionNames =
+    [
+        "number", "nu", "nonumber", "nonu",
+        "relativenumber", "rnu", "norelativenumber", "nornu",
+        "cursorline", "cul", "nocursorline", "nocul",
+        "wrap", "nowrap",
+        "expandtab", "et", "noexpandtab", "noet",
+        "autoindent", "ai", "noautoindent", "noai",
+        "smartindent", "si", "nosmartindent", "nosi",
+        "ignorecase", "ic", "noignorecase", "noic",
+        "smartcase", "scs", "nosmartcase", "noscs",
+        "hlsearch", "hls", "nohlsearch", "nohls",
+        "incsearch", "is", "noincsearch", "nois",
+        "wrapscan", "ws", "nowrapscan", "nows",
+        "hidden", "nohidden",
+        "ruler", "noruler",
+        "showmode", "noshowmode",
+        "showcmd", "noshowcmd",
+        "syntax", "nosyntax",
+        "tabstop=", "ts=",
+        "shiftwidth=", "sw=",
+        "scrolloff=", "so=",
+        "history=",
+        "fontsize=",
+        "clipboard=", "cb=",
+        "colorscheme=",
+    ];
+
+    /// <summary>
+    /// Returns completion candidates for the given partial command-line text (without the leading ':').
+    /// Each returned string is a full replacement for the command line.
+    /// </summary>
+    public string[] GetCompletions(string partial, string? workingDir = null)
+    {
+        if (string.IsNullOrEmpty(partial)) return [];
+
+        var spaceIdx = partial.IndexOf(' ');
+
+        // No space yet — complete command names
+        if (spaceIdx < 0)
+        {
+            return AllCommandNames
+                .Where(c => c.StartsWith(partial, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(c => c)
+                .ToArray();
+        }
+
+        var cmd = partial[..spaceIdx];
+        var arg = partial[(spaceIdx + 1)..];
+
+        // Buffer name completion
+        if (cmd is "b" or "buffer" or "bd" or "bdelete")
+        {
+            return _bufferManager.Buffers
+                .Select(b => Path.GetFileName(b.FilePath) ?? "")
+                .Where(n => n.Length > 0 && n.StartsWith(arg, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(n => n)
+                .Select(n => $"{cmd} {n}")
+                .ToArray();
+        }
+
+        // Colorscheme completion
+        if (cmd is "colorscheme" or "colo")
+        {
+            return KnownColorschemes
+                .Where(c => c.StartsWith(arg, StringComparison.OrdinalIgnoreCase))
+                .Select(c => $"{cmd} {c}")
+                .ToArray();
+        }
+
+        // Set option completion
+        if (cmd == "set")
+        {
+            return SetOptionNames
+                .Where(o => o.StartsWith(arg, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(o => o)
+                .Select(o => $"set {o}")
+                .ToArray();
+        }
+
+        // File path completion
+        if (FileCommands.Contains(cmd))
+            return CompleteFilePath(cmd, arg, workingDir);
+
+        return [];
+    }
+
+    private static string[] CompleteFilePath(string cmdPrefix, string argPartial, string? workingDir)
+    {
+        try
+        {
+            var cwd = workingDir ?? Directory.GetCurrentDirectory();
+            string baseDir = cwd;
+            string prefix;
+
+            if (Path.IsPathRooted(argPartial))
+            {
+                var dirPart = Path.GetDirectoryName(argPartial) ?? "";
+                baseDir = string.IsNullOrEmpty(dirPart) ? (Path.GetPathRoot(argPartial) ?? cwd) : dirPart;
+                prefix = Path.GetFileName(argPartial);
+            }
+            else
+            {
+                var slashIdx = argPartial.LastIndexOfAny(['/', '\\']);
+                if (slashIdx >= 0)
+                {
+                    baseDir = Path.GetFullPath(Path.Combine(cwd, argPartial[..slashIdx]));
+                    prefix = argPartial[(slashIdx + 1)..];
+                }
+                else
+                {
+                    prefix = argPartial;
+                }
+            }
+
+            if (!Directory.Exists(baseDir)) return [];
+
+            var results = new List<string>();
+
+            // Directories first, filtering before sorting
+            foreach (var dir in Directory.EnumerateDirectories(baseDir)
+                .Where(d => Path.GetFileName(d).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(d => d))
+            {
+                results.Add($"{cmdPrefix} {MakeRelative(cwd, dir).Replace('\\', '/')}/");
+            }
+
+            // Then files, filtering before sorting
+            foreach (var file in Directory.EnumerateFiles(baseDir)
+                .Where(f => Path.GetFileName(f).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => f))
+            {
+                results.Add($"{cmdPrefix} {MakeRelative(cwd, file).Replace('\\', '/')}");
+            }
+
+            return [.. results];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static string MakeRelative(string basePath, string fullPath)
+    {
+        try { return Path.GetRelativePath(basePath, fullPath); }
+        catch { return fullPath; }
     }
 
     private static bool TryParseWriteCommand(string cmd, out string? path)
