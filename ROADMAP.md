@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-02
+> 作成日: 2026-03-02 / 更新日: 2026-03-03
 
 ## 高優先度（Vimの基本として欠かせないもの）
 
@@ -20,11 +20,8 @@
 
 ## 中優先度（生産性に大きく影響）
 
-### 4. ファイル Fuzzy Finder
-- `Ctrl+P` でファイル名インクリメンタル検索
-- ファジーマッチング（部分文字列/スコアリング）
-- プロジェクトルートから再帰検索、`.gitignore` 除外
-- **実装箇所:** `Editor.App` に `FuzzyFinderWindow`、`Editor.Core` にマッチングロジック
+### ~~4. ファイル Fuzzy Finder~~ ✅ 実装済み (2026-03-03)
+→ 実装済み一覧を参照
 
 ### 5. プロジェクト横断 grep
 - `:grep pattern` / `:vimgrep /pattern/ **/*.cs`
@@ -37,10 +34,8 @@
 - `set incsearch` オプションで制御（`VimOptions` には存在済み）
 - **実装箇所:** `VimEditorControl` の CommandLine 入力イベントで `EditorCanvas.SetSearchMatches` を随時呼ぶ
 
-### 7. 相対行番号
-- `set relativenumber` — 現在行からの相対距離を表示
-- `set number relativenumber` — 現在行は絶対番号、他は相対
-- **実装箇所:** `EditorCanvas.OnRender` の行番号描画部分、`VimOptions.RelativeNumber` を参照
+### ~~7. 相対行番号~~ ✅ 実装済み (2026-03-03)
+→ 実装済み一覧を参照
 
 ### 8. ウィンドウ分割操作の強化
 - `Ctrl+W w` / `Ctrl+W Ctrl+W` — 分割間フォーカス移動
@@ -96,3 +91,5 @@
 | vimrc 読み込み | ✅ |
 | **Quickfixリスト** (`:copen`/`:cclose`/`:cn`/`:cp`/`:cc N`/`:cl`) | ✅ 2026-03-02 |
 | **コードフォールド** (`za`/`zc`/`zo`/`zR`/`zM`/`zf`、LSP+シンタックス検出、ネスト対応) | ✅ 2026-03-02 |
+| **Fuzzy Finder** (`Ctrl+P`、ファジーマッチ、`.gitignore` 除外) | ✅ 2026-03-03 |
+| **相対行番号** (`set relativenumber`/`rnu`、`set number relativenumber`) | ✅ 2026-03-03 |
