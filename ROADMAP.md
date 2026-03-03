@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-03
+> 作成日: 2026-03-02 / 更新日: 2026-03-03 (Git統合追加)
 
 ## 高優先度（Vimの基本として欠かせないもの）
 
@@ -15,6 +15,7 @@
 - `:v/pattern/cmd` (`:g!`) — 不一致行に実行
 - 例: `:g/^$/d`（空行削除）、`:g/TODO/yank A`（TODO行をレジスタAに収集）
 - **実装箇所:** `ExCommandProcessor.Execute` に `g` ブランチ追加
+
 
 ---
 
@@ -46,15 +47,12 @@
 
 ## 低優先度（あると便利）
 
-### 9. Git 統合
-- 行番号横に diff 記号（`+` 追加、`~` 変更、`-` 削除）
-- `:Git blame` でインライン blame 表示
-- **実装箇所:** `Editor.Controls` に `GitDiffProvider`（`git diff` をパース）、`EditorCanvas` でガター描画
+### ~~9. Git 統合~~ ✅ 実装済み (2026-03-03)
+→ 実装済み一覧を参照
 
 ### 10. ターミナル
 - `:terminal` / `:term` で組み込みターミナルを開く
 - **実装箇所:** `Editor.App` に `TerminalPane`（`System.Diagnostics.Process` + VT100パーサー）
-
 ### 11. スペルチェック
 - `set spell` で有効化
 - `z=` でカーソル下の単語の修正候補ポップアップ
@@ -92,3 +90,4 @@
 | **Fuzzy Finder** (`Ctrl+P`、ファジーマッチ、`.gitignore` 除外) | ✅ 2026-03-03 |
 | **相対行番号** (`set relativenumber`/`rnu`、`set number relativenumber`) | ✅ 2026-03-03 |
 | **プロジェクト横断 grep** (`:grep pattern [glob]`、`:vimgrep /pattern/[flags] [glob]`、Quickfix送り) | ✅ 2026-03-03 |
+| **Git統合** (ガター diff バー `+`/`~`/`-`、`:Git blame`/`:Gblame` インライン blame アノテーション) | ✅ 2026-03-03 |

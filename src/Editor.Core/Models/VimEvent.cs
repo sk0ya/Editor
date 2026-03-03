@@ -30,6 +30,7 @@ public enum VimEventType
     FoldsChanged,
     OptionsChanged,
     GrepRequested,
+    GitBlameRequested,
 }
 
 public enum ViewportAlign
@@ -118,6 +119,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent GrepRequested(string pattern, string? fileGlob, bool ignoreCase) =>
         new GrepRequestedEvent(pattern, fileGlob, ignoreCase);
+
+    public static VimEvent GitBlameRequested() =>
+        new(VimEventType.GitBlameRequested);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);

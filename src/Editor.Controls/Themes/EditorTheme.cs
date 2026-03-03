@@ -22,6 +22,11 @@ public class EditorTheme
     public Brush StatusBarReplace { get; init; } = new SolidColorBrush(Color.FromRgb(0x87, 0x00, 0x00));
     public Brush StatusBarFg { get; init; } = Brushes.White;
 
+    // Git diff colors
+    public Brush GitAdded    { get; init; } = new SolidColorBrush(Color.FromRgb(0x00, 0xA0, 0x00));
+    public Brush GitModified { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0xA0, 0x00));
+    public Brush GitDeleted  { get; init; } = new SolidColorBrush(Color.FromRgb(0xCC, 0x00, 0x00));
+
     // Diagnostic colors
     public Brush DiagnosticError   { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0x00));
     public Brush DiagnosticWarning { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0xA5, 0x00));
@@ -79,6 +84,9 @@ public class EditorTheme
         DiagnosticWarning = new SolidColorBrush(Color.FromRgb(0xFF, 0xB8, 0x6C)),
         DiagnosticInfo    = new SolidColorBrush(Color.FromRgb(0x8B, 0xE9, 0xFD)),
         DiagnosticHint    = new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)),
+        GitAdded    = new SolidColorBrush(Color.FromRgb(0x50, 0xFA, 0x7B)),
+        GitModified = new SolidColorBrush(Color.FromRgb(0xFF, 0xB8, 0x6C)),
+        GitDeleted  = new SolidColorBrush(Color.FromRgb(0xFF, 0x55, 0x55)),
     };
 
     public static EditorTheme Dark { get; } = new();

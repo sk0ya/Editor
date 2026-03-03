@@ -6,6 +6,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.IO;
+using Editor.Controls.Git;
 using Editor.Controls.Lsp;
 using Editor.Controls.Themes;
 using Editor.Core.Config;
@@ -163,6 +164,8 @@ public partial class VimEditorControl : UserControl
     private bool _keyDownHandledByVim;
     private bool _isDragSelecting = false;
     private LspManager _lspManager = null!;
+    private readonly GitDiffProvider _gitProvider = new();
+    private bool _blameActive;
     private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
 
     // Buffer that tracks ImeProcessed key characters typed in Insert mode.
@@ -300,6 +303,8 @@ public partial class VimEditorControl : UserControl
         var fp = _engine.CurrentBuffer.FilePath;
         if (fp != null && _lspManager.CurrentUri == null)
             _lspManager.OnFileOpened(fp, _engine.CurrentBuffer.Text.GetText());
+        if (fp != null)
+            _ = RefreshGitDiffAsync();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -702,6 +707,53 @@ public partial class VimEditorControl : UserControl
         _engine.LoadFile(path);
         UpdateAll();
         _lspManager.OnFileOpened(path, _engine.CurrentBuffer.Text.GetText());
+        _ = RefreshGitDiffAsync();
+    }
+
+    public void RefreshGitDiff() => _ = RefreshGitDiffAsync();
+
+    private async Task RefreshGitDiffAsync()
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        if (string.IsNullOrEmpty(filePath)) return;
+
+        var diff = await Task.Run(() => _gitProvider.GetDiff(filePath));
+        Canvas.SetGitDiff(diff);
+
+        if (_blameActive)
+        {
+            var blame = await Task.Run(() => _gitProvider.GetBlameAnnotations(filePath));
+            Canvas.SetBlameAnnotations(blame);
+        }
+    }
+
+    private async void ToggleBlame()
+    {
+        _blameActive = !_blameActive;
+        if (!_blameActive)
+        {
+            Canvas.SetBlameAnnotations(null);
+            StatusBar.UpdateStatus("Git blame: off");
+            return;
+        }
+
+        var filePath = _engine.CurrentBuffer.FilePath;
+        if (string.IsNullOrEmpty(filePath))
+        {
+            _blameActive = false;
+            StatusBar.UpdateStatus("Git blame: no file open");
+            return;
+        }
+
+        StatusBar.UpdateStatus("Git blame: loading...");
+        var annotations = await Task.Run(() => _gitProvider.GetBlameAnnotations(filePath));
+        if (_blameActive)
+        {
+            Canvas.SetBlameAnnotations(annotations);
+            StatusBar.UpdateStatus(annotations.Count > 0
+                ? $"Git blame: {annotations.Count} lines annotated"
+                : "Git blame: no blame data (file not committed?)");
+        }
     }
 
     public void NavigateTo(int line, int column)
@@ -2044,6 +2096,9 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.GrepRequested when evt is GrepRequestedEvent gre:
                     GrepRequested?.Invoke(this, new GrepRequestedEventArgs(gre.Pattern, gre.FileGlob, gre.IgnoreCase));
+                    break;
+                case VimEventType.GitBlameRequested:
+                    ToggleBlame();
                     break;
                 case VimEventType.FoldsChanged:
                     needFullUpdate = true;

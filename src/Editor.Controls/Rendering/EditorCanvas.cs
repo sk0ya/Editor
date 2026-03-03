@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
+using Editor.Controls.Git;
 using Editor.Controls.Themes;
 using Editor.Core.Engine;
 using Editor.Core.Lsp;
@@ -47,6 +48,10 @@ public class EditorCanvas : FrameworkElement
     private HashSet<int> _closedFoldStarts = [];   // buffer lines with closed fold (▶)
     private HashSet<int> _openFoldStarts = [];     // buffer lines with open fold (▼)
     private int _hoveredFoldLine = -1;             // buffer line currently hovered in fold gutter
+
+    // Git
+    private Dictionary<int, GitLineState> _gitDiff = [];
+    private Dictionary<int, string> _blameAnnotations = [];
 
     // LSP
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
@@ -126,6 +131,18 @@ public class EditorCanvas : FrameworkElement
         RebuildVisualLayout();
         InvalidateVisual();
     }
+    public void SetGitDiff(Dictionary<int, GitLineState> diff)
+    {
+        _gitDiff = diff;
+        InvalidateVisual();
+    }
+
+    public void SetBlameAnnotations(Dictionary<int, string>? annotations)
+    {
+        _blameAnnotations = annotations ?? [];
+        InvalidateVisual();
+    }
+
     public void SetTokens(LineTokens[] tokens) { _tokens = tokens; InvalidateVisual(); }
     public void SetSearchMatches(List<CursorPosition> matches, string pattern) { _searchMatches = matches; _searchPattern = pattern; InvalidateVisual(); }
     public void ShowLineNumbers(bool show)
@@ -605,6 +622,20 @@ public class EditorCanvas : FrameworkElement
                         double mx = lineNumWidth + (foldColWidth - marker.Width) / 2;
                         dc.DrawText(marker, new Point(mx, y + (_lineHeight - marker.Height) / 2));
                     }
+
+                    // Git diff bar (3px wide on left edge of gutter)
+                    if (_gitDiff.TryGetValue(l, out var gitState) && gitState != GitLineState.None)
+                    {
+                        var gitBrush = gitState switch
+                        {
+                            GitLineState.Added    => Theme.GitAdded,
+                            GitLineState.Modified => Theme.GitModified,
+                            GitLineState.Deleted  => Theme.GitDeleted,
+                            _                     => null
+                        };
+                        if (gitBrush != null)
+                            dc.DrawRectangle(gitBrush, null, new Rect(0, y, 3, _lineHeight));
+                    }
                 }
             }
 
@@ -618,6 +649,9 @@ public class EditorCanvas : FrameworkElement
 
             // Text with syntax coloring
             DrawLineText(dc, l, lineText, y, textLeft);
+
+            // Git blame annotation (virtual text at end of line)
+            DrawBlameAnnotation(dc, l, lineText, y, textLeft);
 
             // LSP diagnostics (wavy underlines)
             DrawDiagnostics(dc, l, y, textLeft, lineText);
@@ -640,6 +674,16 @@ public class EditorCanvas : FrameworkElement
             var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)), 1);
             dc.DrawLine(pen, new Point(gutterWidth - 1, 0), new Point(gutterWidth - 1, size.Height));
         }
+    }
+
+    private void DrawBlameAnnotation(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft)
+    {
+        if (_blameAnnotations.Count == 0) return;
+        if (!_blameAnnotations.TryGetValue(lineIndex, out var blame)) return;
+
+        double lineWidth = string.IsNullOrEmpty(lineText) ? 0 : GetVisualX(lineText, lineText.Length);
+        var ft = FormatText(blame, Theme.LineNumberFg);
+        dc.DrawText(ft, new Point(textLeft + lineWidth - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
     }
 
     private void DrawDiagnostics(DrawingContext dc, int line, double y, double textLeft, string lineText)

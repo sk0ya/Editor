@@ -186,6 +186,10 @@ public class ExCommandProcessor
         if (cmd is "Format" or "format")
             return new ExResult(true, null, VimEvent.FormatDocumentRequested());
 
+        // :Git blame / :Gblame — toggle inline git blame annotations
+        if (cmd is "Git blame" or "git blame" or "Gblame" or "gblame")
+            return new ExResult(true, null, VimEvent.GitBlameRequested());
+
         // Quickfix commands
         if (cmd is "copen" or "cope" or "clist" or "cl")
             return new ExResult(true, null, VimEvent.QuickfixOpen());
