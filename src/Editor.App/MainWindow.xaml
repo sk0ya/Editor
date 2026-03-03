@@ -921,51 +921,121 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <TabControl x:Name="TabCtrl" Grid.Row="0"
-                            Background="#282A36" BorderThickness="0"
-                            SelectionChanged="TabCtrl_SelectionChanged">
-                    <TabControl.ItemContainerStyle>
-                        <Style TargetType="TabItem">
-                            <Setter Property="Background" Value="#2D2D30"/>
-                            <Setter Property="Foreground" Value="#888888"/>
-                            <Setter Property="BorderThickness" Value="0"/>
-                            <Setter Property="Padding" Value="12,4"/>
-                            <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
-                            <Setter Property="FontSize" Value="12"/>
-                            <Setter Property="Template">
-                                <Setter.Value>
-                                    <ControlTemplate TargetType="TabItem">
-                                        <Grid>
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="*"/>
-                                                <RowDefinition Height="2"/>
-                                            </Grid.RowDefinitions>
-                                            <Border x:Name="Border" Grid.Row="0"
-                                                    Background="{TemplateBinding Background}"
-                                                    Padding="{TemplateBinding Padding}"
-                                                    BorderThickness="0">
-                                                <ContentPresenter ContentSource="Header"
-                                                                  TextBlock.Foreground="{TemplateBinding Foreground}"
-                                                                  TextBlock.FontFamily="{TemplateBinding FontFamily}"
-                                                                  TextBlock.FontSize="{TemplateBinding FontSize}"/>
-                                            </Border>
-                                            <Border x:Name="AccentBar" Grid.Row="1"
-                                                    Background="{DynamicResource AccentBrush}"
-                                                    Visibility="Collapsed"/>
-                                        </Grid>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property="IsSelected" Value="True">
-                                                <Setter TargetName="Border" Property="Background" Value="#282A36"/>
-                                                <Setter TargetName="AccentBar" Property="Visibility" Value="Visible"/>
-                                                <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Setter.Value>
-                            </Setter>
-                        </Style>
-                    </TabControl.ItemContainerStyle>
-                </TabControl>
+                <!-- DockPanel lets TabControl sit at any edge while EditorContent fills the rest -->
+                <DockPanel x:Name="EditorDockPanel" Grid.Row="0">
+                    <TabControl x:Name="TabCtrl" DockPanel.Dock="Top"
+                                Background="#282A36" BorderThickness="0"
+                                SelectionChanged="TabCtrl_SelectionChanged">
+                        <TabControl.Template>
+                            <ControlTemplate TargetType="TabControl">
+                                <Border Background="{TemplateBinding Background}">
+                                    <WrapPanel x:Name="HeaderPanel"
+                                               IsItemsHost="True"
+                                               Background="Transparent"
+                                               Orientation="Horizontal"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="TabStripPlacement" Value="Left">
+                                        <Setter TargetName="HeaderPanel" Property="Orientation" Value="Vertical"/>
+                                    </Trigger>
+                                    <Trigger Property="TabStripPlacement" Value="Right">
+                                        <Setter TargetName="HeaderPanel" Property="Orientation" Value="Vertical"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </TabControl.Template>
+                        <TabControl.ItemContainerStyle>
+                            <Style TargetType="TabItem">
+                                <Setter Property="Background" Value="#2D2D30"/>
+                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Padding" Value="12,4"/>
+                                <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
+                                <Setter Property="FontSize" Value="12"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="TabItem">
+                                            <!-- Root grid: col 0 = left accent, col 1 = content, col 2 = right accent
+                                                           row 0 = content,      row 1 = bottom accent              -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition x:Name="LeftAccentCol"  Width="0"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition x:Name="RightAccentCol" Width="0"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="*"/>
+                                                    <RowDefinition x:Name="BottomAccentRow" Height="2"/>
+                                                </Grid.RowDefinitions>
+
+                                                <!-- Left accent bar (Left placement) -->
+                                                <Border x:Name="AccentLeft"
+                                                        Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                                                        Background="{DynamicResource AccentBrush}"
+                                                        Visibility="Collapsed"/>
+
+                                                <!-- Tab content -->
+                                                <Border x:Name="Border"
+                                                        Grid.Column="1" Grid.Row="0"
+                                                        Background="{TemplateBinding Background}"
+                                                        Padding="{TemplateBinding Padding}"
+                                                        BorderThickness="0">
+                                                    <ContentPresenter ContentSource="Header"
+                                                                      TextBlock.Foreground="{TemplateBinding Foreground}"
+                                                                      TextBlock.FontFamily="{TemplateBinding FontFamily}"
+                                                                      TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                                                </Border>
+
+                                                <!-- Bottom accent bar (Top/Bottom placement) -->
+                                                <Border x:Name="AccentBar"
+                                                        Grid.Column="1" Grid.Row="1"
+                                                        Background="{DynamicResource AccentBrush}"
+                                                        Visibility="Collapsed"/>
+
+                                                <!-- Right accent bar (Right placement) -->
+                                                <Border x:Name="AccentRight"
+                                                        Grid.Column="2" Grid.Row="0" Grid.RowSpan="2"
+                                                        Background="{DynamicResource AccentBrush}"
+                                                        Visibility="Collapsed"/>
+                                            </Grid>
+                                            <ControlTemplate.Triggers>
+                                                <!-- Selected state: show bottom accent by default -->
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="Border" Property="Background" Value="#282A36"/>
+                                                    <Setter TargetName="AccentBar" Property="Visibility" Value="Visible"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                                </Trigger>
+                                                <!-- Left placement: left accent bar -->
+                                                <MultiTrigger>
+                                                    <MultiTrigger.Conditions>
+                                                        <Condition Property="IsSelected" Value="True"/>
+                                                        <Condition Property="TabStripPlacement" Value="Left"/>
+                                                    </MultiTrigger.Conditions>
+                                                    <Setter TargetName="AccentBar"   Property="Visibility" Value="Collapsed"/>
+                                                    <Setter TargetName="AccentLeft"  Property="Visibility" Value="Visible"/>
+                                                    <Setter TargetName="LeftAccentCol" Property="Width"    Value="2"/>
+                                                </MultiTrigger>
+                                                <!-- Right placement: right accent bar -->
+                                                <MultiTrigger>
+                                                    <MultiTrigger.Conditions>
+                                                        <Condition Property="IsSelected" Value="True"/>
+                                                        <Condition Property="TabStripPlacement" Value="Right"/>
+                                                    </MultiTrigger.Conditions>
+                                                    <Setter TargetName="AccentBar"    Property="Visibility" Value="Collapsed"/>
+                                                    <Setter TargetName="AccentRight"  Property="Visibility" Value="Visible"/>
+                                                    <Setter TargetName="RightAccentCol" Property="Width"   Value="2"/>
+                                                </MultiTrigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </TabControl.ItemContainerStyle>
+                    </TabControl>
+
+                    <!-- Global editor content area (hosts the split pane tree); fills remaining DockPanel space -->
+                    <Border x:Name="EditorContent" Background="#282A36"/>
+                </DockPanel>
 
                 <!-- Splitter between editor and References panel -->
                 <GridSplitter x:Name="RefSplitter" Grid.Row="1"

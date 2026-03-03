@@ -117,22 +117,17 @@ public partial class MainWindow : Window
         return null;
     }
 
-    // ─────────── Tab info ──────────────────────────────────────
+    // ─────────── File tab (represents an open file in the tab bar) ─────────────
 
-    private sealed class TabInfo
+    private sealed class FileTab
     {
         public required TabItem Item { get; init; }
         public required TextBlock HeaderLabel { get; init; }
         public string? FilePath { get; set; }
-        public required PaneNode Root { get; set; }
-        public required VimEditorControl FocusedEditor { get; set; }
 
-        public IEnumerable<VimEditorControl> AllEditors() => Root.AllEditors();
-
-        public void UpdateHeader()
+        public void UpdateHeader(bool isModified)
         {
             var name = FilePath != null ? Path.GetFileName(FilePath) : "[No Name]";
-            var isModified = AllEditors().Any(e => e.Engine.CurrentBuffer.Text.IsModified);
             HeaderLabel.Text = isModified ? $"• {name}" : name;
         }
     }
@@ -184,7 +179,10 @@ public partial class MainWindow : Window
 
     // ────────────────────────────────────────────────────────
 
-    private readonly List<TabInfo> _tabs = [];
+    private readonly List<FileTab> _fileTabs = [];
+    private PaneNode? _globalRoot;
+    private VimEditorControl? _focusedEditor;
+    private bool _suppressTabSelectionChanged;
     private readonly RecentItemsManager _recentItems = new();
     private EditorTheme _currentTheme = EditorTheme.Dracula;
     private string _baseThemeName = "Dracula";
@@ -197,15 +195,25 @@ public partial class MainWindow : Window
     private SidebarPanel _activeSidebarPanel = SidebarPanel.None;
     private System.Windows.Point _shellMenuScreenPos;
 
-    private VimEditorControl? CurrentEditor => CurrentTabInfo?.FocusedEditor;
+    private VimEditorControl? CurrentEditor => _focusedEditor;
 
-    private TabInfo? CurrentTabInfo =>
-        _tabs.Find(t => t.Item == TabCtrl.SelectedItem as TabItem);
+    private FileTab? FindFileTabByPath(string? path) =>
+        path == null
+            ? _fileTabs.FirstOrDefault(t => t.FilePath == null)
+            : _fileTabs.FirstOrDefault(t =>
+                string.Equals(t.FilePath, path, StringComparison.OrdinalIgnoreCase));
 
-    private TabInfo? FindTabInfo(object? sender) =>
-        sender is VimEditorControl editor
-            ? _tabs.Find(t => t.AllEditors().Contains(editor))
-            : null;
+    private IEnumerable<VimEditorControl> AllEditors() =>
+        _globalRoot?.AllEditors() ?? Enumerable.Empty<VimEditorControl>();
+
+    private void UpdateSelectedTabForEditor(VimEditorControl editor)
+    {
+        var path = editor.Engine.CurrentBuffer.FilePath;
+        var ft = FindFileTabByPath(path);
+        _suppressTabSelectionChanged = true;
+        TabCtrl.SelectedItem = ft?.Item;
+        _suppressTabSelectionChanged = false;
+    }
 
     public MainWindow()
     {
@@ -221,14 +229,22 @@ public partial class MainWindow : Window
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
+        // Create the initial global editor and set up the pane tree
+        var initialEditor = CreateEditor(null);
+        _globalRoot = new EditorPaneNode { Editor = initialEditor };
+        _focusedEditor = initialEditor;
+        EditorContent.Child = initialEditor;
+
         var args = Environment.GetCommandLineArgs();
         if (args.Length > 1)
         {
-            AddTab(null);
             if (Directory.Exists(args[1]))
+            {
+                AddTab(null);
                 LoadFolder(args[1]);
+            }
             else if (File.Exists(args[1]))
-                OpenFile(args[1]);
+                AddTab(args[1]);
         }
         else
         {
@@ -251,22 +267,23 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Restore tabs (skip files that no longer exist)
+        // Restore file tabs (add entries without loading yet)
         foreach (var file in session.TabFiles)
         {
             if (File.Exists(file))
-                AddTab(file);
+                AddFileTabEntry(file);
         }
-        if (_tabs.Count == 0)
-            AddTab(null);
-
-        // Restore active tab
-        if (session.ActiveFile != null)
+        if (_fileTabs.Count == 0)
         {
-            var active = _tabs.FirstOrDefault(t =>
-                string.Equals(t.FilePath, session.ActiveFile, StringComparison.OrdinalIgnoreCase));
-            if (active != null)
-                TabCtrl.SelectedItem = active.Item;
+            AddTab(null);
+        }
+        else
+        {
+            // Load the active file (or the first one)
+            var activeTab = session.ActiveFile != null
+                ? FindFileTabByPath(session.ActiveFile)
+                : null;
+            SelectFileTab(activeTab ?? _fileTabs[0]);
         }
 
         // Restore sidebar folder
@@ -703,23 +720,16 @@ public partial class MainWindow : Window
 
     private void OpenOrFocusFile(string path)
     {
-        // Already open in a tab?
-        var existing = _tabs.FirstOrDefault(t =>
-            string.Equals(t.FilePath, path, StringComparison.OrdinalIgnoreCase));
+        // Already tracked in a tab? Select it (and load into focused pane).
+        var existing = FindFileTabByPath(path);
         if (existing != null)
         {
-            TabCtrl.SelectedItem = existing.Item;
-            existing.FocusedEditor.Focus();
+            SelectFileTab(existing);
             return;
         }
 
-        // Replace empty tab or open new
-        var current = CurrentTabInfo;
-        if (current != null && current.FilePath == null &&
-            !current.FocusedEditor.Engine.CurrentBuffer.Text.IsModified)
-            OpenFile(path);
-        else
-            AddTab(path);
+        // Otherwise add a new tab entry and load
+        AddTab(path);
     }
 
     // ─────────── Tab management ────────────────────────────
@@ -737,32 +747,68 @@ public partial class MainWindow : Window
         return editor;
     }
 
-    private void AddTab(string? filePath)
+    /// <summary>Add a file tab entry to the tab bar (without loading into focused pane).</summary>
+    private FileTab AddFileTabEntry(string? filePath)
     {
-        var editor = CreateEditor(filePath);
-        var root = new EditorPaneNode { Editor = editor };
-
         var label = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
         var closeBtn = new Button { Content = "×", Style = (Style)FindResource("TabCloseButton") };
         var header = new StackPanel { Orientation = Orientation.Horizontal };
         header.Children.Add(label);
         header.Children.Add(closeBtn);
 
-        var tabItem = new TabItem { Header = header, Content = editor };
-        var tabInfo = new TabInfo
+        var tabItem = new TabItem { Header = header };  // No Content — editor is in EditorContent
+        var fileTab = new FileTab { Item = tabItem, HeaderLabel = label, FilePath = filePath };
+        closeBtn.Click += (_, _) => CloseFileTab(fileTab, force: false);
+        header.MouseDown += (_, e) =>
         {
-            Item = tabItem, HeaderLabel = label, FilePath = filePath,
-            Root = root, FocusedEditor = editor
+            if (e.ChangedButton == MouseButton.Middle) CloseFileTab(fileTab, force: false);
         };
-        closeBtn.Click += (_, _) => CloseTab(tabInfo, force: false);
-        header.MouseDown += (_, e) => { if (e.ChangedButton == MouseButton.Middle) CloseTab(tabInfo, force: false); };
 
-        tabInfo.UpdateHeader();
-
-        _tabs.Add(tabInfo);
+        fileTab.UpdateHeader(isModified: false);
+        _fileTabs.Add(fileTab);
         TabCtrl.Items.Add(tabItem);
-        TabCtrl.SelectedItem = tabItem;
-        editor.Focus();
+        return fileTab;
+    }
+
+    /// <summary>Ensure a file is tracked in the tab bar. Returns existing or newly-created FileTab.</summary>
+    private FileTab EnsureFileTab(string? filePath)
+    {
+        var existing = FindFileTabByPath(filePath);
+        if (existing != null) return existing;
+        return AddFileTabEntry(filePath);
+    }
+
+    /// <summary>Add tab entry and immediately load the file into the focused pane.</summary>
+    private void AddTab(string? filePath)
+    {
+        // If file already tracked, just select it
+        if (filePath != null)
+        {
+            var existing = FindFileTabByPath(filePath);
+            if (existing != null)
+            {
+                SelectFileTab(existing);
+                return;
+            }
+        }
+        var fileTab = AddFileTabEntry(filePath);
+        SelectFileTab(fileTab);
+    }
+
+    /// <summary>Select a file tab and load its file into the focused pane.</summary>
+    private void SelectFileTab(FileTab fileTab)
+    {
+        _suppressTabSelectionChanged = true;
+        TabCtrl.SelectedItem = fileTab.Item;
+        _suppressTabSelectionChanged = false;
+
+        if (_focusedEditor == null) return;
+
+        if (fileTab.FilePath != null && File.Exists(fileTab.FilePath))
+            _focusedEditor.LoadFile(fileTab.FilePath);
+        // FilePath == null → keep current content (new empty buffer shown as-is)
+
+        _focusedEditor.Focus();
     }
 
     private void WireEditorEvents(VimEditorControl editor)
@@ -790,8 +836,10 @@ public partial class MainWindow : Window
 
     private void Editor_BufferChanged(object? sender, EventArgs e)
     {
-        var tabInfo = FindTabInfo(sender!);
-        tabInfo?.UpdateHeader();
+        if (sender is not VimEditorControl editor) return;
+        var path = editor.Engine.CurrentBuffer.FilePath;
+        var ft = FindFileTabByPath(path);
+        ft?.UpdateHeader(isModified: editor.Engine.CurrentBuffer.Text.IsModified);
     }
 
     // ─────────────── References panel ───────────────
@@ -858,7 +906,7 @@ public partial class MainWindow : Window
 
     private void Editor_GrepRequested(object? sender, GrepRequestedEventArgs e)
     {
-        var currentFilePath = CurrentTabInfo?.FilePath;
+        var currentFilePath = _focusedEditor?.Engine.CurrentBuffer.FilePath;
         _ = RunGrepAsync(e.Pattern, e.FileGlob, e.IgnoreCase, currentFilePath);
     }
 
@@ -1027,17 +1075,21 @@ public partial class MainWindow : Window
         }
     }
 
-    private void CloseTab(TabInfo tabInfo, bool force)
+    private void CloseFileTab(FileTab fileTab, bool force)
     {
-        var modifiedEditors = tabInfo.AllEditors()
-            .Where(e => e.Engine.CurrentBuffer.Text.IsModified)
+        // Check ALL panes showing this file for unsaved changes
+        var modifiedEditors = AllEditors()
+            .Where(e =>
+                string.Equals(e.Engine.CurrentBuffer.FilePath, fileTab.FilePath,
+                    StringComparison.OrdinalIgnoreCase) &&
+                e.Engine.CurrentBuffer.Text.IsModified)
             .ToList();
 
-        if (modifiedEditors.Count > 0 && !force)
+        if (!force && modifiedEditors.Count > 0)
         {
-            var names = string.Join(", ", modifiedEditors.Select(e => e.Engine.CurrentBuffer.Name));
+            var name = fileTab.FilePath != null ? Path.GetFileName(fileTab.FilePath) : "[No Name]";
             var result = MessageBox.Show(
-                $"'{names}' has unsaved changes. Save before closing?",
+                $"'{name}' has unsaved changes. Save before closing?",
                 "Editor",
                 MessageBoxButton.YesNoCancel,
                 MessageBoxImage.Warning);
@@ -1057,25 +1109,32 @@ public partial class MainWindow : Window
             }
         }
 
-        var idx = _tabs.IndexOf(tabInfo);
-        _tabs.Remove(tabInfo);
-        TabCtrl.Items.Remove(tabInfo.Item);
+        var idx = _fileTabs.IndexOf(fileTab);
+        _fileTabs.Remove(fileTab);
+        TabCtrl.Items.Remove(fileTab.Item);
 
-        if (_tabs.Count == 0) { Close(); return; }
+        if (_fileTabs.Count == 0)
+        {
+            // If there are split panes, close them all first; then close app
+            Close();
+            return;
+        }
 
-        var nextIdx = Math.Clamp(idx, 0, _tabs.Count - 1);
-        TabCtrl.SelectedItem = _tabs[nextIdx].Item;
-        _tabs[nextIdx].FocusedEditor.Focus();
+        // Load the next adjacent tab into the focused pane
+        var nextIdx = Math.Clamp(idx, 0, _fileTabs.Count - 1);
+        SelectFileTab(_fileTabs[nextIdx]);
     }
 
     private void OpenFile(string path)
     {
         if (!File.Exists(path)) return;
-        var tabInfo = CurrentTabInfo;
-        if (tabInfo == null) return;
-        tabInfo.FocusedEditor.LoadFile(path);
-        tabInfo.FilePath = path;
-        tabInfo.UpdateHeader();
+        if (_focusedEditor == null) return;
+        _focusedEditor.LoadFile(path);
+        // Ensure the file has a tab entry
+        var ft = EnsureFileTab(path);
+        _suppressTabSelectionChanged = true;
+        TabCtrl.SelectedItem = ft.Item;
+        _suppressTabSelectionChanged = false;
         Title = $"Editor — {Path.GetFileName(path)}";
         _recentItems.AddFile(path);
         RefreshRecentMenus();
@@ -1095,11 +1154,8 @@ public partial class MainWindow : Window
 
     private void Editor_SaveRequested(object? sender, SaveRequestedEventArgs e)
     {
-        if (sender == null) return;
-        var tabInfo = FindTabInfo(sender);
-        if (tabInfo == null) return;
-        var buf = (sender as VimEditorControl)?.Engine.CurrentBuffer
-                  ?? tabInfo.FocusedEditor.Engine.CurrentBuffer;
+        if (sender is not VimEditorControl editor) return;
+        var buf = editor.Engine.CurrentBuffer;
 
         if (e.FilePath != null)
         {
@@ -1109,7 +1165,8 @@ public partial class MainWindow : Window
                 MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
-            tabInfo.FilePath = e.FilePath;
+            // Ensure a tab exists for the new path
+            EnsureFileTab(e.FilePath);
         }
         else if (buf.FilePath == null)
         {
@@ -1121,7 +1178,10 @@ public partial class MainWindow : Window
                 MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
-            tabInfo.FilePath = dlg.FileName;
+            var ft = FindFileTabByPath(null) ?? EnsureFileTab(dlg.FileName);
+            ft.FilePath = dlg.FileName;
+            ft.UpdateHeader(isModified: false);
+            return;
         }
         else
         {
@@ -1132,15 +1192,20 @@ public partial class MainWindow : Window
                 return;
             }
         }
-        tabInfo.UpdateHeader();
+        var fileTab = FindFileTabByPath(buf.FilePath);
+        fileTab?.UpdateHeader(isModified: false);
     }
 
     private void Editor_QuitRequested(object? sender, QuitRequestedEventArgs e)
     {
-        if (sender == null) return;
-        var tabInfo = FindTabInfo(sender);
-        if (tabInfo != null)
-            CloseTab(tabInfo, e.Force);
+        if (sender is not VimEditorControl editor) return;
+        // :wq/:x saves first (engine handles it), then closes the current tab.
+        // :qa/:qa! closes the current tab; if it's the last one, the app exits.
+        var ft = FindFileTabByPath(editor.Engine.CurrentBuffer.FilePath);
+        if (ft != null)
+            CloseFileTab(ft, e.Force);
+        else
+            Close();
     }
 
     private void Editor_OpenFileRequested(object? sender, OpenFileRequestedEventArgs e)
@@ -1159,8 +1224,8 @@ public partial class MainWindow : Window
         OpenFile(path);
 
         // Navigate to the target position if provided (e.g. from go-to-definition)
-        if ((e.Line > 0 || e.Column > 0) && sender is VimEditorControl editor)
-            editor.NavigateTo(e.Line, e.Column);
+        if ((e.Line > 0 || e.Column > 0) && sender is VimEditorControl navEditor)
+            navEditor.NavigateTo(e.Line, e.Column);
     }
 
     private void Editor_NewTabRequested(object? sender, NewTabRequestedEventArgs e)
@@ -1176,21 +1241,21 @@ public partial class MainWindow : Window
     private void Editor_SplitRequested(object? sender, SplitRequestedEventArgs e)
     {
         if (sender is not VimEditorControl source) return;
-        var tabInfo = FindTabInfo(source);
-        if (tabInfo == null) return;
+        if (_globalRoot == null) return;
 
-        var sourcePane = FindEditorPane(tabInfo.Root, source);
+        var sourcePane = FindEditorPane(_globalRoot, source);
         if (sourcePane == null) return;
 
-        // Resolve file to open in new pane
-        var newFilePath = e.FilePath != null ? ResolvePath(e.FilePath) : tabInfo.FilePath;
+        // Resolve file to open in new pane (default: same file as source)
+        var newFilePath = e.FilePath != null
+            ? ResolvePath(e.FilePath)
+            : source.Engine.CurrentBuffer.FilePath;
         var newEditor = CreateEditor(newFilePath);
         var newLeaf = new EditorPaneNode { Editor = newEditor };
 
         // WPF requires element removed from its current parent before being added to a new Grid.
-        // Record the grid position (row/col) BEFORE removing, so we can restore it later.
         var firstElement = (UIElement)sourcePane.Editor;
-        var parentSplit = FindParentSplit(tabInfo.Root, sourcePane);
+        var parentSplit = FindParentSplit(_globalRoot, sourcePane);
         int gridPos = -1;
         if (parentSplit != null)
         {
@@ -1201,25 +1266,22 @@ public partial class MainWindow : Window
         }
         else
         {
-            tabInfo.Item.Content = null; // editor is TabItem.Content — release it first
+            EditorContent.Child = null; // release from Border before adding to Grid
         }
 
-        // firstElement is now parentless — safe to add to new Grid
         var newGrid = SplitPaneNode.BuildGrid(e.Vertical, firstElement, (UIElement)newEditor);
         var splitNode = new SplitPaneNode
         {
             Vertical = e.Vertical, First = sourcePane, Second = newLeaf, Container = newGrid
         };
 
-        // Splice into tree
         if (parentSplit == null)
         {
-            tabInfo.Root = splitNode;
-            tabInfo.Item.Content = newGrid;
+            _globalRoot = splitNode;
+            EditorContent.Child = newGrid;
         }
         else
         {
-            // Place newGrid at the same row/col that firstElement occupied
             if (parentSplit.Vertical) Grid.SetColumn(newGrid, gridPos);
             else                      Grid.SetRow(newGrid, gridPos);
             parentSplit.Container.Children.Add(newGrid);
@@ -1228,17 +1290,21 @@ public partial class MainWindow : Window
             else parentSplit.Second = splitNode;
         }
 
-        tabInfo.FocusedEditor = newEditor;
-        tabInfo.FilePath = newFilePath;
-        tabInfo.UpdateHeader();
+        // Ensure the new file has a tab entry
+        if (newFilePath != null)
+            EnsureFileTab(newFilePath);
+
+        _focusedEditor = newEditor;
+        UpdateSelectedTabForEditor(newEditor);
         newEditor.Focus();
     }
 
-    private void CloseSplitPane(TabInfo tabInfo, VimEditorControl editor, bool force)
+    private void CloseSplitPane(VimEditorControl editor, bool force)
     {
-        var editorPane = FindEditorPane(tabInfo.Root, editor);
+        if (_globalRoot == null) return;
+        var editorPane = FindEditorPane(_globalRoot, editor);
         if (editorPane == null) return;
-        var parentSplit = FindParentSplit(tabInfo.Root, editorPane);
+        var parentSplit = FindParentSplit(_globalRoot, editorPane);
         if (parentSplit == null) return;
 
         var sibling = parentSplit.First == editorPane ? parentSplit.Second : parentSplit.First;
@@ -1247,11 +1313,11 @@ public partial class MainWindow : Window
         // Detach sibling from parentSplit.Container before reparenting
         parentSplit.Container.Children.Remove(siblingElement);
 
-        var grandParent = FindParentSplit(tabInfo.Root, parentSplit);
+        var grandParent = FindParentSplit(_globalRoot, parentSplit);
         if (grandParent == null)
         {
-            tabInfo.Root = sibling;
-            tabInfo.Item.Content = siblingElement;
+            _globalRoot = sibling;
+            EditorContent.Child = siblingElement;
         }
         else
         {
@@ -1261,9 +1327,8 @@ public partial class MainWindow : Window
         }
 
         var nextFocus = sibling.AllEditors().First();
-        tabInfo.FocusedEditor = nextFocus;
-        tabInfo.FilePath = nextFocus.Engine.CurrentBuffer.FilePath;
-        tabInfo.UpdateHeader();
+        _focusedEditor = nextFocus;
+        UpdateSelectedTabForEditor(nextFocus);
         nextFocus.Focus();
         // WPF Unloaded event fires automatically and disposes LSP resources
     }
@@ -1271,30 +1336,32 @@ public partial class MainWindow : Window
     private void Editor_WindowCloseRequested(object? sender, WindowCloseRequestedEventArgs e)
     {
         if (sender is not VimEditorControl editor) return;
-        var ti = FindTabInfo(editor);
-        if (ti == null) return;
-        if (ti.AllEditors().Count() <= 1)
+
+        if (!AllEditors().Skip(1).Any())
         {
-            CloseTab(ti, e.Force);
+            // Single pane: close the current file's tab
+            var path = editor.Engine.CurrentBuffer.FilePath;
+            var ft = FindFileTabByPath(path);
+            if (ft != null)
+                CloseFileTab(ft, e.Force);
+            else
+                Close();
             return;
         }
-        CloseSplitPane(ti, editor, e.Force);
+        CloseSplitPane(editor, e.Force);
     }
 
     private void Editor_WindowNavRequested(object? sender, WindowNavRequestedEventArgs e)
     {
-        var ti = FindTabInfo(sender);
-        if (ti == null) return;
-        var editors = ti.AllEditors().ToList();
+        var editors = AllEditors().ToList();
         if (editors.Count <= 1) return;
 
-        var focused = ti.FocusedEditor;
-        var idx = editors.IndexOf(focused);
+        var focused = _focusedEditor;
+        var idx = focused != null ? editors.IndexOf(focused) : 0;
         if (idx < 0) idx = 0;
 
         if (e.Dir == WindowNavDir.Next || e.Dir == WindowNavDir.Prev)
         {
-            // Cycle in tree-traversal order (same behaviour as Ctrl+W w/W).
             var next = e.Dir == WindowNavDir.Prev
                 ? editors[(idx - 1 + editors.Count) % editors.Count]
                 : editors[(idx + 1) % editors.Count];
@@ -1302,9 +1369,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Coordinate-based spatial navigation: get pixel rects for every pane
-        // relative to the tab content area so comparisons are in a shared space.
-        var reference = (UIElement)ti.Item.Content;
+        // Coordinate-based spatial navigation
+        var reference = (UIElement)EditorContent;
         var rects = editors
             .Select(ed => GetPaneRect(ed, reference))
             .ToList();
@@ -1328,33 +1394,36 @@ public partial class MainWindow : Window
     private void Editor_GotKeyboardFocus(object? sender, KeyboardFocusChangedEventArgs e)
     {
         if (sender is not VimEditorControl editor) return;
-        var ti = FindTabInfo(editor);
-        if (ti == null) return;
-        ti.FocusedEditor = editor;
-        ti.FilePath = editor.Engine.CurrentBuffer.FilePath ?? ti.FilePath;
-        ti.UpdateHeader();
+        _focusedEditor = editor;
+        // Sync the selected tab to reflect the focused pane's current file
+        UpdateSelectedTabForEditor(editor);
     }
 
     private void Editor_NextTabRequested(object? sender, EventArgs e)
     {
-        if (TabCtrl.Items.Count == 0) return;
-        var current = TabCtrl.SelectedIndex < 0 ? 0 : TabCtrl.SelectedIndex;
-        TabCtrl.SelectedIndex = (current + 1) % TabCtrl.Items.Count;
+        if (_fileTabs.Count == 0) return;
+        var selectedItem = TabCtrl.SelectedItem as TabItem;
+        var current = _fileTabs.FindIndex(t => t.Item == selectedItem);
+        var next = (current + 1) % _fileTabs.Count;
+        SelectFileTab(_fileTabs[next]);
     }
 
     private void Editor_PrevTabRequested(object? sender, EventArgs e)
     {
-        if (TabCtrl.Items.Count == 0) return;
-        var current = TabCtrl.SelectedIndex < 0 ? 0 : TabCtrl.SelectedIndex;
-        TabCtrl.SelectedIndex = (current - 1 + TabCtrl.Items.Count) % TabCtrl.Items.Count;
+        if (_fileTabs.Count == 0) return;
+        var selectedItem = TabCtrl.SelectedItem as TabItem;
+        var current = _fileTabs.FindIndex(t => t.Item == selectedItem);
+        var prev = (current - 1 + _fileTabs.Count) % _fileTabs.Count;
+        SelectFileTab(_fileTabs[prev]);
     }
 
     private void Editor_CloseTabRequested(object? sender, CloseTabRequestedEventArgs e)
     {
-        if (sender == null) return;
-        var tabInfo = FindTabInfo(sender);
-        if (tabInfo != null)
-            CloseTab(tabInfo, e.Force);
+        if (sender is not VimEditorControl editor) return;
+        var path = editor.Engine.CurrentBuffer.FilePath;
+        var ft = FindFileTabByPath(path);
+        if (ft != null)
+            CloseFileTab(ft, e.Force);
     }
 
     // ─────────── Recent items ──────────────────────────────────
@@ -1448,12 +1517,7 @@ public partial class MainWindow : Window
             Title = "Open File"
         };
         if (dlg.ShowDialog() != true) return;
-
-        var current = CurrentTabInfo;
-        if (current != null && current.FilePath == null && !current.FocusedEditor.Engine.CurrentBuffer.Text.IsModified)
-            OpenFile(dlg.FileName);
-        else
-            AddTab(dlg.FileName);
+        OpenOrFocusFile(dlg.FileName);
     }
 
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
@@ -1484,15 +1548,7 @@ public partial class MainWindow : Window
     {
         if (!IsLoaded) return;
         if (sender is not RadioButton rb || rb.Tag is not string placementStr) return;
-
-        var placement = placementStr switch
-        {
-            "Bottom" => Dock.Bottom,
-            "Left"   => Dock.Left,
-            "Right"  => Dock.Right,
-            _        => Dock.Top
-        };
-        TabCtrl.TabStripPlacement = placement;
+        ApplyTabPlacement(placementStr);
         _recentItems.SaveTabPlacement(placementStr);
     }
 
@@ -1505,6 +1561,7 @@ public partial class MainWindow : Window
             "Right"  => Dock.Right,
             _        => Dock.Top
         };
+        DockPanel.SetDock(TabCtrl, dock);
         TabCtrl.TabStripPlacement = dock;
 
         var rb = placement switch
@@ -1525,15 +1582,16 @@ public partial class MainWindow : Window
 
     private void SaveAs_Click(object sender, RoutedEventArgs e)
     {
-        var tabInfo = CurrentTabInfo;
-        if (tabInfo == null) return;
+        var editor = _focusedEditor;
+        if (editor == null) return;
         var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "All Files|*.*", Title = "Save File As" };
-        if (dlg.ShowDialog() == true)
-        {
-            tabInfo.FocusedEditor.Engine.CurrentBuffer.Save(dlg.FileName);
-            tabInfo.FilePath = dlg.FileName;
-            tabInfo.UpdateHeader();
-        }
+        if (dlg.ShowDialog() != true) return;
+        editor.Engine.CurrentBuffer.Save(dlg.FileName);
+        var ft = EnsureFileTab(dlg.FileName);
+        ft.UpdateHeader(isModified: false);
+        _suppressTabSelectionChanged = true;
+        TabCtrl.SelectedItem = ft.Item;
+        _suppressTabSelectionChanged = false;
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
@@ -1633,9 +1691,8 @@ public partial class MainWindow : Window
             theme = theme.WithAccent(accent);
 
         _currentTheme = theme;
-        foreach (var t in _tabs)
-            foreach (var ed in t.AllEditors())
-                ed.SetTheme(_currentTheme);
+        foreach (var ed in AllEditors())
+            ed.SetTheme(_currentTheme);
 
         // Update dynamic accent resource (affects tabs, activity bar)
         var resolvedAccent = accentHex ?? ColorToHex(GetThemeAccentColor(EditorTheme.GetByName(themeName)));
@@ -1687,7 +1744,13 @@ public partial class MainWindow : Window
 
     private void TabCtrl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        CurrentEditor?.Focus();
+        if (_suppressTabSelectionChanged) return;
+        var selectedItem = TabCtrl.SelectedItem as TabItem;
+        var fileTab = _fileTabs.Find(t => t.Item == selectedItem);
+        if (fileTab == null) return;
+        if (fileTab.FilePath != null && File.Exists(fileTab.FilePath))
+            _focusedEditor?.LoadFile(fileTab.FilePath);
+        _focusedEditor?.Focus();
     }
 
     // ─────────── Title bar controls ─────────────────────────
@@ -2506,8 +2569,8 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        var unsaved = _tabs.Where(t => t.AllEditors().Any(e => e.Engine.CurrentBuffer.Text.IsModified)).ToList();
-        if (unsaved.Count > 0)
+        var hasUnsaved = AllEditors().Any(ed => ed.Engine.CurrentBuffer.Text.IsModified);
+        if (hasUnsaved)
         {
             var result = MessageBox.Show(
                 "You have unsaved changes. Exit anyway?",
@@ -2522,10 +2585,10 @@ public partial class MainWindow : Window
             }
         }
 
-        var tabFiles = _tabs
+        var tabFiles = _fileTabs
             .Where(t => t.FilePath != null)
             .Select(t => t.FilePath!);
-        var activeFile = CurrentTabInfo?.FilePath;
+        var activeFile = _focusedEditor?.Engine.CurrentBuffer.FilePath;
         _recentItems.SaveSession(_currentFolderPath, tabFiles, activeFile);
 
         if (_windowSource != null)
