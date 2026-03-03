@@ -38,6 +38,7 @@ public enum VimEventType
     LspRenameRequested,
     CodeActionRequested,
     CommandCompletionChanged,
+    OpenUrlRequested,
 }
 
 public enum ViewportAlign
@@ -152,6 +153,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent CommandCompletionChanged(string[] items, int selectedIndex) =>
         new CommandCompletionChangedEvent(items, selectedIndex);
+
+    public static VimEvent OpenUrlRequested(string url) =>
+        new OpenUrlRequestedEvent(url);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -177,3 +181,4 @@ public record QuickfixGotoEvent(int Index) : VimEvent(VimEventType.QuickfixGotoR
 public record GrepRequestedEvent(string Pattern, string? FileGlob, bool IgnoreCase) : VimEvent(VimEventType.GrepRequested);
 public record LspRenameRequestedEvent(string? NewName) : VimEvent(VimEventType.LspRenameRequested);
 public record CommandCompletionChangedEvent(string[] Items, int SelectedIndex) : VimEvent(VimEventType.CommandCompletionChanged);
+public record OpenUrlRequestedEvent(string Url) : VimEvent(VimEventType.OpenUrlRequested);

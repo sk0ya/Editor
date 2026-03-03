@@ -100,9 +100,10 @@
 - `ds{char}` — 囲み文字を削除
 - **実装箇所:** `VimEngine` に `ys/cs/ds` ハンドラ追加
 
-### 19. `gf` — カーソル下のファイルを開く
-- `gf` — カーソル下のパス文字列を `OpenFileRequested` として発火
-- **実装箇所:** `VimEngine.ExecuteNormalCommand` の `g` プレフィックスブランチ
+### 19. `gf` / `gx` — カーソル下のファイル・URLを開く ✅
+- `gf` — カーソル下のパス文字列を `OpenFileRequested` として発火（相対パス解決あり）
+- `gx` — `http://` / `https://` / `ftp://` はデフォルトブラウザで開く、それ以外はファイルとして開く
+- **実装箇所:** `CommandParser.cs`（`gf`/`gx` を認識）、`VimEngine.ExecuteNormalCommand`（`case "gf"` / `case "gx"`）、`VimEditorControl.xaml.cs`（`OpenUrlRequested` → `Process.Start`）
 
 ### 20. 不可視文字表示 (`set list`)
 - `set list` — タブ(`→`)・行末スペース(`·`)・改行(`¶`)を表示

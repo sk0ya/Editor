@@ -2179,6 +2179,12 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.OpenFileRequested when evt is OpenFileRequestedEvent ofre:
                     OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(ofre.FilePath));
                     break;
+                case VimEventType.OpenUrlRequested when evt is OpenUrlRequestedEvent oure:
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(oure.Url)
+                    {
+                        UseShellExecute = true
+                    });
+                    break;
                 case VimEventType.NewTabRequested when evt is NewTabRequestedEvent ntre:
                     NewTabRequested?.Invoke(this, new NewTabRequestedEventArgs(ntre.FilePath));
                     break;

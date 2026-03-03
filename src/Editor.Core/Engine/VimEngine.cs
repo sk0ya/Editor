@@ -654,6 +654,51 @@ public class VimEngine
             case "ga":
                 events.Add(VimEvent.CodeActionRequested());
                 break;
+            case "gf":
+            {
+                var line = buf.GetLine(_cursor.Line);
+                var path = ExtractFilePathUnderCursor(line, _cursor.Column);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    if (!System.IO.Path.IsPathRooted(path))
+                    {
+                        var dir = _bufferManager.Current.FilePath is { } fp
+                            ? System.IO.Path.GetDirectoryName(fp)
+                            : null;
+                        if (dir != null)
+                            path = System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, path));
+                    }
+                    events.Add(VimEvent.OpenFileRequested(path));
+                }
+                break;
+            }
+            case "gx":
+            {
+                var line = buf.GetLine(_cursor.Line);
+                var token = ExtractFilePathUnderCursor(line, _cursor.Column);
+                if (!string.IsNullOrEmpty(token))
+                {
+                    if (token.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                        token.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                        token.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase))
+                    {
+                        events.Add(VimEvent.OpenUrlRequested(token));
+                    }
+                    else
+                    {
+                        if (!System.IO.Path.IsPathRooted(token))
+                        {
+                            var dir = _bufferManager.Current.FilePath is { } fp
+                                ? System.IO.Path.GetDirectoryName(fp)
+                                : null;
+                            if (dir != null)
+                                token = System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, token));
+                        }
+                        events.Add(VimEvent.OpenFileRequested(token));
+                    }
+                }
+                break;
+            }
             case "F2":
                 events.Add(VimEvent.LspRenameRequested());
                 break;
@@ -1839,6 +1884,28 @@ public class VimEngine
         var col = Math.Clamp(oneBasedColumn - 1, 0, maxCol);
         _preferredColumn = col;
         MoveCursor(_cursor with { Column = col }, events);
+    }
+
+    private static string? ExtractFilePathUnderCursor(string line, int col)
+    {
+        if (string.IsNullOrEmpty(line) || col < 0 || col >= line.Length)
+            return null;
+
+        // Path chars: anything except whitespace, quotes, and common delimiters
+        static bool IsPathChar(char c) =>
+            !char.IsWhiteSpace(c) && c != '"' && c != '\'' && c != '<' && c != '>' &&
+            c != '(' && c != ')' && c != '[' && c != ']' && c != '{' && c != '}' &&
+            c != ',' && c != ';';
+
+        if (!IsPathChar(line[col])) return null;
+
+        int start = col;
+        while (start > 0 && IsPathChar(line[start - 1])) start--;
+
+        int end = col;
+        while (end < line.Length - 1 && IsPathChar(line[end + 1])) end++;
+
+        return line[start..(end + 1)];
     }
 
     private CursorPosition WordEndBackward(int count)
