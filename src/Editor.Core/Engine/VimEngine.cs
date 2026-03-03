@@ -487,6 +487,20 @@ public class VimEngine
             case "h": MoveCursor(motion.MoveLeft(_cursor, 1), events); _preferredColumn = _cursor.Column; break;
             case "j": MoveVertical(1, events); break;
             case "m": MoveLineAndFirstNonBlank(1, events); break;
+            case "a":
+            {
+                int cnt = int.TryParse(_commandParser.Buffer, out var n) ? n : 1;
+                _commandParser.Reset();
+                ExecuteIncrementNumber(cnt, true, events);
+                break;
+            }
+            case "x":
+            {
+                int cnt = int.TryParse(_commandParser.Buffer, out var n) ? n : 1;
+                _commandParser.Reset();
+                ExecuteIncrementNumber(cnt, false, events);
+                break;
+            }
             case "[":
                 _commandParser.Reset();
                 EmitStatus(events, "");
@@ -2023,6 +2037,82 @@ public class VimEngine
             buf.DeleteChar(_cursor.Line, _cursor.Column);
             buf.InsertChar(_cursor.Line, _cursor.Column, ch);
         }
+        EmitText(events);
+    }
+
+    private void ExecuteIncrementNumber(int count, bool increment, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        var line = buf.GetLine(_cursor.Line);
+        int col = _cursor.Column;
+
+        int numStart = -1, numEnd = -1;
+        bool isHex = false, hexUpper = false;
+
+        for (int i = col; i < line.Length; i++)
+        {
+            // Hex: 0x... or 0X...
+            if (line[i] == '0' && i + 1 < line.Length && (line[i + 1] == 'x' || line[i + 1] == 'X'))
+            {
+                hexUpper = line[i + 1] == 'X';
+                int j = i + 2;
+                while (j < line.Length && char.IsAsciiHexDigit(line[j])) j++;
+                if (j > i + 2) { numStart = i; numEnd = j; isHex = true; break; }
+            }
+            // Negative decimal: -N (not preceded by word char or underscore)
+            if (line[i] == '-' && i + 1 < line.Length && char.IsDigit(line[i + 1])
+                && (i == 0 || (!char.IsLetterOrDigit(line[i - 1]) && line[i - 1] != '_')))
+            {
+                int j = i + 1;
+                while (j < line.Length && char.IsDigit(line[j])) j++;
+                numStart = i; numEnd = j; break;
+            }
+            // Decimal: walk backward first to find the true start of the number
+            if (char.IsDigit(line[i]))
+            {
+                int start = i;
+                while (start > 0 && char.IsDigit(line[start - 1])) start--;
+                // Check for negative sign before the number
+                if (start > 0 && line[start - 1] == '-'
+                    && (start < 2 || (!char.IsLetterOrDigit(line[start - 2]) && line[start - 2] != '_')))
+                    start--;
+                int end = i + 1;
+                while (end < line.Length && char.IsDigit(line[end])) end++;
+                numStart = start; numEnd = end; break;
+            }
+        }
+
+        if (numStart == -1) return;
+
+        long delta = increment ? count : -(long)count;
+        string numStr = line[numStart..numEnd];
+        string newStr;
+
+        if (isHex)
+        {
+            ulong hexVal = Convert.ToUInt64(numStr[2..], 16);
+            long newVal = (long)hexVal + delta;
+            int digits = numStr.Length - 2;
+            if (newVal >= 0)
+            {
+                string fmt = hexUpper ? "X" : "x";
+                newStr = (hexUpper ? "0X" : "0x") + ((ulong)newVal).ToString(fmt).PadLeft(digits, '0');
+            }
+            else
+            {
+                newStr = newVal.ToString();
+            }
+        }
+        else
+        {
+            long decVal = long.Parse(numStr);
+            newStr = (decVal + delta).ToString();
+        }
+
+        Snapshot();
+        string newLine = line[..numStart] + newStr + line[numEnd..];
+        buf.ReplaceLine(_cursor.Line, newLine);
+        _cursor = _cursor with { Column = Math.Min(numStart + newStr.Length - 1, Math.Max(0, newLine.Length - 1)) };
         EmitText(events);
     }
 

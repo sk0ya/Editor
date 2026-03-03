@@ -979,4 +979,104 @@ public class VimEngineTests
         var events = ExCmd(engine, "vsplit foo.txt");
         Assert.Contains(events, e => e is SplitRequestedEvent { Vertical: true, FilePath: "foo.txt" });
     }
+
+    // ─── Ctrl+A / Ctrl+X ───
+
+    [Fact]
+    public void CtrlA_IncrementDecimal()
+    {
+        var engine = CreateEngine("foo 42 bar");
+        // Move cursor onto '4'
+        engine.ProcessKey("4"); engine.ProcessKey("l");
+        engine.ProcessKey("a", ctrl: true);
+        Assert.Equal("foo 43 bar", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlX_DecrementDecimal()
+    {
+        var engine = CreateEngine("foo 42 bar");
+        engine.ProcessKey("4"); engine.ProcessKey("l");
+        engine.ProcessKey("x", ctrl: true);
+        Assert.Equal("foo 41 bar", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlA_WithCount_IncrementsByCount()
+    {
+        var engine = CreateEngine("value=10");
+        // cursor at col 0, scan finds '10'
+        engine.ProcessKey("5");
+        engine.ProcessKey("a", ctrl: true);
+        Assert.Equal("value=15", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlA_NegativeNumber_Increments()
+    {
+        var engine = CreateEngine("x=-5 y");
+        engine.ProcessKey("a", ctrl: true);
+        Assert.Equal("x=-4 y", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlX_DecrementToNegative()
+    {
+        var engine = CreateEngine("n=0");
+        engine.ProcessKey("x", ctrl: true);
+        Assert.Equal("n=-1", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlA_HexNumber_Increments()
+    {
+        var engine = CreateEngine("color=0xfe");
+        engine.ProcessKey("a", ctrl: true);
+        Assert.Equal("color=0xff", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlA_HexOverflow_GrowsDigits()
+    {
+        var engine = CreateEngine("0xff");
+        engine.ProcessKey("a", ctrl: true);
+        Assert.Equal("0x100", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlA_CursorLandsOnLastDigit()
+    {
+        var engine = CreateEngine("99");
+        engine.ProcessKey("a", ctrl: true);
+        // "99" → "100": cursor should be at col 2 (last '0')
+        Assert.Equal(2, engine.Cursor.Column);
+        Assert.Equal("100", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlA_NoNumber_DoesNothing()
+    {
+        var engine = CreateEngine("hello world");
+        engine.ProcessKey("a", ctrl: true);
+        Assert.Equal("hello world", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlA_FindsNumberAfterCursor()
+    {
+        var engine = CreateEngine("abc 7 def");
+        // cursor at col 0, no digit at col 0–2; scans forward and finds '7' at col 4
+        engine.ProcessKey("a", ctrl: true);
+        Assert.Equal("abc 8 def", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CtrlA_CursorInsideNumber_UsesFullNumber()
+    {
+        // Cursor on '9' of "19" → should increment whole 19→20, not just 9→10 giving "110"
+        var engine = CreateEngine("19");
+        engine.ProcessKey("l"); // move to col 1 ('9')
+        engine.ProcessKey("a", ctrl: true);
+        Assert.Equal("20", engine.CurrentBuffer.Text.GetText());
+    }
 }
