@@ -29,6 +29,7 @@ public enum VimEventType
     QuickfixGotoRequested,
     FoldsChanged,
     OptionsChanged,
+    GrepRequested,
 }
 
 public enum ViewportAlign
@@ -114,6 +115,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent OptionsChanged() =>
         new(VimEventType.OptionsChanged);
+
+    public static VimEvent GrepRequested(string pattern, string? fileGlob, bool ignoreCase) =>
+        new GrepRequestedEvent(pattern, fileGlob, ignoreCase);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -134,3 +138,4 @@ public record ViewportAlignRequestedEvent(ViewportAlign Align) : VimEvent(VimEve
 public record QuickfixNextEvent(int Count) : VimEvent(VimEventType.QuickfixNextRequested);
 public record QuickfixPrevEvent(int Count) : VimEvent(VimEventType.QuickfixPrevRequested);
 public record QuickfixGotoEvent(int Index) : VimEvent(VimEventType.QuickfixGotoRequested);
+public record GrepRequestedEvent(string Pattern, string? FileGlob, bool IgnoreCase) : VimEvent(VimEventType.GrepRequested);

@@ -57,6 +57,12 @@ public class FindReferencesResultEventArgs(IReadOnlyList<FindReferenceItem> item
     public IReadOnlyList<FindReferenceItem> Items { get; } = items;
     public string SymbolName { get; } = symbolName;
 }
+public class GrepRequestedEventArgs(string pattern, string? fileGlob, bool ignoreCase) : EventArgs
+{
+    public string Pattern { get; } = pattern;
+    public string? FileGlob { get; } = fileGlob;
+    public bool IgnoreCase { get; } = ignoreCase;
+}
 
 public partial class VimEditorControl : UserControl
 {
@@ -189,6 +195,7 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<int>? QuickfixNextRequested;
     public event EventHandler<int>? QuickfixPrevRequested;
     public event EventHandler<int>? QuickfixGotoRequested;
+    public event EventHandler<GrepRequestedEventArgs>? GrepRequested;
 
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
@@ -2034,6 +2041,9 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.QuickfixGotoRequested when evt is QuickfixGotoEvent qge:
                     QuickfixGotoRequested?.Invoke(this, qge.Index);
+                    break;
+                case VimEventType.GrepRequested when evt is GrepRequestedEvent gre:
+                    GrepRequested?.Invoke(this, new GrepRequestedEventArgs(gre.Pattern, gre.FileGlob, gre.IgnoreCase));
                     break;
                 case VimEventType.FoldsChanged:
                     needFullUpdate = true;

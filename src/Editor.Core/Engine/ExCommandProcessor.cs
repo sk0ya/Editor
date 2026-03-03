@@ -212,6 +212,22 @@ public class ExCommandProcessor
             return new ExResult(true, null, VimEvent.CursorMoved(new CursorPosition(line, 0)));
         }
 
+        // :grep [!] {pattern} [{glob}]  /  :vimgrep [!] /{pattern}/[flags] [{glob}]
+        if (cmd.StartsWith("grep") && (cmd.Length == 4 || cmd[4] is ' ' or '!'))
+        {
+            var rest = cmd.Length > 4 ? cmd[4..].TrimStart('!').Trim() : "";
+            if (string.IsNullOrEmpty(rest)) return new ExResult(false, "E471: Argument required");
+            ParseGrepPattern(rest, out var gpat, out var gglob, out var gic);
+            return new ExResult(true, null, VimEvent.GrepRequested(gpat, gglob, gic));
+        }
+        if (cmd.StartsWith("vimgrep") && (cmd.Length == 7 || cmd[7] is ' ' or '!'))
+        {
+            var rest = cmd.Length > 7 ? cmd[7..].TrimStart('!').Trim() : "";
+            if (string.IsNullOrEmpty(rest)) return new ExResult(false, "E471: Argument required");
+            ParseVimgrepPattern(rest, out var vpat, out var vglob, out var vic);
+            return new ExResult(true, null, VimEvent.GrepRequested(vpat, vglob, vic));
+        }
+
         // :s/pattern/replace/flags (substitute)
         if (cmd.StartsWith("s/") || cmd.StartsWith("s!"))
         {
@@ -303,6 +319,70 @@ public class ExCommandProcessor
             if (int.TryParse(rest, out var n) && n >= 1) { index = n - 1; return true; }
         }
         return false;
+    }
+
+    // Parse ":grep pattern [glob]" or ":grep /pattern/[flags] [glob]"
+    private static void ParseGrepPattern(string rest, out string pattern, out string? fileGlob, out bool ignoreCase)
+    {
+        ignoreCase = false;
+        fileGlob = null;
+
+        if (rest.StartsWith('/'))
+        {
+            var closeSlash = rest.IndexOf('/', 1);
+            if (closeSlash > 0)
+            {
+                pattern = rest[1..closeSlash];
+                var after = rest[(closeSlash + 1)..].Trim();
+                var spaceIdx = after.IndexOf(' ');
+                var flags = spaceIdx >= 0 ? after[..spaceIdx] : after;
+                var globPart = spaceIdx >= 0 ? after[(spaceIdx + 1)..].Trim() : "";
+                ignoreCase = flags.Contains('i');
+                fileGlob = string.IsNullOrEmpty(globPart) ? null : globPart;
+                return;
+            }
+        }
+
+        // "pattern [glob]" — last whitespace token is glob if it looks like one
+        var lastSpace = rest.LastIndexOf(' ');
+        if (lastSpace >= 0)
+        {
+            var lastToken = rest[(lastSpace + 1)..];
+            if (lastToken.Contains('*') || lastToken == "%")
+            {
+                pattern = rest[..lastSpace].Trim();
+                fileGlob = lastToken;
+                return;
+            }
+        }
+
+        pattern = rest;
+    }
+
+    // Parse ":vimgrep /pattern/[flags] [glob]"
+    private static void ParseVimgrepPattern(string rest, out string pattern, out string? fileGlob, out bool ignoreCase)
+    {
+        ignoreCase = false;
+        fileGlob = null;
+
+        if (rest.StartsWith('/'))
+        {
+            var closeSlash = rest.IndexOf('/', 1);
+            if (closeSlash > 0)
+            {
+                pattern = rest[1..closeSlash];
+                var after = rest[(closeSlash + 1)..].Trim();
+                var spaceIdx = after.IndexOf(' ');
+                var flags = spaceIdx >= 0 ? after[..spaceIdx] : after;
+                var globPart = spaceIdx >= 0 ? after[(spaceIdx + 1)..].Trim() : "";
+                ignoreCase = flags.Contains('i');
+                fileGlob = string.IsNullOrEmpty(globPart) ? null : globPart;
+                return;
+            }
+        }
+
+        // Fallback: no delimiter → treat whole thing as pattern
+        pattern = rest;
     }
 
     private static bool TryParseWriteCommand(string cmd, out string? path)

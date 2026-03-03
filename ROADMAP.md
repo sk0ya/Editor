@@ -23,10 +23,8 @@
 ### ~~4. ファイル Fuzzy Finder~~ ✅ 実装済み (2026-03-03)
 → 実装済み一覧を参照
 
-### 5. プロジェクト横断 grep
-- `:grep pattern` / `:vimgrep /pattern/ **/*.cs`
-- 結果を Quickfix リストに送る
-- **実装箇所:** `ExCommandProcessor` に `:grep` / `:vimgrep` 追加、バックグラウンド検索
+### ~~5. プロジェクト横断 grep~~ ✅ 実装済み (2026-03-03)
+→ 実装済み一覧を参照
 
 ### 6. インクリメンタル検索ハイライト（`incsearch`）
 - `/` 入力中にリアルタイムでマッチ箇所をハイライト
@@ -93,3 +91,4 @@
 | **コードフォールド** (`za`/`zc`/`zo`/`zR`/`zM`/`zf`、LSP+シンタックス検出、ネスト対応) | ✅ 2026-03-02 |
 | **Fuzzy Finder** (`Ctrl+P`、ファジーマッチ、`.gitignore` 除外) | ✅ 2026-03-03 |
 | **相対行番号** (`set relativenumber`/`rnu`、`set number relativenumber`) | ✅ 2026-03-03 |
+| **プロジェクト横断 grep** (`:grep pattern [glob]`、`:vimgrep /pattern/[flags] [glob]`、Quickfix送り) | ✅ 2026-03-03 |

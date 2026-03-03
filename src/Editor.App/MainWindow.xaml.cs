@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -672,6 +673,7 @@ public partial class MainWindow : Window
         editor.QuickfixNextRequested  += (_, count) => QuickfixNavigate(count);
         editor.QuickfixPrevRequested  += (_, count) => QuickfixNavigate(-count);
         editor.QuickfixGotoRequested  += (_, index) => QuickfixNavigateTo(index);
+        editor.GrepRequested          += Editor_GrepRequested;
     }
 
     private void Editor_BufferChanged(object? sender, EventArgs e)
@@ -740,6 +742,122 @@ public partial class MainWindow : Window
         RefSplitterRow.Height  = new System.Windows.GridLength(4);
         ReferencesPanel.Visibility = Visibility.Visible;
         RefSplitter.Visibility     = Visibility.Visible;
+    }
+
+    private void Editor_GrepRequested(object? sender, GrepRequestedEventArgs e)
+    {
+        var currentFilePath = CurrentTabInfo?.FilePath;
+        _ = RunGrepAsync(e.Pattern, e.FileGlob, e.IgnoreCase, currentFilePath);
+    }
+
+    private async Task RunGrepAsync(string pattern, string? fileGlob, bool ignoreCase, string? currentFilePath)
+    {
+        RefList.SelectionChanged -= RefList_SelectionChanged;
+        RefList.ItemsSource = null;
+        _quickfixCurrentIndex = -1;
+        RefPanelTitle.Text = $"GREP \"{pattern}\" — Searching…";
+        ShowReferencesPanel();
+        RefList.SelectionChanged += RefList_SelectionChanged;
+
+        List<ReferenceListItem> results;
+        try
+        {
+            results = await Task.Run(() => ExecuteGrep(pattern, fileGlob, ignoreCase, currentFilePath));
+        }
+        catch { results = []; }
+
+        RefList.SelectionChanged -= RefList_SelectionChanged;
+        RefList.ItemsSource = results;
+        RefList.SelectedIndex = -1;
+        _quickfixCurrentIndex = -1;
+        RefList.SelectionChanged += RefList_SelectionChanged;
+
+        int fileCount = results.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        RefPanelTitle.Text = results.Count > 0
+            ? $"GREP \"{pattern}\" — {results.Count} matches [{fileCount} file(s)]"
+            : $"GREP \"{pattern}\" — no matches";
+
+    }
+
+    private List<ReferenceListItem> ExecuteGrep(string pattern, string? fileGlob, bool ignoreCase, string? currentFilePath)
+    {
+        var results = new List<ReferenceListItem>();
+
+        Regex regex;
+        try
+        {
+            var opts = ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
+            regex = new Regex(pattern, opts);
+        }
+        catch { return results; }
+
+        IEnumerable<string> files;
+        if (fileGlob == "%")
+        {
+            files = currentFilePath != null ? [currentFilePath] : [];
+        }
+        else
+        {
+            var root = _currentFolderPath
+                       ?? (currentFilePath != null ? Path.GetDirectoryName(currentFilePath) : null);
+            if (root == null) return results;
+            files = EnumerateSourceFiles(root);
+
+            if (!string.IsNullOrEmpty(fileGlob))
+            {
+                var exts = GetExtensionsFromGlob(fileGlob);
+                if (exts != null)
+                    files = files.Where(f => exts.Any(e =>
+                        f.EndsWith(e, StringComparison.OrdinalIgnoreCase)));
+            }
+        }
+
+        foreach (var f in files)
+        {
+            if (new FileInfo(f).Length > 5_000_000) continue;
+            try
+            {
+                var lineIdx = 0;
+                foreach (var line in File.ReadLines(f))
+                {
+                    var m = regex.Match(line);
+                    if (m.Success)
+                        results.Add(new ReferenceListItem
+                        {
+                            FilePath = f,
+                            FileName = Path.GetFileName(f),
+                            LineCol  = $":{lineIdx + 1}:{m.Index + 1}",
+                            Preview  = line.Trim(),
+                            Line     = lineIdx,
+                            Col      = m.Index,
+                        });
+                    lineIdx++;
+                }
+            }
+            catch { /* skip unreadable */ }
+        }
+
+        return results;
+    }
+
+    private static string[]? GetExtensionsFromGlob(string glob)
+    {
+        // e.g. "**/*.cs" → ".cs",  "*.{cs,ts}" → [".cs", ".ts"],  "**" → null
+        var lastSlash = glob.LastIndexOfAny(['/', '\\']);
+        var pat = lastSlash >= 0 ? glob[(lastSlash + 1)..] : glob;
+
+        if (pat.StartsWith("*.{") && pat.EndsWith('}'))
+        {
+            return pat[3..^1].Split(',')
+                .Select(e => "." + e.Trim())
+                .ToArray();
+        }
+
+        var dotIdx = pat.IndexOf('.');
+        if (dotIdx >= 0 && dotIdx < pat.Length - 1)
+            return ["." + pat[(dotIdx + 1)..]];
+
+        return null;
     }
 
     private void QuickfixNavigate(int delta)
