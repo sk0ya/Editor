@@ -598,6 +598,43 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void K_WithoutMapping_EmitsLspHoverRequested()
+    {
+        // K in Normal mode with no vimrc mapping should emit LspHoverRequested
+        // so the WPF layer can call ShowLspHoverAsync via the event system (like gd).
+        var engine = CreateEngine("hello world");
+
+        var events = engine.ProcessKey("K");
+
+        Assert.Contains(events, e => e.Type == VimEventType.LspHoverRequested);
+    }
+
+    [Fact]
+    public void NormalMap_K_WhenMapped_ExecutesMappedCommand()
+    {
+        // When K is mapped in vimrc the mapping fires instead of LspHoverRequested.
+        var config = new VimConfig();
+        config.NormalMaps["K"] = "dd";
+        var engine = CreateEngine("line1\nline2", config);
+
+        var events = engine.ProcessKey("K");
+
+        Assert.Equal(1, engine.CurrentBuffer.Text.LineCount);
+        Assert.Equal("line2", engine.CurrentBuffer.Text.GetLine(0));
+        Assert.DoesNotContain(events, e => e.Type == VimEventType.LspHoverRequested);
+    }
+
+    [Fact]
+    public void VimConfig_ParseLines_Nnoremap_K_RegistersMapping()
+    {
+        // Verifies vimrc "nnoremap K ..." is parsed and stored in NormalMaps.
+        var cfg = new VimConfig();
+        cfg.ParseLines(["nnoremap K dd"]);
+        Assert.True(cfg.NormalMaps.ContainsKey("K"), "K should be in NormalMaps after nnoremap K dd");
+        Assert.Equal("dd", cfg.NormalMaps["K"]);
+    }
+
+    [Fact]
     public void InsertMap_FromConfig_CanLeaveInsertMode()
     {
         var config = new VimConfig();

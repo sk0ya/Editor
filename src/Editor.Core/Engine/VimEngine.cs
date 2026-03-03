@@ -632,6 +632,9 @@ public class VimEngine
             case "gd":
                 events.Add(VimEvent.GoToDefinitionRequested());
                 break;
+            case "K":
+                events.Add(VimEvent.LspHoverRequested());
+                break;
             case "+":
                 MoveLineAndFirstNonBlank(count, events);
                 break;

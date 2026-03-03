@@ -33,6 +33,7 @@ public enum VimEventType
     GitBlameRequested,
     WindowNavRequested,
     WindowCloseRequested,
+    LspHoverRequested,
 }
 
 public enum ViewportAlign
@@ -132,6 +133,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent GitBlameRequested() =>
         new(VimEventType.GitBlameRequested);
+
+    public static VimEvent LspHoverRequested() =>
+        new(VimEventType.LspHoverRequested);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);

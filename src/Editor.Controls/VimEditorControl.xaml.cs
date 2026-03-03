@@ -1508,13 +1508,6 @@ public partial class VimEditorControl : UserControl
     {
         Canvas.ResetCursorBlink();
 
-        // LSP: K in Normal mode shows hover info
-        if (key == "K" && !ctrl && !shift && !alt && _engine.Mode == VimMode.Normal)
-        {
-            _ = ShowLspHoverAsync();
-            return;
-        }
-
         bool hadCompletion = _lspManager.CompletionVisible;
 
         var events = _engine.ProcessKey(key, ctrl, shift, alt);
@@ -2125,6 +2118,9 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.GoToDefinitionRequested:
                     _ = HandleGoToDefinitionAsync();
+                    break;
+                case VimEventType.LspHoverRequested:
+                    _ = ShowLspHoverAsync();
                     break;
                 case VimEventType.FormatDocumentRequested:
                     _ = HandleFormatDocumentAsync();
