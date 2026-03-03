@@ -16,6 +16,7 @@ using Editor.Controls;
 using Editor.Controls.Themes;
 using Editor.Core.Lsp;
 using Editor.Core.Models;
+using Editor.Core.Panes;
 using Editor.Core.Syntax;
 
 namespace Editor.App;
@@ -1287,15 +1288,41 @@ public partial class MainWindow : Window
         var editors = ti.AllEditors().ToList();
         if (editors.Count <= 1) return;
 
-        var idx = editors.IndexOf(ti.FocusedEditor);
+        var focused = ti.FocusedEditor;
+        var idx = editors.IndexOf(focused);
         if (idx < 0) idx = 0;
-        var next = e.Dir switch
+
+        if (e.Dir == WindowNavDir.Next || e.Dir == WindowNavDir.Prev)
         {
-            WindowNavDir.Prev or WindowNavDir.Left or WindowNavDir.Up =>
-                editors[(idx - 1 + editors.Count) % editors.Count],
-            _ => editors[(idx + 1) % editors.Count]
-        };
-        next.Focus();
+            // Cycle in tree-traversal order (same behaviour as Ctrl+W w/W).
+            var next = e.Dir == WindowNavDir.Prev
+                ? editors[(idx - 1 + editors.Count) % editors.Count]
+                : editors[(idx + 1) % editors.Count];
+            next.Focus();
+            return;
+        }
+
+        // Coordinate-based spatial navigation: get pixel rects for every pane
+        // relative to the tab content area so comparisons are in a shared space.
+        var reference = (UIElement)ti.Item.Content;
+        var rects = editors
+            .Select(ed => GetPaneRect(ed, reference))
+            .ToList();
+
+        var targetIdx = PaneNavigator.FindNext(rects[idx], rects, e.Dir);
+        if (targetIdx.HasValue)
+            editors[targetIdx.Value].Focus();
+    }
+
+    // Returns the bounding PaneRect of 'editor' expressed in 'reference' coordinates.
+    private static PaneRect GetPaneRect(VimEditorControl editor, UIElement reference)
+    {
+        var origin = editor.TranslatePoint(new Point(0, 0), reference);
+        return new PaneRect(
+            origin.X,
+            origin.Y,
+            origin.X + editor.ActualWidth,
+            origin.Y + editor.ActualHeight);
     }
 
     private void Editor_GotKeyboardFocus(object? sender, KeyboardFocusChangedEventArgs e)
