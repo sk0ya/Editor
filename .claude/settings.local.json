@@ -15,7 +15,11 @@
       "Bash(curl:*)",
       "Bash(csharp-ls:*)",
       "Bash(winget install:*)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(xargs grep:*)",
+      "Bash(xargs ls:*)",
+      "Bash(grep:*)",
+      "Bash(git:*)"
     ]
   }
 }
