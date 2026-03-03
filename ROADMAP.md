@@ -27,11 +27,8 @@
 ### ~~5. プロジェクト横断 grep~~ ✅ 実装済み (2026-03-03)
 → 実装済み一覧を参照
 
-### 6. インクリメンタル検索ハイライト（`incsearch`）
-- `/` 入力中にリアルタイムでマッチ箇所をハイライト
-- カーソルを最初のマッチにプレビュー移動
-- `set incsearch` オプションで制御（`VimOptions` には存在済み）
-- **実装箇所:** `VimEditorControl` の CommandLine 入力イベントで `EditorCanvas.SetSearchMatches` を随時呼ぶ
+### ~~6. インクリメンタル検索ハイライト（`incsearch`）~~ ✅ 実装済み (2026-03-03)
+→ 実装済み一覧を参照
 
 ### ~~7. 相対行番号~~ ✅ 実装済み (2026-03-03)
 → 実装済み一覧を参照
@@ -91,3 +88,4 @@
 | **相対行番号** (`set relativenumber`/`rnu`、`set number relativenumber`) | ✅ 2026-03-03 |
 | **プロジェクト横断 grep** (`:grep pattern [glob]`、`:vimgrep /pattern/[flags] [glob]`、Quickfix送り) | ✅ 2026-03-03 |
 | **Git統合** (ガター diff バー `+`/`~`/`-`、`:Git blame`/`:Gblame` インライン blame アノテーション) | ✅ 2026-03-03 |
+| **インクリメンタル検索ハイライト** (`/` 入力中にリアルタイム全マッチ強調、カーソルプレビュー移動、Escape で復元、`set incsearch`) | ✅ 2026-03-03 |

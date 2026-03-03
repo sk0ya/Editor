@@ -28,6 +28,7 @@ public class VimEngine
     private string _statusMsg = "";
     private string _searchPattern = "";
     private bool _searchForward = true;
+    private CursorPosition _preSearchCursor;
 
     private char? _pendingReplaceChar;
     private bool _awaitingMark;
@@ -1295,10 +1296,29 @@ public class VimEngine
     // ─────────────── COMMAND LINE MODE ───────────────
     private void HandleCommandLine(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
+        bool isSearch = _mode == VimMode.SearchForward || _mode == VimMode.SearchBackward;
         switch (key)
         {
             case "Escape":
                 _cmdLine = "";
+                if (isSearch)
+                {
+                    MoveCursor(_preSearchCursor, events);
+                    // Restore highlights for the previous confirmed pattern (or clear)
+                    if (!string.IsNullOrEmpty(_searchPattern) && _config.Options.HlSearch)
+                    {
+                        var buf2 = _bufferManager.Current.Text;
+                        var ic2 = _config.Options.SmartCase
+                            ? !_searchPattern.Any(char.IsUpper)
+                            : _config.Options.IgnoreCase;
+                        var all2 = buf2.FindAll(_searchPattern, ic2);
+                        events.Add(VimEvent.SearchChanged(_searchPattern, all2.Count));
+                    }
+                    else
+                    {
+                        events.Add(VimEvent.SearchChanged("", 0));
+                    }
+                }
                 ChangeMode(VimMode.Normal, events);
                 EmitCmdLine(events);
                 break;
@@ -1311,7 +1331,16 @@ public class VimEngine
                     _cmdLine = _cmdLine[..^1];
                     if (_cmdLine.Length == 0)
                     {
+                        if (isSearch)
+                        {
+                            MoveCursor(_preSearchCursor, events);
+                            events.Add(VimEvent.SearchChanged("", 0));
+                        }
                         ChangeMode(VimMode.Normal, events);
+                    }
+                    else if (isSearch && _config.Options.IncrSearch)
+                    {
+                        DoIncrSearch(events);
                     }
                 }
                 else ChangeMode(VimMode.Normal, events);
@@ -1329,12 +1358,8 @@ public class VimEngine
                 if (key.Length == 1 && !ctrl)
                 {
                     _cmdLine += key;
-                    if (_mode == VimMode.SearchForward || _mode == VimMode.SearchBackward)
-                    {
-                        // Incremental search
-                        if (_config.Options.IncrSearch)
-                            DoIncrSearch(events);
-                    }
+                    if (isSearch && _config.Options.IncrSearch)
+                        DoIncrSearch(events);
                 }
                 EmitCmdLine(events);
                 break;
@@ -1374,6 +1399,7 @@ public class VimEngine
             _searchPattern = _cmdLine;
             _searchForward = _mode == VimMode.SearchForward;
             _cmdLine = "";
+            _cursor = _preSearchCursor; // search from where we started, not incsearch preview pos
             ChangeMode(VimMode.Normal, events);
             DoSearch(_searchForward, events);
         }
@@ -1451,13 +1477,20 @@ public class VimEngine
 
     private void DoIncrSearch(List<VimEvent> events)
     {
-        if (string.IsNullOrEmpty(_cmdLine)) return;
         var buf = _bufferManager.Current.Text;
+        if (string.IsNullOrEmpty(_cmdLine))
+        {
+            MoveCursor(_preSearchCursor, events);
+            events.Add(VimEvent.SearchChanged("", 0));
+            return;
+        }
         var ignoreCase = _config.Options.SmartCase
             ? !_cmdLine.Any(char.IsUpper)
             : _config.Options.IgnoreCase;
-        var found = buf.FindNext(_cmdLine, _cursor, _mode == VimMode.SearchForward, ignoreCase);
-        if (found.HasValue) MoveCursor(found.Value, events);
+        var found = buf.FindNext(_cmdLine, _preSearchCursor, _mode == VimMode.SearchForward, ignoreCase);
+        MoveCursor(found ?? _preSearchCursor, events);
+        var all = buf.FindAll(_cmdLine, ignoreCase);
+        events.Add(VimEvent.SearchChanged(_cmdLine, all.Count));
     }
 
     // ─────────────── HELPERS ───────────────
@@ -1510,6 +1543,7 @@ public class VimEngine
     {
         _cmdLine = "";
         _searchForward = forward;
+        _preSearchCursor = _cursor;
         ChangeMode(forward ? VimMode.SearchForward : VimMode.SearchBackward, events);
         EmitCmdLine(events);
     }
