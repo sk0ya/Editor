@@ -186,6 +186,15 @@ public class ExCommandProcessor
         if (cmd is "Format" or "format")
             return new ExResult(true, null, VimEvent.FormatDocumentRequested());
 
+        // :Rename [newname] — LSP workspace rename
+        if (cmd.Equals("Rename", StringComparison.OrdinalIgnoreCase) ||
+            cmd.StartsWith("Rename ", StringComparison.OrdinalIgnoreCase))
+        {
+            var newName = cmd.Length > 7 ? cmd[7..].Trim() : null;
+            if (string.IsNullOrEmpty(newName)) newName = null;
+            return new ExResult(true, null, VimEvent.LspRenameRequested(newName));
+        }
+
         // :Git blame / :Gblame — toggle inline git blame annotations
         if (cmd is "Git blame" or "git blame" or "Gblame" or "gblame")
             return new ExResult(true, null, VimEvent.GitBlameRequested());

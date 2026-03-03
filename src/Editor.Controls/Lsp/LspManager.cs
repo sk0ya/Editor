@@ -36,12 +36,21 @@ public sealed class LspManager : IDisposable
 
     private LspSignatureHelp? _signatureHelp;
 
+    private IReadOnlyList<LspCodeAction> _codeActions = [];
+    private int _codeActionsSelection = 0;
+    private int _codeActionsScrollOffset = 0;
+    private bool _codeActionsVisible;
+
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => _diagnostics;
     public IReadOnlyList<LspCompletionItem> CompletionItems => _completionItems;
     public int CompletionSelection => _completionSelection;
     public int CompletionScrollOffset => _completionScrollOffset;
     public bool CompletionVisible => _completionVisible;
     public LspSignatureHelp? CurrentSignatureHelp => _signatureHelp;
+    public IReadOnlyList<LspCodeAction> CurrentCodeActions => _codeActions;
+    public int CodeActionsSelection => _codeActionsSelection;
+    public int CodeActionsScrollOffset => _codeActionsScrollOffset;
+    public bool CodeActionsVisible => _codeActionsVisible;
 
     /// <summary>True when the server is running for the current file.</summary>
     public bool IsConnected => _currentClient?.IsRunning == true && _currentUri != null;
@@ -69,6 +78,7 @@ public sealed class LspManager : IDisposable
     public void OnFileOpened(string? filePath, string text)
     {
         HideCompletion();
+        HideCodeActions();
         _diagnostics = [];
         _documentReady = false;
         _pendingFoldRangeUri = null;
@@ -288,6 +298,47 @@ public sealed class LspManager : IDisposable
     {
         if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return [];
         return await _currentClient.GetReferencesAsync(_currentUri, new LspPosition(line, character));
+    }
+
+    /// <summary>Request code actions at the given cursor line.</summary>
+    public async Task<IReadOnlyList<LspCodeAction>> RequestCodeActionsAsync(int line, int character)
+    {
+        if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return [];
+        var pos = new LspPosition(line, character);
+        var range = new LspRange(pos, pos);
+        return await _currentClient.GetCodeActionsAsync(_currentUri, range);
+    }
+
+    /// <summary>Show code actions popup with the given items.</summary>
+    public void ShowCodeActions(IReadOnlyList<LspCodeAction> actions)
+    {
+        _codeActions = actions;
+        _codeActionsSelection = 0;
+        _codeActionsScrollOffset = 0;
+        _codeActionsVisible = true;
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>Hide code actions popup.</summary>
+    public void HideCodeActions()
+    {
+        if (!_codeActionsVisible && _codeActions.Count == 0) return;
+        _codeActionsVisible = false;
+        _codeActions = [];
+        _codeActionsScrollOffset = 0;
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>Move code actions selection by delta, adjusting scroll offset to keep selection visible.</summary>
+    public void MoveCodeActionsSelection(int delta)
+    {
+        if (_codeActions.Count == 0) return;
+        _codeActionsSelection = (_codeActionsSelection + delta + _codeActions.Count) % _codeActions.Count;
+        if (_codeActionsSelection < _codeActionsScrollOffset)
+            _codeActionsScrollOffset = _codeActionsSelection;
+        else if (_codeActionsSelection >= _codeActionsScrollOffset + MaxVisibleCompletion)
+            _codeActionsScrollOffset = _codeActionsSelection - MaxVisibleCompletion + 1;
+        StateChanged?.Invoke();
     }
 
     /// <summary>Request formatting edits for the current document.</summary>

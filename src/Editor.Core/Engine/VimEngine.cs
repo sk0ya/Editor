@@ -646,6 +646,15 @@ public class VimEngine
             case "gd":
                 events.Add(VimEvent.GoToDefinitionRequested());
                 break;
+            case "gr":
+                events.Add(VimEvent.FindReferencesRequested());
+                break;
+            case "ga":
+                events.Add(VimEvent.CodeActionRequested());
+                break;
+            case "F2":
+                events.Add(VimEvent.LspRenameRequested());
+                break;
             case "K":
                 events.Add(VimEvent.LspHoverRequested());
                 break;

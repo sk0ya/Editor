@@ -273,6 +273,7 @@ public partial class VimEditorControl : UserControl
         Canvas.SetDiagnostics(_lspManager.CurrentDiagnostics);
         Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection, _lspManager.CompletionScrollOffset);
         Canvas.SetSignatureHelp(_lspManager.CurrentSignatureHelp);
+        Canvas.SetCodeActions(_lspManager.CurrentCodeActions, _lspManager.CodeActionsSelection, _lspManager.CodeActionsScrollOffset);
     }
 
     private void OnLspStatusMessage(string msg)
@@ -1399,6 +1400,37 @@ public partial class VimEditorControl : UserControl
             }
         }
 
+        // LSP: code actions popup navigation (Normal mode)
+        if (_lspManager.CodeActionsVisible && mode == VimMode.Normal)
+        {
+            if (key == Key.J || key == Key.Down)
+            {
+                _lspManager.MoveCodeActionsSelection(1);
+                e.Handled = true;
+                return;
+            }
+            if (key == Key.K || key == Key.Up)
+            {
+                _lspManager.MoveCodeActionsSelection(-1);
+                e.Handled = true;
+                return;
+            }
+            if (key == Key.Return)
+            {
+                var acts = _lspManager.CurrentCodeActions;
+                int sel = _lspManager.CodeActionsSelection;
+                if (sel >= 0 && sel < acts.Count) ApplyCodeAction(acts[sel]);
+                e.Handled = true;
+                return;
+            }
+            if (key == Key.Escape)
+            {
+                _lspManager.HideCodeActions();
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (!ctrl && alt && !shift && key == Key.Z)
         {
             ToggleWordWrap();
@@ -1447,6 +1479,7 @@ public partial class VimEditorControl : UserControl
             Key.PageUp => ctrl ? "b" : null,
             Key.PageDown => ctrl ? "f" : null,
             Key.F1 => null,
+            Key.F2 => "F2",
             _ => null
         };
 
@@ -1706,10 +1739,10 @@ public partial class VimEditorControl : UserControl
         ActiveStatusBar.UpdateStatus("Format: document formatted");
     }
 
-    private async Task HandleRenameAsync()
+    private async Task HandleRenameAsync(string? prefilledName = null)
     {
         var currentWord = GetWordAtCursor();
-        var newName = ShowRenameDialog(currentWord);
+        var newName = prefilledName ?? ShowRenameDialog(currentWord);
         if (string.IsNullOrWhiteSpace(newName) || newName == currentWord) return;
 
         var cursor = _engine.Cursor;
@@ -1720,25 +1753,7 @@ public partial class VimEditorControl : UserControl
             return;
         }
 
-        // Apply edits to the current file; report other changed files by count
-        var currentPath = _engine.CurrentBuffer.FilePath ?? "";
-        int otherFileCount = 0;
-        foreach (var (fileUri, fileEdits) in edit.Changes)
-        {
-            string localPath = "";
-            try { localPath = new Uri(fileUri).LocalPath; } catch { }
-            bool isCurrent = string.Equals(localPath, currentPath, StringComparison.OrdinalIgnoreCase);
-            if (isCurrent)
-            {
-                var formatted = ApplyTextEdits(_engine.CurrentBuffer.Text.GetText(), fileEdits);
-                _engine.SetText(formatted);
-                UpdateAll();
-                _lspManager.OnTextChanged(formatted);
-            }
-            else if (fileEdits.Count > 0)
-                otherFileCount++;
-        }
-
+        int otherFileCount = ApplyWorkspaceEditToCurrentBuffer(edit);
         string msg = otherFileCount > 0
             ? $"Renamed to '{newName}' ({otherFileCount} other file(s) may need saving)"
             : $"Renamed to '{newName}'";
@@ -1768,6 +1783,61 @@ public partial class VimEditorControl : UserControl
         }).ToList();
 
         FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(items, symbol));
+    }
+
+    private async Task HandleCodeActionAsync()
+    {
+        if (!_lspManager.IsConnected) { ActiveStatusBar.UpdateStatus("Code actions: LSP not connected"); return; }
+        ActiveStatusBar.UpdateStatus("Code actions: searching…");
+
+        var cursor = _engine.Cursor;
+        var actions = await _lspManager.RequestCodeActionsAsync(cursor.Line, cursor.Column);
+        if (actions.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus("Code actions: none available");
+            return;
+        }
+
+        _lspManager.ShowCodeActions(actions);
+        ActiveStatusBar.UpdateStatus($"Code actions: {actions.Count} available — j/k to select, Enter to apply, Esc to dismiss");
+    }
+
+    private void ApplyCodeAction(LspCodeAction action)
+    {
+        _lspManager.HideCodeActions();
+        if (action.Edit == null || action.Edit.Changes.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus($"Code action '{action.Title}': no edits to apply");
+            return;
+        }
+
+        int otherFileCount = ApplyWorkspaceEditToCurrentBuffer(action.Edit);
+        string msg = otherFileCount > 0
+            ? $"Code action '{action.Title}' applied ({otherFileCount} other file(s) may need saving)"
+            : $"Code action '{action.Title}' applied";
+        ActiveStatusBar.UpdateStatus(msg);
+    }
+
+    /// <summary>Apply a workspace edit to the current buffer; returns count of other modified files.</summary>
+    private int ApplyWorkspaceEditToCurrentBuffer(LspWorkspaceEdit edit)
+    {
+        var currentPath = _engine.CurrentBuffer.FilePath ?? "";
+        int otherFileCount = 0;
+        foreach (var (fileUri, fileEdits) in edit.Changes)
+        {
+            string localPath = "";
+            try { localPath = new Uri(fileUri).LocalPath; } catch { }
+            if (string.Equals(localPath, currentPath, StringComparison.OrdinalIgnoreCase))
+            {
+                var text = ApplyTextEdits(_engine.CurrentBuffer.Text.GetText(), fileEdits);
+                _engine.SetText(text);
+                UpdateAll();
+                _lspManager.OnTextChanged(text);
+            }
+            else if (fileEdits.Count > 0)
+                otherFileCount++;
+        }
+        return otherFileCount;
     }
 
     private string GetWordAtCursor()
@@ -2118,6 +2188,15 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.GoToDefinitionRequested:
                     _ = HandleGoToDefinitionAsync();
+                    break;
+                case VimEventType.FindReferencesRequested:
+                    _ = HandleFindReferencesAsync();
+                    break;
+                case VimEventType.LspRenameRequested when evt is LspRenameRequestedEvent rre:
+                    _ = HandleRenameAsync(rre.NewName);
+                    break;
+                case VimEventType.CodeActionRequested:
+                    _ = HandleCodeActionAsync();
                     break;
                 case VimEventType.LspHoverRequested:
                     _ = ShowLspHoverAsync();

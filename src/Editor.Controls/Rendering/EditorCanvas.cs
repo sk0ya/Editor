@@ -60,6 +60,9 @@ public class EditorCanvas : FrameworkElement
     private int _completionSelection = -1;
     private int _completionScrollOffset = 0;
     private LspSignatureHelp? _signatureHelp;
+    private IReadOnlyList<LspCodeAction> _codeActionItems = [];
+    private int _codeActionsSelection = 0;
+    private int _codeActionsScrollOffset = 0;
 
     public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
 
@@ -180,6 +183,15 @@ public class EditorCanvas : FrameworkElement
     public void SetSignatureHelp(LspSignatureHelp? help)
     {
         _signatureHelp = help;
+        InvalidateVisual();
+    }
+
+    public void SetCodeActions(IReadOnlyList<LspCodeAction> items, int selection, int scrollOffset = 0)
+    {
+        if (_codeActionItems.Count == 0 && items.Count == 0) return;
+        _codeActionItems = items;
+        _codeActionsSelection = selection;
+        _codeActionsScrollOffset = scrollOffset;
         InvalidateVisual();
     }
 
@@ -674,6 +686,7 @@ public class EditorCanvas : FrameworkElement
         DrawImeCandidatePopup(dc, textLeft, size);
         DrawSignatureHelp(dc, textLeft, size);
         DrawCompletionPopup(dc, textLeft, size);
+        DrawCodeActionPopup(dc, textLeft, size);
 
         // Gutter border
         if (_showLineNumbers)
@@ -852,6 +865,52 @@ public class EditorCanvas : FrameworkElement
         CompletionItemKind.Snippet => Theme.TokenString,
         _ => Theme.TokenIdentifier
     };
+
+    private void DrawCodeActionPopup(DrawingContext dc, double textLeft, Size size)
+    {
+        if (_codeActionItems.Count == 0) return;
+
+        const int maxVisible = 10;
+        int scrollOffset = Math.Max(0, Math.Min(_codeActionsScrollOffset, _codeActionItems.Count - 1));
+        int count = Math.Min(maxVisible, _codeActionItems.Count - scrollOffset);
+
+        var texts = new FormattedText[count];
+        double maxW = 0;
+        for (int i = 0; i < count; i++)
+        {
+            var action = _codeActionItems[scrollOffset + i];
+            var label = action.Kind != null ? $"[{action.Kind}]  {action.Title}" : action.Title;
+            var ft = FormatText(label, Theme.Foreground);
+            texts[i] = ft;
+            maxW = Math.Max(maxW, ft.Width);
+        }
+
+        double rowH   = Math.Max(_lineHeight, texts.Max(static t => t.Height));
+        double padX   = 8;
+        double padY   = 4;
+        double popupW = maxW + padX * 2 + 16;
+        double popupH = rowH * count + padY * 2;
+
+        var cursor = GetCursorPixelPosition();
+        double x = cursor.X;
+        double y = cursor.Y - popupH - 2;  // prefer above cursor
+        if (y < 0) y = cursor.Y + _lineHeight + 2;  // fall back to below
+
+        if (x + popupW > size.Width) x = Math.Max(textLeft, size.Width - popupW - 2);
+
+        var bg     = new SolidColorBrush(Color.FromArgb(0xF0, 0x1E, 0x1F, 0x29));
+        var border = new Pen(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)), 1);
+        dc.DrawRectangle(bg, border, new Rect(x, y, popupW, popupH));
+
+        for (int i = 0; i < count; i++)
+        {
+            int itemIndex = scrollOffset + i;
+            double rowY = y + padY + rowH * i;
+            if (itemIndex == _codeActionsSelection)
+                dc.DrawRectangle(Theme.SelectionBg, null, new Rect(x + 1, rowY, popupW - 2, rowH));
+            dc.DrawText(texts[i], new Point(x + padX, rowY + (rowH - texts[i].Height) / 2));
+        }
+    }
 
     private void DrawSelection(DrawingContext dc, int line, double y, double textLeft, string lineText)
     {

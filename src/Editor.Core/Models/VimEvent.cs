@@ -34,6 +34,9 @@ public enum VimEventType
     WindowNavRequested,
     WindowCloseRequested,
     LspHoverRequested,
+    FindReferencesRequested,
+    LspRenameRequested,
+    CodeActionRequested,
 }
 
 public enum ViewportAlign
@@ -136,6 +139,15 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent LspHoverRequested() =>
         new(VimEventType.LspHoverRequested);
+
+    public static VimEvent FindReferencesRequested() =>
+        new(VimEventType.FindReferencesRequested);
+
+    public static VimEvent LspRenameRequested(string? newName = null) =>
+        new LspRenameRequestedEvent(newName);
+
+    public static VimEvent CodeActionRequested() =>
+        new(VimEventType.CodeActionRequested);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -159,3 +171,4 @@ public record QuickfixNextEvent(int Count) : VimEvent(VimEventType.QuickfixNextR
 public record QuickfixPrevEvent(int Count) : VimEvent(VimEventType.QuickfixPrevRequested);
 public record QuickfixGotoEvent(int Index) : VimEvent(VimEventType.QuickfixGotoRequested);
 public record GrepRequestedEvent(string Pattern, string? FileGlob, bool IgnoreCase) : VimEvent(VimEventType.GrepRequested);
+public record LspRenameRequestedEvent(string? NewName) : VimEvent(VimEventType.LspRenameRequested);

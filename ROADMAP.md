@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-03
+> 作成日: 2026-03-02 / 更新日: 2026-03-04
 
 ---
 
@@ -40,17 +40,14 @@
 - `gq{motion}` / `gqq` (1行) — `textwidth` の設定値で折り返し整形
 - **実装箇所:** `VimEngine`、`VimOptions.TextWidth` を追加
 
-### 6. LSP: 参照検索 (`gr`)
-- `gr` — カーソル下シンボルの全参照をQuickfixリストへ送信
-- **実装箇所:** `ILspClient.FindReferencesAsync`、`LspManager`、`VimEngine` の `g-prefix` ハンドラ
+### ~~6. LSP: 参照検索 (`gr`)~~ ✅ 実装済み (2026-03-04)
+→ 実装済み一覧を参照
 
-### 7. LSP: シンボルリネーム
-- `:Rename [newname]` または `<F2>` — LSP `workspace/rename`
-- **実装箇所:** `ILspClient.RenameAsync`、`ExCommandProcessor` に `:Rename` ブランチ、`VimEditorControl` で複数ファイル編集反映
+### ~~7. LSP: シンボルリネーム~~ ✅ 実装済み (2026-03-04)
+→ 実装済み一覧を参照
 
-### 8. LSP: コードアクション (`ga`)
-- `ga` (Normal) または `:CodeAction` — カーソル位置の Quick Fix / Refactor 候補を表示
-- **実装箇所:** `ILspClient.CodeActionAsync`、`EditorCanvas` にアクション選択ポップアップ
+### ~~8. LSP: コードアクション (`ga`)~~ ✅ 実装済み (2026-03-04)
+→ 実装済み一覧を参照
 
 ### 9. コマンドライン Tab 補完
 - `:e <Tab>` — ファイルパス補完
@@ -156,3 +153,6 @@
 | テキストオブジェクト `iw/aw/iW/aW` | ✅ |
 | **`Ctrl+A/X`** 数値インクリメント/デクリメント（10進・16進、count対応） | ✅ 2026-03-03 |
 | `gu/gU/g~` ケース変換オペレータ | ❌ 未実装 → 中優先度 #4 |
+| **LSP: 参照検索** (`gr` → Referencesパネル) | ✅ 2026-03-04 |
+| **LSP: シンボルリネーム** (`F2` / `:Rename [name]`) | ✅ 2026-03-04 |
+| **LSP: コードアクション** (`ga`、j/k/Enter/Escポップアップ) | ✅ 2026-03-04 |

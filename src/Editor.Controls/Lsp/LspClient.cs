@@ -316,6 +316,40 @@ public sealed class LspClient : ILspClient
         catch { return []; }
     }
 
+    public async Task<IReadOnlyList<LspCodeAction>> GetCodeActionsAsync(
+        string uri, LspRange range, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/codeAction", new
+            {
+                textDocument = new { uri },
+                range = new
+                {
+                    start = new { line = range.Start.Line, character = range.Start.Character },
+                    end   = new { line = range.End.Line,   character = range.End.Character }
+                },
+                context = new { diagnostics = Array.Empty<object>() }
+            }, ct);
+
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
+
+            var list = new List<LspCodeAction>();
+            foreach (var item in result.Value.EnumerateArray())
+            {
+                if (!item.TryGetProperty("title", out var titleEl)) continue;
+                var title = titleEl.GetString() ?? "";
+                var kind = item.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null;
+                LspWorkspaceEdit? edit = null;
+                if (item.TryGetProperty("edit", out var editEl))
+                    edit = ParseWorkspaceEdit(editEl);
+                list.Add(new LspCodeAction(title, kind, edit));
+            }
+            return list;
+        }
+        catch { return []; }
+    }
+
     private void OnNotification(string method, JsonElement @params)
     {
         if (method != "textDocument/publishDiagnostics") return;
