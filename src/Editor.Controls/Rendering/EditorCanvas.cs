@@ -35,6 +35,7 @@ public class EditorCanvas : FrameworkElement
     private bool _relativeNumber = false;
     private int _lineNumberWidth = 4; // digits
     private bool _cursorVisible = true;
+    private bool _isActive = true;
     private System.Windows.Threading.DispatcherTimer? _cursorTimer;
     private bool _isDragging = false;
     private string _imeCompositionText = string.Empty;
@@ -117,6 +118,12 @@ public class EditorCanvas : FrameworkElement
         _lineNumberWidth = Math.Max(3, _lines.Length.ToString().Length);
         RebuildVisualLayout();
         InvalidateVisual();
+    }
+
+    public bool IsActive
+    {
+        get => _isActive;
+        set { if (_isActive == value) return; _isActive = value; InvalidateVisual(); }
     }
 
     public void SetCursor(CursorPosition cursor) { _cursor = cursor; EnsureCursorVisible(); InvalidateVisual(); }
@@ -952,6 +959,7 @@ public class EditorCanvas : FrameworkElement
 
     private void DrawCursor(DrawingContext dc, int line, double y, double textLeft, string lineText)
     {
+        if (!_isActive) return;
         if (line != _cursor.Line) return;
 
         double cursorX = textLeft + GetVisualX(lineText, _cursor.Column) - _scrollOffsetX;

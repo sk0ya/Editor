@@ -19,7 +19,9 @@
       "Bash(xargs grep:*)",
       "Bash(xargs ls:*)",
       "Bash(grep:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(dotnet build:*)",
+      "Bash(dotnet test:*)"
     ]
   }
 }

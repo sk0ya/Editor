@@ -15,6 +15,7 @@ using System.Windows.Threading;
 using Editor.Controls;
 using Editor.Controls.Themes;
 using Editor.Core.Lsp;
+using Editor.Core.Models;
 using Editor.Core.Syntax;
 
 namespace Editor.App;
@@ -25,17 +26,112 @@ public partial class MainWindow : Window
     private const int WheelDelta = 120;
     private HwndSource? _windowSource;
 
+    // ─────────── Pane tree ──────────────────────────────────────
+
+    private abstract class PaneNode
+    {
+        public abstract IEnumerable<VimEditorControl> AllEditors();
+    }
+
+    private sealed class EditorPaneNode : PaneNode
+    {
+        public required VimEditorControl Editor { get; init; }
+        public override IEnumerable<VimEditorControl> AllEditors() { yield return Editor; }
+    }
+
+    private sealed class SplitPaneNode : PaneNode
+    {
+        public bool Vertical { get; init; }
+        public required PaneNode First { get; set; }
+        public required PaneNode Second { get; set; }
+        public required Grid Container { get; set; }
+
+        public override IEnumerable<VimEditorControl> AllEditors()
+            => First.AllEditors().Concat(Second.AllEditors());
+
+        public static Grid BuildGrid(bool vertical, UIElement first, UIElement second)
+        {
+            var grid = new Grid();
+            var splitter = new GridSplitter
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0x44, 0x47, 0x5A)),
+                ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            if (vertical)
+            {
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                splitter.Width = 4;
+                Grid.SetColumn(first, 0); Grid.SetColumn(splitter, 1); Grid.SetColumn(second, 2);
+            }
+            else
+            {
+                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });
+                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                splitter.Height = 4;
+                Grid.SetRow(first, 0); Grid.SetRow(splitter, 1); Grid.SetRow(second, 2);
+            }
+            grid.Children.Add(first);
+            grid.Children.Add(splitter);
+            grid.Children.Add(second);
+            return grid;
+        }
+
+        public void ReplaceChild(UIElement oldChild, UIElement newChild)
+        {
+            int idx = Container.Children.IndexOf(oldChild);
+            if (idx < 0) return;
+            if (Vertical) Grid.SetColumn(newChild, Grid.GetColumn(oldChild));
+            else          Grid.SetRow(newChild, Grid.GetRow(oldChild));
+            Container.Children.RemoveAt(idx);
+            Container.Children.Insert(idx, newChild);
+        }
+    }
+
+    private static UIElement PaneToElement(PaneNode node) => node switch
+    {
+        EditorPaneNode e => e.Editor,
+        SplitPaneNode s  => s.Container,
+        _ => throw new InvalidOperationException()
+    };
+
+    private static SplitPaneNode? FindParentSplit(PaneNode root, PaneNode target)
+    {
+        if (root is SplitPaneNode spn)
+        {
+            if (spn.First == target || spn.Second == target) return spn;
+            return FindParentSplit(spn.First, target) ?? FindParentSplit(spn.Second, target);
+        }
+        return null;
+    }
+
+    private static EditorPaneNode? FindEditorPane(PaneNode root, VimEditorControl editor)
+    {
+        if (root is EditorPaneNode epn && epn.Editor == editor) return epn;
+        if (root is SplitPaneNode spn)
+            return FindEditorPane(spn.First, editor) ?? FindEditorPane(spn.Second, editor);
+        return null;
+    }
+
+    // ─────────── Tab info ──────────────────────────────────────
+
     private sealed class TabInfo
     {
         public required TabItem Item { get; init; }
-        public required VimEditorControl Editor { get; init; }
         public required TextBlock HeaderLabel { get; init; }
         public string? FilePath { get; set; }
+        public required PaneNode Root { get; set; }
+        public required VimEditorControl FocusedEditor { get; set; }
+
+        public IEnumerable<VimEditorControl> AllEditors() => Root.AllEditors();
 
         public void UpdateHeader()
         {
             var name = FilePath != null ? Path.GetFileName(FilePath) : "[No Name]";
-            var isModified = Editor.Engine.CurrentBuffer.Text.IsModified;
+            var isModified = AllEditors().Any(e => e.Engine.CurrentBuffer.Text.IsModified);
             HeaderLabel.Text = isModified ? $"• {name}" : name;
         }
     }
@@ -100,14 +196,15 @@ public partial class MainWindow : Window
     private SidebarPanel _activeSidebarPanel = SidebarPanel.None;
     private System.Windows.Point _shellMenuScreenPos;
 
-    private VimEditorControl? CurrentEditor =>
-        TabCtrl.SelectedItem is TabItem ti ? ti.Content as VimEditorControl : null;
+    private VimEditorControl? CurrentEditor => CurrentTabInfo?.FocusedEditor;
 
     private TabInfo? CurrentTabInfo =>
         _tabs.Find(t => t.Item == TabCtrl.SelectedItem as TabItem);
 
-    private TabInfo? FindTabInfo(object sender) =>
-        _tabs.Find(t => t.Editor == sender as VimEditorControl);
+    private TabInfo? FindTabInfo(object? sender) =>
+        sender is VimEditorControl editor
+            ? _tabs.Find(t => t.AllEditors().Contains(editor))
+            : null;
 
     public MainWindow()
     {
@@ -611,14 +708,14 @@ public partial class MainWindow : Window
         if (existing != null)
         {
             TabCtrl.SelectedItem = existing.Item;
-            existing.Editor.Focus();
+            existing.FocusedEditor.Focus();
             return;
         }
 
         // Replace empty tab or open new
         var current = CurrentTabInfo;
         if (current != null && current.FilePath == null &&
-            !current.Editor.Engine.CurrentBuffer.Text.IsModified)
+            !current.FocusedEditor.Engine.CurrentBuffer.Text.IsModified)
             OpenFile(path);
         else
             AddTab(path);
@@ -626,11 +723,23 @@ public partial class MainWindow : Window
 
     // ─────────── Tab management ────────────────────────────
 
-    private void AddTab(string? filePath)
+    private VimEditorControl CreateEditor(string? filePath)
     {
         var editor = new VimEditorControl();
         editor.SetTheme(_currentTheme);
+        editor.SetSharedStatusBar(SharedStatusBar);
         WireEditorEvents(editor);
+        if (filePath != null && File.Exists(filePath))
+            editor.LoadFile(filePath);
+        else
+            editor.SetText("");
+        return editor;
+    }
+
+    private void AddTab(string? filePath)
+    {
+        var editor = CreateEditor(filePath);
+        var root = new EditorPaneNode { Editor = editor };
 
         var label = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
         var closeBtn = new Button { Content = "×", Style = (Style)FindResource("TabCloseButton") };
@@ -639,14 +748,13 @@ public partial class MainWindow : Window
         header.Children.Add(closeBtn);
 
         var tabItem = new TabItem { Header = header, Content = editor };
-        var tabInfo = new TabInfo { Item = tabItem, Editor = editor, HeaderLabel = label, FilePath = filePath };
+        var tabInfo = new TabInfo
+        {
+            Item = tabItem, HeaderLabel = label, FilePath = filePath,
+            Root = root, FocusedEditor = editor
+        };
         closeBtn.Click += (_, _) => CloseTab(tabInfo, force: false);
         header.MouseDown += (_, e) => { if (e.ChangedButton == MouseButton.Middle) CloseTab(tabInfo, force: false); };
-
-        if (filePath != null && File.Exists(filePath))
-            editor.LoadFile(filePath);
-        else
-            editor.SetText("");
 
         tabInfo.UpdateHeader();
 
@@ -666,6 +774,8 @@ public partial class MainWindow : Window
         editor.NextTabRequested  += Editor_NextTabRequested;
         editor.PrevTabRequested  += Editor_PrevTabRequested;
         editor.CloseTabRequested    += Editor_CloseTabRequested;
+        editor.WindowNavRequested   += Editor_WindowNavRequested;
+        editor.WindowCloseRequested += Editor_WindowCloseRequested;
         editor.BufferChanged        += Editor_BufferChanged;
         editor.FindReferencesResult += Editor_FindReferencesResult;
         editor.QuickfixOpenRequested  += (_, _) => ShowReferencesPanel();
@@ -674,6 +784,7 @@ public partial class MainWindow : Window
         editor.QuickfixPrevRequested  += (_, count) => QuickfixNavigate(-count);
         editor.QuickfixGotoRequested  += (_, index) => QuickfixNavigateTo(index);
         editor.GrepRequested          += Editor_GrepRequested;
+        editor.GotKeyboardFocus       += Editor_GotKeyboardFocus;
     }
 
     private void Editor_BufferChanged(object? sender, EventArgs e)
@@ -917,11 +1028,15 @@ public partial class MainWindow : Window
 
     private void CloseTab(TabInfo tabInfo, bool force)
     {
-        var buf = tabInfo.Editor.Engine.CurrentBuffer;
-        if (buf.Text.IsModified && !force)
+        var modifiedEditors = tabInfo.AllEditors()
+            .Where(e => e.Engine.CurrentBuffer.Text.IsModified)
+            .ToList();
+
+        if (modifiedEditors.Count > 0 && !force)
         {
+            var names = string.Join(", ", modifiedEditors.Select(e => e.Engine.CurrentBuffer.Name));
             var result = MessageBox.Show(
-                $"'{buf.Name}' has unsaved changes. Save before closing?",
+                $"'{names}' has unsaved changes. Save before closing?",
                 "Editor",
                 MessageBoxButton.YesNoCancel,
                 MessageBoxImage.Warning);
@@ -929,11 +1044,14 @@ public partial class MainWindow : Window
             if (result == MessageBoxResult.Cancel) return;
             if (result == MessageBoxResult.Yes)
             {
-                try { buf.Save(); }
-                catch (Exception ex)
+                foreach (var ed in modifiedEditors)
                 {
-                    MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
+                    try { ed.Engine.CurrentBuffer.Save(); }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
+                        return;
+                    }
                 }
             }
         }
@@ -946,7 +1064,7 @@ public partial class MainWindow : Window
 
         var nextIdx = Math.Clamp(idx, 0, _tabs.Count - 1);
         TabCtrl.SelectedItem = _tabs[nextIdx].Item;
-        _tabs[nextIdx].Editor.Focus();
+        _tabs[nextIdx].FocusedEditor.Focus();
     }
 
     private void OpenFile(string path)
@@ -954,7 +1072,7 @@ public partial class MainWindow : Window
         if (!File.Exists(path)) return;
         var tabInfo = CurrentTabInfo;
         if (tabInfo == null) return;
-        tabInfo.Editor.LoadFile(path);
+        tabInfo.FocusedEditor.LoadFile(path);
         tabInfo.FilePath = path;
         tabInfo.UpdateHeader();
         Title = $"Editor — {Path.GetFileName(path)}";
@@ -979,7 +1097,8 @@ public partial class MainWindow : Window
         if (sender == null) return;
         var tabInfo = FindTabInfo(sender);
         if (tabInfo == null) return;
-        var buf = tabInfo.Editor.Engine.CurrentBuffer;
+        var buf = (sender as VimEditorControl)?.Engine.CurrentBuffer
+                  ?? tabInfo.FocusedEditor.Engine.CurrentBuffer;
 
         if (e.FilePath != null)
         {
@@ -1055,11 +1174,138 @@ public partial class MainWindow : Window
 
     private void Editor_SplitRequested(object? sender, SplitRequestedEventArgs e)
     {
-        MessageBox.Show(
-            $"{(e.Vertical ? "Vertical" : "Horizontal")} split is not implemented yet.",
-            "Editor",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+        if (sender is not VimEditorControl source) return;
+        var tabInfo = FindTabInfo(source);
+        if (tabInfo == null) return;
+
+        var sourcePane = FindEditorPane(tabInfo.Root, source);
+        if (sourcePane == null) return;
+
+        // Resolve file to open in new pane
+        var newFilePath = e.FilePath != null ? ResolvePath(e.FilePath) : tabInfo.FilePath;
+        var newEditor = CreateEditor(newFilePath);
+        var newLeaf = new EditorPaneNode { Editor = newEditor };
+
+        // WPF requires element removed from its current parent before being added to a new Grid.
+        // Record the grid position (row/col) BEFORE removing, so we can restore it later.
+        var firstElement = (UIElement)sourcePane.Editor;
+        var parentSplit = FindParentSplit(tabInfo.Root, sourcePane);
+        int gridPos = -1;
+        if (parentSplit != null)
+        {
+            gridPos = parentSplit.Vertical
+                ? Grid.GetColumn(firstElement)
+                : Grid.GetRow(firstElement);
+            parentSplit.Container.Children.Remove(firstElement);
+        }
+        else
+        {
+            tabInfo.Item.Content = null; // editor is TabItem.Content — release it first
+        }
+
+        // firstElement is now parentless — safe to add to new Grid
+        var newGrid = SplitPaneNode.BuildGrid(e.Vertical, firstElement, (UIElement)newEditor);
+        var splitNode = new SplitPaneNode
+        {
+            Vertical = e.Vertical, First = sourcePane, Second = newLeaf, Container = newGrid
+        };
+
+        // Splice into tree
+        if (parentSplit == null)
+        {
+            tabInfo.Root = splitNode;
+            tabInfo.Item.Content = newGrid;
+        }
+        else
+        {
+            // Place newGrid at the same row/col that firstElement occupied
+            if (parentSplit.Vertical) Grid.SetColumn(newGrid, gridPos);
+            else                      Grid.SetRow(newGrid, gridPos);
+            parentSplit.Container.Children.Add(newGrid);
+
+            if (parentSplit.First == sourcePane) parentSplit.First = splitNode;
+            else parentSplit.Second = splitNode;
+        }
+
+        tabInfo.FocusedEditor = newEditor;
+        tabInfo.FilePath = newFilePath;
+        tabInfo.UpdateHeader();
+        newEditor.Focus();
+    }
+
+    private void CloseSplitPane(TabInfo tabInfo, VimEditorControl editor, bool force)
+    {
+        var editorPane = FindEditorPane(tabInfo.Root, editor);
+        if (editorPane == null) return;
+        var parentSplit = FindParentSplit(tabInfo.Root, editorPane);
+        if (parentSplit == null) return;
+
+        var sibling = parentSplit.First == editorPane ? parentSplit.Second : parentSplit.First;
+        var siblingElement = PaneToElement(sibling);
+
+        // Detach sibling from parentSplit.Container before reparenting
+        parentSplit.Container.Children.Remove(siblingElement);
+
+        var grandParent = FindParentSplit(tabInfo.Root, parentSplit);
+        if (grandParent == null)
+        {
+            tabInfo.Root = sibling;
+            tabInfo.Item.Content = siblingElement;
+        }
+        else
+        {
+            grandParent.ReplaceChild(parentSplit.Container, siblingElement);
+            if (grandParent.First == parentSplit) grandParent.First = sibling;
+            else grandParent.Second = sibling;
+        }
+
+        var nextFocus = sibling.AllEditors().First();
+        tabInfo.FocusedEditor = nextFocus;
+        tabInfo.FilePath = nextFocus.Engine.CurrentBuffer.FilePath;
+        tabInfo.UpdateHeader();
+        nextFocus.Focus();
+        // WPF Unloaded event fires automatically and disposes LSP resources
+    }
+
+    private void Editor_WindowCloseRequested(object? sender, WindowCloseRequestedEventArgs e)
+    {
+        if (sender is not VimEditorControl editor) return;
+        var ti = FindTabInfo(editor);
+        if (ti == null) return;
+        if (ti.AllEditors().Count() <= 1)
+        {
+            CloseTab(ti, e.Force);
+            return;
+        }
+        CloseSplitPane(ti, editor, e.Force);
+    }
+
+    private void Editor_WindowNavRequested(object? sender, WindowNavRequestedEventArgs e)
+    {
+        var ti = FindTabInfo(sender);
+        if (ti == null) return;
+        var editors = ti.AllEditors().ToList();
+        if (editors.Count <= 1) return;
+
+        var idx = editors.IndexOf(ti.FocusedEditor);
+        if (idx < 0) idx = 0;
+        var next = e.Dir switch
+        {
+            WindowNavDir.Prev or WindowNavDir.Left or WindowNavDir.Up =>
+                editors[(idx - 1 + editors.Count) % editors.Count],
+            _ => editors[(idx + 1) % editors.Count]
+        };
+        next.Focus();
+    }
+
+    private void Editor_GotKeyboardFocus(object? sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is not VimEditorControl editor) return;
+        var ti = FindTabInfo(editor);
+        if (ti == null) return;
+        ti.FocusedEditor = editor;
+        ti.FilePath = editor.Engine.CurrentBuffer.FilePath ?? ti.FilePath;
+        ti.UpdateHeader();
     }
 
     private void Editor_NextTabRequested(object? sender, EventArgs e)
@@ -1177,7 +1423,7 @@ public partial class MainWindow : Window
         if (dlg.ShowDialog() != true) return;
 
         var current = CurrentTabInfo;
-        if (current != null && current.FilePath == null && !current.Editor.Engine.CurrentBuffer.Text.IsModified)
+        if (current != null && current.FilePath == null && !current.FocusedEditor.Engine.CurrentBuffer.Text.IsModified)
             OpenFile(dlg.FileName);
         else
             AddTab(dlg.FileName);
@@ -1257,7 +1503,7 @@ public partial class MainWindow : Window
         var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "All Files|*.*", Title = "Save File As" };
         if (dlg.ShowDialog() == true)
         {
-            tabInfo.Editor.Engine.CurrentBuffer.Save(dlg.FileName);
+            tabInfo.FocusedEditor.Engine.CurrentBuffer.Save(dlg.FileName);
             tabInfo.FilePath = dlg.FileName;
             tabInfo.UpdateHeader();
         }
@@ -1360,7 +1606,9 @@ public partial class MainWindow : Window
             theme = theme.WithAccent(accent);
 
         _currentTheme = theme;
-        foreach (var t in _tabs) t.Editor.SetTheme(_currentTheme);
+        foreach (var t in _tabs)
+            foreach (var ed in t.AllEditors())
+                ed.SetTheme(_currentTheme);
 
         // Update dynamic accent resource (affects tabs, activity bar)
         var resolvedAccent = accentHex ?? ColorToHex(GetThemeAccentColor(EditorTheme.GetByName(themeName)));
@@ -2231,7 +2479,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        var unsaved = _tabs.Where(t => t.Editor.Engine.CurrentBuffer.Text.IsModified).ToList();
+        var unsaved = _tabs.Where(t => t.AllEditors().Any(e => e.Engine.CurrentBuffer.Text.IsModified)).ToList();
         if (unsaved.Count > 0)
         {
             var result = MessageBox.Show(

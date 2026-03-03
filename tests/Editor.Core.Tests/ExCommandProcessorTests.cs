@@ -14,26 +14,26 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
-    public void QuitAlias_ProducesQuitRequestedEvent()
+    public void QuitAlias_ProducesWindowCloseRequestedEvent()
     {
         var (processor, _) = CreateProcessor();
 
         var result = processor.Execute("quit", CursorPosition.Zero);
 
         Assert.True(result.Success);
-        var evt = Assert.IsType<QuitRequestedEvent>(result.Event);
+        var evt = Assert.IsType<WindowCloseRequestedEvent>(result.Event);
         Assert.False(evt.Force);
     }
 
     [Fact]
-    public void ForceQuitAlias_ProducesForceQuitRequestedEvent()
+    public void ForceQuitAlias_ProducesForceWindowCloseRequestedEvent()
     {
         var (processor, _) = CreateProcessor();
 
         var result = processor.Execute("quit!", CursorPosition.Zero);
 
         Assert.True(result.Success);
-        var evt = Assert.IsType<QuitRequestedEvent>(result.Event);
+        var evt = Assert.IsType<WindowCloseRequestedEvent>(result.Event);
         Assert.True(evt.Force);
     }
 

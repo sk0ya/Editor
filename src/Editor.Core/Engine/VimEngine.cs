@@ -34,6 +34,7 @@ public class VimEngine
     private bool _awaitingMark;
     private bool _awaitingMarkJump;
     private bool _awaitingMarkJumpLine;
+    private bool _ctrlWPending;
     private int _preferredColumn = 0; // Sticky column for j/k
 
     private CursorPosition _insertStart;
@@ -428,6 +429,15 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
         var motion = new MotionEngine(buf);
 
+        // Ctrl+W two-key window prefix
+        if (_ctrlWPending)
+        {
+            _ctrlWPending = false;
+            if (key == "Escape") { EmitStatus(events, ""); return; }
+            HandleCtrlWSecondKey(key, ctrl, events);
+            return;
+        }
+
         // Awaiting pending chars
         if (_awaitingMark) { _markManager.SetMark(key[0], _cursor); _awaitingMark = false; EmitCursor(events); return; }
         if (_awaitingMarkJump) { var m = _markManager.GetMark(key[0]); if (m.HasValue) MoveCursor(m.Value, events); _awaitingMarkJump = false; return; }
@@ -473,7 +483,7 @@ public class VimEngine
             case "o": var jb = _markManager.JumpBack(); if (jb.HasValue) MoveCursor(jb.Value, events); break;
             case "i": var jf = _markManager.JumpForward(); if (jf.HasValue) MoveCursor(jf.Value, events); break;
             case "v": EnterVisualMode(VimMode.VisualBlock, events); break;
-            case "w": MoveCursor(motion.WordForward(_cursor, 1, false), events); break;
+            case "w": _ctrlWPending = true; EmitStatus(events, "^W"); break;
             case "h": MoveCursor(motion.MoveLeft(_cursor, 1), events); _preferredColumn = _cursor.Column; break;
             case "j": MoveVertical(1, events); break;
             case "m": MoveLineAndFirstNonBlank(1, events); break;
@@ -481,6 +491,25 @@ public class VimEngine
                 _commandParser.Reset();
                 EmitStatus(events, "");
                 break;
+        }
+    }
+
+    private void HandleCtrlWSecondKey(string key, bool ctrl, List<VimEvent> events)
+    {
+        // Normalize: Ctrl+W Ctrl+X = same as Ctrl+W x (lowercase)
+        var k = ctrl ? key.ToLower() : key;
+        switch (k)
+        {
+            case "w": events.Add(VimEvent.WindowNavRequested(WindowNavDir.Next)); break;
+            case "W": events.Add(VimEvent.WindowNavRequested(WindowNavDir.Prev)); break;
+            case "q": case "c": events.Add(VimEvent.WindowCloseRequested(false)); break;
+            case "v": events.Add(VimEvent.SplitRequested(true)); break;
+            case "s": events.Add(VimEvent.SplitRequested(false)); break;
+            case "h": events.Add(VimEvent.WindowNavRequested(WindowNavDir.Left)); break;
+            case "j": events.Add(VimEvent.WindowNavRequested(WindowNavDir.Down)); break;
+            case "k": events.Add(VimEvent.WindowNavRequested(WindowNavDir.Up)); break;
+            case "l": events.Add(VimEvent.WindowNavRequested(WindowNavDir.Right)); break;
+            default: EmitStatus(events, ""); break;
         }
     }
 
@@ -869,6 +898,7 @@ public class VimEngine
     // ─────────────── INSERT MODE ───────────────
     private void HandleInsert(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
+        _ctrlWPending = false;
         var buf = _bufferManager.Current.Text;
 
         if (ctrl)
@@ -956,6 +986,7 @@ public class VimEngine
     // ─────────────── VISUAL MODE ───────────────
     private void HandleVisual(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
+        _ctrlWPending = false;
         if (key == "Escape")
         {
             _commandParser.Reset();

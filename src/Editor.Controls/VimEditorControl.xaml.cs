@@ -35,9 +35,18 @@ public class NewTabRequestedEventArgs(string? filePath) : EventArgs
 {
     public string? FilePath { get; } = filePath;
 }
-public class SplitRequestedEventArgs(bool vertical) : EventArgs
+public class SplitRequestedEventArgs(bool vertical, string? filePath = null) : EventArgs
 {
     public bool Vertical { get; } = vertical;
+    public string? FilePath { get; } = filePath;
+}
+public class WindowNavRequestedEventArgs(WindowNavDir dir) : EventArgs
+{
+    public WindowNavDir Dir { get; } = dir;
+}
+public class WindowCloseRequestedEventArgs(bool force) : EventArgs
+{
+    public bool Force { get; } = force;
 }
 public class CloseTabRequestedEventArgs(bool force) : EventArgs
 {
@@ -166,6 +175,8 @@ public partial class VimEditorControl : UserControl
     private LspManager _lspManager = null!;
     private readonly GitDiffProvider _gitProvider = new();
     private bool _blameActive;
+    private VimStatusBar? _sharedStatusBar;
+    private VimStatusBar ActiveStatusBar => _sharedStatusBar ?? StatusBar;
     private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
 
     // Buffer that tracks ImeProcessed key characters typed in Insert mode.
@@ -199,6 +210,8 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<int>? QuickfixPrevRequested;
     public event EventHandler<int>? QuickfixGotoRequested;
     public event EventHandler<GrepRequestedEventArgs>? GrepRequested;
+    public event EventHandler<WindowNavRequestedEventArgs>? WindowNavRequested;
+    public event EventHandler<WindowCloseRequestedEventArgs>? WindowCloseRequested;
 
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
@@ -238,6 +251,10 @@ public partial class VimEditorControl : UserControl
         Unloaded += OnUnloaded;
         PreviewKeyDown += OnPreviewKeyDown;
 
+        // Active-pane cursor and status bar
+        GotKeyboardFocus  += (_, _) => { Canvas.IsActive = true;  SyncStatusBar(); };
+        LostKeyboardFocus += (_, _) => Canvas.IsActive = false;
+
         // Mouse and scroll wiring
         Canvas.MouseClicked += OnCanvasMouseClicked;
         Canvas.MouseRightClicked += OnCanvasMouseRightClicked;
@@ -260,7 +277,7 @@ public partial class VimEditorControl : UserControl
 
     private void OnLspStatusMessage(string msg)
     {
-        StatusBar.UpdateStatus(msg);
+        ActiveStatusBar.UpdateStatus(msg);
     }
 
     private void OnLspFoldingRangesChanged(IReadOnlyList<LspFoldingRange> ranges)
@@ -733,7 +750,7 @@ public partial class VimEditorControl : UserControl
         if (!_blameActive)
         {
             Canvas.SetBlameAnnotations(null);
-            StatusBar.UpdateStatus("Git blame: off");
+            ActiveStatusBar.UpdateStatus("Git blame: off");
             return;
         }
 
@@ -741,16 +758,16 @@ public partial class VimEditorControl : UserControl
         if (string.IsNullOrEmpty(filePath))
         {
             _blameActive = false;
-            StatusBar.UpdateStatus("Git blame: no file open");
+            ActiveStatusBar.UpdateStatus("Git blame: no file open");
             return;
         }
 
-        StatusBar.UpdateStatus("Git blame: loading...");
+        ActiveStatusBar.UpdateStatus("Git blame: loading...");
         var annotations = await Task.Run(() => _gitProvider.GetBlameAnnotations(filePath));
         if (_blameActive)
         {
             Canvas.SetBlameAnnotations(annotations);
-            StatusBar.UpdateStatus(annotations.Count > 0
+            ActiveStatusBar.UpdateStatus(annotations.Count > 0
                 ? $"Git blame: {annotations.Count} lines annotated"
                 : "Git blame: no blame data (file not committed?)");
         }
@@ -799,7 +816,34 @@ public partial class VimEditorControl : UserControl
     {
         Canvas.Theme = _theme;
         StatusBar.Theme = _theme;
+        if (_sharedStatusBar != null) _sharedStatusBar.Theme = _theme;
         Background = _theme.Background;
+    }
+
+    // ─────────────── Shared status bar ───────────────
+
+    /// <summary>
+    /// Assigns a status bar that lives outside this control (e.g. in the host window).
+    /// When set, this control's built-in status bar is hidden and all status updates are
+    /// routed to the shared bar instead.
+    /// </summary>
+    public void SetSharedStatusBar(VimStatusBar? bar)
+    {
+        _sharedStatusBar = bar;
+        StatusBar.Visibility = bar != null ? Visibility.Collapsed : Visibility.Visible;
+        if (bar != null) bar.Theme = _theme;
+    }
+
+    /// <summary>
+    /// Pushes the current mode / file / cursor state to the active status bar.
+    /// Call this when this editor gains focus so the shared bar reflects its state.
+    /// </summary>
+    public void SyncStatusBar()
+    {
+        var buf = _engine.CurrentBuffer;
+        ActiveStatusBar.UpdateMode(_engine.Mode);
+        ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified);
+        ActiveStatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount);
     }
 
     // ─────────────── Scrollbar ───────────────
@@ -886,7 +930,7 @@ public partial class VimEditorControl : UserControl
         _engine.Options.Wrap = enabled;
         Canvas.ScrollTo(Canvas.VerticalOffset, enabled ? 0 : Canvas.HorizontalOffset);
         UpdateScrollbars(Canvas.VerticalOffset, Canvas.HorizontalOffset);
-        StatusBar.UpdateStatus(enabled ? "Wrap: ON" : "Wrap: OFF");
+        ActiveStatusBar.UpdateStatus(enabled ? "Wrap: ON" : "Wrap: OFF");
     }
 
     // ─────────────── Mouse handling ───────────────
@@ -1568,7 +1612,7 @@ public partial class VimEditorControl : UserControl
         var msg = await _lspManager.RequestCompletionAsync(line, col);
         if (!string.IsNullOrEmpty(msg))
         {
-            StatusBar.UpdateStatus(msg);
+            ActiveStatusBar.UpdateStatus(msg);
             return;
         }
 
@@ -1595,7 +1639,7 @@ public partial class VimEditorControl : UserControl
         {
             // Show first non-empty line of hover in status bar
             var firstLine = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? text;
-            StatusBar.UpdateStatus(firstLine.Trim());
+            ActiveStatusBar.UpdateStatus(firstLine.Trim());
         }
     }
 
@@ -1632,13 +1676,13 @@ public partial class VimEditorControl : UserControl
         var result = await _lspManager.RequestDefinitionAsync(cursor.Line, cursor.Column);
         if (result == null)
         {
-            StatusBar.UpdateStatus("LSP: definition not found");
+            ActiveStatusBar.UpdateStatus("LSP: definition not found");
             return;
         }
         var (filePath, line, col) = result.Value;
         if (!System.IO.File.Exists(filePath))
         {
-            StatusBar.UpdateStatus("LSP: definition in non-navigable location");
+            ActiveStatusBar.UpdateStatus("LSP: definition in non-navigable location");
             return;
         }
         // Same file: just move the cursor without reopening
@@ -1658,7 +1702,7 @@ public partial class VimEditorControl : UserControl
         var edits = await _lspManager.RequestFormattingAsync(tabSize, insertSpaces);
         if (edits.Count == 0)
         {
-            StatusBar.UpdateStatus("Format: no changes");
+            ActiveStatusBar.UpdateStatus("Format: no changes");
             return;
         }
         var original = _engine.CurrentBuffer.Text.GetText();
@@ -1666,7 +1710,7 @@ public partial class VimEditorControl : UserControl
         _engine.SetText(formatted);
         UpdateAll();
         _lspManager.OnTextChanged(formatted);
-        StatusBar.UpdateStatus("Format: document formatted");
+        ActiveStatusBar.UpdateStatus("Format: document formatted");
     }
 
     private async Task HandleRenameAsync()
@@ -1679,7 +1723,7 @@ public partial class VimEditorControl : UserControl
         var edit = await _lspManager.RequestRenameAsync(cursor.Line, cursor.Column, newName);
         if (edit == null || edit.Changes.Count == 0)
         {
-            StatusBar.UpdateStatus("Rename: no changes returned by server");
+            ActiveStatusBar.UpdateStatus("Rename: no changes returned by server");
             return;
         }
 
@@ -1705,24 +1749,24 @@ public partial class VimEditorControl : UserControl
         string msg = otherFileCount > 0
             ? $"Renamed to '{newName}' ({otherFileCount} other file(s) may need saving)"
             : $"Renamed to '{newName}'";
-        StatusBar.UpdateStatus(msg);
+        ActiveStatusBar.UpdateStatus(msg);
     }
 
     private async Task HandleFindReferencesAsync()
     {
         var symbol = GetWordAtCursor();
-        StatusBar.UpdateStatus("References: searching…");
+        ActiveStatusBar.UpdateStatus("References: searching…");
 
         var cursor = _engine.Cursor;
         var refs = await _lspManager.RequestReferencesAsync(cursor.Line, cursor.Column);
         if (refs.Count == 0)
         {
-            StatusBar.UpdateStatus("References: none found");
+            ActiveStatusBar.UpdateStatus("References: none found");
             return;
         }
 
         int fileCount = refs.Select(r => r.Uri).Distinct().Count();
-        StatusBar.UpdateStatus($"{refs.Count} reference(s) in {fileCount} file(s)");
+        ActiveStatusBar.UpdateStatus($"{refs.Count} reference(s) in {fileCount} file(s)");
 
         var items = refs.Select(r =>
         {
@@ -2013,7 +2057,7 @@ public partial class VimEditorControl : UserControl
                     if (!needFullUpdate)
                     {
                         Canvas.SetCursor(ce.Position);
-                        StatusBar.UpdateCursor(ce.Position, _engine.CurrentBuffer.Text.LineCount);
+                        ActiveStatusBar.UpdateCursor(ce.Position, _engine.CurrentBuffer.Text.LineCount);
                         if (_engine.Mode is VimMode.Insert or VimMode.Replace)
                             UpdateImeWindowPos();
                     }
@@ -2030,7 +2074,7 @@ public partial class VimEditorControl : UserControl
                     {
                         UpdateImeWindowPos();
                     }
-                    StatusBar.UpdateMode(me.Mode);
+                    ActiveStatusBar.UpdateMode(me.Mode);
                     Canvas.SetMode(me.Mode);
                     ModeChanged?.Invoke(this, new ModeChangedEventArgs(me.Mode));
                     break;
@@ -2038,10 +2082,10 @@ public partial class VimEditorControl : UserControl
                     Canvas.SetSelection(se.Selection);
                     break;
                 case VimEventType.StatusMessage when evt is StatusMessageEvent sme:
-                    StatusBar.UpdateStatus(sme.Message);
+                    ActiveStatusBar.UpdateStatus(sme.Message);
                     break;
                 case VimEventType.CommandLineChanged when evt is CommandLineChangedEvent cle:
-                    StatusBar.UpdateCommandLine(cle.Text);
+                    ActiveStatusBar.UpdateCommandLine(cle.Text);
                     break;
                 case VimEventType.SaveRequested when evt is SaveRequestedEvent sre:
                     SaveRequested?.Invoke(this, new SaveRequestedEventArgs(sre.FilePath));
@@ -2056,7 +2100,13 @@ public partial class VimEditorControl : UserControl
                     NewTabRequested?.Invoke(this, new NewTabRequestedEventArgs(ntre.FilePath));
                     break;
                 case VimEventType.SplitRequested when evt is SplitRequestedEvent stre:
-                    SplitRequested?.Invoke(this, new SplitRequestedEventArgs(stre.Vertical));
+                    SplitRequested?.Invoke(this, new SplitRequestedEventArgs(stre.Vertical, stre.FilePath));
+                    break;
+                case VimEventType.WindowNavRequested when evt is WindowNavRequestedEvent wnre:
+                    WindowNavRequested?.Invoke(this, new WindowNavRequestedEventArgs(wnre.Dir));
+                    break;
+                case VimEventType.WindowCloseRequested when evt is WindowCloseRequestedEvent wcre:
+                    WindowCloseRequested?.Invoke(this, new WindowCloseRequestedEventArgs(wcre.Force));
                     break;
                 case VimEventType.NextTabRequested:
                     NextTabRequested?.Invoke(this, EventArgs.Empty);
@@ -2146,9 +2196,7 @@ public partial class VimEditorControl : UserControl
             Canvas.SetTokens([]);
         }
 
-        StatusBar.UpdateMode(_engine.Mode);
-        StatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified);
-        StatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount);
+        SyncStatusBar();
 
         UpdateScrollbars(Canvas.VerticalOffset, Canvas.HorizontalOffset);
     }

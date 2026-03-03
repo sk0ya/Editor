@@ -31,6 +31,8 @@ public enum VimEventType
     OptionsChanged,
     GrepRequested,
     GitBlameRequested,
+    WindowNavRequested,
+    WindowCloseRequested,
 }
 
 public enum ViewportAlign
@@ -39,6 +41,8 @@ public enum ViewportAlign
     Center,
     Bottom
 }
+
+public enum WindowNavDir { Next, Prev, Left, Right, Up, Down }
 
 public record VimEvent(VimEventType Type)
 {
@@ -75,8 +79,14 @@ public record VimEvent(VimEventType Type)
     public static VimEvent NewTabRequested(string? path) =>
         new NewTabRequestedEvent(path);
 
-    public static VimEvent SplitRequested(bool vertical) =>
-        new SplitRequestedEvent(vertical);
+    public static VimEvent SplitRequested(bool vertical, string? filePath = null) =>
+        new SplitRequestedEvent(vertical, filePath);
+
+    public static VimEvent WindowNavRequested(WindowNavDir dir) =>
+        new WindowNavRequestedEvent(dir);
+
+    public static VimEvent WindowCloseRequested(bool force) =>
+        new WindowCloseRequestedEvent(force);
 
     public static VimEvent NextTabRequested() =>
         new NextTabRequestedEvent();
@@ -134,7 +144,9 @@ public record StatusMessageEvent(string Message) : VimEvent(VimEventType.StatusM
 public record CommandLineChangedEvent(string Text) : VimEvent(VimEventType.CommandLineChanged);
 public record SearchResultChangedEvent(string Pattern, int MatchCount) : VimEvent(VimEventType.SearchResultChanged);
 public record NewTabRequestedEvent(string? FilePath) : VimEvent(VimEventType.NewTabRequested);
-public record SplitRequestedEvent(bool Vertical) : VimEvent(VimEventType.SplitRequested);
+public record SplitRequestedEvent(bool Vertical, string? FilePath) : VimEvent(VimEventType.SplitRequested);
+public record WindowNavRequestedEvent(WindowNavDir Dir) : VimEvent(VimEventType.WindowNavRequested);
+public record WindowCloseRequestedEvent(bool Force) : VimEvent(VimEventType.WindowCloseRequested);
 public record NextTabRequestedEvent() : VimEvent(VimEventType.NextTabRequested);
 public record PrevTabRequestedEvent() : VimEvent(VimEventType.PrevTabRequested);
 public record CloseTabRequestedEvent(bool Force) : VimEvent(VimEventType.CloseTabRequested);

@@ -73,10 +73,10 @@ public class ExCommandProcessor
         {
             if (_bufferManager.Current.Text.IsModified)
                 return new ExResult(false, "No write since last change (add ! to override)");
-            return new ExResult(true, null, VimEvent.QuitRequested(false));
+            return new ExResult(true, null, VimEvent.WindowCloseRequested(false));
         }
         if (cmd is "q!" or "quit!")
-            return new ExResult(true, null, VimEvent.QuitRequested(true));
+            return new ExResult(true, null, VimEvent.WindowCloseRequested(true));
 
         if (cmd is "wq" or "wq!" or "x" or "x!" or "xit" or "exit")
         {
@@ -203,11 +203,27 @@ public class ExCommandProcessor
         if (TryParseQuickfixGoto(cmd, out var ccIndex))
             return new ExResult(true, null, VimEvent.QuickfixGoto(ccIndex));
 
-        // :split :vsplit
-        if (cmd == "split" || cmd == "sp" || cmd == "new")
-            return new ExResult(true, null, VimEvent.SplitRequested(false));
-        if (cmd == "vsplit" || cmd == "vs" || cmd == "vnew")
-            return new ExResult(true, null, VimEvent.SplitRequested(true));
+        // :split [file] :vsplit [file]
+        if (cmd == "split" || cmd == "sp" || cmd == "new" ||
+            cmd.StartsWith("split ") || cmd.StartsWith("sp ") || cmd.StartsWith("new "))
+        {
+            var path = cmd.StartsWith("split ", StringComparison.Ordinal) ? cmd[6..].Trim()
+                     : cmd.StartsWith("sp ", StringComparison.Ordinal)    ? cmd[3..].Trim()
+                     : cmd.StartsWith("new ", StringComparison.Ordinal)   ? cmd[4..].Trim()
+                     : null;
+            return new ExResult(true, null, VimEvent.SplitRequested(false,
+                string.IsNullOrWhiteSpace(path) ? null : path));
+        }
+        if (cmd == "vsplit" || cmd == "vs" || cmd == "vnew" ||
+            cmd.StartsWith("vsplit ") || cmd.StartsWith("vs ") || cmd.StartsWith("vnew "))
+        {
+            var path = cmd.StartsWith("vsplit ", StringComparison.Ordinal) ? cmd[7..].Trim()
+                     : cmd.StartsWith("vs ", StringComparison.Ordinal)     ? cmd[3..].Trim()
+                     : cmd.StartsWith("vnew ", StringComparison.Ordinal)   ? cmd[5..].Trim()
+                     : null;
+            return new ExResult(true, null, VimEvent.SplitRequested(true,
+                string.IsNullOrWhiteSpace(path) ? null : path));
+        }
 
         // :number (go to line)
         if (int.TryParse(cmd, out var lineNum))

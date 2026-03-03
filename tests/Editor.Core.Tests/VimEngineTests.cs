@@ -408,11 +408,12 @@ public class VimEngineTests
     }
 
     [Fact]
-    public void CtrlNormalBindings_WorksForWHJMAndBracket()
+    public void CtrlNormalBindings_WorksForHJMAndBracket()
     {
         var engine = CreateEngine("one two\nnext line");
 
-        engine.ProcessKey("w", ctrl: true);
+        // Use 'w' (non-ctrl) to move to word-forward position (col 4 = start of "two")
+        engine.ProcessKey("w");
         Assert.Equal(4, engine.Cursor.Column);
 
         engine.ProcessKey("h", ctrl: true);
@@ -826,5 +827,119 @@ public class VimEngineTests
         var events = ExCmd(engine, "set nonumber");
         Assert.False(engine.Options.Number);
         Assert.Contains(events, e => e.Type == VimEventType.OptionsChanged);
+    }
+
+    // ── Ctrl+W window prefix tests ──────────────────────────────────────────
+
+    [Fact]
+    public void CtrlW_w_EmitsWindowNavNext()
+    {
+        var engine = CreateEngine("hello");
+        var e1 = engine.ProcessKey("w", ctrl: true);
+        Assert.DoesNotContain(e1, e => e.Type == VimEventType.WindowNavRequested);
+        var e2 = engine.ProcessKey("w");
+        Assert.Contains(e2, e => e is WindowNavRequestedEvent { Dir: WindowNavDir.Next });
+    }
+
+    [Fact]
+    public void CtrlW_CtrlW_EmitsWindowNavNext()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("w", ctrl: true);
+        var events = engine.ProcessKey("w", ctrl: true);
+        Assert.Contains(events, e => e is WindowNavRequestedEvent { Dir: WindowNavDir.Next });
+    }
+
+    [Fact]
+    public void CtrlW_W_EmitsWindowNavPrev()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("w", ctrl: true);
+        var events = engine.ProcessKey("W");
+        Assert.Contains(events, e => e is WindowNavRequestedEvent { Dir: WindowNavDir.Prev });
+    }
+
+    [Fact]
+    public void CtrlW_q_EmitsWindowCloseRequested()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("w", ctrl: true);
+        var events = engine.ProcessKey("q");
+        Assert.Contains(events, e => e is WindowCloseRequestedEvent { Force: false });
+    }
+
+    [Fact]
+    public void CtrlW_c_EmitsWindowCloseRequested()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("w", ctrl: true);
+        var events = engine.ProcessKey("c");
+        Assert.Contains(events, e => e.Type == VimEventType.WindowCloseRequested);
+    }
+
+    [Fact]
+    public void CtrlW_v_EmitsSplitRequestedVertical()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("w", ctrl: true);
+        var events = engine.ProcessKey("v");
+        Assert.Contains(events, e => e is SplitRequestedEvent { Vertical: true });
+    }
+
+    [Fact]
+    public void CtrlW_s_EmitsSplitRequestedHorizontal()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("w", ctrl: true);
+        var events = engine.ProcessKey("s");
+        Assert.Contains(events, e => e is SplitRequestedEvent { Vertical: false });
+    }
+
+    [Fact]
+    public void CtrlW_Escape_CancelsPending()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("w", ctrl: true);
+        var events = engine.ProcessKey("Escape");
+        Assert.DoesNotContain(events, e =>
+            e.Type is VimEventType.WindowNavRequested or
+                      VimEventType.WindowCloseRequested or
+                      VimEventType.SplitRequested);
+    }
+
+    [Fact]
+    public void CtrlW_Escape_ThenJ_MovesCursor()
+    {
+        var engine = CreateEngine("line1\nline2");
+        engine.ProcessKey("w", ctrl: true);
+        engine.ProcessKey("Escape");
+        var startLine = engine.Cursor.Line;
+        engine.ProcessKey("j");
+        Assert.Equal(startLine + 1, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void ColonQ_EmitsWindowCloseRequested()
+    {
+        var engine = CreateEngine("hello");
+        var events = ExCmd(engine, "q");
+        Assert.Contains(events, e => e.Type == VimEventType.WindowCloseRequested);
+        Assert.DoesNotContain(events, e => e.Type == VimEventType.QuitRequested);
+    }
+
+    [Fact]
+    public void ColonSplit_EmitsSplitRequestedHorizontal()
+    {
+        var engine = CreateEngine("hello");
+        var events = ExCmd(engine, "split");
+        Assert.Contains(events, e => e is SplitRequestedEvent { Vertical: false, FilePath: null });
+    }
+
+    [Fact]
+    public void ColonVsplit_WithFilename_EmitsSplitWithPath()
+    {
+        var engine = CreateEngine("hello");
+        var events = ExCmd(engine, "vsplit foo.txt");
+        Assert.Contains(events, e => e is SplitRequestedEvent { Vertical: true, FilePath: "foo.txt" });
     }
 }

@@ -918,6 +918,7 @@
                     <RowDefinition Height="*"/>
                     <RowDefinition x:Name="RefSplitterRow" Height="0" MinHeight="0"/>
                     <RowDefinition x:Name="RefPanelRow" Height="0" MinHeight="0"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <TabControl x:Name="TabCtrl" Grid.Row="0"
@@ -974,6 +975,9 @@
                               Background="#2D2D30"
                               Cursor="SizeNS"
                               Visibility="Collapsed"/>
+
+                <!-- Shared status bar (one bar for all split panes) -->
+                <controls:VimStatusBar x:Name="SharedStatusBar" Grid.Row="3"/>
 
                 <!-- References panel -->
                 <Border x:Name="ReferencesPanel" Grid.Row="2"
