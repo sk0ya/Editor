@@ -1345,7 +1345,7 @@ public class VimEngine
     {
         if (_mode == VimMode.Command)
         {
-            if (TryExecuteConfigCommand(_cmdLine, out var configMessage, out var configError))
+            if (TryExecuteConfigCommand(_cmdLine, out var configMessage, out var configError, out var optionsChanged))
             {
                 _cmdLine = "";
                 ChangeMode(VimMode.Normal, events);
@@ -1353,6 +1353,8 @@ public class VimEngine
                     EmitStatus(events, "E: " + configError);
                 else if (configMessage != null)
                     EmitStatus(events, configMessage);
+                if (optionsChanged)
+                    events.Add(VimEvent.OptionsChanged());
                 EmitCmdLine(events);
                 return;
             }
@@ -1378,10 +1380,11 @@ public class VimEngine
         EmitCmdLine(events);
     }
 
-    private bool TryExecuteConfigCommand(string cmdLine, out string? message, out string? error)
+    private bool TryExecuteConfigCommand(string cmdLine, out string? message, out string? error, out bool optionsChanged)
     {
         message = null;
         error = null;
+        optionsChanged = false;
 
         var cmd = cmdLine.Trim();
         if (!IsConfigCommand(cmd))
@@ -1395,6 +1398,9 @@ public class VimEngine
             message = "Key mapping registered";
         else if (cmd.StartsWith("colorscheme ", StringComparison.OrdinalIgnoreCase))
             message = $"colorscheme: {_config.Options.ColorScheme}";
+        else if (cmd.StartsWith("set ", StringComparison.OrdinalIgnoreCase) ||
+                 cmd.StartsWith("syntax ", StringComparison.OrdinalIgnoreCase))
+            optionsChanged = true;
 
         return true;
     }

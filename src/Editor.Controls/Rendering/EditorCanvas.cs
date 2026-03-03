@@ -31,6 +31,7 @@ public class EditorCanvas : FrameworkElement
     private List<CursorPosition> _searchMatches = [];
     private string _searchPattern = "";
     private bool _showLineNumbers = true;
+    private bool _relativeNumber = false;
     private int _lineNumberWidth = 4; // digits
     private bool _cursorVisible = true;
     private System.Windows.Threading.DispatcherTimer? _cursorTimer;
@@ -131,6 +132,11 @@ public class EditorCanvas : FrameworkElement
     {
         _showLineNumbers = show;
         RebuildVisualLayout();
+        InvalidateVisual();
+    }
+    public void ShowRelativeLineNumbers(bool relative)
+    {
+        _relativeNumber = relative;
         InvalidateVisual();
     }
     public void SetDiagnostics(IReadOnlyList<LspDiagnostic> diagnostics)
@@ -575,8 +581,14 @@ public class EditorCanvas : FrameworkElement
                 dc.DrawRectangle(Theme.LineNumberBg, null, new Rect(0, y, gutterWidth, _lineHeight));
                 if (drawNumberAndFold)
                 {
-                    var lineNumberBrush = l == _cursor.Line ? Theme.CurrentLineNumberFg : Theme.LineNumberFg;
-                    var numText = FormatText((l + 1).ToString().PadLeft(_lineNumberWidth), lineNumberBrush);
+                    bool isCursorLine = l == _cursor.Line;
+                    var lineNumberBrush = isCursorLine ? Theme.CurrentLineNumberFg : Theme.LineNumberFg;
+                    string lineNumStr;
+                    if (_relativeNumber && !isCursorLine)
+                        lineNumStr = Math.Abs(l - _cursor.Line).ToString().PadLeft(_lineNumberWidth);
+                    else
+                        lineNumStr = (l + 1).ToString().PadLeft(_lineNumberWidth);
+                    var numText = FormatText(lineNumStr, lineNumberBrush);
                     dc.DrawText(numText, new Point(2, y + (_lineHeight - numText.Height) / 2));
 
                     // Fold indicator in dedicated fold column (▶ closed, ▼ open)

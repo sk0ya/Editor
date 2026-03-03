@@ -2038,6 +2038,9 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.FoldsChanged:
                     needFullUpdate = true;
                     break;
+                case VimEventType.OptionsChanged:
+                    needFullUpdate = true;
+                    break;
             }
         }
 
@@ -2064,7 +2067,8 @@ public partial class VimEditorControl : UserControl
 
         Canvas.SetCursor(_engine.Cursor);
         Canvas.SetMode(_engine.Mode);
-        Canvas.ShowLineNumbers(_engine.Options.Number);
+        Canvas.ShowLineNumbers(_engine.Options.Number || _engine.Options.RelativeNumber);
+        Canvas.ShowRelativeLineNumbers(_engine.Options.RelativeNumber);
 
         // Syntax tokens
         if (_engine.Options.Syntax)

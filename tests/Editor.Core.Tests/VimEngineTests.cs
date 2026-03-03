@@ -757,4 +757,74 @@ public class VimEngineTests
         engine.ProcessKey("n");
         Assert.Equal(1, engine.Cursor.Line);
     }
+
+    // ── :set option tests ──────────────────────────────────────────────────
+
+    private static IReadOnlyList<VimEvent> ExCmd(VimEngine engine, string cmd)
+    {
+        engine.ProcessKey(":");
+        foreach (var ch in cmd)
+            engine.ProcessKey(ch.ToString());
+        return engine.ProcessKey("Return");
+    }
+
+    [Fact]
+    public void SetRelativeNumber_SetsFlag()
+    {
+        var engine = CreateEngine("a\nb\nc");
+        ExCmd(engine, "set relativenumber");
+        Assert.True(engine.Options.RelativeNumber);
+    }
+
+    [Fact]
+    public void SetNoRelativeNumber_ClearsFlag()
+    {
+        var engine = CreateEngine("a\nb\nc");
+        ExCmd(engine, "set relativenumber");
+        ExCmd(engine, "set norelativenumber");
+        Assert.False(engine.Options.RelativeNumber);
+    }
+
+    [Fact]
+    public void SetRnu_ShortAlias_SetsFlag()
+    {
+        var engine = CreateEngine("a\nb\nc");
+        ExCmd(engine, "set rnu");
+        Assert.True(engine.Options.RelativeNumber);
+    }
+
+    [Fact]
+    public void SetRelativeNumber_EmitsOptionsChangedEvent()
+    {
+        var engine = CreateEngine("a\nb\nc");
+        var events = ExCmd(engine, "set relativenumber");
+        Assert.Contains(events, e => e.Type == VimEventType.OptionsChanged);
+    }
+
+    [Fact]
+    public void SetNoRelativeNumber_EmitsOptionsChangedEvent()
+    {
+        var engine = CreateEngine("a\nb\nc");
+        ExCmd(engine, "set relativenumber");
+        var events = ExCmd(engine, "set norelativenumber");
+        Assert.Contains(events, e => e.Type == VimEventType.OptionsChanged);
+    }
+
+    [Fact]
+    public void SetNumber_EmitsOptionsChangedEvent()
+    {
+        var engine = CreateEngine("a\nb\nc");
+        var events = ExCmd(engine, "set number");
+        Assert.Contains(events, e => e.Type == VimEventType.OptionsChanged);
+    }
+
+    [Fact]
+    public void SetNoNumber_ClearsFlagAndEmitsOptionsChanged()
+    {
+        var engine = CreateEngine("a\nb\nc");
+        ExCmd(engine, "set number");
+        var events = ExCmd(engine, "set nonumber");
+        Assert.False(engine.Options.Number);
+        Assert.Contains(events, e => e.Type == VimEventType.OptionsChanged);
+    }
 }
