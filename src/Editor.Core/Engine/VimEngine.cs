@@ -1683,6 +1683,8 @@ public class VimEngine
                 return;
             }
 
+            var preExLines = CurrentBuffer.Text.Snapshot();
+            var preExCursor = _cursor;
             var result = _exProcessor.Execute(_cmdLine, _cursor);
             _cmdLine = "";
             ChangeMode(VimMode.Normal, events);
@@ -1691,7 +1693,10 @@ public class VimEngine
             else if (result.Message != null)
                 EmitStatus(events, result.Message);
             if (result.TextModified)
+            {
+                CurrentBuffer.Undo.Snapshot(preExLines, preExCursor);
                 EmitText(events);
+            }
             if (result.Event != null)
                 events.Add(result.Event);
         }

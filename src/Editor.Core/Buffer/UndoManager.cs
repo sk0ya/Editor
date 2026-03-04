@@ -15,6 +15,11 @@ public class UndoManager
 
     public void Snapshot(TextBuffer buffer, CursorPosition cursor)
     {
+        Snapshot(buffer.Snapshot(), cursor);
+    }
+
+    public void Snapshot(string[] lines, CursorPosition cursor)
+    {
         _redoStack.Clear();
         if (_undoStack.Count >= MaxHistory)
         {
@@ -24,7 +29,7 @@ public class UndoManager
             for (int i = arr.Length - 1; i > 0; i--)
                 _undoStack.Push(arr[i]);
         }
-        _undoStack.Push(new UndoState(buffer.Snapshot(), cursor));
+        _undoStack.Push(new UndoState([.. lines], cursor));
     }
 
     public UndoState? Undo(TextBuffer buffer, CursorPosition currentCursor)

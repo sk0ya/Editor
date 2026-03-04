@@ -1074,6 +1074,21 @@ public class VimEngineTests
         Assert.Contains(events, e => e is SplitRequestedEvent { Vertical: true, FilePath: "foo.txt" });
     }
 
+    [Fact]
+    public void ColonSort_CanUndoAndRedo()
+    {
+        var engine = CreateEngine("c\na\nb");
+
+        ExCmd(engine, "%sort");
+        Assert.Equal("a\nb\nc", engine.CurrentBuffer.Text.GetText());
+
+        engine.ProcessKey("u");
+        Assert.Equal("c\na\nb", engine.CurrentBuffer.Text.GetText());
+
+        engine.ProcessKey("r", ctrl: true);
+        Assert.Equal("a\nb\nc", engine.CurrentBuffer.Text.GetText());
+    }
+
     // ─── Ctrl+A / Ctrl+X ───
 
     [Fact]
