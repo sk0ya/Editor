@@ -979,7 +979,6 @@ public class VimEngine
             switch (key.ToLower())
             {
                 case "[": // Ctrl+[
-                case "escape" when !ctrl:
                     ExitInsertMode(events);
                     return;
                 case "w": DeleteWordBack(events); return;
@@ -1018,7 +1017,13 @@ public class VimEngine
                     EmitStatus(events, "1 line cut");
                     return;
                 }
+                case "r": // Ctrl+R = Redo (exit insert first to preserve undo chain)
+                    ExitInsertMode(events);
+                    ExecuteRedo(events);
+                    return;
             }
+            // Unhandled Ctrl combo — do not insert as text.
+            return;
         }
 
         if (!ctrl && _mode == VimMode.Insert && HandleBlockInsertKey(key, events))
