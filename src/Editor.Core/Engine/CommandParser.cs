@@ -116,6 +116,15 @@ public class CommandParser
                 if (rest[2] == 'c') return Finalize(count, "gc", "gc", linewise: true);
                 return ParseMotion(rest[2..], count, "gc");
             }
+            // gu/gU/g~ operators: guu/gUU/g~~ = linewise, gu{motion}/gU{motion}/g~{motion} = range
+            if (rest[1] is 'u' or 'U' or '~')
+            {
+                char op2 = rest[1];
+                string opName = "g" + op2;
+                if (rest.Length == 2) return (CommandState.Incomplete, null);
+                if (rest[2] == op2) return Finalize(count, opName, opName, linewise: true);
+                return ParseMotion(rest[2..], count, opName);
+            }
             return rest[1] switch
             {
                 'e' => Finalize(count, null, "ge"),

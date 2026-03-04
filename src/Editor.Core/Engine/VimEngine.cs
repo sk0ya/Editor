@@ -570,6 +570,21 @@ public class VimEngine
                     SetRepeatChange(cmd);
                     ToggleCommentLines(_cursor.Line, endLine, events);
                     return;
+                case "gu":
+                    SetRepeatChange(cmd);
+                    Snapshot();
+                    ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Lower, events);
+                    return;
+                case "gU":
+                    SetRepeatChange(cmd);
+                    Snapshot();
+                    ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Upper, events);
+                    return;
+                case "g~":
+                    SetRepeatChange(cmd);
+                    Snapshot();
+                    ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Toggle, events);
+                    return;
             }
         }
 
@@ -930,7 +945,7 @@ public class VimEngine
         }
 
         if (cmd.Operator == "c") BeginInsertRepeat(cmd);
-        else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
+        else if (cmd.Operator is "d" or "<" or ">" or "=" or "gu" or "gU" or "g~") SetRepeatChange(cmd);
 
         ExecuteOperator(cmd.Operator, _cursor, mot.Value.Target, cmd.Register ?? '"', linewise, events);
     }
@@ -971,6 +986,9 @@ public class VimEngine
             case "<": IndentRange(start.Line, end.Line, false, events); break;
             case "=": AutoIndentRange(start.Line, end.Line, events); break;
             case "gc": ToggleCommentLines(start.Line, end.Line, events); break;
+            case "gu": ApplyCaseConversion(start, end, linewise, CaseConversion.Lower, events); break;
+            case "gU": ApplyCaseConversion(start, end, linewise, CaseConversion.Upper, events); break;
+            case "g~": ApplyCaseConversion(start, end, linewise, CaseConversion.Toggle, events); break;
         }
     }
 
@@ -1322,11 +1340,12 @@ public class VimEngine
         if (string.IsNullOrEmpty(_commandParser.Buffer))
             return false;
 
-        // gc in visual mode: comment toggle on the selection
-        if (_commandParser.Buffer == "g" && key == "c")
+        // gc/gu/gU/g~ in visual mode: operate on the selection
+        if (_commandParser.Buffer == "g" && key is "c" or "u" or "U" or "~")
         {
             _commandParser.Reset();
-            ExecuteVisualComment(events);
+            if (key == "c") ExecuteVisualComment(events);
+            else ExecuteVisualCaseConvert(key switch { "u" => CaseConversion.Lower, "U" => CaseConversion.Upper, _ => CaseConversion.Toggle }, events);
             return true;
         }
 
@@ -2802,6 +2821,37 @@ public class VimEngine
         EmitText(events);
     }
 
+    private enum CaseConversion { Lower, Upper, Toggle }
+
+    private void ApplyCaseConversion(CursorPosition from, CursorPosition to, bool linewise, CaseConversion mode, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        var start = from.Line < to.Line || (from.Line == to.Line && from.Column <= to.Column) ? from : to;
+        var end = start == from ? to : from;
+
+        for (int l = start.Line; l <= end.Line; l++)
+        {
+            var line = buf.GetLine(l);
+            int colStart = (!linewise && l == start.Line) ? start.Column : 0;
+            int colEnd = (!linewise && l == end.Line) ? end.Column : line.Length - 1;
+            var chars = line.ToCharArray();
+            bool changed = false;
+            for (int c = colStart; c <= colEnd && c < chars.Length; c++)
+            {
+                char converted = mode switch
+                {
+                    CaseConversion.Lower => char.ToLower(chars[c]),
+                    CaseConversion.Upper => char.ToUpper(chars[c]),
+                    _ => char.IsUpper(chars[c]) ? char.ToLower(chars[c]) : char.ToUpper(chars[c])
+                };
+                if (converted != chars[c]) { chars[c] = converted; changed = true; }
+            }
+            if (changed) buf.ReplaceLine(l, new string(chars));
+        }
+        MoveCursor(start, events);
+        EmitText(events);
+    }
+
     private void IndentLine(bool indent, int count, List<VimEvent> events)
     {
         Snapshot();
@@ -3075,30 +3125,16 @@ public class VimEngine
         ExitVisualMode(events);
     }
 
-    private void ExecuteVisualToggleCase(List<VimEvent> events)
+    private void ExecuteVisualToggleCase(List<VimEvent> events) =>
+        ExecuteVisualCaseConvert(CaseConversion.Toggle, events);
+
+    private void ExecuteVisualCaseConvert(CaseConversion mode, List<VimEvent> events)
     {
         if (_selection == null) { ExitVisualMode(events); return; }
         Snapshot();
-        var buf = _bufferManager.Current.Text;
         var sel = _selection.Value;
-        var start = sel.NormalizedStart;
-        var end = sel.NormalizedEnd;
-
-        for (int l = start.Line; l <= end.Line; l++)
-        {
-            var line = buf.GetLine(l);
-            var lineStart = l == start.Line ? start.Column : 0;
-            var lineEnd = l == end.Line ? end.Column : line.Length - 1;
-            for (int c = lineStart; c <= lineEnd && c < line.Length; c++)
-            {
-                var ch = line[c];
-                var toggled = char.IsUpper(ch) ? char.ToLower(ch) : char.ToUpper(ch);
-                buf.DeleteChar(l, c);
-                buf.InsertChar(l, c, toggled);
-                line = buf.GetLine(l); // refresh
-            }
-        }
-        EmitText(events);
+        bool linewise = _mode == VimMode.VisualLine;
+        ApplyCaseConversion(sel.NormalizedStart, sel.NormalizedEnd, linewise, mode, events);
         ExitVisualMode(events);
     }
 

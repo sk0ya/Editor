@@ -1324,4 +1324,58 @@ public class VimEngineTests
         engine.ProcessKey(")"); // no skip — inserts ")"
         Assert.Equal(")()", engine.CurrentBuffer.Text.GetText());
     }
+
+    // ─── Case conversion operators ───────────────────────────────────────────
+
+    [Fact]
+    public void Guu_LowercasesCurrentLine()
+    {
+        var engine = CreateEngine("Hello World");
+        engine.ProcessKey("g");
+        engine.ProcessKey("u");
+        engine.ProcessKey("u");
+        Assert.Equal("hello world", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void GUU_UppercasesCurrentLine()
+    {
+        var engine = CreateEngine("hello world");
+        engine.ProcessKey("g");
+        engine.ProcessKey("U");
+        engine.ProcessKey("U");
+        Assert.Equal("HELLO WORLD", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void GTilde_TogglesCurrentLine()
+    {
+        var engine = CreateEngine("Hello World");
+        engine.ProcessKey("g");
+        engine.ProcessKey("~");
+        engine.ProcessKey("~");
+        Assert.Equal("hELLO wORLD", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void GuIw_LowercasesInnerWord()
+    {
+        var engine = CreateEngine("HELLO world");
+        engine.ProcessKey("g");
+        engine.ProcessKey("u");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+        Assert.Equal("hello world", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void GUIw_UppercasesInnerWord()
+    {
+        var engine = CreateEngine("hello world");
+        engine.ProcessKey("g");
+        engine.ProcessKey("U");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+        Assert.Equal("HELLO world", engine.CurrentBuffer.Text.GetText());
+    }
 }
