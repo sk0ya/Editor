@@ -1234,6 +1234,10 @@ public class VimEngine
         // Visual operations and mode toggles
         switch (key)
         {
+            case ":":
+                _commandParser.Reset();
+                EnterCommandModeFromVisual(events);
+                return;
             case "v":
                 _commandParser.Reset();
                 if (_mode == VimMode.Visual) ExitVisualMode(events);
@@ -1842,6 +1846,18 @@ public class VimEngine
     private void EnterCommandMode(List<VimEvent> events)
     {
         _cmdLine = "";
+        ChangeMode(VimMode.Command, events);
+        EmitCmdLine(events);
+    }
+
+    private void EnterCommandModeFromVisual(List<VimEvent> events)
+    {
+        int start = Math.Min(_visualStart.Line, _cursor.Line) + 1;
+        int end = Math.Max(_visualStart.Line, _cursor.Line) + 1;
+        _awaitingVisualTextObj = '\0';
+        _selection = null;
+        events.Add(VimEvent.SelectionChanged(null));
+        _cmdLine = $"{start},{end}";
         ChangeMode(VimMode.Command, events);
         EmitCmdLine(events);
     }

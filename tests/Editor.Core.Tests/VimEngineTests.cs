@@ -174,6 +174,36 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VisualMode_Colon_EntersCommandModeWithRange()
+    {
+        var engine = CreateEngine("a\nb\nc");
+        engine.ProcessKey("V");
+        engine.ProcessKey("j");
+
+        engine.ProcessKey(":");
+
+        Assert.Equal(VimMode.Command, engine.Mode);
+        Assert.Equal("1,2", engine.CommandLine);
+        Assert.Null(engine.Selection);
+    }
+
+    [Fact]
+    public void VisualMode_ColonSort_AppliesToSelectedLines()
+    {
+        var engine = CreateEngine("c\na\nb\nd");
+        engine.ProcessKey("V");
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey(":");
+        foreach (var ch in "sort")
+            engine.ProcessKey(ch.ToString());
+        engine.ProcessKey("Return");
+
+        Assert.Equal("a\nb\nc\nd", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
     public void PressColon_EntersCommandMode()
     {
         var engine = CreateEngine("hello");
