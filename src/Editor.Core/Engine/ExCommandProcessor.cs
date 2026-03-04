@@ -7,7 +7,7 @@ using Editor.Core.Models;
 
 namespace Editor.Core.Engine;
 
-public record ExResult(bool Success, string? Message = null, VimEvent? Event = null);
+public record ExResult(bool Success, string? Message = null, VimEvent? Event = null, bool TextModified = false);
 
 public class ExCommandProcessor
 {
@@ -282,6 +282,10 @@ public class ExCommandProcessor
             return ExecuteReadShell(shellCmd, cursor);
         }
 
+        // :[range]sort[!] [i] [n] [r] [/pat/]
+        if (cmd == "sort" || (cmd.StartsWith("sort") && cmd.Length > 4 && cmd[4] is ' ' or '!'))
+            return ExecuteSort(cmd, range, cursor);
+
         return new ExResult(false, $"Not an editor command: {cmd}");
     }
 
@@ -344,7 +348,7 @@ public class ExCommandProcessor
                 buf.DeleteLines(matchingLines[i], matchingLines[hi]);
                 i--;
             }
-            return new ExResult(true, $"{matchingLines.Count} line(s) deleted");
+            return new ExResult(true, $"{matchingLines.Count} line(s) deleted", TextModified: true);
         }
 
         // ── print ────────────────────────────────────────────────────────────
@@ -367,7 +371,7 @@ public class ExCommandProcessor
                 if (res.Success && res.Message?.Contains("substitution") == true)
                     totalSubs++;
             }
-            return new ExResult(true, totalSubs > 0 ? $"{totalSubs} substitution(s) made" : "No matches");
+            return new ExResult(true, totalSubs > 0 ? $"{totalSubs} substitution(s) made" : "No matches", TextModified: totalSubs > 0);
         }
 
         return new ExResult(false, $"Not supported in :global: {subCmd}");
@@ -433,7 +437,7 @@ public class ExCommandProcessor
             }
         }
 
-        return new ExResult(true, count > 0 ? $"{count} substitution(s) made" : "No matches");
+        return new ExResult(true, count > 0 ? $"{count} substitution(s) made" : "No matches", TextModified: count > 0);
     }
 
     private static readonly string[] NewlineSeparators = ["\r\n", "\n"];
@@ -464,7 +468,7 @@ public class ExCommandProcessor
             var lines = output.TrimEnd('\r', '\n').Split(NewlineSeparators, StringSplitOptions.None);
             var buf = _bufferManager.Current.Text;
             buf.InsertLines(cursor.Line, lines);
-            return new ExResult(true, $"{lines.Length} line(s) inserted");
+            return new ExResult(true, $"{lines.Length} line(s) inserted", TextModified: true);
         }
         catch (Exception ex)
         {
@@ -566,6 +570,78 @@ public class ExCommandProcessor
         pattern = rest;
     }
 
+    private static readonly Regex NumericSortRegex = new(@"-?\d+", RegexOptions.Compiled);
+
+    private ExResult ExecuteSort(string cmd, string range, CursorPosition cursor)
+    {
+        // Extract "!" from the command verb itself (like :grep! does), not from the flag list
+        var arg = cmd.Length > 4 ? cmd[4..].TrimStart() : "";
+        bool reverse = arg.StartsWith('!');
+        if (reverse) arg = arg[1..].TrimStart();
+
+        bool ignoreCase = false, numeric = false, sortOnMatch = false;
+        while (arg.Length > 0 && arg[0] is 'i' or 'n' or 'r')
+        {
+            switch (arg[0])
+            {
+                case 'i': ignoreCase = true; break;
+                case 'n': numeric = true; break;
+                case 'r': sortOnMatch = true; break;
+            }
+            arg = arg[1..].TrimStart();
+        }
+
+        Regex? keyRegex = null;
+        if (arg.StartsWith('/'))
+        {
+            var closeSlash = arg.IndexOf('/', 1);
+            var pat = closeSlash > 0 ? arg[1..closeSlash] : arg[1..];
+            if (!string.IsNullOrEmpty(pat))
+            {
+                keyRegex = TryBuildRegex(pat, ignoreCase, out var patErr);
+                if (keyRegex == null) return new ExResult(false, patErr);
+            }
+        }
+
+        var buf = _bufferManager.Current.Text;
+        int startLine = 0, endLine = buf.LineCount - 1;
+        if (!string.IsNullOrEmpty(range))
+            ResolveRange(range, cursor, buf.LineCount, ref startLine, ref endLine);
+        if (startLine > endLine) return new ExResult(false, "Invalid range");
+
+        // GetLines clamps indices internally
+        var lines = buf.GetLines(startLine, endLine);
+
+        string SortKey(string line)
+        {
+            if (keyRegex == null) return line;
+            var m = keyRegex.Match(line);
+            if (!m.Success) return "";
+            return sortOnMatch ? m.Value : line[(m.Index + m.Length)..];
+        }
+
+        string[] result;
+        if (numeric)
+        {
+            long NumKey(string line) { var m = NumericSortRegex.Match(SortKey(line)); return m.Success ? long.Parse(m.Value) : 0L; }
+            result = reverse
+                ? [.. lines.OrderByDescending(NumKey)]
+                : [.. lines.OrderBy(NumKey)];
+        }
+        else
+        {
+            var comparer = ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            result = reverse
+                ? [.. lines.OrderByDescending(SortKey, comparer)]
+                : [.. lines.OrderBy(SortKey, comparer)];
+        }
+
+        for (int i = 0; i < result.Length; i++)
+            buf.ReplaceLine(startLine + i, result[i]);
+
+        return new ExResult(true, $"{result.Length} line(s) sorted", TextModified: true);
+    }
+
     // ─────────────── TAB COMPLETION ───────────────
 
     private static readonly string[] AllCommandNames =
@@ -591,6 +667,7 @@ public class ExCommandProcessor
         "copen", "cope", "clist", "cl",
         "cclose", "ccl",
         "cn", "cnext", "cp", "cprev",
+        "sort",
         "g", "global", "v", "vglobal",
         "grep", "vimgrep",
         "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",

@@ -1690,6 +1690,8 @@ public class VimEngine
                 EmitStatus(events, "E: " + result.Message);
             else if (result.Message != null)
                 EmitStatus(events, result.Message);
+            if (result.TextModified)
+                EmitText(events);
             if (result.Event != null)
                 events.Add(result.Event);
         }
