@@ -6,62 +6,46 @@
 
 ## 中優先度（生産性に大きく影響）
 
-### 5. テキスト整形 `gq{motion}`
+### 1. テキスト整形 `gq{motion}`
 - `gq{motion}` / `gqq` (1行) — `textwidth` の設定値で折り返し整形
 - **実装箇所:** `VimEngine`、`VimOptions.TextWidth` を追加
-
-### ~~10. `:sort` コマンド~~ ✅
-
-### ~~11. `:normal` コマンド~~ ✅
-- `:[range]normal {commands}` — Exモードからノーマルモードのコマンドを実行
-- 例: `:%normal A;`（全行末にセミコロン追加）
-- **実装箇所:** `VimEngine.TryExecuteNormalCmd` — 範囲ループで各行に `ProcessStroke` 呼び出し、単一 undo レコード、`<Esc>`/`<CR>` 等スペシャルキー対応
 
 ---
 
 ## 低優先度（あると便利）
 
-### 12. ターミナル
-- `:terminal` / `:term` で組み込みターミナルを開く
-- **実装箇所:** `Editor.App` に `TerminalPane`（`System.Diagnostics.Process` + VT100パーサー）
-
-### 13. スペルチェック
-- `set spell` で有効化
-- `z=` でカーソル下の単語の修正候補ポップアップ
-- `]s` / `[s` でスペルミスを移動
-- **実装箇所:** `Editor.Core` に `SpellChecker`（辞書ファイルベース）
-
-### ~~14. `:read !cmd`~~ ✅
-- `:read !ls` などシェルコマンド出力をバッファに挿入
-- **実装箇所:** `ExCommandProcessor.ExecuteReadShell` — `ArgumentList` でクロスプラットフォーム対応、タイムアウト時 `Kill()`
-
-### 15. 補完ドキュメントポップアップ
+### 2. 補完ドキュメントポップアップ
 - 補完候補選択中に右側にドキュメント（`documentation` フィールド）を表示
 - **実装箇所:** `EditorCanvas` の補完ポップアップ描画を拡張
 
-### 18. Surround 操作
+### 3. Surround 操作
 - `ys{motion}{char}` — モーション範囲を指定文字で囲む
 - `cs{from}{to}` — 既存の囲み文字を変更
 - `ds{char}` — 囲み文字を削除
 - **実装箇所:** `VimEngine` に `ys/cs/ds` ハンドラ追加
 
-### ~~20. 不可視文字表示 (`set list`)~~ ✅
-- `set list` — タブ(`→`)・行末スペース(`·`)・改行(`¶`)を表示
-- `set listchars=tab:→\ ,trail:·,eol:¶,space:·` でカスタマイズ
-- **実装箇所:** `EditorCanvas.DrawListChars()` でオーバーレイ描画、`VimOptions.List`/`ListChars` 追加
-
-### 21. `:retab`
+### 4. `:retab`
 - `:[range]retab [N]` — タブとスペースを相互変換
 - **実装箇所:** `ExCommandProcessor` に `:retab` ブランチ
 
-### 22. セッション管理
+### 5. スペルチェック
+- `set spell` で有効化
+- `z=` でカーソル下の単語の修正候補ポップアップ
+- `]s` / `[s` でスペルミスを移動
+- **実装箇所:** `Editor.Core` に `SpellChecker`（辞書ファイルベース）
+
+### 6. セッション管理
 - `:mksession [file]` — 開いているファイル・タブ・分割状態を保存
 - `:source [file]` — セッションファイルを読み込み
 - **実装箇所:** `Editor.App` に `SessionManager`
 
-### 23. 追加テーマ
+### 7. 追加テーマ
 - Dracula に加えて Nord、Tokyo Night、One Dark などを追加
 - `EditorTheme.Nord` / `EditorTheme.OneDark` クラスを追加
+
+### 8. ターミナル
+- `:terminal` / `:term` で組み込みターミナルを開く
+- **実装箇所:** `Editor.App` に `TerminalPane`（`System.Diagnostics.Process` + VT100パーサー）
 
 ---
 
@@ -96,8 +80,9 @@
 | **LSP: シンボルリネーム** (`F2` / `:Rename [name]`) | ✅ 2026-03-04 |
 | **LSP: コードアクション** (`ga`、j/k/Enter/Escポップアップ) | ✅ 2026-03-04 |
 | **コマンドライン Tab 補完** (`:e`/`:b`/`:colorscheme`/`:set`/コマンド名、Wildmenu表示) | ✅ 2026-03-04 |
-| **不可視文字表示** (`set list`/`nolist`、`set listchars=tab:→ ,trail:·,eol:¶,space:·`) | ✅ 2026-03-05 |
 | **`gf` / `gx`** カーソル下のファイル・URL を開く | ✅ 2026-03-04 |
 | **`gu/gU/g~`** ケース変換オペレータ（`guu`/`gUU`/`g~~`=行全体、テキストオブジェクト対応、Visual対応） | ✅ 2026-03-04 |
+| **不可視文字表示** (`set list`/`nolist`、`set listchars=tab:→ ,trail:·,eol:¶,space:·`) | ✅ 2026-03-05 |
+| **`:read !cmd`** シェルコマンド出力をバッファに挿入 | ✅ 2026-03-05 |
 | **`:normal` / `:norm`** (`:[range]normal[!] {cmds}`、`<Esc>`/`<CR>` 等スペシャルキー、単一 undo レコード) | ✅ 2026-03-06 |
 | **`:sort`** (`:[range]sort [i] [r /pat/]`、大小無視・パターン一致部分ソート対応) | ✅ 2026-03-07 |
