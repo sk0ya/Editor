@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
 using Editor.Core.Buffer;
@@ -272,6 +273,15 @@ public class ExCommandProcessor
         if (IsGlobalCommand(cmd, out bool globalInverse, out string globalRest))
             return ExecuteGlobal(globalRest, globalInverse, range, cursor);
 
+        // :read !{cmd}  — insert shell command output after current line
+        if (cmd.StartsWith("read !") || cmd.StartsWith("r !"))
+        {
+            var offset = cmd.StartsWith("read !") ? 6 : 3;
+            var shellCmd = cmd[offset..].Trim();
+            if (string.IsNullOrEmpty(shellCmd)) return new ExResult(false, "No command");
+            return ExecuteReadShell(shellCmd, cursor);
+        }
+
         return new ExResult(false, $"Not an editor command: {cmd}");
     }
 
@@ -426,6 +436,42 @@ public class ExCommandProcessor
         return new ExResult(true, count > 0 ? $"{count} substitution(s) made" : "No matches");
     }
 
+    private static readonly string[] NewlineSeparators = ["\r\n", "\n"];
+
+    private ExResult ExecuteReadShell(string shellCmd, CursorPosition cursor)
+    {
+        try
+        {
+            var isWindows = OperatingSystem.IsWindows();
+            var psi = new ProcessStartInfo
+            {
+                FileName = isWindows ? "cmd.exe" : "/bin/sh",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            if (isWindows) { psi.ArgumentList.Add("/c"); psi.ArgumentList.Add(shellCmd); }
+            else           { psi.ArgumentList.Add("-c"); psi.ArgumentList.Add(shellCmd); }
+
+            using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start shell");
+            var output = proc.StandardOutput.ReadToEnd();
+            if (!proc.WaitForExit(10_000))
+            {
+                try { proc.Kill(); } catch { /* best-effort */ }
+                return new ExResult(false, "Shell command timed out");
+            }
+
+            var lines = output.TrimEnd('\r', '\n').Split(NewlineSeparators, StringSplitOptions.None);
+            var buf = _bufferManager.Current.Text;
+            buf.InsertLines(cursor.Line, lines);
+            return new ExResult(true, $"{lines.Length} line(s) inserted");
+        }
+        catch (Exception ex)
+        {
+            return new ExResult(false, $"Shell error: {ex.Message}");
+        }
+    }
+
     private static bool TryParseQuickfixNav(string cmd, string shortName, string longName, out int count)
     {
         count = 1;
@@ -540,6 +586,7 @@ public class ExCommandProcessor
         "split", "sp", "new",
         "vsplit", "vs", "vnew",
         "Format", "Rename",
+        "read", "r",
         "Git blame", "Gblame",
         "copen", "cope", "clist", "cl",
         "cclose", "ccl",

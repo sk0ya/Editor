@@ -33,9 +33,9 @@
 - `]s` / `[s` でスペルミスを移動
 - **実装箇所:** `Editor.Core` に `SpellChecker`（辞書ファイルベース）
 
-### 14. `:read !cmd`
+### ~~14. `:read !cmd`~~ ✅
 - `:read !ls` などシェルコマンド出力をバッファに挿入
-- **実装箇所:** `ExCommandProcessor` の `:read` ブランチ拡張
+- **実装箇所:** `ExCommandProcessor.ExecuteReadShell` — `ArgumentList` でクロスプラットフォーム対応、タイムアウト時 `Kill()`
 
 ### 15. 補完ドキュメントポップアップ
 - 補完候補選択中に右側にドキュメント（`documentation` フィールド）を表示
