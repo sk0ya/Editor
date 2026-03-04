@@ -31,6 +31,8 @@ public class VimOptions
     public string FontFamily { get; set; } = "Cascadia Code";
     public double FontSize { get; set; } = 14;
     public bool Syntax { get; set; } = true;
+    public bool List { get; set; } = false;
+    public string ListChars { get; set; } = "tab:→ ,trail:·,eol:¶";
 
     // Behaviour
     public bool Hidden { get; set; } = true; // Allow hidden buffers
@@ -102,7 +104,7 @@ public class VimOptions
             "breakindent" or "bri"             => null,
             "undofile" or "udf"                => null,
             "lazyredraw" or "lz"               => null,
-            "list"                             => null,
+            "list"                             => Set(() => List = value),
             "paste"                            => null,
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => null,
@@ -144,6 +146,7 @@ public class VimOptions
             "updatetime" or "ut"            => null,
             "timeoutlen" or "tm"            => null,
             "ttimeoutlen"                   => null,
+            "listchars" or "lcs"            => Set(() => ListChars = value),
             "formatoptions" or "fo"         => null,
             "t_vb"                          => null,
             "t_si" or "t_ei" or "t_sr"      => null,

@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-04
+> 作成日: 2026-03-02 / 更新日: 2026-03-05
 
 ---
 
@@ -47,10 +47,10 @@
 - `ds{char}` — 囲み文字を削除
 - **実装箇所:** `VimEngine` に `ys/cs/ds` ハンドラ追加
 
-### 20. 不可視文字表示 (`set list`)
+### ~~20. 不可視文字表示 (`set list`)~~ ✅
 - `set list` — タブ(`→`)・行末スペース(`·`)・改行(`¶`)を表示
-- `set listchars=tab:→\ ,trail:·` でカスタマイズ
-- **実装箇所:** `EditorCanvas.OnRender` にリストchar描画、`VimOptions.List`/`ListChars` 追加
+- `set listchars=tab:→\ ,trail:·,eol:¶,space:·` でカスタマイズ
+- **実装箇所:** `EditorCanvas.DrawListChars()` でオーバーレイ描画、`VimOptions.List`/`ListChars` 追加
 
 ### 21. `:retab`
 - `:[range]retab [N]` — タブとスペースを相互変換
@@ -98,5 +98,6 @@
 | **LSP: シンボルリネーム** (`F2` / `:Rename [name]`) | ✅ 2026-03-04 |
 | **LSP: コードアクション** (`ga`、j/k/Enter/Escポップアップ) | ✅ 2026-03-04 |
 | **コマンドライン Tab 補完** (`:e`/`:b`/`:colorscheme`/`:set`/コマンド名、Wildmenu表示) | ✅ 2026-03-04 |
+| **不可視文字表示** (`set list`/`nolist`、`set listchars=tab:→ ,trail:·,eol:¶,space:·`) | ✅ 2026-03-05 |
 | **`gf` / `gx`** カーソル下のファイル・URL を開く | ✅ 2026-03-04 |
 | **`gu/gU/g~`** ケース変換オペレータ（`guu`/`gUU`/`g~~`=行全体、テキストオブジェクト対応、Visual対応） | ✅ 2026-03-04 |

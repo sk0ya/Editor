@@ -2285,6 +2285,7 @@ public partial class VimEditorControl : UserControl
         Canvas.SetMode(_engine.Mode);
         Canvas.ShowLineNumbers(_engine.Options.Number || _engine.Options.RelativeNumber);
         Canvas.ShowRelativeLineNumbers(_engine.Options.RelativeNumber);
+        Canvas.SetList(_engine.Options.List, _engine.Options.ListChars);
 
         // Syntax tokens
         if (_engine.Options.Syntax)

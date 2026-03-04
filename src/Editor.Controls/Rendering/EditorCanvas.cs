@@ -50,6 +50,14 @@ public class EditorCanvas : FrameworkElement
     private HashSet<int> _openFoldStarts = [];     // buffer lines with open fold (▼)
     private int _hoveredFoldLine = -1;             // buffer line currently hovered in fold gutter
 
+    // List chars
+    private bool _showList = false;
+    private string _listCharsRaw = "";
+    private string _listTab   = "→ ";
+    private string _listTrail = "·";
+    private string _listEol   = "¶";
+    private string _listSpace = "";   // empty = don't show spaces
+
     // Git
     private Dictionary<int, GitLineState> _gitDiff = [];
     private Dictionary<int, string> _blameAnnotations = [];
@@ -166,6 +174,31 @@ public class EditorCanvas : FrameworkElement
         _relativeNumber = relative;
         InvalidateVisual();
     }
+
+    public void SetList(bool show, string listchars)
+    {
+        if (_showList == show && _listCharsRaw == listchars) return;
+        _showList = show;
+        _listCharsRaw = listchars;
+        // Parse "tab:→ ,trail:·,eol:¶,space:·"
+        _listTab = "→ "; _listTrail = "·"; _listEol = "¶"; _listSpace = "";
+        foreach (var part in listchars.Split(','))
+        {
+            int colon = part.IndexOf(':');
+            if (colon < 0) continue;
+            var key = part[..colon].Trim();
+            var val = part[(colon + 1)..];
+            switch (key)
+            {
+                case "tab":   _listTab   = val; break;
+                case "trail": _listTrail = val; break;
+                case "eol":   _listEol   = val; break;
+                case "space": _listSpace = val; break;
+            }
+        }
+        InvalidateVisual();
+    }
+
     public void SetDiagnostics(IReadOnlyList<LspDiagnostic> diagnostics)
     {
         _diagnostics = diagnostics;
@@ -669,6 +702,9 @@ public class EditorCanvas : FrameworkElement
             // Text with syntax coloring
             DrawLineText(dc, l, lineText, y, textLeft);
 
+            // Invisible character markers (set list)
+            DrawListChars(dc, lineText, y, textLeft);
+
             // Git blame annotation (virtual text at end of line)
             DrawBlameAnnotation(dc, l, lineText, y, textLeft);
 
@@ -1003,6 +1039,57 @@ public class EditorCanvas : FrameworkElement
             var rem = lineText[pos..];
             var ft = FormatText(rem, Theme.Foreground);
             dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, pos) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+        }
+    }
+
+    private void DrawListChars(DrawingContext dc, string lineText, double y, double textLeft)
+    {
+        if (!_showList) return;
+        var brush = Theme.ListCharBrush;
+
+        // Pre-format each glyph once per line (not per character)
+        FormattedText? tabFt     = _listTab.Length   > 0 ? FormatText(_listTab[0].ToString(),   brush) : null;
+        FormattedText? tabFillFt = _listTab.Length   > 1 ? FormatText(_listTab[1].ToString(),   brush) : null;
+        FormattedText? trailFt   = _listTrail.Length > 0 ? FormatText(_listTrail[0].ToString(), brush) : null;
+        FormattedText? spaceFt   = _listSpace.Length > 0 ? FormatText(_listSpace[0].ToString(), brush) : null;
+        FormattedText? eolFt     = _listEol.Length   > 0 ? FormatText(_listEol[0].ToString(),   brush) : null;
+
+        // Find index where trailing whitespace starts
+        int trailStart = lineText.Length;
+        while (trailStart > 0 && (lineText[trailStart - 1] == ' ' || lineText[trailStart - 1] == '\t'))
+            trailStart--;
+
+        double x = 0;
+        for (int i = 0; i < lineText.Length; i++)
+        {
+            char c = lineText[i];
+            double px = textLeft + x - _scrollOffsetX;
+            double charW = CharW(c);
+
+            if (c == '\t' && tabFt != null)
+            {
+                dc.DrawText(tabFt, new Point(px, y + (_lineHeight - tabFt.Height) / 2));
+                if (tabFillFt != null && charW > tabFt.Width)
+                {
+                    for (double fx = px + tabFt.Width; fx + tabFillFt.Width / 2 < px + charW; fx += tabFillFt.Width)
+                        dc.DrawText(tabFillFt, new Point(fx, y + (_lineHeight - tabFillFt.Height) / 2));
+                }
+            }
+            else if (c == ' ')
+            {
+                var ft = i >= trailStart ? trailFt : spaceFt;
+                if (ft != null)
+                    dc.DrawText(ft, new Point(px, y + (_lineHeight - ft.Height) / 2));
+            }
+
+            x += charW;
+        }
+
+        // EOL marker
+        if (eolFt != null)
+        {
+            double eolX = textLeft + x - _scrollOffsetX;
+            dc.DrawText(eolFt, new Point(eolX, y + (_lineHeight - eolFt.Height) / 2));
         }
     }
 
