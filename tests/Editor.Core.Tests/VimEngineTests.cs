@@ -383,6 +383,100 @@ public class VimEngineTests
         Assert.Equal("X X", engine.CurrentBuffer.Text.GetText());
     }
 
+    // ──── Text Object Extensions ────
+
+    [Fact]
+    public void Di_Paren_DeletesInsideBrackets()
+    {
+        var engine = CreateEngine("foo(bar)baz");
+        // cursor on 'b' inside parens (col 4)
+        engine.ProcessKey("f"); engine.ProcessKey("b");
+        engine.ProcessKey("d"); engine.ProcessKey("i"); engine.ProcessKey("(");
+        Assert.Equal("foo()baz", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Da_Paren_DeletesAroundBrackets()
+    {
+        var engine = CreateEngine("foo(bar)baz");
+        engine.ProcessKey("f"); engine.ProcessKey("b");
+        engine.ProcessKey("d"); engine.ProcessKey("a"); engine.ProcessKey("(");
+        Assert.Equal("foobaz", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Di_CurlyBrace_DeletesInsideBraces()
+    {
+        var engine = CreateEngine("x{hello}y");
+        engine.ProcessKey("f"); engine.ProcessKey("h");
+        engine.ProcessKey("d"); engine.ProcessKey("i"); engine.ProcessKey("{");
+        Assert.Equal("x{}y", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Di_SquareBracket_DeletesInsideBrackets()
+    {
+        var engine = CreateEngine("a[bc]d");
+        engine.ProcessKey("f"); engine.ProcessKey("b");
+        engine.ProcessKey("d"); engine.ProcessKey("i"); engine.ProcessKey("[");
+        Assert.Equal("a[]d", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Di_DoubleQuote_DeletesInsideQuotes()
+    {
+        var engine = CreateEngine("say \"hello\" there");
+        engine.ProcessKey("f"); engine.ProcessKey("h");
+        engine.ProcessKey("d"); engine.ProcessKey("i"); engine.ProcessKey("\"");
+        Assert.Equal("say \"\" there", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Da_DoubleQuote_DeletesAroundQuotes()
+    {
+        var engine = CreateEngine("say \"hello\" there");
+        engine.ProcessKey("f"); engine.ProcessKey("h");
+        engine.ProcessKey("d"); engine.ProcessKey("a"); engine.ProcessKey("\"");
+        Assert.Equal("say  there", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Di_SingleQuote_DeletesInsideQuotes()
+    {
+        var engine = CreateEngine("say 'hello' ok");
+        // position cursor inside 'hello'
+        engine.ProcessKey("f"); engine.ProcessKey("h");
+        engine.ProcessKey("d"); engine.ProcessKey("i"); engine.ProcessKey("'");
+        Assert.Equal("say '' ok", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Yip_YanksInnerParagraph()
+    {
+        var engine = CreateEngine("line1\nline2\n\nline4");
+        // cursor on line1
+        engine.ProcessKey("y"); engine.ProcessKey("i"); engine.ProcessKey("p");
+        // should yank "line1\nline2"
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        // Paste to verify content was yanked
+        engine.ProcessKey("G");
+        engine.ProcessKey("p");
+        var text = engine.CurrentBuffer.Text.GetText();
+        Assert.Contains("line1", text);
+        Assert.Contains("line2", text);
+    }
+
+    [Fact]
+    public void Visual_IW_SelectsInnerWord()
+    {
+        var engine = CreateEngine("foo bar");
+        engine.ProcessKey("v");
+        engine.ProcessKey("i"); engine.ProcessKey("w");
+        Assert.Equal(VimMode.Visual, engine.Mode);
+        // Cursor is at end of "foo" (col 2), visual start at col 0
+        Assert.Equal(2, engine.Cursor.Column);
+    }
+
     [Fact]
     public void FindMotions_FFTT_WorkAsStandaloneMotions()
     {

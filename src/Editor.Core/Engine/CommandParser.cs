@@ -181,14 +181,20 @@ public class CommandParser
     {
         if (s.Length == 0) return (CommandState.Incomplete, null);
 
-        // Text objects for operators: iw/aw (and WORD variants)
+        // Text objects for operators: iw/aw and all extensions
         if (op != null && s is "i" or "a")
             return (CommandState.Incomplete, null);
         if (op != null && s.Length == 2 && (s[0] is 'i' or 'a'))
         {
             return s[1] switch
             {
-                'w' or 'W' => Finalize(count, op, s),
+                'w' or 'W' or
+                '(' or ')' or 'b' or
+                '{' or '}' or 'B' or
+                '[' or ']' or
+                '<' or '>' or
+                '"' or '\'' or '`' or
+                't' or 's' or 'p' => Finalize(count, op, s),
                 _ => (CommandState.Invalid, null)
             };
         }
