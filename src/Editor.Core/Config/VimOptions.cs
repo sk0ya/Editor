@@ -17,6 +17,7 @@ public class VimOptions
     public bool ExpandTab { get; set; } = true;
     public bool AutoIndent { get; set; } = true;
     public bool SmartIndent { get; set; } = true;
+    public bool Pairs { get; set; } = true;
 
     // Search
     public bool IgnoreCase { get; set; } = true;
@@ -75,6 +76,7 @@ public class VimOptions
             "expandtab" or "et"                => Set(() => ExpandTab = value),
             "autoindent" or "ai"               => Set(() => AutoIndent = value),
             "smartindent" or "si"              => Set(() => SmartIndent = value),
+            "pairs"                            => Set(() => Pairs = value),
             "ignorecase" or "ic"               => Set(() => IgnoreCase = value),
             "smartcase" or "scs"               => Set(() => SmartCase = value),
             "hlsearch" or "hls"                => Set(() => HlSearch = value),

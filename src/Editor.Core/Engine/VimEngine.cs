@@ -1036,6 +1036,20 @@ public class VimEngine
                 ExitInsertMode(events);
                 break;
             case "Back":
+                if (_config.Options.Pairs && _mode == VimMode.Insert && _cursor.Column > 0)
+                {
+                    var lineBack = buf.GetLine(_cursor.Line);
+                    char prevChar = lineBack[_cursor.Column - 1];
+                    char? pairClose = GetAutoPairClose(prevChar);
+                    if (pairClose.HasValue && _cursor.Column < lineBack.Length && lineBack[_cursor.Column] == pairClose.Value)
+                    {
+                        buf.DeleteChar(_cursor.Line, _cursor.Column); // delete close first
+                        buf.DeleteChar(_cursor.Line, _cursor.Column - 1); // then open
+                        _cursor = _cursor with { Column = _cursor.Column - 1 };
+                        EmitText(events);
+                        break;
+                    }
+                }
                 DeleteCharBack(events);
                 break;
             case "Delete":
@@ -1080,6 +1094,36 @@ public class VimEngine
             default:
                 if (key.Length == 1)
                 {
+                    if (_config.Options.Pairs && _mode == VimMode.Insert)
+                    {
+                        char ch = key[0];
+
+                        // Skip over auto-inserted asymmetric closing bracket only.
+                        // Symmetric pairs (", ', `) are not skipped — typing a quote
+                        // when one is at cursor should open a new pair, not skip.
+                        if (ch is ')' or ']' or '}')
+                        {
+                            var lineStr = buf.GetLine(_cursor.Line);
+                            if (_cursor.Column < lineStr.Length && lineStr[_cursor.Column] == ch)
+                            {
+                                _cursor = _cursor with { Column = _cursor.Column + 1 };
+                                EmitCursor(events);
+                                break;
+                            }
+                        }
+
+                        // Auto-insert matching close char
+                        char? pairClose = GetAutoPairClose(ch);
+                        if (pairClose.HasValue)
+                        {
+                            buf.InsertChar(_cursor.Line, _cursor.Column, ch);
+                            buf.InsertChar(_cursor.Line, _cursor.Column + 1, pairClose.Value);
+                            _cursor = _cursor with { Column = _cursor.Column + 1 };
+                            EmitText(events);
+                            break;
+                        }
+                    }
+
                     if (_mode == VimMode.Replace)
                     {
                         if (_cursor.Column < buf.GetLineLength(_cursor.Line))
@@ -3084,6 +3128,17 @@ public class VimEngine
         }
         EmitText(events);
     }
+
+    private static char? GetAutoPairClose(char open) => open switch
+    {
+        '(' => ')',
+        '[' => ']',
+        '{' => '}',
+        '"' => '"',
+        '\'' => '\'',
+        '`' => '`',
+        _ => null
+    };
 
     private void InsertNewline(List<VimEvent> events)
     {

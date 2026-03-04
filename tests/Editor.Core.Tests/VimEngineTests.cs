@@ -1173,4 +1173,155 @@ public class VimEngineTests
         engine.ProcessKey("a", ctrl: true);
         Assert.Equal("20", engine.CurrentBuffer.Text.GetText());
     }
+
+    // ─────────────── AUTO-PAIRS ───────────────
+
+    [Fact]
+    public void AutoPairs_OpenParen_InsertsClosingParen()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("(");
+        Assert.Equal("()", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(1, engine.Cursor.Column); // cursor between the pair
+    }
+
+    [Fact]
+    public void AutoPairs_OpenBracket_InsertsClosingBracket()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("[");
+        Assert.Equal("[]", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_OpenBrace_InsertsClosingBrace()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("{");
+        Assert.Equal("{}", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_DoubleQuote_InsertsPair()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("\"");
+        Assert.Equal("\"\"", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_SingleQuote_InsertsPair()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("'");
+        Assert.Equal("''", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_Backtick_InsertsPair()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("`");
+        Assert.Equal("``", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_CloseParen_SkipsOver()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("("); // inserts "()" cursor at col 1
+        engine.ProcessKey(")"); // should skip over, not insert
+        Assert.Equal("()", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(2, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_CloseBracket_SkipsOver()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("[");
+        engine.ProcessKey("]");
+        Assert.Equal("[]", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(2, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_CloseBrace_SkipsOver()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("{");
+        engine.ProcessKey("}");
+        Assert.Equal("{}", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(2, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_Quote_DoesNotSkip_InsertsNewPair()
+    {
+        // Symmetric pairs always insert rather than skip
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("\""); // inserts ""
+        engine.ProcessKey("\""); // should insert another "" pair, not skip
+        Assert.Equal("\"\"\"\"", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void AutoPairs_Backspace_DeletesBothChars()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("("); // inserts "()", cursor at 1
+        engine.ProcessKey("Back"); // should delete both '(' and ')'
+        Assert.Equal("", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_TypeInsidePair()
+    {
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("(");   // "()" cursor=1
+        engine.ProcessKey("x");   // "(x)" cursor=2
+        engine.ProcessKey(")");   // skip over → "(x)" cursor=3
+        Assert.Equal("(x)", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(3, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AutoPairs_Disabled_NoPairInsertion()
+    {
+        var config = new VimConfig();
+        config.Options.Apply("nopairs");
+        var engine = CreateEngine(config: config);
+        engine.ProcessKey("i");
+        engine.ProcessKey("(");
+        Assert.Equal("(", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void AutoPairs_Disabled_NoSkipOver()
+    {
+        var config = new VimConfig();
+        config.Options.Apply("nopairs");
+        var engine = CreateEngine("()", config: config);
+        engine.ProcessKey("i"); // enter insert at col 0
+        engine.ProcessKey(")"); // no skip — inserts ")"
+        Assert.Equal(")()", engine.CurrentBuffer.Text.GetText());
+    }
 }

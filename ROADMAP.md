@@ -72,11 +72,12 @@
 - 補完候補選択中に右側にドキュメント（`documentation` フィールド）を表示
 - **実装箇所:** `EditorCanvas` の補完ポップアップ描画を拡張
 
-### 16. Auto-pairs（括弧・クォートの自動補完）
+### ~~16. Auto-pairs（括弧・クォートの自動補完）~~ ✅
 - Insertモードで `(` 入力時に `)` を自動挿入し、カーソルを中央に
-- `"`, `'`, `` ` ``, `[`, `{` も同様
+- `"`, `'`, `` ` ``, `[`, `{` も同様（非対称括弧はスキップオーバー、クォートは常に新規ペア）
+- Backspaceでペアを同時削除
 - `set nopairs` で無効化
-- **実装箇所:** `VimEngine.HandleInsert` にペア補完ロジック、`VimOptions` に `Pairs` 設定追加
+- **実装箇所:** `VimEngine.HandleInsert` + `VimOptions.Pairs`
 
 ### 17. コメントトグル (`gc` オペレータ)
 - `gc{motion}` / `gcc`（1行） — vim-commentary 風のコメント切り替え
