@@ -113,4 +113,103 @@ public class ExCommandProcessorTests
         var evt = Assert.IsType<SaveRequestedEvent>(result.Event);
         Assert.Null(evt.FilePath);
     }
+
+    // ── :global tests ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Global_Delete_RemovesMatchingLines()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("foo\nbar\nbaz\nfoo2");
+
+        var result = processor.Execute("g/foo/d", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Contains("2", result.Message); // "2 line(s) deleted"
+        var lines = buffers.Current.Text.GetText().Split('\n');
+        Assert.DoesNotContain("foo", lines);
+        Assert.Contains("bar", lines);
+        Assert.Contains("baz", lines);
+    }
+
+    [Fact]
+    public void Global_Inverse_DeletesNonMatchingLines()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("keep\nremove\nkeep2");
+
+        var result = processor.Execute("v/keep/d", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var text = buffers.Current.Text.GetText();
+        Assert.Contains("keep", text);
+        Assert.DoesNotContain("remove", text);
+    }
+
+    [Fact]
+    public void Global_Substitute_AppliesOnMatchingLines()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("hello world\ngoodbye world\nhello again");
+
+        var result = processor.Execute("g/hello/s/world/earth/", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var lines = buffers.Current.Text.GetText().Split('\n');
+        Assert.Equal("hello earth", lines[0]);
+        Assert.Equal("goodbye world", lines[1]); // unchanged — doesn't match "hello"
+        Assert.Equal("hello again", lines[2]);   // "world" not present, no change
+    }
+
+    [Fact]
+    public void Global_Print_ReturnsMatchingLineContent()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("alpha\nbeta\nalpha2");
+
+        var result = processor.Execute("g/alpha/p", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Contains("alpha", result.Message);
+    }
+
+    [Fact]
+    public void Global_NoMatch_ReturnsFailure()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("foo\nbar");
+
+        var result = processor.Execute("g/xyz/d", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Contains("not found", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Vglobal_Delete_RemovesNonMatchingLines()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("keep\ndelete me\nkeep too");
+
+        var result = processor.Execute("vglobal/keep/d", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var text = buffers.Current.Text.GetText();
+        Assert.Contains("keep", text);
+        Assert.DoesNotContain("delete me", text);
+    }
+
+    [Fact]
+    public void GlobalBang_Delete_RemovesNonMatchingLines()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("keep\nremove\nkeep2");
+
+        var result = processor.Execute("g!/keep/d", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var text = buffers.Current.Text.GetText();
+        Assert.Contains("keep", text);
+        Assert.DoesNotContain("remove", text);
+    }
 }

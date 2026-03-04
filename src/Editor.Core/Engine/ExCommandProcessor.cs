@@ -268,7 +268,123 @@ public class ExCommandProcessor
             return ExecuteSubstitute(cmd, range, cursor);
         }
 
+        // :g/pattern/cmd  :g!/pattern/cmd  :v/pattern/cmd  :global  :vglobal
+        if (IsGlobalCommand(cmd, out bool globalInverse, out string globalRest))
+            return ExecuteGlobal(globalRest, globalInverse, range, cursor);
+
         return new ExResult(false, $"Not an editor command: {cmd}");
+    }
+
+    private static bool IsGlobalCommand(string cmd, out bool inverse, out string rest)
+    {
+        inverse = false;
+        rest = "";
+        if (cmd.StartsWith("global!", StringComparison.Ordinal))      { inverse = true;  rest = cmd[7..]; return true; }
+        if (cmd.StartsWith("global", StringComparison.Ordinal))        { inverse = false; rest = cmd[6..]; return true; }
+        if (cmd.StartsWith("vglobal", StringComparison.Ordinal))       { inverse = true;  rest = cmd[7..]; return true; }
+        if (cmd.Length >= 2 && cmd[0] == 'g' && cmd[1] == '!')        { inverse = true;  rest = cmd[2..]; return true; }
+        if (cmd.Length >= 2 && cmd[0] == 'g' && !char.IsLetterOrDigit(cmd[1])) { inverse = false; rest = cmd[1..]; return true; }
+        if (cmd.Length >= 2 && cmd[0] == 'v' && !char.IsLetterOrDigit(cmd[1])) { inverse = true;  rest = cmd[1..]; return true; }
+        return false;
+    }
+
+    private ExResult ExecuteGlobal(string rest, bool inverse, string range, CursorPosition cursor)
+    {
+        if (rest.Length == 0)
+            return new ExResult(false, "E148: Regular expression missing from global");
+
+        char delim = rest[0];
+        var secondDelim = rest.IndexOf(delim, 1);
+        if (secondDelim < 1)
+            return new ExResult(false, "E148: Regular expression missing from global");
+
+        string pattern = rest[1..secondDelim];
+        string subCmd = secondDelim < rest.Length - 1 ? rest[(secondDelim + 1)..].Trim() : "";
+        if (string.IsNullOrEmpty(subCmd)) subCmd = "p";
+
+        var regex = TryBuildRegex(pattern, _options.IgnoreCase, out var patternError);
+        if (regex == null) return new ExResult(false, patternError);
+
+        var buf = _bufferManager.Current.Text;
+        int startLine = 0, endLine = buf.LineCount - 1;
+        // :g defaults to whole file; only restrict when an explicit range was given
+        if (!string.IsNullOrEmpty(range))
+            ResolveRange(range, cursor, buf.LineCount, ref startLine, ref endLine);
+
+        // Collect matching lines (indices snapshot before any mutation)
+        var matchingLines = new List<int>();
+        for (int l = startLine; l <= endLine && l < buf.LineCount; l++)
+        {
+            bool matches = regex.IsMatch(buf.GetLine(l));
+            if (matches != inverse)
+                matchingLines.Add(l);
+        }
+
+        if (matchingLines.Count == 0)
+            return new ExResult(false, "Pattern not found");
+
+        // ── delete ──────────────────────────────────────────────────────────
+        if (subCmd is "d" or "delete" or "d!" or "delete!")
+        {
+            // Batch contiguous groups into single DeleteLines calls (from bottom up)
+            for (int i = matchingLines.Count - 1; i >= 0; )
+            {
+                int hi = i;
+                while (i > 0 && matchingLines[i - 1] == matchingLines[i] - 1) i--;
+                buf.DeleteLines(matchingLines[i], matchingLines[hi]);
+                i--;
+            }
+            return new ExResult(true, $"{matchingLines.Count} line(s) deleted");
+        }
+
+        // ── print ────────────────────────────────────────────────────────────
+        if (subCmd is "p" or "print")
+        {
+            var lines = matchingLines.Select(l => buf.GetLine(l));
+            return new ExResult(true, string.Join("  |  ", lines));
+        }
+
+        // ── substitute ───────────────────────────────────────────────────────
+        if (subCmd.StartsWith("s/", StringComparison.Ordinal) ||
+            subCmd.Length >= 2 && subCmd[0] == 's' && !char.IsLetterOrDigit(subCmd[1]))
+        {
+            int totalSubs = 0;
+            // Process top-to-bottom; substitute doesn't change line count
+            foreach (int l in matchingLines)
+            {
+                var lineRange = $"{l + 1},{l + 1}";
+                var res = ExecuteSubstitute(subCmd, lineRange, new CursorPosition(l, 0));
+                if (res.Success && res.Message?.Contains("substitution") == true)
+                    totalSubs++;
+            }
+            return new ExResult(true, totalSubs > 0 ? $"{totalSubs} substitution(s) made" : "No matches");
+        }
+
+        return new ExResult(false, $"Not supported in :global: {subCmd}");
+    }
+
+    private static Regex? TryBuildRegex(string pattern, bool ignoreCase, out string? error)
+    {
+        error = null;
+        var opts = ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
+        try { return new Regex(pattern, opts); }
+        catch (Exception ex) { error = $"Invalid pattern: {ex.Message}"; return null; }
+    }
+
+    private static void ResolveRange(string range, CursorPosition cursor, int lineCount, ref int startLine, ref int endLine)
+    {
+        if (range == "%") { startLine = 0; endLine = lineCount - 1; }
+        else if (range == "." || range == "") { startLine = endLine = cursor.Line; }
+        else
+        {
+            var parts = range.Split(',');
+            if (parts.Length == 2 &&
+                int.TryParse(parts[0], out var s) &&
+                int.TryParse(parts[1], out var e))
+            { startLine = s - 1; endLine = e - 1; }
+            else if (parts.Length == 1 && int.TryParse(parts[0], out var n))
+            { startLine = endLine = n - 1; }
+        }
     }
 
     private ExResult ExecuteSubstitute(string cmd, string range, CursorPosition cursor)
@@ -285,25 +401,14 @@ public class ExCommandProcessor
         bool ignoreCase = flags.Contains('i') || (!flags.Contains('I') && _options.IgnoreCase);
         bool confirm = flags.Contains('c');
 
-        var regexOpts = ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
-        Regex regex;
-        try { regex = new Regex(pattern, regexOpts); }
-        catch (Exception ex) { return new ExResult(false, $"Invalid pattern: {ex.Message}"); }
+        var regex = TryBuildRegex(pattern, ignoreCase, out var patternError);
+        if (regex == null) return new ExResult(false, patternError);
 
         var buf = _bufferManager.Current.Text;
         int count = 0;
 
         int startLine = 0, endLine = buf.LineCount - 1;
-        if (range == "%") { startLine = 0; endLine = buf.LineCount - 1; }
-        else if (range == "." || range == "") { startLine = endLine = cursor.Line; }
-        else
-        {
-            var rangeParts = range.Split(',');
-            if (rangeParts.Length == 2 &&
-                int.TryParse(rangeParts[0], out var s) &&
-                int.TryParse(rangeParts[1], out var e))
-            { startLine = s - 1; endLine = e - 1; }
-        }
+        ResolveRange(range, cursor, buf.LineCount, ref startLine, ref endLine);
 
         for (int l = startLine; l <= endLine && l < buf.LineCount; l++)
         {
@@ -439,6 +544,7 @@ public class ExCommandProcessor
         "copen", "cope", "clist", "cl",
         "cclose", "ccl",
         "cn", "cnext", "cp", "cprev",
+        "g", "global", "v", "vglobal",
         "grep", "vimgrep",
         "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",
     ];
