@@ -95,9 +95,119 @@ public class EditorTheme
 
     public static EditorTheme Dark { get; } = new();
 
+    // Nord — https://www.nordtheme.com
+    public static EditorTheme Nord { get; } = new()
+    {
+        Background          = new SolidColorBrush(Color.FromRgb(0x2E, 0x34, 0x40)),
+        Foreground          = new SolidColorBrush(Color.FromRgb(0xD8, 0xDE, 0xE9)),
+        CursorBackground    = new SolidColorBrush(Color.FromRgb(0xD8, 0xDE, 0xE9)),
+        CursorForeground    = new SolidColorBrush(Color.FromRgb(0x2E, 0x34, 0x40)),
+        InsertCursor        = new SolidColorBrush(Color.FromRgb(0x88, 0xC0, 0xD0)),
+        LineNumberFg        = new SolidColorBrush(Color.FromRgb(0x4C, 0x56, 0x6A)),
+        CurrentLineNumberFg = new SolidColorBrush(Color.FromRgb(0xD8, 0xDE, 0xE9)),
+        LineNumberBg        = new SolidColorBrush(Color.FromRgb(0x27, 0x2C, 0x36)),
+        CurrentLineBg       = new SolidColorBrush(Color.FromRgb(0x3B, 0x42, 0x52)),
+        SelectionBg         = new SolidColorBrush(Color.FromArgb(0x80, 0x43, 0x4C, 0x5E)),
+        StatusBarNormal     = new SolidColorBrush(Color.FromRgb(0x5E, 0x81, 0xAC)),
+        StatusBarInsert     = new SolidColorBrush(Color.FromRgb(0xA3, 0xBE, 0x8C)),
+        StatusBarVisual     = new SolidColorBrush(Color.FromRgb(0xEB, 0xCB, 0x8B)),
+        StatusBarFg         = new SolidColorBrush(Color.FromRgb(0xEC, 0xEF, 0xF4)),
+        SearchHighlightBg   = new SolidColorBrush(Color.FromArgb(0xA0, 0xEB, 0xCB, 0x8B)),
+        TokenKeyword        = new SolidColorBrush(Color.FromRgb(0x81, 0xA1, 0xC1)),
+        TokenString         = new SolidColorBrush(Color.FromRgb(0xA3, 0xBE, 0x8C)),
+        TokenComment        = new SolidColorBrush(Color.FromRgb(0x4C, 0x56, 0x6A)),
+        TokenNumber         = new SolidColorBrush(Color.FromRgb(0xB4, 0x8E, 0xAD)),
+        TokenType           = new SolidColorBrush(Color.FromRgb(0x8F, 0xBC, 0xBB)),
+        TokenAttribute      = new SolidColorBrush(Color.FromRgb(0x88, 0xC0, 0xD0)),
+        TokenIdentifier     = new SolidColorBrush(Color.FromRgb(0xD8, 0xDE, 0xE9)),
+        DiagnosticError     = new SolidColorBrush(Color.FromRgb(0xBF, 0x61, 0x6A)),
+        DiagnosticWarning   = new SolidColorBrush(Color.FromRgb(0xEB, 0xCB, 0x8B)),
+        DiagnosticInfo      = new SolidColorBrush(Color.FromRgb(0x88, 0xC0, 0xD0)),
+        DiagnosticHint      = new SolidColorBrush(Color.FromRgb(0x4C, 0x56, 0x6A)),
+        GitAdded            = new SolidColorBrush(Color.FromRgb(0xA3, 0xBE, 0x8C)),
+        GitModified         = new SolidColorBrush(Color.FromRgb(0xEB, 0xCB, 0x8B)),
+        GitDeleted          = new SolidColorBrush(Color.FromRgb(0xBF, 0x61, 0x6A)),
+        ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x43, 0x4C, 0x5E)),
+    };
+
+    // Tokyo Night — dark variant
+    public static EditorTheme TokyoNight { get; } = new()
+    {
+        Background          = new SolidColorBrush(Color.FromRgb(0x1A, 0x1B, 0x26)),
+        Foreground          = new SolidColorBrush(Color.FromRgb(0xA9, 0xB1, 0xD6)),
+        CursorBackground    = new SolidColorBrush(Color.FromRgb(0xA9, 0xB1, 0xD6)),
+        CursorForeground    = new SolidColorBrush(Color.FromRgb(0x1A, 0x1B, 0x26)),
+        InsertCursor        = new SolidColorBrush(Color.FromRgb(0x7A, 0xA2, 0xF7)),
+        LineNumberFg        = new SolidColorBrush(Color.FromRgb(0x3B, 0x3D, 0x57)),
+        CurrentLineNumberFg = new SolidColorBrush(Color.FromRgb(0x73, 0x7A, 0xA2)),
+        LineNumberBg        = new SolidColorBrush(Color.FromRgb(0x16, 0x17, 0x21)),
+        CurrentLineBg       = new SolidColorBrush(Color.FromRgb(0x1F, 0x20, 0x35)),
+        SelectionBg         = new SolidColorBrush(Color.FromArgb(0x80, 0x28, 0x3B, 0x4D)),
+        StatusBarNormal     = new SolidColorBrush(Color.FromRgb(0x36, 0x4A, 0x82)),
+        StatusBarInsert     = new SolidColorBrush(Color.FromRgb(0x41, 0xA6, 0xB5)),
+        StatusBarVisual     = new SolidColorBrush(Color.FromRgb(0xFF, 0x9E, 0x64)),
+        StatusBarFg         = new SolidColorBrush(Color.FromRgb(0xC0, 0xCA, 0xF5)),
+        SearchHighlightBg   = new SolidColorBrush(Color.FromArgb(0xA0, 0xFF, 0x9E, 0x64)),
+        TokenKeyword        = new SolidColorBrush(Color.FromRgb(0x9D, 0x7C, 0xD8)),
+        TokenString         = new SolidColorBrush(Color.FromRgb(0x9E, 0xCE, 0x6A)),
+        TokenComment        = new SolidColorBrush(Color.FromRgb(0x56, 0x5F, 0x89)),
+        TokenNumber         = new SolidColorBrush(Color.FromRgb(0xFF, 0x9E, 0x64)),
+        TokenType           = new SolidColorBrush(Color.FromRgb(0x2A, 0xC3, 0xDE)),
+        TokenAttribute      = new SolidColorBrush(Color.FromRgb(0x7A, 0xA2, 0xF7)),
+        TokenIdentifier     = new SolidColorBrush(Color.FromRgb(0xA9, 0xB1, 0xD6)),
+        DiagnosticError     = new SolidColorBrush(Color.FromRgb(0xF7, 0x76, 0x8E)),
+        DiagnosticWarning   = new SolidColorBrush(Color.FromRgb(0xE0, 0xAF, 0x68)),
+        DiagnosticInfo      = new SolidColorBrush(Color.FromRgb(0x2A, 0xC3, 0xDE)),
+        DiagnosticHint      = new SolidColorBrush(Color.FromRgb(0x56, 0x5F, 0x89)),
+        GitAdded            = new SolidColorBrush(Color.FromRgb(0x9E, 0xCE, 0x6A)),
+        GitModified         = new SolidColorBrush(Color.FromRgb(0xE0, 0xAF, 0x68)),
+        GitDeleted          = new SolidColorBrush(Color.FromRgb(0xF7, 0x76, 0x8E)),
+        ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x28, 0x3B, 0x4D)),
+    };
+
+    // One Dark — Atom One Dark inspired
+    public static EditorTheme OneDark { get; } = new()
+    {
+        Background          = new SolidColorBrush(Color.FromRgb(0x28, 0x2C, 0x34)),
+        Foreground          = new SolidColorBrush(Color.FromRgb(0xAB, 0xB2, 0xBF)),
+        CursorBackground    = new SolidColorBrush(Color.FromRgb(0xAB, 0xB2, 0xBF)),
+        CursorForeground    = new SolidColorBrush(Color.FromRgb(0x28, 0x2C, 0x34)),
+        InsertCursor        = new SolidColorBrush(Color.FromRgb(0x61, 0xAF, 0xEF)),
+        LineNumberFg        = new SolidColorBrush(Color.FromRgb(0x4B, 0x51, 0x63)),
+        CurrentLineNumberFg = new SolidColorBrush(Color.FromRgb(0xAB, 0xB2, 0xBF)),
+        LineNumberBg        = new SolidColorBrush(Color.FromRgb(0x21, 0x25, 0x2B)),
+        CurrentLineBg       = new SolidColorBrush(Color.FromRgb(0x2C, 0x31, 0x3A)),
+        SelectionBg         = new SolidColorBrush(Color.FromArgb(0x80, 0x3E, 0x44, 0x50)),
+        StatusBarNormal     = new SolidColorBrush(Color.FromRgb(0x52, 0x85, 0xBE)),
+        StatusBarInsert     = new SolidColorBrush(Color.FromRgb(0x98, 0xC3, 0x79)),
+        StatusBarVisual     = new SolidColorBrush(Color.FromRgb(0xD1, 0x9A, 0x66)),
+        StatusBarFg         = new SolidColorBrush(Color.FromRgb(0xAB, 0xB2, 0xBF)),
+        SearchHighlightBg   = new SolidColorBrush(Color.FromArgb(0xA0, 0xD1, 0x9A, 0x66)),
+        TokenKeyword        = new SolidColorBrush(Color.FromRgb(0xC6, 0x78, 0xDD)),
+        TokenString         = new SolidColorBrush(Color.FromRgb(0x98, 0xC3, 0x79)),
+        TokenComment        = new SolidColorBrush(Color.FromRgb(0x5C, 0x63, 0x70)),
+        TokenNumber         = new SolidColorBrush(Color.FromRgb(0xD1, 0x9A, 0x66)),
+        TokenType           = new SolidColorBrush(Color.FromRgb(0xE5, 0xC0, 0x7B)),
+        TokenAttribute      = new SolidColorBrush(Color.FromRgb(0x61, 0xAF, 0xEF)),
+        TokenIdentifier     = new SolidColorBrush(Color.FromRgb(0xAB, 0xB2, 0xBF)),
+        DiagnosticError     = new SolidColorBrush(Color.FromRgb(0xE0, 0x6C, 0x75)),
+        DiagnosticWarning   = new SolidColorBrush(Color.FromRgb(0xD1, 0x9A, 0x66)),
+        DiagnosticInfo      = new SolidColorBrush(Color.FromRgb(0x61, 0xAF, 0xEF)),
+        DiagnosticHint      = new SolidColorBrush(Color.FromRgb(0x5C, 0x63, 0x70)),
+        GitAdded            = new SolidColorBrush(Color.FromRgb(0x98, 0xC3, 0x79)),
+        GitModified         = new SolidColorBrush(Color.FromRgb(0xD1, 0x9A, 0x66)),
+        GitDeleted          = new SolidColorBrush(Color.FromRgb(0xE0, 0x6C, 0x75)),
+        ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x3E, 0x44, 0x50)),
+    };
+
     public static EditorTheme GetByName(string name) => name.ToLower() switch
     {
-        "dracula" => Dracula,
+        "dracula"     => Dracula,
+        "nord"        => Nord,
+        "tokyonight"  => TokyoNight,
+        "tokyo-night" => TokyoNight,
+        "onedark"     => OneDark,
+        "one-dark"    => OneDark,
         _ => Dark
     };
 

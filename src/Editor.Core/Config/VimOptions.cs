@@ -18,6 +18,7 @@ public class VimOptions
     public bool AutoIndent { get; set; } = true;
     public bool SmartIndent { get; set; } = true;
     public bool Pairs { get; set; } = true;
+    public int TextWidth { get; set; } = 79;
 
     // Search
     public bool IgnoreCase { get; set; } = true;
@@ -32,6 +33,7 @@ public class VimOptions
     public double FontSize { get; set; } = 14;
     public bool Syntax { get; set; } = true;
     public bool List { get; set; } = false;
+    public bool Spell { get; set; } = false;
     public string ListChars { get; set; } = "tab:→ ,trail:·,eol:¶";
 
     // Behaviour
@@ -105,6 +107,7 @@ public class VimOptions
             "undofile" or "udf"                => null,
             "lazyredraw" or "lz"               => null,
             "list"                             => Set(() => List = value),
+            "spell"                            => Set(() => Spell = value),
             "paste"                            => null,
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => null,
@@ -139,7 +142,7 @@ public class VimOptions
             "directory" or "dir"            => null,
             "undodir"                       => null,
             "softtabstop" or "sts"          => null,
-            "textwidth" or "tw"             => null,
+            "textwidth" or "tw"             when int.TryParse(value, out var n) => Set(() => TextWidth = n),
             "colorcolumn" or "cc"           => null,
             "foldmethod" or "fdm"           => null,
             "completeopt" or "cot"          => null,

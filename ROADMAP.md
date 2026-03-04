@@ -1,53 +1,10 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-07
+> 作成日: 2026-03-02 / 更新日: 2026-03-04
 
 ---
 
-## 中優先度（生産性に大きく影響）
-
-### 1. テキスト整形 `gq{motion}`
-- `gq{motion}` / `gqq` (1行) — `textwidth` の設定値で折り返し整形
-- **実装箇所:** `VimEngine`、`VimOptions.TextWidth` を追加
-
----
-
-## 低優先度（あると便利）
-
-### 2. 補完ドキュメントポップアップ
-- 補完候補選択中に右側にドキュメント（`documentation` フィールド）を表示
-- **実装箇所:** `EditorCanvas` の補完ポップアップ描画を拡張
-
-### 3. Surround 操作
-- `ys{motion}{char}` — モーション範囲を指定文字で囲む
-- `cs{from}{to}` — 既存の囲み文字を変更
-- `ds{char}` — 囲み文字を削除
-- **実装箇所:** `VimEngine` に `ys/cs/ds` ハンドラ追加
-
-### 4. `:retab`
-- `:[range]retab [N]` — タブとスペースを相互変換
-- **実装箇所:** `ExCommandProcessor` に `:retab` ブランチ
-
-### 5. スペルチェック
-- `set spell` で有効化
-- `z=` でカーソル下の単語の修正候補ポップアップ
-- `]s` / `[s` でスペルミスを移動
-- **実装箇所:** `Editor.Core` に `SpellChecker`（辞書ファイルベース）
-
-### 6. セッション管理
-- `:mksession [file]` — 開いているファイル・タブ・分割状態を保存
-- `:source [file]` — セッションファイルを読み込み
-- **実装箇所:** `Editor.App` に `SessionManager`
-
-### 7. 追加テーマ
-- Dracula に加えて Nord、Tokyo Night、One Dark などを追加
-- `EditorTheme.Nord` / `EditorTheme.OneDark` クラスを追加
-
-### 8. ターミナル
-- `:terminal` / `:term` で組み込みターミナルを開く
-- **実装箇所:** `Editor.App` に `TerminalPane`（`System.Diagnostics.Process` + VT100パーサー）
-
----
+## 実装済み（新規）
 
 ## 実装済み
 
@@ -86,3 +43,11 @@
 | **`:read !cmd`** シェルコマンド出力をバッファに挿入 | ✅ 2026-03-05 |
 | **`:normal` / `:norm`** (`:[range]normal[!] {cmds}`、`<Esc>`/`<CR>` 等スペシャルキー、単一 undo レコード) | ✅ 2026-03-06 |
 | **`:sort`** (`:[range]sort [i] [r /pat/]`、大小無視・パターン一致部分ソート対応) | ✅ 2026-03-07 |
+| **`gq{motion}` / `gqq`** テキスト整形（`textwidth` 設定値で折り返し） | ✅ 2026-03-04 |
+| **補完ドキュメントポップアップ** (選択中アイテムの `documentation` を右パネルに表示) | ✅ 2026-03-04 |
+| **Surround 操作** `ys{motion}{char}` / `cs{from}{to}` / `ds{char}` (vim-surround 互換) | ✅ 2026-03-04 |
+| **`:retab[!] [N]`** タブ↔スペース相互変換（範囲指定対応） | ✅ 2026-03-04 |
+| **スペルチェック** (`set spell`、`z=` 提案、`]s`/`[s` ナビ、辞書ファイル読み込み) | ✅ 2026-03-04 |
+| **セッション管理** (`:mksession [file]`、`:source [file]`) | ✅ 2026-03-04 |
+| **追加テーマ** Nord / Tokyo Night / One Dark (`set colorscheme=nord` 等) | ✅ 2026-03-04 |
+| **組み込みターミナル** (`:terminal` / `:term`、コマンド実行、履歴、`cd` 組み込み) | ✅ 2026-03-04 |

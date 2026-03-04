@@ -97,6 +97,23 @@ public class CommandParser
 
         if (rest.Length == 0) return (CommandState.Incomplete, null);
 
+        // Surround operations (must come before standard operator handling)
+        if (rest.StartsWith("ys"))
+        {
+            if (rest.Length == 2) return (CommandState.Incomplete, null);
+            return ParseMotion(rest[2..], count, "ys");
+        }
+        if (rest.StartsWith("cs"))
+        {
+            if (rest.Length < 4) return (CommandState.Incomplete, null);
+            return Finalize(count, null, rest[..4]); // motion = "cs{from}{to}"
+        }
+        if (rest.StartsWith("ds"))
+        {
+            if (rest.Length < 3) return (CommandState.Incomplete, null);
+            return Finalize(count, null, rest[..3]); // motion = "ds{char}"
+        }
+
         // Check for operator
         string? op = rest[0] switch
         {
@@ -115,6 +132,13 @@ public class CommandParser
                 if (rest.Length == 2) return (CommandState.Incomplete, null);
                 if (rest[2] == 'c') return Finalize(count, "gc", "gc", linewise: true);
                 return ParseMotion(rest[2..], count, "gc");
+            }
+            // gq operator: gqq = linewise, gq{motion} = range
+            if (rest[1] == 'q')
+            {
+                if (rest.Length == 2) return (CommandState.Incomplete, null);
+                if (rest[2] == 'q') return Finalize(count, "gq", "gq", linewise: true);
+                return ParseMotion(rest[2..], count, "gq");
             }
             // gu/gU/g~ operators: guu/gUU/g~~ = linewise, gu{motion}/gU{motion}/g~{motion} = range
             if (rest[1] is 'u' or 'U' or '~')
@@ -268,6 +292,10 @@ public class CommandParser
         if (s is "q" or "@") return (CommandState.Incomplete, null);
         if (s.Length == 2 && s[0] is 'q' or '@') return Finalize(count, op, s);
 
+        // ] and [ prefixed motions: ]s (next misspell), [s (prev misspell)
+        if (s is "]" or "[") return (CommandState.Incomplete, null);
+        if (s.Length == 2 && s[0] is ']' or '[') return Finalize(count, op, s);
+
         return Finalize(count, op, motion);
     }
 
@@ -282,6 +310,7 @@ public class CommandParser
         'M' => Finalize(count, null, "zM"),
         'R' => Finalize(count, null, "zR"),
         'f' => Finalize(count, null, "zf"),
+        '=' => Finalize(count, null, "z="),
         _ => (CommandState.Invalid, null)
     };
 

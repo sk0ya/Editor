@@ -439,7 +439,15 @@ public sealed class LspClient : ILspClient
             var detail = item.TryGetProperty("detail", out var d) ? d.GetString() : null;
             var insertText = item.TryGetProperty("insertText", out var ins) ? ins.GetString() : null;
             var filterText = item.TryGetProperty("filterText", out var ft) ? ft.GetString() : null;
-            list.Add(new LspCompletionItem(label, kind, detail, insertText ?? label, filterText));
+            string? documentation = null;
+            if (item.TryGetProperty("documentation", out var doc))
+            {
+                if (doc.ValueKind == JsonValueKind.String)
+                    documentation = doc.GetString();
+                else if (doc.ValueKind == JsonValueKind.Object && doc.TryGetProperty("value", out var docVal))
+                    documentation = docVal.GetString();
+            }
+            list.Add(new LspCompletionItem(label, kind, detail, insertText ?? label, filterText, documentation));
             if (list.Count >= 500) break;
         }
         return list;

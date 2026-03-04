@@ -918,6 +918,8 @@
                     <RowDefinition Height="*"/>
                     <RowDefinition x:Name="RefSplitterRow" Height="0" MinHeight="0"/>
                     <RowDefinition x:Name="RefPanelRow" Height="0" MinHeight="0"/>
+                    <RowDefinition x:Name="TermSplitterRow" Height="0" MinHeight="0"/>
+                    <RowDefinition x:Name="TermPanelRow" Height="0" MinHeight="0"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
@@ -1047,7 +1049,7 @@
                               Visibility="Collapsed"/>
 
                 <!-- Shared status bar (one bar for all split panes) -->
-                <controls:VimStatusBar x:Name="SharedStatusBar" Grid.Row="3"/>
+                <controls:VimStatusBar x:Name="SharedStatusBar" Grid.Row="5"/>
 
                 <!-- References panel -->
                 <Border x:Name="ReferencesPanel" Grid.Row="2"
@@ -1138,6 +1140,52 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
+                    </Grid>
+                </Border>
+
+                <!-- Splitter between References and Terminal -->
+                <GridSplitter x:Name="TermSplitter" Grid.Row="3"
+                              Height="4"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              Background="#2D2D30"
+                              Cursor="SizeNS"
+                              Visibility="Collapsed"/>
+
+                <!-- Terminal panel -->
+                <Border x:Name="TerminalPanel" Grid.Row="4"
+                        Background="#1E1E1E"
+                        BorderBrush="#3A3D46" BorderThickness="0,1,0,0"
+                        Visibility="Collapsed">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="26"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <!-- Panel header -->
+                        <Border Grid.Row="0" Background="#1A1A1A" Padding="10,0">
+                            <DockPanel>
+                                <Button x:Name="CloseTermPanelBtn"
+                                        DockPanel.Dock="Right"
+                                        Content="✕"
+                                        Click="CloseTermPanel_Click"
+                                        Background="Transparent"
+                                        Foreground="#888888"
+                                        BorderThickness="0"
+                                        FontSize="11"
+                                        Padding="6,0"
+                                        Cursor="Hand"
+                                        ToolTip="ターミナルを閉じる"/>
+                                <TextBlock Text="TERMINAL"
+                                           FontFamily="Cascadia Code, Consolas"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Foreground="#888888"
+                                           VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Border>
+                        <!-- Terminal content (populated at runtime) -->
+                        <ContentPresenter x:Name="TerminalContent" Grid.Row="1"/>
                     </Grid>
                 </Border>
             </Grid>

@@ -24,7 +24,8 @@ public record LspCompletionItem(
     CompletionItemKind Kind = CompletionItemKind.Text,
     string? Detail = null,
     string? InsertText = null,
-    string? FilterText = null);
+    string? FilterText = null,
+    string? Documentation = null);
 
 public record LspHover(string Value);
 

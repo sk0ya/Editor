@@ -832,6 +832,9 @@ public partial class MainWindow : Window
         editor.QuickfixGotoRequested  += (_, index) => QuickfixNavigateTo(index);
         editor.GrepRequested          += Editor_GrepRequested;
         editor.GotKeyboardFocus       += Editor_GotKeyboardFocus;
+        editor.MkSessionRequested     += Editor_MkSessionRequested;
+        editor.SourceRequested        += Editor_SourceRequested;
+        editor.TerminalRequested      += Editor_TerminalRequested;
     }
 
     private void Editor_BufferChanged(object? sender, EventArgs e)
@@ -840,6 +843,112 @@ public partial class MainWindow : Window
         var path = editor.Engine.CurrentBuffer.FilePath;
         var ft = FindFileTabByPath(path);
         ft?.UpdateHeader(isModified: editor.Engine.CurrentBuffer.Text.IsModified);
+    }
+
+    private void Editor_MkSessionRequested(object? sender, string sessionPath)
+    {
+        // Collect all open files from all editors
+        var files = new List<(string FilePath, int Line, int Col)>();
+        int activeIndex = 0;
+        int idx = 0;
+        foreach (var editor in AllEditors())
+        {
+            var fp = editor.Engine.CurrentBuffer.FilePath;
+            if (fp == null) { idx++; continue; }
+            var cursor = editor.Engine.Cursor;
+            files.Add((fp, cursor.Line, cursor.Column));
+            if (editor == _focusedEditor) activeIndex = idx;
+            idx++;
+        }
+
+        var resolvedPath = System.IO.Path.IsPathRooted(sessionPath)
+            ? sessionPath
+            : System.IO.Path.GetFullPath(sessionPath);
+
+        SessionManager.Save(resolvedPath, files, activeIndex);
+        MessageBox.Show($"Session saved:\n{resolvedPath}", "Session Saved",
+            MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void Editor_TerminalRequested(object? sender, string? shellCmd)
+    {
+        ShowTerminalPanel();
+    }
+
+    private void ShowTerminalPanel()
+    {
+        if (TerminalPanel.Visibility == Visibility.Visible)
+        {
+            TerminalContent.Focus();
+            return;
+        }
+
+        var terminal = new TerminalPane();
+        var workDir = _focusedEditor?.Engine.CurrentBuffer.FilePath is { } fp
+            ? Path.GetDirectoryName(fp)
+            : null;
+        terminal.SetWorkingDirectory(workDir);
+
+        TerminalContent.Content = terminal;
+        TerminalPanel.Visibility = Visibility.Visible;
+        TermSplitter.Visibility  = Visibility.Visible;
+        TermSplitterRow.Height   = new GridLength(4);
+        TermPanelRow.Height      = new GridLength(200);
+        terminal.Focus();
+    }
+
+    private void CloseTermPanel_Click(object sender, RoutedEventArgs e)
+    {
+        TerminalPanel.Visibility = Visibility.Collapsed;
+        TermSplitter.Visibility  = Visibility.Collapsed;
+        TermSplitterRow.Height   = new GridLength(0);
+        TermPanelRow.Height      = new GridLength(0);
+        TerminalContent.Content  = null;
+        _focusedEditor?.Focus();
+    }
+
+    private void Editor_SourceRequested(object? sender, string filePath)
+    {
+        var resolved = System.IO.Path.IsPathRooted(filePath)
+            ? filePath
+            : System.IO.Path.GetFullPath(filePath);
+
+        if (!File.Exists(resolved))
+        {
+            MessageBox.Show($"E484: Cannot open file: {resolved}", "Source Error",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        var commands = SessionManager.Load(resolved);
+        if (commands == null) return;
+
+        bool firstFile = true;
+        foreach (var cmd in commands)
+        {
+            switch (cmd.Type)
+            {
+                case SessionCommandType.OpenFile:
+                    if (cmd.Path != null && File.Exists(cmd.Path))
+                    {
+                        if (firstFile) { _focusedEditor?.LoadFile(cmd.Path); firstFile = false; }
+                        else AddTab(cmd.Path);
+                    }
+                    break;
+                case SessionCommandType.OpenFileInTab:
+                    if (cmd.Path != null && File.Exists(cmd.Path))
+                        AddTab(cmd.Path);
+                    break;
+                case SessionCommandType.SetCursor:
+                    _focusedEditor?.Engine.SetCursorPosition(
+                        new Editor.Core.Models.CursorPosition(cmd.Line, cmd.Col));
+                    break;
+                case SessionCommandType.SwitchTab:
+                    if (cmd.Line >= 0 && cmd.Line < TabCtrl.Items.Count)
+                        TabCtrl.SelectedIndex = cmd.Line;
+                    break;
+            }
+        }
     }
 
     // ─────────────── References panel ───────────────

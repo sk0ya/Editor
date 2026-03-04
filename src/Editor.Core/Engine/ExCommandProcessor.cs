@@ -286,6 +286,33 @@ public class ExCommandProcessor
         if (cmd == "sort" || (cmd.StartsWith("sort") && cmd.Length > 4 && cmd[4] is ' ' or '!'))
             return ExecuteSort(cmd, range, cursor);
 
+        // :[range]retab[!] [N]
+        if (cmd == "retab" || cmd.StartsWith("retab ") || cmd.StartsWith("retab!"))
+            return ExecuteRetab(cmd, range);
+
+        // :terminal [cmd]  :term [cmd]
+        if (cmd == "terminal" || cmd == "term" || cmd.StartsWith("terminal ") || cmd.StartsWith("term "))
+        {
+            var rest = cmd.Contains(' ') ? cmd[(cmd.IndexOf(' ') + 1)..].Trim() : null;
+            return new ExResult(true, null, VimEvent.TerminalRequested(rest?.Length > 0 ? rest : null));
+        }
+
+        // :mksession [file]  :mks [file]
+        if (cmd.StartsWith("mksession") || cmd.StartsWith("mks"))
+        {
+            var rest = cmd.StartsWith("mksession") ? cmd[9..].Trim() : cmd[3..].Trim();
+            var path = rest.Length > 0 ? rest : "Session.vim";
+            return new ExResult(true, null, VimEvent.MkSessionRequested(path));
+        }
+
+        // :source [file]  :so [file]
+        if (cmd.StartsWith("source ") || cmd.StartsWith("so ") || cmd == "source" || cmd == "so")
+        {
+            var rest = cmd.Contains(' ') ? cmd[(cmd.IndexOf(' ') + 1)..].Trim() : "";
+            if (rest.Length == 0) return new ExResult(false, "E476: Invalid command");
+            return new ExResult(true, null, VimEvent.SourceRequested(rest));
+        }
+
         return new ExResult(false, $"Not an editor command: {cmd}");
     }
 
@@ -642,6 +669,84 @@ public class ExCommandProcessor
         return new ExResult(true, $"{result.Length} line(s) sorted", TextModified: true);
     }
 
+    private ExResult ExecuteRetab(string cmd, string range)
+    {
+        // retab[!] [N]: convert tabs<->spaces
+        // retab  → expand tabs to spaces using tabstop
+        // retab! → compress spaces to tabs where possible
+        bool toTabs = cmd.StartsWith("retab!");
+        string rest = cmd[(toTabs ? 6 : 5)..].Trim();
+        int tabWidth = rest.Length > 0 && int.TryParse(rest, out int n) && n > 0 ? n : _options.TabStop;
+
+        var buf = _bufferManager.Current.Text;
+        int startLine = 0, endLine = buf.LineCount - 1;
+        ResolveRange(range, new CursorPosition(0, 0), buf.LineCount, ref startLine, ref endLine);
+
+        for (int i = startLine; i <= endLine; i++)
+        {
+            var line = buf.GetLine(i);
+            string newLine;
+            if (toTabs)
+            {
+                // Replace runs of spaces with tabs
+                var sb = new System.Text.StringBuilder();
+                int col = 0;
+                int j = 0;
+                while (j < line.Length)
+                {
+                    if (line[j] == ' ')
+                    {
+                        int spaceStart = j;
+                        while (j < line.Length && line[j] == ' ') { j++; col++; }
+                        int spaces = j - spaceStart;
+                        int tabs = spaces / tabWidth;
+                        int rem = spaces % tabWidth;
+                        sb.Append('\t', tabs);
+                        sb.Append(' ', rem);
+                    }
+                    else if (line[j] == '\t')
+                    {
+                        sb.Append('\t');
+                        col = (col / tabWidth + 1) * tabWidth;
+                        j++;
+                    }
+                    else
+                    {
+                        sb.Append(line[j]);
+                        col++;
+                        j++;
+                    }
+                }
+                newLine = sb.ToString();
+            }
+            else
+            {
+                // Expand tabs to spaces
+                var sb = new System.Text.StringBuilder();
+                int col = 0;
+                foreach (char ch in line)
+                {
+                    if (ch == '\t')
+                    {
+                        int spaces = tabWidth - (col % tabWidth);
+                        sb.Append(' ', spaces);
+                        col += spaces;
+                    }
+                    else
+                    {
+                        sb.Append(ch);
+                        col++;
+                    }
+                }
+                newLine = sb.ToString();
+            }
+            buf.ReplaceLine(i, newLine);
+        }
+
+        int count = endLine - startLine + 1;
+        return new ExResult(true, $"Retabbed {count} line(s)", TextModified: true);
+    }
+
     // ─────────────── TAB COMPLETION ───────────────
 
     private static readonly string[] AllCommandNames =
@@ -677,7 +782,7 @@ public class ExCommandProcessor
     private static readonly HashSet<string> FileCommands = new(StringComparer.Ordinal)
         { "e", "edit", "w", "write", "split", "sp", "vsplit", "vs", "new", "vnew", "tabnew", "tabedit", "tabe" };
 
-    private static readonly string[] KnownColorschemes = ["dracula", "dark", "light"];
+    private static readonly string[] KnownColorschemes = ["dracula", "nord", "tokyonight", "onedark", "dark", "light"];
 
     private static readonly string[] SetOptionNames =
     [

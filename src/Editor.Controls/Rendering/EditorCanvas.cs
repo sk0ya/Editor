@@ -83,6 +83,18 @@ public class EditorCanvas : FrameworkElement
     public event Action? MouseDragEnded;
     public event Action<int>? FoldGutterClicked;       // (bufferLine) fold indicator clicked
 
+    // Brushes/pens for popup chrome and spell underlines — created once (theme-independent)
+    private static readonly SolidColorBrush s_popupBg1    = Freeze(new SolidColorBrush(Color.FromArgb(0xF0, 0x25, 0x26, 0x33)));
+    private static readonly SolidColorBrush s_popupBg2    = Freeze(new SolidColorBrush(Color.FromArgb(0xF0, 0x1E, 0x1F, 0x29)));
+    private static readonly SolidColorBrush s_popupBg3    = Freeze(new SolidColorBrush(Color.FromArgb(0xEE, 0x1E, 0x1F, 0x29)));
+    private static readonly SolidColorBrush s_popupDocBg  = Freeze(new SolidColorBrush(Color.FromArgb(0xF0, 0x26, 0x27, 0x35)));
+    private static readonly Pen             s_popupBorder = FreezePen(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72))), 1));
+    private static readonly SolidColorBrush s_spellBrush  = Freeze(new SolidColorBrush(Color.FromRgb(0x4F, 0x9F, 0xFF)));
+    private static readonly Pen             s_spellPen    = FreezePen(new Pen(s_spellBrush, 1.0));
+
+    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+    private static Pen FreezePen(Pen p) { p.Freeze(); return p; }
+
     public EditorCanvas()
     {
         ClipToBounds = true;
@@ -202,6 +214,15 @@ public class EditorCanvas : FrameworkElement
     public void SetDiagnostics(IReadOnlyList<LspDiagnostic> diagnostics)
     {
         _diagnostics = diagnostics;
+        InvalidateVisual();
+    }
+
+    // Spell check errors: line → list of (startCol, endCol) spans
+    private Dictionary<int, IReadOnlyList<(int Start, int End)>> _spellErrors = [];
+
+    public void SetSpellErrors(Dictionary<int, IReadOnlyList<(int Start, int End)>> errors)
+    {
+        _spellErrors = errors;
         InvalidateVisual();
     }
 
@@ -711,6 +732,9 @@ public class EditorCanvas : FrameworkElement
             // LSP diagnostics (wavy underlines)
             DrawDiagnostics(dc, l, y, textLeft, lineText);
 
+            // Spell check errors (blue wavy underlines)
+            DrawSpellErrors(dc, l, y, textLeft, lineText);
+
             // Cursor
             DrawCursor(dc, l, y, textLeft, lineText);
 
@@ -765,6 +789,18 @@ public class EditorCanvas : FrameworkElement
             double yBase  = y + _lineHeight - 2;
 
             DrawWavyLine(dc, new Pen(brush, 1.0), xStart, xEnd, yBase);
+        }
+    }
+
+    private void DrawSpellErrors(DrawingContext dc, int line, double y, double textLeft, string lineText)
+    {
+        if (!_spellErrors.TryGetValue(line, out var errors)) return;
+        double yBase = y + _lineHeight - 2;
+        foreach (var (start, end) in errors)
+        {
+            double xStart = textLeft + GetVisualX(lineText, start) - _scrollOffsetX;
+            double xEnd   = textLeft + GetVisualX(lineText, end + 1) - _scrollOffsetX;
+            DrawWavyLine(dc, s_spellPen, xStart, xEnd, yBase);
         }
     }
 
@@ -824,9 +860,7 @@ public class EditorCanvas : FrameworkElement
         if (y < 0) y = cursor.Y + _lineHeight + 2;
         if (x + totalW > size.Width) x = Math.Max(textLeft, size.Width - totalW - 2);
 
-        var bg     = new SolidColorBrush(Color.FromArgb(0xF0, 0x25, 0x26, 0x33));
-        var border = new Pen(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)), 1);
-        dc.DrawRectangle(bg, border, new Rect(x, y, totalW, totalH));
+        dc.DrawRectangle(s_popupBg1, s_popupBorder, new Rect(x, y, totalW, totalH));
 
         double tx = x + padX;
         double ty = y + padY + (_lineHeight - ftBefore.Height) / 2;
@@ -873,9 +907,7 @@ public class EditorCanvas : FrameworkElement
         if (x + popupW > size.Width)  x = Math.Max(textLeft, size.Width - popupW - 2);
         if (y + popupH > size.Height) y = Math.Max(0, cursor.Y - popupH - 2);
 
-        var bg     = new SolidColorBrush(Color.FromArgb(0xF0, 0x1E, 0x1F, 0x29));
-        var border = new Pen(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)), 1);
-        dc.DrawRectangle(bg, border, new Rect(x, y, popupW, popupH));
+        dc.DrawRectangle(s_popupBg2, s_popupBorder, new Rect(x, y, popupW, popupH));
 
         for (int i = 0; i < count; i++)
         {
@@ -890,6 +922,69 @@ public class EditorCanvas : FrameworkElement
 
             dc.DrawText(texts[i], new Point(x + padX + 16, rowY + (rowH - texts[i].Height) / 2));
         }
+
+        // Documentation panel for selected item
+        if (_completionSelection >= 0 && _completionSelection < _completionItems.Count)
+        {
+            var selectedItem = _completionItems[_completionSelection];
+            var docText = selectedItem.Documentation;
+            if (!string.IsNullOrWhiteSpace(docText))
+            {
+                const double docPadX = 10;
+                const double docPadY = 8;
+                const double docMaxW = 320;
+                const double docMaxH = 200;
+
+                // Word-wrap documentation text
+                var docLines = WrapDocText(docText, docMaxW - docPadX * 2);
+                double docLineH = _lineHeight;
+                double docW = docLines.Max(l => l.Width) + docPadX * 2;
+                double docH = Math.Min(docMaxH, docLines.Count * docLineH + docPadY * 2);
+
+                double docX = x + popupW + 2;
+                double docY = y;
+
+                // Flip to left if no room on right
+                if (docX + docW > size.Width)
+                    docX = x - docW - 2;
+
+                dc.DrawRectangle(s_popupDocBg, s_popupBorder, new Rect(docX, docY, docW, docH));
+
+                // Clip doc text to panel
+                dc.PushClip(new RectangleGeometry(new Rect(docX + 1, docY + 1, docW - 2, docH - 2)));
+                int maxLines = (int)((docH - docPadY * 2) / docLineH);
+                for (int i = 0; i < Math.Min(maxLines, docLines.Count); i++)
+                    dc.DrawText(docLines[i], new Point(docX + docPadX, docY + docPadY + i * docLineH));
+                dc.Pop();
+            }
+        }
+    }
+
+    private List<FormattedText> WrapDocText(string text, double maxWidth)
+    {
+        var result = new List<FormattedText>();
+        var paragraphs = text.Replace("\r\n", "\n").Split('\n');
+        foreach (var para in paragraphs)
+        {
+            if (string.IsNullOrEmpty(para)) { result.Add(FormatText("", Theme.TokenComment)); continue; }
+            var words = para.Split(' ');
+            var line = new System.Text.StringBuilder();
+            foreach (var word in words)
+            {
+                var test = line.Length == 0 ? word : line + " " + word;
+                var ft = FormatText(test, Theme.TokenComment);
+                if (ft.Width <= maxWidth || line.Length == 0)
+                    line.Clear().Append(test);
+                else
+                {
+                    result.Add(FormatText(line.ToString(), Theme.TokenComment));
+                    line.Clear().Append(word);
+                }
+            }
+            if (line.Length > 0)
+                result.Add(FormatText(line.ToString(), Theme.TokenComment));
+        }
+        return result;
     }
 
     private Brush GetCompletionKindBrush(CompletionItemKind kind) => kind switch
@@ -934,9 +1029,7 @@ public class EditorCanvas : FrameworkElement
 
         if (x + popupW > size.Width) x = Math.Max(textLeft, size.Width - popupW - 2);
 
-        var bg     = new SolidColorBrush(Color.FromArgb(0xF0, 0x1E, 0x1F, 0x29));
-        var border = new Pen(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)), 1);
-        dc.DrawRectangle(bg, border, new Rect(x, y, popupW, popupH));
+        dc.DrawRectangle(s_popupBg2, s_popupBorder, new Rect(x, y, popupW, popupH));
 
         for (int i = 0; i < count; i++)
         {
@@ -1191,9 +1284,7 @@ public class EditorCanvas : FrameworkElement
         if (y + popupH > size.Height)
             y = Math.Max(0, cursor.Y - popupH - 2);
 
-        var bg = new SolidColorBrush(Color.FromArgb(0xEE, 0x1E, 0x1F, 0x29));
-        var border = new Pen(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72)), 1);
-        dc.DrawRectangle(bg, border, new Rect(x, y, popupW, popupH));
+        dc.DrawRectangle(s_popupBg3, s_popupBorder, new Rect(x, y, popupW, popupH));
 
         int selected = _imeCandidateSelection;
         for (int i = 0; i < count; i++)

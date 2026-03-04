@@ -4,6 +4,7 @@ using Editor.Core.Macros;
 using Editor.Core.Marks;
 using Editor.Core.Models;
 using Editor.Core.Registers;
+using Editor.Core.Spell;
 using Editor.Core.Syntax;
 
 namespace Editor.Core.Engine;
@@ -18,6 +19,7 @@ public class VimEngine
     private readonly SyntaxEngine _syntaxEngine;
     private readonly CommandParser _commandParser;
     private readonly VimConfig _config;
+    private readonly SpellChecker _spellChecker = new();
 
     private VimMode _mode = VimMode.Normal;
     private CursorPosition _cursor = CursorPosition.Zero;
@@ -39,6 +41,9 @@ public class VimEngine
     private bool _awaitingMarkJumpLine;
     private bool _ctrlWPending;
     private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
+    private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
+    private CursorPosition _surroundStart, _surroundEnd;
+    private bool _surroundLinewise;
     private int _preferredColumn = 0; // Sticky column for j/k
 
     private CursorPosition _insertStart;
@@ -60,6 +65,7 @@ public class VimEngine
     public string StatusMessage => _statusMsg;
     public VimOptions Options => _config.Options;
     public VimConfig Config => _config;
+    public SpellChecker SpellChecker => _spellChecker;
     public VimBuffer CurrentBuffer => _bufferManager.Current;
     public BufferManager BufferManager => _bufferManager;
     public SyntaxEngine Syntax => _syntaxEngine;
@@ -164,6 +170,7 @@ public class VimEngine
             _macroManager.RecordKey(stroke);
 
         ProcessKeyInternal(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt, events);
+        SyncSpellChecker();
         TrackPendingInsertRepeat(stroke, modeBefore);
     }
 
@@ -447,6 +454,12 @@ public class VimEngine
         if (_awaitingMarkJump) { var m = _markManager.GetMark(key[0]); if (m.HasValue) MoveCursor(m.Value, events); _awaitingMarkJump = false; return; }
         if (_awaitingMarkJumpLine) { var m = _markManager.GetMark(key[0]); if (m.HasValue) MoveCursor(m.Value with { Column = 0 }, events); _awaitingMarkJumpLine = false; return; }
         if (_pendingReplaceChar.HasValue) { ExecuteReplace(key[0], events); _pendingReplaceChar = null; return; }
+        if (_awaitingSurroundChar)
+        {
+            _awaitingSurroundChar = false;
+            if (key.Length == 1) ApplySurround(_surroundStart, _surroundEnd, _surroundLinewise, key[0], events);
+            return;
+        }
 
         // Ctrl keys
         if (ctrl)
@@ -571,6 +584,19 @@ public class VimEngine
                     SetRepeatChange(cmd);
                     ToggleCommentLines(_cursor.Line, endLine, events);
                     return;
+                case "gq":
+                    SetRepeatChange(cmd);
+                    Snapshot();
+                    FormatText(_cursor.Line, endLine, events);
+                    return;
+                case "ys":
+                    // yss{char}: surround current line(s) — await surround char
+                    Snapshot();
+                    _surroundStart = new CursorPosition(_cursor.Line, 0);
+                    _surroundEnd = new CursorPosition(endLine, buf.GetLine(endLine).TrimEnd().Length - 1);
+                    _surroundLinewise = true;
+                    _awaitingSurroundChar = true;
+                    return;
                 case "gu":
                     SetRepeatChange(cmd);
                     Snapshot();
@@ -587,6 +613,20 @@ public class VimEngine
                     ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Toggle, events);
                     return;
             }
+        }
+
+        // Surround: cs{from}{to} and ds{char}
+        if (cmd.Operator == null && cmd.Motion?.StartsWith("cs") == true && cmd.Motion.Length >= 4)
+        {
+            Snapshot();
+            ExecuteChangeSurround(cmd.Motion[2], cmd.Motion[3], events);
+            return;
+        }
+        if (cmd.Operator == null && cmd.Motion?.StartsWith("ds") == true && cmd.Motion.Length >= 3)
+        {
+            Snapshot();
+            ExecuteDeleteSurround(cmd.Motion[2], events);
+            return;
         }
 
         switch (cmd.Motion)
@@ -720,6 +760,8 @@ public class VimEngine
                 }
                 break;
             }
+            case "]s": NavigateSpellError(true, count, events); break;
+            case "[s": NavigateSpellError(false, count, events); break;
             case "F2":
                 events.Add(VimEvent.LspRenameRequested());
                 break;
@@ -789,6 +831,9 @@ public class VimEngine
                 }
                 break;
             }
+            case "z=":
+                ShowSpellSuggestions(events);
+                break;
 
             // Editing
             case "x":
@@ -987,6 +1032,13 @@ public class VimEngine
             case "<": IndentRange(start.Line, end.Line, false, events); break;
             case "=": AutoIndentRange(start.Line, end.Line, events); break;
             case "gc": ToggleCommentLines(start.Line, end.Line, events); break;
+            case "gq": FormatText(start.Line, end.Line, events); break;
+            case "ys":
+                _surroundStart = start;
+                _surroundEnd = end;
+                _surroundLinewise = linewise;
+                _awaitingSurroundChar = true;
+                return;
             case "gu": ApplyCaseConversion(start, end, linewise, CaseConversion.Lower, events); break;
             case "gU": ApplyCaseConversion(start, end, linewise, CaseConversion.Upper, events); break;
             case "g~": ApplyCaseConversion(start, end, linewise, CaseConversion.Toggle, events); break;
@@ -2960,6 +3012,317 @@ public class VimEngine
         }
 
         EmitText(events);
+    }
+
+    private void FormatText(int startLine, int endLine, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        int tw = _config.Options.TextWidth;
+        if (tw <= 0) tw = 79;
+
+        // Collect lines, preserving leading indent of first line in each paragraph
+        var result = new List<string>();
+        int i = startLine;
+        while (i <= endLine)
+        {
+            var line = buf.GetLine(i);
+            // Blank line: preserve as-is and start new paragraph
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                result.Add(line);
+                i++;
+                continue;
+            }
+
+            // Detect indent from first line of paragraph
+            var indent = "";
+            int indentLen = 0;
+            while (indentLen < line.Length && (line[indentLen] == ' ' || line[indentLen] == '\t'))
+                indentLen++;
+            indent = line[..indentLen];
+
+            // Collect all non-blank lines of this paragraph
+            var words = new List<string>();
+            while (i <= endLine && !string.IsNullOrWhiteSpace(buf.GetLine(i)))
+            {
+                var l = buf.GetLine(i).TrimStart();
+                words.AddRange(l.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                i++;
+            }
+
+            // Wrap words at textwidth
+            var currentLine = new System.Text.StringBuilder(indent);
+            int currentLen = indent.Length;
+            bool first = true;
+            foreach (var word in words)
+            {
+                if (first)
+                {
+                    currentLine.Append(word);
+                    currentLen += word.Length;
+                    first = false;
+                }
+                else if (currentLen + 1 + word.Length <= tw)
+                {
+                    currentLine.Append(' ');
+                    currentLine.Append(word);
+                    currentLen += 1 + word.Length;
+                }
+                else
+                {
+                    result.Add(currentLine.ToString());
+                    currentLine = new System.Text.StringBuilder(indent);
+                    currentLine.Append(word);
+                    currentLen = indent.Length + word.Length;
+                }
+            }
+            if (currentLine.Length > 0)
+                result.Add(currentLine.ToString());
+        }
+
+        // Replace lines startLine..endLine with result lines
+        // First replace existing lines, then insert/delete extras
+        int origCount = endLine - startLine + 1;
+        int newCount = result.Count;
+        int replaceCount = Math.Min(origCount, newCount);
+        for (int j = 0; j < replaceCount; j++)
+            buf.ReplaceLine(startLine + j, result[j]);
+        if (newCount > origCount)
+        {
+            for (int j = origCount; j < newCount; j++)
+            {
+                buf.InsertLineAbove(startLine + j, result[j]);
+            }
+        }
+        else if (newCount < origCount)
+        {
+            buf.DeleteLines(startLine + newCount, startLine + origCount - 1);
+        }
+
+        _cursor = _cursor with { Line = Math.Min(startLine, buf.LineCount - 1), Column = 0 };
+        EmitText(events);
+        EmitCursor(events);
+        EmitStatus(events, $"Formatted {endLine - startLine + 1} lines");
+    }
+
+    // ─────────────── SPELL ───────────────
+    private void SyncSpellChecker()
+    {
+        bool enabled = _config.Options.Spell;
+        if (enabled && !_spellChecker.IsLoaded)
+            _spellChecker.Load();
+        _spellChecker.IsEnabled = enabled;
+    }
+
+    public IReadOnlyList<(int Start, int End)> GetSpellErrors(int lineIndex)
+    {
+        if (!_config.Options.Spell || !_spellChecker.IsLoaded) return [];
+        var line = _bufferManager.Current.Text.GetLine(lineIndex);
+        return _spellChecker.FindErrors(line);
+    }
+
+    private void NavigateSpellError(bool forward, int count, List<VimEvent> events)
+    {
+        if (!_config.Options.Spell) { EmitStatus(events, "Spell checking not enabled"); return; }
+        if (!_spellChecker.IsLoaded) { EmitStatus(events, "No spell dictionary loaded"); return; }
+
+        var buf = _bufferManager.Current.Text;
+        int line = _cursor.Line;
+        int col = _cursor.Column;
+
+        for (int step = 0; step < count; step++)
+        {
+            bool found = false;
+            if (forward)
+            {
+                for (int l = line; l < buf.LineCount && !found; l++)
+                {
+                    var errors = _spellChecker.FindErrors(buf.GetLine(l));
+                    foreach (var (s, e) in errors)
+                    {
+                        if (l > line || s > col)
+                        {
+                            line = l; col = s; found = true; break;
+                        }
+                    }
+                }
+                if (!found) { EmitStatus(events, "No more misspelled words"); return; }
+            }
+            else
+            {
+                for (int l = line; l >= 0 && !found; l--)
+                {
+                    var errors = _spellChecker.FindErrors(buf.GetLine(l));
+                    for (int i = errors.Count - 1; i >= 0; i--)
+                    {
+                        var (s, e) = errors[i];
+                        if (l < line || s < col)
+                        {
+                            line = l; col = s; found = true; break;
+                        }
+                    }
+                }
+                if (!found) { EmitStatus(events, "No previous misspelled words"); return; }
+            }
+        }
+
+        MoveCursor(new CursorPosition(line, col), events);
+    }
+
+    private void ShowSpellSuggestions(List<VimEvent> events)
+    {
+        if (!_config.Options.Spell) { EmitStatus(events, "Spell checking not enabled"); return; }
+        if (!_spellChecker.IsLoaded) { EmitStatus(events, "No spell dictionary loaded"); return; }
+
+        var buf = _bufferManager.Current.Text;
+        var line = buf.GetLine(_cursor.Line);
+        // Find the word under cursor
+        int col = Math.Clamp(_cursor.Column, 0, Math.Max(0, line.Length - 1));
+        int start = col;
+        while (start > 0 && char.IsLetter(line[start - 1])) start--;
+        int end = col;
+        while (end < line.Length && char.IsLetter(line[end])) end++;
+        if (start >= end) { EmitStatus(events, "No word under cursor"); return; }
+
+        var word = line[start..end];
+        var suggestions = _spellChecker.Suggest(word);
+        if (suggestions.Count == 0)
+            EmitStatus(events, $"No suggestions for '{word}'");
+        else
+            EmitStatus(events, $"Suggestions for '{word}': {string.Join(", ", suggestions.Take(5))}");
+    }
+
+    // ─────────────── SURROUND ───────────────
+    private static (string Open, string Close) GetSurroundPair(char ch) => ch switch
+    {
+        '(' or 'b' => ("( ", " )"),
+        ')'        => ("(", ")"),
+        '{' or 'B' => ("{ ", " }"),
+        '}'        => ("{", "}"),
+        '['        => ("[ ", " ]"),
+        ']'        => ("[", "]"),
+        '<'        => ("< ", " >"),
+        '>'        => ("<", ">"),
+        _          => (ch.ToString(), ch.ToString())
+    };
+
+    private static char GetSurroundOpen(char ch) => ch switch
+    {
+        ')' or 'b' => '(',
+        '}' or 'B' => '{',
+        ']'        => '[',
+        '>'        => '<',
+        _          => ch
+    };
+
+    private static char GetSurroundClose(char ch) => ch switch
+    {
+        '(' or 'b' => ')',
+        '{' or 'B' => '}',
+        '['        => ']',
+        '<'        => '>',
+        _          => ch
+    };
+
+    private void ApplySurround(CursorPosition start, CursorPosition end, bool linewise, char ch, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        var (open, close) = GetSurroundPair(ch);
+
+        if (start.Line == end.Line)
+        {
+            // Single-line: insert close first, then open (to preserve column indices)
+            int closeCol = Math.Min(end.Column + 1, buf.GetLineLength(end.Line));
+            buf.InsertText(end.Line, closeCol, close);
+            buf.InsertText(start.Line, start.Column, open);
+            _cursor = start with { Column = start.Column };
+        }
+        else
+        {
+            // Multi-line: add close at end of last line, open at start of first line
+            var lastLine = buf.GetLine(end.Line).TrimEnd();
+            buf.ReplaceLine(end.Line, lastLine + close);
+            var firstLine = buf.GetLine(start.Line);
+            buf.ReplaceLine(start.Line, open + firstLine);
+            _cursor = start with { Column = 0 };
+        }
+
+        EmitText(events);
+        EmitCursor(events);
+    }
+
+    private void ExecuteDeleteSurround(char ch, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        char openCh = GetSurroundOpen(ch);
+        char closeCh = GetSurroundClose(ch);
+
+        (CursorPosition Start, CursorPosition End)? pair;
+        if (ch is '"' or '\'' or '`')
+            pair = FindEnclosingQuote(ch, true);
+        else
+            pair = FindEnclosingPair(openCh, closeCh, true);
+
+        if (pair == null) { EmitStatus(events, $"No surrounding '{ch}' found"); return; }
+
+        var (s, e) = pair.Value;
+        // Delete close char first (higher position), then open char
+        if (e.Line > s.Line || (e.Line == s.Line && e.Column > s.Column))
+        {
+            buf.DeleteChar(e.Line, e.Column);
+            buf.DeleteChar(s.Line, s.Column);
+        }
+        else
+        {
+            buf.DeleteChar(s.Line, s.Column);
+        }
+        _cursor = buf.ClampCursor(s, false);
+        EmitText(events);
+        EmitCursor(events);
+    }
+
+    private void ExecuteChangeSurround(char from, char to, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        char openFrom = GetSurroundOpen(from);
+        char closeFrom = GetSurroundClose(from);
+
+        (CursorPosition Start, CursorPosition End)? pair;
+        if (from is '"' or '\'' or '`')
+            pair = FindEnclosingQuote(from, true);
+        else
+            pair = FindEnclosingPair(openFrom, closeFrom, true);
+
+        if (pair == null) { EmitStatus(events, $"No surrounding '{from}' found"); return; }
+
+        var (s, e) = pair.Value;
+        var (openStr, closeStr) = GetSurroundPair(to);
+
+        // Replace close first, then open (to preserve column indices)
+        if (e.Line > s.Line)
+        {
+            // Multi-line: replace chars
+            var closeLine = buf.GetLine(e.Line);
+            buf.ReplaceLine(e.Line, closeLine[..e.Column] + closeStr + (e.Column + 1 < closeLine.Length ? closeLine[(e.Column + 1)..] : ""));
+            var openLine = buf.GetLine(s.Line);
+            buf.ReplaceLine(s.Line, openLine[..s.Column] + openStr + (s.Column + 1 < openLine.Length ? openLine[(s.Column + 1)..] : ""));
+        }
+        else if (e.Column > s.Column)
+        {
+            buf.DeleteRange(e.Line, e.Column, e.Column);
+            buf.InsertText(e.Line, e.Column, closeStr);
+            buf.DeleteRange(s.Line, s.Column, s.Column);
+            buf.InsertText(s.Line, s.Column, openStr);
+        }
+        else
+        {
+            buf.DeleteRange(s.Line, s.Column, s.Column);
+            buf.InsertText(s.Line, s.Column, openStr + closeStr);
+        }
+
+        _cursor = buf.ClampCursor(s, false);
+        EmitText(events);
+        EmitCursor(events);
     }
 
     private void ScrollHalfPage(bool down, List<VimEvent> events)

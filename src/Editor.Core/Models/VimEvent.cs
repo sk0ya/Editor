@@ -39,6 +39,9 @@ public enum VimEventType
     CodeActionRequested,
     CommandCompletionChanged,
     OpenUrlRequested,
+    MkSessionRequested,
+    SourceRequested,
+    TerminalRequested,
 }
 
 public enum ViewportAlign
@@ -156,6 +159,15 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent OpenUrlRequested(string url) =>
         new OpenUrlRequestedEvent(url);
+
+    public static VimEvent MkSessionRequested(string path) =>
+        new MkSessionRequestedEvent(path);
+
+    public static VimEvent SourceRequested(string path) =>
+        new SourceRequestedEvent(path);
+
+    public static VimEvent TerminalRequested(string? shellCmd = null) =>
+        new TerminalRequestedEvent(shellCmd);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -182,3 +194,6 @@ public record GrepRequestedEvent(string Pattern, string? FileGlob, bool IgnoreCa
 public record LspRenameRequestedEvent(string? NewName) : VimEvent(VimEventType.LspRenameRequested);
 public record CommandCompletionChangedEvent(string[] Items, int SelectedIndex) : VimEvent(VimEventType.CommandCompletionChanged);
 public record OpenUrlRequestedEvent(string Url) : VimEvent(VimEventType.OpenUrlRequested);
+public record MkSessionRequestedEvent(string FilePath) : VimEvent(VimEventType.MkSessionRequested);
+public record SourceRequestedEvent(string FilePath) : VimEvent(VimEventType.SourceRequested);
+public record TerminalRequestedEvent(string? ShellCmd) : VimEvent(VimEventType.TerminalRequested);

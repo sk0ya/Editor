@@ -212,6 +212,9 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<GrepRequestedEventArgs>? GrepRequested;
     public event EventHandler<WindowNavRequestedEventArgs>? WindowNavRequested;
     public event EventHandler<WindowCloseRequestedEventArgs>? WindowCloseRequested;
+    public event EventHandler<string>? MkSessionRequested;
+    public event EventHandler<string>? SourceRequested;
+    public event EventHandler<string?>? TerminalRequested;
 
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
@@ -2185,6 +2188,15 @@ public partial class VimEditorControl : UserControl
                         UseShellExecute = true
                     });
                     break;
+                case VimEventType.MkSessionRequested when evt is MkSessionRequestedEvent mksre:
+                    MkSessionRequested?.Invoke(this, mksre.FilePath);
+                    break;
+                case VimEventType.SourceRequested when evt is SourceRequestedEvent sre:
+                    SourceRequested?.Invoke(this, sre.FilePath);
+                    break;
+                case VimEventType.TerminalRequested when evt is TerminalRequestedEvent tre:
+                    TerminalRequested?.Invoke(this, tre.ShellCmd);
+                    break;
                 case VimEventType.NewTabRequested when evt is NewTabRequestedEvent ntre:
                     NewTabRequested?.Invoke(this, new NewTabRequestedEventArgs(ntre.FilePath));
                     break;
@@ -2296,6 +2308,22 @@ public partial class VimEditorControl : UserControl
         else
         {
             Canvas.SetTokens([]);
+        }
+
+        // Spell errors
+        if (_engine.Options.Spell && _engine.SpellChecker.IsLoaded)
+        {
+            var spellErrors = new Dictionary<int, IReadOnlyList<(int Start, int End)>>();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var errs = _engine.GetSpellErrors(i);
+                if (errs.Count > 0) spellErrors[i] = errs;
+            }
+            Canvas.SetSpellErrors(spellErrors);
+        }
+        else
+        {
+            Canvas.SetSpellErrors([]);
         }
 
         SyncStatusBar();
