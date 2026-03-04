@@ -4,6 +4,7 @@ public class PowerShellSyntax : ISyntaxLanguage
 {
     public string Name => "PowerShell";
     public string[] Extensions => [".ps1", ".psm1", ".psd1"];
+    public string? LineCommentPrefix => "#";
 
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {

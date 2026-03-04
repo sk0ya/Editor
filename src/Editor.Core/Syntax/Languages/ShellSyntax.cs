@@ -4,6 +4,7 @@ public class ShellSyntax : ISyntaxLanguage
 {
     public string Name => "Shell";
     public string[] Extensions => [".sh", ".bash", ".zsh", ".fish"];
+    public string? LineCommentPrefix => "#";
 
     private static readonly HashSet<string> Keywords =
     [

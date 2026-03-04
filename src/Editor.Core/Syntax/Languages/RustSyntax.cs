@@ -4,6 +4,7 @@ public class RustSyntax : ISyntaxLanguage
 {
     public string Name => "Rust";
     public string[] Extensions => [".rs"];
+    public string? LineCommentPrefix => "//";
 
     private static readonly HashSet<string> Keywords =
     [

@@ -4,6 +4,7 @@ public class YamlSyntax : ISyntaxLanguage
 {
     public string Name => "YAML";
     public string[] Extensions => [".yml", ".yaml"];
+    public string? LineCommentPrefix => "#";
 
     private static readonly HashSet<string> BoolNull = new(StringComparer.OrdinalIgnoreCase)
     {

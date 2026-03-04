@@ -4,6 +4,7 @@ public class CppSyntax : ISyntaxLanguage
 {
     public string Name => "C/C++";
     public string[] Extensions => [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh"];
+    public string? LineCommentPrefix => "//";
 
     private static readonly HashSet<string> Keywords =
     [

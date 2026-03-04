@@ -4,6 +4,7 @@ public class TomlSyntax : ISyntaxLanguage
 {
     public string Name => "TOML";
     public string[] Extensions => [".toml"];
+    public string? LineCommentPrefix => "#";
 
     public LineTokens[] Tokenize(string[] lines)
     {

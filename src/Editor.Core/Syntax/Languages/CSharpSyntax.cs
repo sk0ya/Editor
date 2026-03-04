@@ -6,6 +6,7 @@ public class CSharpSyntax : ISyntaxLanguage
 {
     public string Name => "C#";
     public string[] Extensions => [".cs"];
+    public string? LineCommentPrefix => "//";
 
     private static readonly HashSet<string> Keywords =
     [

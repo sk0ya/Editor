@@ -566,6 +566,10 @@ public class VimEngine
                     SetRepeatChange(cmd);
                     AutoIndentRange(_cursor.Line, endLine, events);
                     return;
+                case "gc":
+                    SetRepeatChange(cmd);
+                    ToggleCommentLines(_cursor.Line, endLine, events);
+                    return;
             }
         }
 
@@ -966,6 +970,7 @@ public class VimEngine
             case ">": IndentRange(start.Line, end.Line, true, events); break;
             case "<": IndentRange(start.Line, end.Line, false, events); break;
             case "=": AutoIndentRange(start.Line, end.Line, events); break;
+            case "gc": ToggleCommentLines(start.Line, end.Line, events); break;
         }
     }
 
@@ -1316,6 +1321,14 @@ public class VimEngine
     {
         if (string.IsNullOrEmpty(_commandParser.Buffer))
             return false;
+
+        // gc in visual mode: comment toggle on the selection
+        if (_commandParser.Buffer == "g" && key == "c")
+        {
+            _commandParser.Reset();
+            ExecuteVisualComment(events);
+            return true;
+        }
 
         var (state, cmd) = _commandParser.Feed(key);
         if (state == CommandState.Incomplete)
@@ -2820,6 +2833,53 @@ public class VimEngine
 
     private void AutoIndentRange(int start, int end, List<VimEvent> events) { EmitText(events); }
 
+    private void ToggleCommentLines(int startLine, int endLine, List<VimEvent> events)
+    {
+        var prefix = _syntaxEngine.GetCommentPrefix();
+        if (prefix == null)
+        {
+            EmitStatus(events, "No comment prefix for this file type");
+            return;
+        }
+
+        var buf = _bufferManager.Current.Text;
+        Snapshot();
+
+        // Collect line data and detect if ALL non-empty lines are already commented
+        int count = endLine - startLine + 1;
+        var lines = new (string Raw, string Trimmed, int Indent)[count];
+        bool allCommented = true;
+        for (int i = 0; i < count; i++)
+        {
+            var raw = buf.GetLine(startLine + i);
+            var trimmed = raw.TrimStart();
+            lines[i] = (raw, trimmed, raw.Length - trimmed.Length);
+            if (trimmed.Length > 0 && !trimmed.StartsWith(prefix))
+                allCommented = false;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            var (raw, trimmed, indent) = lines[i];
+            if (allCommented)
+            {
+                // Remove comment prefix (and one trailing space if present)
+                if (!trimmed.StartsWith(prefix)) continue;
+                string uncommented = trimmed[prefix.Length..];
+                if (uncommented.StartsWith(" ")) uncommented = uncommented[1..];
+                buf.ReplaceLine(startLine + i, raw[..indent] + uncommented);
+            }
+            else
+            {
+                // Add comment prefix; skip blank lines
+                if (trimmed.Length == 0) continue;
+                buf.ReplaceLine(startLine + i, raw[..indent] + prefix + " " + trimmed);
+            }
+        }
+
+        EmitText(events);
+    }
+
     private void ScrollHalfPage(bool down, List<VimEvent> events)
     {
         var lines = down ? 15 : -15;
@@ -3004,6 +3064,14 @@ public class VimEngine
         if (_selection == null) { ExitVisualMode(events); return; }
         var sel = _selection.Value;
         IndentRange(sel.NormalizedStart.Line, sel.NormalizedEnd.Line, indent, events);
+        ExitVisualMode(events);
+    }
+
+    private void ExecuteVisualComment(List<VimEvent> events)
+    {
+        if (_selection == null) { ExitVisualMode(events); return; }
+        var sel = _selection.Value;
+        ToggleCommentLines(sel.NormalizedStart.Line, sel.NormalizedEnd.Line, events);
         ExitVisualMode(events);
     }
 

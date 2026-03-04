@@ -79,10 +79,11 @@
 - `set nopairs` で無効化
 - **実装箇所:** `VimEngine.HandleInsert` + `VimOptions.Pairs`
 
-### 17. コメントトグル (`gc` オペレータ)
-- `gc{motion}` / `gcc`（1行） — vim-commentary 風のコメント切り替え
-- 言語別コメント記号を `ISyntaxLanguage` から取得
-- **実装箇所:** `CommandParser` に `gc` オペレータ追加、`ISyntaxLanguage` に `CommentPrefix`/`CommentWrap` プロパティ
+### ~~17. コメントトグル (`gc` オペレータ)~~ ✅
+- `gc{motion}` / `gcc`（1行） / Visual+`gc` — vim-commentary 風のコメント切り替え
+- `ISyntaxLanguage.LineCommentPrefix` + `SyntaxEngine.GetCommentPrefix()` で言語別コメント記号を取得
+- 全17言語対応（`//`, `#`, `--`, `REM`, null=ブロックコメントのみの言語）
+- **実装:** `CommandParser` の g-prefix ブロックに `gc` オペレータ追加、`VimEngine.ToggleCommentLines`
 
 ### 18. Surround 操作
 - `ys{motion}{char}` — モーション範囲を指定文字で囲む

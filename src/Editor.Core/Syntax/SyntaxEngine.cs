@@ -6,6 +6,7 @@ public interface ISyntaxLanguage
 {
     string Name { get; }
     string[] Extensions { get; }
+    string? LineCommentPrefix { get; }
     LineTokens[] Tokenize(string[] lines);
 }
 
@@ -68,6 +69,8 @@ public class SyntaxEngine
         var found = all.FirstOrDefault(t => t.Line == lineIndex);
         return found.Tokens ?? [];
     }
+
+    public string? GetCommentPrefix() => _currentLanguage?.LineCommentPrefix;
 
     public void Invalidate() => _cachedTokens = null;
 }

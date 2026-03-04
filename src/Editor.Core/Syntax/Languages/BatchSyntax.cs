@@ -4,6 +4,7 @@ public class BatchSyntax : ISyntaxLanguage
 {
     public string Name => "Batch";
     public string[] Extensions => [".bat", ".cmd"];
+    public string? LineCommentPrefix => "REM";
 
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {

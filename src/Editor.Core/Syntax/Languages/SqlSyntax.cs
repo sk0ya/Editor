@@ -4,6 +4,7 @@ public class SqlSyntax : ISyntaxLanguage
 {
     public string Name => "SQL";
     public string[] Extensions => [".sql"];
+    public string? LineCommentPrefix => "--";
 
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {

@@ -109,6 +109,13 @@ public class CommandParser
         if (rest == "g") return (CommandState.Incomplete, null);
         if (rest.StartsWith("g") && rest.Length >= 2)
         {
+            // gc operator: gcc = linewise, gc{motion} = operator+motion
+            if (rest[1] == 'c')
+            {
+                if (rest.Length == 2) return (CommandState.Incomplete, null);
+                if (rest[2] == 'c') return Finalize(count, "gc", "gc", linewise: true);
+                return ParseMotion(rest[2..], count, "gc");
+            }
             return rest[1] switch
             {
                 'e' => Finalize(count, null, "ge"),

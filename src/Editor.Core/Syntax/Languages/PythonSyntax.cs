@@ -4,6 +4,7 @@ public class PythonSyntax : ISyntaxLanguage
 {
     public string Name => "Python";
     public string[] Extensions => [".py", ".pyw"];
+    public string? LineCommentPrefix => "#";
 
     private static readonly HashSet<string> Keywords =
     [

@@ -4,6 +4,7 @@ public class JavaScriptSyntax : ISyntaxLanguage
 {
     public virtual string Name => "JavaScript";
     public virtual string[] Extensions => [".js", ".jsx"];
+    public virtual string? LineCommentPrefix => "//";
 
     protected virtual IReadOnlySet<string> Keywords { get; } = new HashSet<string>
     {

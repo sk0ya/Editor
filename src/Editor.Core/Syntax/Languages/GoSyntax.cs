@@ -4,6 +4,7 @@ public class GoSyntax : ISyntaxLanguage
 {
     public string Name => "Go";
     public string[] Extensions => [".go"];
+    public string? LineCommentPrefix => "//";
 
     private static readonly HashSet<string> Keywords =
     [

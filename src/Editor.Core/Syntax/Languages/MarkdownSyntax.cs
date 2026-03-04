@@ -4,6 +4,7 @@ public class MarkdownSyntax : ISyntaxLanguage
 {
     public string Name => "Markdown";
     public string[] Extensions => [".md", ".markdown"];
+    public string? LineCommentPrefix => null; // Markdown uses <!-- --> block comments
 
     public LineTokens[] Tokenize(string[] lines)
     {

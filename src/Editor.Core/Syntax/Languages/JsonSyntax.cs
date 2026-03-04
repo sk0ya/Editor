@@ -4,6 +4,7 @@ public class JsonSyntax : ISyntaxLanguage
 {
     public string Name => "JSON";
     public string[] Extensions => [".json"];
+    public string? LineCommentPrefix => null; // JSON has no comments
 
     public LineTokens[] Tokenize(string[] lines)
     {
