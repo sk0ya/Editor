@@ -88,10 +88,8 @@
 - `ds{char}` — 囲み文字を削除
 - **実装箇所:** `VimEngine` に `ys/cs/ds` ハンドラ追加
 
-### 19. `gf` / `gx` — カーソル下のファイル・URLを開く ✅
-- `gf` — カーソル下のパス文字列を `OpenFileRequested` として発火（相対パス解決あり）
-- `gx` — `http://` / `https://` / `ftp://` はデフォルトブラウザで開く、それ以外はファイルとして開く
-- **実装箇所:** `CommandParser.cs`（`gf`/`gx` を認識）、`VimEngine.ExecuteNormalCommand`（`case "gf"` / `case "gx"`）、`VimEditorControl.xaml.cs`（`OpenUrlRequested` → `Process.Start`）
+### ~~19. `gf` / `gx` — カーソル下のファイル・URLを開く~~ ✅ 実装済み (2026-03-04)
+→ 実装済み一覧を参照
 
 ### 20. 不可視文字表示 (`set list`)
 - `set list` — タブ(`→`)・行末スペース(`·`)・改行(`¶`)を表示
@@ -138,6 +136,7 @@
 | **テキストオブジェクト拡張** `iw/aw/iW/aW`・括弧`(){}[]`・クォート`"'\``・タグ`t`・センテンス`s`・パラグラフ`p`、Visualモード対応 | ✅ 2026-03-04 |
 | **`Ctrl+A/X`** 数値インクリメント/デクリメント（10進・16進、count対応） | ✅ 2026-03-03 |
 | **`gu/gU/g~`** ケース変換オペレータ (`guu`/`gUU`/`g~~`=行全体、`gu{obj}`等=テキストオブジェクト、Visual+`gu`/`gU`/`g~`) | ✅ 2026-03-04 |
+| **`gf` / `gx`** カーソル下のファイル・URL を開く（`gf`=`OpenFileRequested`、`gx`=ブラウザ or ファイル） | ✅ 2026-03-04 |
 | **LSP: 参照検索** (`gr` → Referencesパネル) | ✅ 2026-03-04 |
 | **LSP: シンボルリネーム** (`F2` / `:Rename [name]`) | ✅ 2026-03-04 |
 | **LSP: コードアクション** (`ga`、j/k/Enter/Escポップアップ) | ✅ 2026-03-04 |
