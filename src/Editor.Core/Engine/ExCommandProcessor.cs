@@ -385,7 +385,7 @@ public class ExCommandProcessor
         catch (Exception ex) { error = $"Invalid pattern: {ex.Message}"; return null; }
     }
 
-    private static void ResolveRange(string range, CursorPosition cursor, int lineCount, ref int startLine, ref int endLine)
+    internal static void ResolveRange(string range, CursorPosition cursor, int lineCount, ref int startLine, ref int endLine)
     {
         if (range == "%") { startLine = 0; endLine = lineCount - 1; }
         else if (range == "." || range == "") { startLine = endLine = cursor.Line; }
@@ -668,6 +668,7 @@ public class ExCommandProcessor
         "cclose", "ccl",
         "cn", "cnext", "cp", "cprev",
         "sort",
+        "normal", "norm", "normal!", "norm!",
         "g", "global", "v", "vglobal",
         "grep", "vimgrep",
         "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",

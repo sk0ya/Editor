@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-05
+> 作成日: 2026-03-02 / 更新日: 2026-03-06
 
 ---
 
@@ -14,10 +14,10 @@
 - `:[range]sort [i] [r /pat/]` — 行ソート（`i`=大小無視、`r`=パターン一致部分でソート）
 - **実装箇所:** `ExCommandProcessor.Execute` に `sort` ブランチ
 
-### 11. `:normal` コマンド
+### ~~11. `:normal` コマンド~~ ✅
 - `:[range]normal {commands}` — Exモードからノーマルモードのコマンドを実行
 - 例: `:%normal A;`（全行末にセミコロン追加）
-- **実装箇所:** `ExCommandProcessor` で範囲ループ + `VimEngine.ProcessKey` 呼び出し
+- **実装箇所:** `VimEngine.TryExecuteNormalCmd` — 範囲ループで各行に `ProcessStroke` 呼び出し、単一 undo レコード、`<Esc>`/`<CR>` 等スペシャルキー対応
 
 ---
 
@@ -101,3 +101,4 @@
 | **不可視文字表示** (`set list`/`nolist`、`set listchars=tab:→ ,trail:·,eol:¶,space:·`) | ✅ 2026-03-05 |
 | **`gf` / `gx`** カーソル下のファイル・URL を開く | ✅ 2026-03-04 |
 | **`gu/gU/g~`** ケース変換オペレータ（`guu`/`gUU`/`g~~`=行全体、テキストオブジェクト対応、Visual対応） | ✅ 2026-03-04 |
+| **`:normal` / `:norm`** (`:[range]normal[!] {cmds}`、`<Esc>`/`<CR>` 等スペシャルキー、単一 undo レコード) | ✅ 2026-03-06 |

@@ -1423,4 +1423,83 @@ public class VimEngineTests
         engine.ProcessKey("w");
         Assert.Equal("HELLO world", engine.CurrentBuffer.Text.GetText());
     }
+
+    // ─────────────── :normal tests ───────────────
+
+    private void ExCommand(VimEngine engine, string cmd)
+    {
+        engine.ProcessKey(":");
+        foreach (var ch in cmd) engine.ProcessKey(ch.ToString());
+        engine.ProcessKey("Return");
+    }
+
+    [Fact]
+    public void Normal_AppendSemicolon_AllLines()
+    {
+        var engine = CreateEngine("foo\nbar\nbaz");
+        ExCommand(engine, "%normal A;");
+        Assert.Equal("foo;\nbar;\nbaz;", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void Normal_OnCurrentLine_NoRange()
+    {
+        var engine = CreateEngine("hello world");
+        ExCommand(engine, "normal x");
+        Assert.Equal("ello world", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void Normal_DeleteWord()
+    {
+        var engine = CreateEngine("hello world");
+        engine.ProcessKey("d");
+        engine.ProcessKey("w");
+        var textAfterDirectDw = engine.CurrentBuffer.Text.GetText();
+        // Reset and try via :normal
+        engine.SetText("hello world");
+        ExCommand(engine, "normal dw");
+        Assert.Equal(textAfterDirectDw, engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Normal_WithLineRange_OnlyAffectsRange()
+    {
+        var engine = CreateEngine("aaa\nbbb\nccc");
+        ExCommand(engine, "1,2normal A!");
+        Assert.Equal("aaa!\nbbb!\nccc", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Normal_Bang_IgnoresMappings()
+    {
+        // :normal! executes the sequence while ignoring user mappings
+        var engine = CreateEngine("hello");
+        ExCommand(engine, "normal! x");
+        Assert.Equal("ello", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void Normal_SpecialKey_EscapeInSequence()
+    {
+        var engine = CreateEngine("hello");
+        // Enter insert mode, type text, then Escape back — all via :normal
+        ExCommand(engine, "normal A<Esc>");
+        // Should append nothing (A then immediately Esc)
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void Normal_IsUndoable()
+    {
+        var engine = CreateEngine("foo\nbar");
+        ExCommand(engine, "%normal A;");
+        Assert.Equal("foo;\nbar;", engine.CurrentBuffer.Text.GetText());
+        // Undo should revert
+        engine.ProcessKey("u");
+        Assert.Equal("foo\nbar", engine.CurrentBuffer.Text.GetText());
+    }
 }

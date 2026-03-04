@@ -21,6 +21,7 @@ public class VimEngine
 
     private VimMode _mode = VimMode.Normal;
     private CursorPosition _cursor = CursorPosition.Zero;
+    private bool _suppressSnapshot;
     private Selection? _selection;
     private CursorPosition _visualStart;
 
@@ -1687,6 +1688,14 @@ public class VimEngine
                 return;
             }
 
+            if (TryExecuteNormalCmd(_cmdLine, events))
+            {
+                _cmdLine = "";
+                ChangeMode(VimMode.Normal, events);
+                EmitCmdLine(events);
+                return;
+            }
+
             var preExLines = CurrentBuffer.Text.Snapshot();
             var preExCursor = _cursor;
             var result = _exProcessor.Execute(_cmdLine, _cursor);
@@ -3283,6 +3292,7 @@ public class VimEngine
 
     private void Snapshot()
     {
+        if (_suppressSnapshot) return;
         var vbuf = _bufferManager.Current;
         vbuf.Undo.Snapshot(vbuf.Text, _cursor);
     }
@@ -3299,6 +3309,146 @@ public class VimEngine
 
     // Expose motion helpers for MotionEngine
     private MotionEngine GetMotion() => new(_bufferManager.Current.Text);
+
+    // ─────────────── :normal implementation ───────────────
+
+    /// <summary>
+    /// Handles :[range]normal[!] {commands} — executes normal-mode key sequences on each line in range.
+    /// Returns true if the command line was a :normal command (consumed), false otherwise.
+    /// </summary>
+    private bool TryExecuteNormalCmd(string cmdLine, List<VimEvent> events)
+    {
+        var trimmed = cmdLine.Trim();
+
+        // Parse optional range prefix (%, ., number, number,number)
+        string range = "";
+        int pos = 0;
+        if (trimmed.StartsWith('%')) { range = "%"; pos = 1; }
+        else if (trimmed.StartsWith('.')) { range = "."; pos = 1; }
+        else if (pos < trimmed.Length && char.IsDigit(trimmed[pos]))
+        {
+            while (pos < trimmed.Length && (char.IsDigit(trimmed[pos]) || trimmed[pos] == ','))
+                pos++;
+            range = trimmed[..pos];
+        }
+
+        var rest = trimmed[pos..].TrimStart();
+
+        // Detect "normal" or "norm" keyword
+        int keywordLen;
+        if (rest.StartsWith("normal", StringComparison.OrdinalIgnoreCase) &&
+            (rest.Length == 6 || rest[6] is ' ' or '!'))
+            keywordLen = 6;
+        else if (rest.StartsWith("norm", StringComparison.OrdinalIgnoreCase) &&
+                 (rest.Length == 4 || rest[4] is ' ' or '!'))
+            keywordLen = 4;
+        else
+            return false;
+
+        rest = rest[keywordLen..];
+        bool ignoreMapping = rest.StartsWith('!');
+        if (ignoreMapping) rest = rest[1..];
+
+        // Require a space followed by at least one command character
+        if (rest.Length == 0 || rest[0] != ' ') return false;
+        var commands = rest[1..];
+        if (string.IsNullOrEmpty(commands)) return false;
+
+        var strokes = ParseNormalKeySequence(commands);
+
+        // Resolve line range
+        var buf = CurrentBuffer.Text;
+        int startLine = _cursor.Line, endLine = _cursor.Line;
+        ExCommandProcessor.ResolveRange(range, _cursor, buf.LineCount, ref startLine, ref endLine);
+        startLine = Math.Clamp(startLine, 0, buf.LineCount - 1);
+        endLine = Math.Clamp(endLine, 0, buf.LineCount - 1);
+
+        // Snapshot before mutations for undo; suppress inner Snapshot() calls so the
+        // entire :normal range executes as a single undo record.
+        var preLines = buf.Snapshot();
+        var preCursor = _cursor;
+
+        _mode = VimMode.Normal;
+        _commandParser.Reset();
+        _suppressSnapshot = true;
+        var innerEvents = new List<VimEvent>();
+        bool anyChange = false;
+
+        try
+        {
+            for (int l = startLine; l <= endLine; l++)
+            {
+                if (l >= CurrentBuffer.Text.LineCount) break;
+                _cursor = new CursorPosition(l, 0);
+
+                foreach (var stroke in strokes)
+                {
+                    innerEvents.Clear();
+                    ProcessStroke(stroke, innerEvents, allowMapping: !ignoreMapping);
+                    if (!anyChange)
+                        foreach (var ev in innerEvents)
+                            if (ev.Type == VimEventType.TextChanged) { anyChange = true; break; }
+                }
+
+                // Implicitly exit Insert/Visual mode after command sequence (like Vim does)
+                if (_mode != VimMode.Normal)
+                {
+                    innerEvents.Clear();
+                    ProcessKeyInternal("Escape", false, false, false, innerEvents);
+                }
+            }
+        }
+        finally
+        {
+            _suppressSnapshot = false;
+        }
+
+        if (anyChange)
+        {
+            CurrentBuffer.Undo.Snapshot(preLines, preCursor);
+            EmitText(events);
+        }
+        else
+        {
+            EmitCursor(events);
+        }
+
+        return true;
+    }
+
+    private static List<VimKeyStroke> ParseNormalKeySequence(string seq)
+    {
+        var strokes = new List<VimKeyStroke>();
+        int i = 0;
+        while (i < seq.Length)
+        {
+            if (seq[i] == '<')
+            {
+                var close = seq.IndexOf('>', i + 1);
+                if (close > i)
+                {
+                    var keyName = seq[(i + 1)..close];
+                    strokes.Add(new VimKeyStroke(MapNormalSpecialKey(keyName), false, false, false));
+                    i = close + 1;
+                    continue;
+                }
+            }
+            strokes.Add(new VimKeyStroke(seq[i].ToString(), false, false, false));
+            i++;
+        }
+        return strokes;
+    }
+
+    private static string MapNormalSpecialKey(string name) => name.ToUpperInvariant() switch
+    {
+        "ESC" or "ESCAPE" => "Escape",
+        "CR" or "ENTER" or "RETURN" => "Return",
+        "BS" or "BACKSPACE" => "Back",
+        "TAB" => "Tab",
+        "SPACE" => " ",
+        "DEL" or "DELETE" => "Delete",
+        _ => name
+    };
 }
 
 // Extension for MotionEngine public access
