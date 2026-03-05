@@ -42,6 +42,7 @@ public class VimEngine
     private bool _ctrlWPending;
     private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
+    private bool _awaitingInsertRegister; // Ctrl+R in Insert mode — waiting for register name
     private CursorPosition _surroundStart, _surroundEnd;
     private bool _surroundLinewise;
     private int _preferredColumn = 0; // Sticky column for j/k
@@ -1099,6 +1100,15 @@ public class VimEngine
         _ctrlWPending = false;
         var buf = _bufferManager.Current.Text;
 
+        if (_awaitingInsertRegister)
+        {
+            _awaitingInsertRegister = false;
+            EmitStatus(events, "");
+            if (key.Length == 1)
+                InsertRegisterContent(key[0], events);
+            return;
+        }
+
         if (ctrl)
         {
             switch (key.ToLower())
@@ -1142,9 +1152,9 @@ public class VimEngine
                     EmitStatus(events, "1 line cut");
                     return;
                 }
-                case "r": // Ctrl+R = Redo (exit insert first to preserve undo chain)
-                    ExitInsertMode(events);
-                    ExecuteRedo(events);
+                case "r": // Ctrl+R {reg} = insert register contents
+                    _awaitingInsertRegister = true;
+                    EmitStatus(events, "\"");
                     return;
             }
             // Unhandled Ctrl combo — do not insert as text.
@@ -1901,6 +1911,7 @@ public class VimEngine
             _cursor = _cursor with { Column = Math.Max(0, _cursor.Column - 1) };
         _lastInsertPos = _cursor;
         _blockInsertState = null;
+        _awaitingInsertRegister = false;
         ChangeMode(VimMode.Normal, events);
     }
 
@@ -2687,8 +2698,21 @@ public class VimEngine
         var reg = _registerManager.Get('+');
         if (reg.IsEmpty) return;
         Snapshot();
+        InsertTextAtCursor(reg.Text, events);
+    }
+
+    private void InsertRegisterContent(char regName, List<VimEvent> events)
+    {
+        var reg = _registerManager.Get(regName);
+        if (reg.IsEmpty) return;
+        Snapshot();
+        InsertTextAtCursor(reg.Text, events);
+    }
+
+    private void InsertTextAtCursor(string rawText, List<VimEvent> events)
+    {
         var buf = _bufferManager.Current.Text;
-        var text = reg.Text.Replace("\r\n", "\n").Replace("\r", "\n");
+        var text = rawText.Replace("\r\n", "\n").Replace("\r", "\n");
         var parts = text.Split('\n');
         if (parts.Length == 1)
         {
