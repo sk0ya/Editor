@@ -165,6 +165,8 @@ public class CommandParser
                 'v' => Finalize(count, null, "gv"),
                 'i' => Finalize(count, null, "gi"),
                 'J' => Finalize(count, null, "gJ"),
+                ';' => Finalize(count, null, "g;"),
+                ',' => Finalize(count, null, "g,"),
                 _ => (CommandState.Invalid, null)
             };
         }
@@ -207,6 +209,8 @@ public class CommandParser
                     'v' => Finalize(count, null, "gv"),
                     'i' => Finalize(count, null, "gi"),
                     'J' => Finalize(count, null, "gJ"),
+                    ';' => Finalize(count, null, "g;"),
+                    ',' => Finalize(count, null, "g,"),
                     _ => (CommandState.Invalid, null)
                 };
             }

@@ -1,6 +1,7 @@
 using Editor.Core.Buffer;
 using Editor.Core.Config;
 using Editor.Core.Engine;
+using Editor.Core.Marks;
 using Editor.Core.Models;
 
 namespace Editor.Core.Tests;
@@ -10,7 +11,7 @@ public class ExCommandProcessorTests
     private static (ExCommandProcessor Processor, BufferManager Buffers) CreateProcessor()
     {
         var buffers = new BufferManager();
-        return (new ExCommandProcessor(buffers, new VimOptions()), buffers);
+        return (new ExCommandProcessor(buffers, new VimOptions(), new MarkManager()), buffers);
     }
 
     [Fact]

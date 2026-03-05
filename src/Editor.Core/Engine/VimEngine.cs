@@ -83,7 +83,7 @@ public class VimEngine
         _macroManager = new MacroManager();
         _syntaxEngine = new SyntaxEngine();
         _commandParser = new CommandParser();
-        _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options);
+        _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -720,6 +720,24 @@ public class VimEngine
                 MoveCursor(_bufferManager.Current.Text.ClampCursor(_lastInsertPos), events);
                 EnterInsertMode(false, events);
                 break;
+            case "g;":
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    var cp = _markManager.ChangeBack();
+                    if (cp.HasValue) MoveCursor(buf.ClampCursor(cp.Value), events);
+                }
+                break;
+            }
+            case "g,":
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    var cp = _markManager.ChangeForward();
+                    if (cp.HasValue) MoveCursor(buf.ClampCursor(cp.Value), events);
+                }
+                break;
+            }
             case "gJ":
                 SetRepeatChange(cmd);
                 JoinLinesNoSpace(count, events);
@@ -3702,6 +3720,7 @@ public class VimEngine
         if (_suppressSnapshot) return;
         var vbuf = _bufferManager.Current;
         vbuf.Undo.Snapshot(vbuf.Text, _cursor);
+        _markManager.AddChange(_cursor);
     }
 
     // ─────────────── Event helpers ───────────────

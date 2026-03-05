@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using Editor.Core.Buffer;
 using Editor.Core.Config;
+using Editor.Core.Marks;
 using Editor.Core.Models;
 
 namespace Editor.Core.Engine;
@@ -13,13 +14,15 @@ public class ExCommandProcessor
 {
     private readonly BufferManager _bufferManager;
     private readonly VimOptions _options;
+    private readonly MarkManager _markManager;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
 
-    public ExCommandProcessor(BufferManager bufferManager, VimOptions options)
+    public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager)
     {
         _bufferManager = bufferManager;
         _options = options;
+        _markManager = markManager;
     }
 
     public void AddHistory(string cmd)
@@ -312,6 +315,10 @@ public class ExCommandProcessor
             if (rest.Length == 0) return new ExResult(false, "E476: Invalid command");
             return new ExResult(true, null, VimEvent.SourceRequested(rest));
         }
+
+        // :changes
+        if (cmd == "changes")
+            return new ExResult(true, _markManager.FormatChangeList());
 
         return new ExResult(false, $"Not an editor command: {cmd}");
     }
