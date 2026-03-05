@@ -278,6 +278,24 @@ public class ExCommandProcessor
         if (IsGlobalCommand(cmd, out bool globalInverse, out string globalRest))
             return ExecuteGlobal(globalRest, globalInverse, range, cursor);
 
+        // :[range]!{cmd}  — with range: filter lines; without range: run command and show output
+        if (cmd.StartsWith('!') && cmd.Length > 1)
+        {
+            var shellCmd = cmd[1..].Trim();
+            if (string.IsNullOrEmpty(shellCmd)) return new ExResult(false, "No command");
+            if (string.IsNullOrEmpty(range))
+            {
+                var (output, err) = RunShellCommand(shellCmd, null);
+                if (err != null) return new ExResult(false, err);
+                var preview = output.Split(NewlineSeparators, StringSplitOptions.None)[0];
+                return new ExResult(true, preview.Length > 80 ? preview[..80] + "…" : preview);
+            }
+            var buf2 = _bufferManager.Current.Text;
+            int filterStart = 0, filterEnd = buf2.LineCount - 1;
+            ResolveRange(range, cursor, buf2.LineCount, ref filterStart, ref filterEnd);
+            return ExecuteShellFilter(shellCmd, filterStart, filterEnd);
+        }
+
         // :read !{cmd}  — insert shell command output after current line
         if (cmd.StartsWith("read !") || cmd.StartsWith("r !"))
         {
@@ -478,7 +496,9 @@ public class ExCommandProcessor
 
     private static readonly string[] NewlineSeparators = ["\r\n", "\n"];
 
-    private ExResult ExecuteReadShell(string shellCmd, CursorPosition cursor)
+    /// <summary>Runs a shell command, optionally writing <paramref name="stdin"/> to the process.
+    /// Returns (output, errorMessage). On success errorMessage is null.</summary>
+    private static (string Output, string? Error) RunShellCommand(string shellCmd, string? stdin)
     {
         try
         {
@@ -486,6 +506,7 @@ public class ExCommandProcessor
             var psi = new ProcessStartInfo
             {
                 FileName = isWindows ? "cmd.exe" : "/bin/sh",
+                RedirectStandardInput = stdin != null,
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -494,22 +515,52 @@ public class ExCommandProcessor
             else           { psi.ArgumentList.Add("-c"); psi.ArgumentList.Add(shellCmd); }
 
             using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start shell");
+            if (stdin != null)
+            {
+                proc.StandardInput.Write(stdin);
+                proc.StandardInput.Close();
+            }
             var output = proc.StandardOutput.ReadToEnd();
             if (!proc.WaitForExit(10_000))
             {
                 try { proc.Kill(); } catch { /* best-effort */ }
-                return new ExResult(false, "Shell command timed out");
+                return ("", "Shell command timed out");
             }
-
-            var lines = output.TrimEnd('\r', '\n').Split(NewlineSeparators, StringSplitOptions.None);
-            var buf = _bufferManager.Current.Text;
-            buf.InsertLines(cursor.Line, lines);
-            return new ExResult(true, $"{lines.Length} line(s) inserted", TextModified: true);
+            return (output, null);
         }
         catch (Exception ex)
         {
-            return new ExResult(false, $"Shell error: {ex.Message}");
+            return ("", $"Shell error: {ex.Message}");
         }
+    }
+
+    private static string[] SplitShellOutput(string output)
+    {
+        // Strip exactly one trailing newline (the standard line terminator), preserving intentional blank lines
+        if (output.EndsWith("\r\n", StringComparison.Ordinal)) output = output[..^2];
+        else if (output.EndsWith('\n')) output = output[..^1];
+        return output.Split(NewlineSeparators, StringSplitOptions.None);
+    }
+
+    private ExResult ExecuteShellFilter(string shellCmd, int startLine, int endLine)
+    {
+        var buf = _bufferManager.Current.Text;
+        var input = string.Join("\n", buf.GetLines(startLine, endLine));
+        var (output, err) = RunShellCommand(shellCmd, input);
+        if (err != null) return new ExResult(false, err);
+        var newLines = SplitShellOutput(output);
+        buf.DeleteLines(startLine, endLine);
+        buf.InsertLines(startLine, newLines);
+        return new ExResult(true, $"{newLines.Length} line(s)", TextModified: true);
+    }
+
+    private ExResult ExecuteReadShell(string shellCmd, CursorPosition cursor)
+    {
+        var (output, err) = RunShellCommand(shellCmd, null);
+        if (err != null) return new ExResult(false, err);
+        var lines = SplitShellOutput(output);
+        _bufferManager.Current.Text.InsertLines(cursor.Line, lines);
+        return new ExResult(true, $"{lines.Length} line(s) inserted", TextModified: true);
     }
 
     private static bool TryParseQuickfixNav(string cmd, string shortName, string longName, out int count)
