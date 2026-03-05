@@ -25,6 +25,8 @@ public class ExCommandProcessor
         _markManager = markManager;
     }
 
+    public string? LastCommand => _history.Count > 0 ? _history[0] : null;
+
     public void AddHistory(string cmd)
     {
         if (!string.IsNullOrWhiteSpace(cmd))

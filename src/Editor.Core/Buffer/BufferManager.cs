@@ -36,6 +36,7 @@ public class BufferManager
 {
     private readonly List<VimBuffer> _buffers = [];
     private int _currentIndex = 0;
+    private int _alternateIndex = -1;
 
     public IReadOnlyList<VimBuffer> Buffers => _buffers;
     public VimBuffer Current => _buffers[_currentIndex];
@@ -50,43 +51,49 @@ public class BufferManager
     {
         var buf = new VimBuffer();
         _buffers.Add(buf);
-        _currentIndex = _buffers.Count - 1;
+        SwitchTo(_buffers.Count - 1);
         return buf;
     }
 
     public VimBuffer OpenFile(string path)
     {
-        // Check if already open
-        var existing = _buffers.FirstOrDefault(b => b.FilePath == path);
-        if (existing != null)
+        var existingIndex = _buffers.FindIndex(b => b.FilePath == path);
+        if (existingIndex >= 0)
         {
-            _currentIndex = _buffers.IndexOf(existing);
-            return existing;
+            SwitchTo(existingIndex);
+            return _buffers[existingIndex];
         }
         var buf = new VimBuffer(path);
         _buffers.Add(buf);
-        _currentIndex = _buffers.Count - 1;
+        SwitchTo(_buffers.Count - 1);
         return buf;
     }
 
     public bool GoToNext()
     {
         if (_buffers.Count <= 1) return false;
-        _currentIndex = (_currentIndex + 1) % _buffers.Count;
+        SwitchTo((_currentIndex + 1) % _buffers.Count);
         return true;
     }
 
     public bool GoToPrev()
     {
         if (_buffers.Count <= 1) return false;
-        _currentIndex = (_currentIndex - 1 + _buffers.Count) % _buffers.Count;
+        SwitchTo((_currentIndex - 1 + _buffers.Count) % _buffers.Count);
         return true;
     }
 
     public bool GoTo(int n)
     {
         if (n < 0 || n >= _buffers.Count) return false;
-        _currentIndex = n;
+        SwitchTo(n);
+        return true;
+    }
+
+    public bool GoToAlternate()
+    {
+        if (_alternateIndex < 0 || _alternateIndex >= _buffers.Count) return false;
+        SwitchTo(_alternateIndex);
         return true;
     }
 
@@ -95,7 +102,17 @@ public class BufferManager
         if (index < 0) index = _currentIndex;
         if (_buffers.Count <= 1) return false;
         _buffers.RemoveAt(index);
-        _currentIndex = Math.Clamp(_currentIndex, 0, _buffers.Count - 1);
+        if (_alternateIndex > index) _alternateIndex--;
+        else if (_alternateIndex >= _buffers.Count) _alternateIndex = _buffers.Count - 1;
+        if (_currentIndex > index) _currentIndex--;
+        else _currentIndex = Math.Clamp(_currentIndex, 0, _buffers.Count - 1);
         return true;
+    }
+
+    private void SwitchTo(int index)
+    {
+        if (index != _currentIndex)
+            _alternateIndex = _currentIndex;
+        _currentIndex = index;
     }
 }

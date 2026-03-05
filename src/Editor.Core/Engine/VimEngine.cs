@@ -526,6 +526,10 @@ public class VimEngine
                 _commandParser.Reset();
                 EmitStatus(events, "");
                 break;
+            case "6":
+            case "^":
+                SwitchToAlternateBuffer(events);
+                break;
         }
     }
 
@@ -966,7 +970,15 @@ public class VimEngine
                 EmitStatus(events, _macroManager.IsRecording ? $"recording @{q[1]}" : "");
                 break;
             case var at when at?.StartsWith('@') == true && at.Length == 2:
-                PlayMacro(at[1], count, events);
+                if (at[1] == ':')
+                {
+                    var lastCmd = _exProcessor.LastCommand;
+                    if (lastCmd == null) { EmitStatus(events, "E80: Error while processing command"); break; }
+                    for (int i = 0; i < count; i++)
+                        ExecuteExCommand(lastCmd, events);
+                }
+                else
+                    PlayMacro(at[1], count, events);
                 break;
 
             // Operator + motion commands
@@ -1762,44 +1774,10 @@ public class VimEngine
     {
         if (_mode == VimMode.Command)
         {
-            if (TryExecuteConfigCommand(_cmdLine, out var configMessage, out var configError, out var optionsChanged))
-            {
-                _cmdLine = "";
-                ChangeMode(VimMode.Normal, events);
-                if (configError != null)
-                    EmitStatus(events, "E: " + configError);
-                else if (configMessage != null)
-                    EmitStatus(events, configMessage);
-                if (optionsChanged)
-                    events.Add(VimEvent.OptionsChanged());
-                EmitCmdLine(events);
-                return;
-            }
-
-            if (TryExecuteNormalCmd(_cmdLine, events))
-            {
-                _cmdLine = "";
-                ChangeMode(VimMode.Normal, events);
-                EmitCmdLine(events);
-                return;
-            }
-
-            var preExLines = CurrentBuffer.Text.Snapshot();
-            var preExCursor = _cursor;
-            var result = _exProcessor.Execute(_cmdLine, _cursor);
+            var cmdLine = _cmdLine;
             _cmdLine = "";
             ChangeMode(VimMode.Normal, events);
-            if (!result.Success)
-                EmitStatus(events, "E: " + result.Message);
-            else if (result.Message != null)
-                EmitStatus(events, result.Message);
-            if (result.TextModified)
-            {
-                CurrentBuffer.Undo.Snapshot(preExLines, preExCursor);
-                EmitText(events);
-            }
-            if (result.Event != null)
-                events.Add(result.Event);
+            ExecuteExCommand(cmdLine, events);
         }
         else // Search
         {
@@ -3460,6 +3438,38 @@ public class VimEngine
     {
         var line = Math.Clamp(_cursor.Line + offset, 0, _bufferManager.Current.Text.LineCount - 1);
         return new CursorPosition(line, 0);
+    }
+
+    private void ExecuteExCommand(string cmdLine, List<VimEvent> events)
+    {
+        if (TryExecuteConfigCommand(cmdLine, out var msg, out var err, out var optChanged))
+        {
+            if (err != null) EmitStatus(events, "E: " + err);
+            else if (msg != null) EmitStatus(events, msg);
+            if (optChanged) events.Add(VimEvent.OptionsChanged());
+            return;
+        }
+        if (TryExecuteNormalCmd(cmdLine, events)) return;
+        var preLines = CurrentBuffer.Text.Snapshot();
+        var preCursor = _cursor;
+        var result = _exProcessor.Execute(cmdLine, _cursor);
+        if (!result.Success) EmitStatus(events, "E: " + result.Message);
+        else if (result.Message != null) EmitStatus(events, result.Message);
+        if (result.TextModified) { CurrentBuffer.Undo.Snapshot(preLines, preCursor); EmitText(events); }
+        if (result.Event != null) events.Add(result.Event);
+    }
+
+    private void SwitchToAlternateBuffer(List<VimEvent> events)
+    {
+        if (!_bufferManager.GoToAlternate())
+        {
+            EmitStatus(events, "E23: No alternate file");
+            return;
+        }
+        var filePath = _bufferManager.Current.FilePath;
+        if (filePath != null)
+            events.Add(VimEvent.OpenFileRequested(filePath));
+        EmitText(events);
     }
 
     private void PlayMacro(char register, int count, List<VimEvent> events)
