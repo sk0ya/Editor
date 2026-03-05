@@ -43,6 +43,10 @@ public class VimEngine
     private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
     private bool _awaitingInsertRegister; // Ctrl+R in Insert mode — waiting for register name
+    private string[] _kwCompletions = []; // Ctrl+N/P keyword completion candidates
+    private int _kwCompletionIndex = -1;  // current completion index (-1 = prefix only)
+    private string _kwCompletionPrefix = "";
+    private int _kwCompletionApplied = 0; // length of completion text currently in buffer
     private CursorPosition _surroundStart, _surroundEnd;
     private bool _surroundLinewise;
     private int _preferredColumn = 0; // Sticky column for j/k
@@ -1109,6 +1113,20 @@ public class VimEngine
             return;
         }
 
+        if (ctrl && (key.ToLower() == "n" || key.ToLower() == "p"))
+        {
+            CycleKeywordCompletion(key.ToLower() == "n" ? +1 : -1, events);
+            return;
+        }
+
+        if (_kwCompletions.Length > 0)
+        {
+            _kwCompletions = [];
+            _kwCompletionIndex = -1;
+            _kwCompletionApplied = 0;
+            _kwCompletionPrefix = "";
+        }
+
         if (ctrl)
         {
             switch (key.ToLower())
@@ -1912,6 +1930,10 @@ public class VimEngine
         _lastInsertPos = _cursor;
         _blockInsertState = null;
         _awaitingInsertRegister = false;
+        _kwCompletions = [];
+        _kwCompletionIndex = -1;
+        _kwCompletionApplied = 0;
+        _kwCompletionPrefix = "";
         ChangeMode(VimMode.Normal, events);
     }
 
@@ -2707,6 +2729,74 @@ public class VimEngine
         if (reg.IsEmpty) return;
         Snapshot();
         InsertTextAtCursor(reg.Text, events);
+    }
+
+    private void CycleKeywordCompletion(int dir, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        if (_kwCompletions.Length == 0)
+        {
+            // Start a new completion session: extract word prefix before cursor
+            var line = buf.GetLine(_cursor.Line);
+            int col = _cursor.Column;
+            int start = col;
+            while (start > 0 && MotionEngine.IsWordChar(line[start - 1]))
+                start--;
+            _kwCompletionPrefix = line[start..col];
+            _kwCompletions = CollectBufferKeywords(_kwCompletionPrefix);
+            _kwCompletionIndex = -1;
+            _kwCompletionApplied = _kwCompletionPrefix.Length;
+            if (_kwCompletions.Length == 0)
+            {
+                EmitStatus(events, "Pattern not found");
+                return;
+            }
+        }
+
+        _kwCompletionIndex = dir > 0
+            ? (_kwCompletionIndex + 1) % _kwCompletions.Length
+            : (_kwCompletionIndex - 1 + _kwCompletions.Length) % _kwCompletions.Length;
+
+        var completion = _kwCompletions[_kwCompletionIndex];
+        // Replace the previously applied text with the new completion
+        int delStart = _cursor.Column - _kwCompletionApplied;
+        if (_kwCompletionApplied > 0)
+            buf.DeleteRange(_cursor.Line, delStart, delStart + _kwCompletionApplied - 1);
+        buf.InsertText(_cursor.Line, delStart, completion);
+        _cursor = _cursor with { Column = delStart + completion.Length };
+        _kwCompletionApplied = completion.Length;
+        EmitText(events);
+        EmitStatus(events, $"\"{completion}\"");
+    }
+
+    private string[] CollectBufferKeywords(string prefix)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<string>();
+        foreach (var vbuf in _bufferManager.Buffers)
+        {
+            for (int l = 0; l < vbuf.Text.LineCount; l++)
+            {
+                var line = vbuf.Text.GetLine(l);
+                int i = 0;
+                while (i < line.Length)
+                {
+                    if (MotionEngine.IsWordChar(line[i]))
+                    {
+                        int start = i;
+                        while (i < line.Length && MotionEngine.IsWordChar(line[i]))
+                            i++;
+                        var word = line[start..i];
+                        if (word.Length > prefix.Length &&
+                            word.StartsWith(prefix, StringComparison.Ordinal) &&
+                            seen.Add(word))
+                            result.Add(word);
+                    }
+                    else i++;
+                }
+            }
+        }
+        return [.. result];
     }
 
     private void InsertTextAtCursor(string rawText, List<VimEvent> events)
