@@ -47,6 +47,10 @@ public class VimEngine
     private int _preferredColumn = 0; // Sticky column for j/k
 
     private CursorPosition _insertStart;
+    private CursorPosition _lastInsertPos;
+    private CursorPosition _lastVisualStart;
+    private CursorPosition _lastVisualEnd;
+    private VimMode _lastVisualMode = VimMode.Visual;
     private RepeatChange? _lastRepeatChange;
     private ParsedCommand? _pendingInsertRepeatCommand;
     private List<VimKeyStroke>? _pendingInsertRepeatKeys;
@@ -705,6 +709,20 @@ public class VimEngine
             case "gT":
                 for (int i = 0; i < count; i++)
                     events.Add(VimEvent.PrevTabRequested());
+                break;
+            case "gv":
+                _visualStart = buf.ClampCursor(_lastVisualStart);
+                _cursor = buf.ClampCursor(_lastVisualEnd);
+                ChangeMode(_lastVisualMode, events);
+                UpdateSelection(events);
+                break;
+            case "gi":
+                MoveCursor(_bufferManager.Current.Text.ClampCursor(_lastInsertPos), events);
+                EnterInsertMode(false, events);
+                break;
+            case "gJ":
+                SetRepeatChange(cmd);
+                JoinLinesNoSpace(count, events);
                 break;
             case "gd":
                 events.Add(VimEvent.GoToDefinitionRequested());
@@ -1885,6 +1903,7 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
         if (_cursor.Column > 0 && _cursor.Column >= buf.GetLineLength(_cursor.Line))
             _cursor = _cursor with { Column = Math.Max(0, _cursor.Column - 1) };
+        _lastInsertPos = _cursor;
         _blockInsertState = null;
         ChangeMode(VimMode.Normal, events);
     }
@@ -1899,6 +1918,9 @@ public class VimEngine
     private void ExitVisualMode(List<VimEvent> events)
     {
         _awaitingVisualTextObj = '\0';
+        _lastVisualStart = _visualStart;
+        _lastVisualEnd = _cursor;
+        _lastVisualMode = _mode;
         _selection = null;
         ChangeMode(VimMode.Normal, events);
         events.Add(VimEvent.SelectionChanged(null));
@@ -2882,6 +2904,28 @@ public class VimEngine
                 }
             }
         }
+        EmitText(events);
+    }
+
+    private void JoinLinesNoSpace(int count, List<VimEvent> events)
+    {
+        Snapshot();
+        var buf = _bufferManager.Current.Text;
+        int joinCol = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (_cursor.Line < buf.LineCount - 1)
+            {
+                // Strip all leading whitespace from next line before joining (matches Vim gJ)
+                var nextLine = buf.GetLine(_cursor.Line + 1);
+                int trimStart = nextLine.Length - nextLine.TrimStart().Length;
+                if (trimStart > 0)
+                    buf.DeleteRange(_cursor.Line + 1, 0, trimStart);
+                joinCol = buf.GetLineLength(_cursor.Line);
+                buf.JoinLines(_cursor.Line);
+            }
+        }
+        _cursor = buf.ClampCursor(_cursor with { Column = Math.Max(0, joinCol - 1) });
         EmitText(events);
     }
 
