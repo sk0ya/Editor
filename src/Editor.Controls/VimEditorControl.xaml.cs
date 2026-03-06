@@ -90,6 +90,11 @@ public class GitOutputRequestedEventArgs(string title, string content) : EventAr
     public string Title { get; } = title;
     public string Content { get; } = content;
 }
+public class GitCommitRequestedEventArgs(string? filePath, string template) : EventArgs
+{
+    public string? FilePath { get; } = filePath;
+    public string Template { get; } = template;
+}
 
 public partial class VimEditorControl : UserControl
 {
@@ -234,6 +239,7 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<int>? QuickfixGotoRequested;
     public event EventHandler<GrepRequestedEventArgs>? GrepRequested;
     public event EventHandler<GitOutputRequestedEventArgs>? GitOutputRequested;
+    public event EventHandler<GitCommitRequestedEventArgs>? GitCommitRequested;
     public event EventHandler<WindowNavRequestedEventArgs>? WindowNavRequested;
     public event EventHandler<WindowCloseRequestedEventArgs>? WindowCloseRequested;
     public event EventHandler<string>? MkSessionRequested;
@@ -953,6 +959,66 @@ public partial class VimEditorControl : UserControl
         var filePath = _engine.CurrentBuffer.FilePath;
         var repoPath = string.IsNullOrEmpty(filePath) ? Environment.CurrentDirectory : filePath;
         await ShowGitOutputAsync("[Git Log]", () => _gitProvider.GetLogOutput(repoPath));
+    }
+
+    private void ShowGitCommit()
+    {
+        if (GitCommitRequested != null)
+            GitCommitRequested.Invoke(this, new GitCommitRequestedEventArgs(_engine.CurrentBuffer.FilePath, ""));
+        else
+            ActiveStatusBar.UpdateStatus("Git commit: not supported in this host");
+    }
+
+    public (bool Success, string Message) ExecuteGitCommit(string message)
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        var (success, output) = _gitProvider.RunCommit(filePath ?? "", message);
+        if (success)
+            _ = RefreshGitDiffAsync();
+        return (success, output);
+    }
+
+    private void NavigateHunk(bool forward)
+    {
+        var diff = Canvas.GetGitDiff();
+        if (diff == null || diff.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus("No changes");
+            return;
+        }
+
+        int curLine = _engine.Cursor.Line;
+
+        // Build hunk-start list: a line is a hunk start when its predecessor is not in the diff
+        var allLines = diff.Keys.Order().ToList();
+        var hunkStarts = new List<int>(allLines.Count);
+        for (int i = 0; i < allLines.Count; i++)
+        {
+            if (i == 0 || allLines[i - 1] != allLines[i] - 1)
+                hunkStarts.Add(allLines[i]);
+        }
+
+        if (hunkStarts.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus("No hunks");
+            return;
+        }
+
+        int targetIndex;
+        if (forward)
+        {
+            targetIndex = hunkStarts.FindIndex(l => l > curLine);
+            if (targetIndex < 0) targetIndex = 0; // wrap around
+        }
+        else
+        {
+            targetIndex = hunkStarts.FindLastIndex(l => l < curLine);
+            if (targetIndex < 0) targetIndex = hunkStarts.Count - 1; // wrap around
+        }
+
+        var events = _engine.SetCursorPosition(new CursorPosition(hunkStarts[targetIndex], 0));
+        ProcessVimEvents(events);
+        ActiveStatusBar.UpdateStatus($"Hunk {targetIndex + 1}/{hunkStarts.Count}");
     }
 
     private async Task ShowGitOutputAsync(string title, Func<string> fetch)
@@ -2505,6 +2571,12 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.GitLogRequested:
                     _ = ShowGitLogAsync();
+                    break;
+                case VimEventType.GitCommitRequested:
+                    ShowGitCommit();
+                    break;
+                case VimEventType.HunkNavigateRequested when evt is HunkNavigateRequestedEvent hnr:
+                    NavigateHunk(hnr.Forward);
                     break;
                 case VimEventType.SymbolsRequested:
                     _ = HandleDocumentSymbolsAsync();

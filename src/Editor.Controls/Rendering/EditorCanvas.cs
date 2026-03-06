@@ -61,6 +61,9 @@ public class EditorCanvas : FrameworkElement
     private bool _showIndentGuides = false;
     private int _indentGuideTabStop = 4;
 
+    // Color preview swatches
+    private bool _showColorPreview = true;
+
     // List chars
     private bool _showList = false;
     private string _listCharsRaw = "";
@@ -178,6 +181,8 @@ public class EditorCanvas : FrameworkElement
         InvalidateVisual();
     }
 
+    public Dictionary<int, GitLineState>? GetGitDiff() => _gitDiff;
+
     public void SetBlameAnnotations(Dictionary<int, string>? annotations)
     {
         _blameAnnotations = annotations ?? [];
@@ -219,6 +224,13 @@ public class EditorCanvas : FrameworkElement
         if (_showIndentGuides == show && _indentGuideTabStop == tabStop) return;
         _showIndentGuides = show;
         _indentGuideTabStop = Math.Max(1, tabStop);
+        InvalidateVisual();
+    }
+
+    public void SetColorPreview(bool show)
+    {
+        if (_showColorPreview == show) return;
+        _showColorPreview = show;
         InvalidateVisual();
     }
 
@@ -763,6 +775,10 @@ public class EditorCanvas : FrameworkElement
 
             // Text with syntax coloring
             DrawLineText(dc, l, lineText, y, textLeft);
+
+            // Inline color preview swatches
+            if (_showColorPreview)
+                DrawColorSwatches(dc, lineText, y, textLeft);
 
             // Invisible character markers (set list)
             DrawListChars(dc, lineText, y, textLeft);
@@ -1333,6 +1349,37 @@ public class EditorCanvas : FrameworkElement
             var rem = lineText[pos..];
             var ft = FormatText(rem, Theme.Foreground);
             dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, pos) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+        }
+    }
+
+    private static readonly Pen s_swatchBorderPen = FreezePen(new Pen(Freeze(new SolidColorBrush(Colors.Black)), 0.75));
+
+    private void DrawColorSwatches(DrawingContext dc, string lineText, double y, double textLeft)
+    {
+        if (string.IsNullOrEmpty(lineText)) return;
+
+        double swatchSize = Math.Max(8, _lineHeight - 4);
+        double swatchY    = y + (_lineHeight - swatchSize) / 2;
+
+        for (int i = 0; i < lineText.Length; i++)
+        {
+            char c = lineText[i];
+            if (c != '#' && c != 'r' && c != 'R') continue;
+
+            if (!ColorParser.TryParseColor(lineText, i, out var color, out int matchLen))
+                continue;
+
+            // Position swatch right after the color text
+            double textX = textLeft + GetVisualX(lineText, i + matchLen) - _scrollOffsetX;
+            double swatchX = textX + 2; // small gap
+
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            var swatchRect = new Rect(swatchX, swatchY, swatchSize, swatchSize);
+            dc.DrawRectangle(brush, s_swatchBorderPen, swatchRect);
+
+            // Advance past the matched token so we don't re-scan its interior
+            i += matchLen - 1;
         }
     }
 

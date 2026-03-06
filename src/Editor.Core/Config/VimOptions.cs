@@ -42,6 +42,9 @@ public class VimOptions
     // Indent guides
     public bool IndentGuides { get; set; } = false;
 
+    // Color preview
+    public bool ColorPreview { get; set; } = true;
+
     // File format (line endings)
     public string FileFormat { get; set; } = "unix"; // "unix" (\n), "dos" (\r\n), "mac" (\r)
 
@@ -133,6 +136,7 @@ public class VimOptions
             "paste"                            => Set(() => Paste = value),
             "scrollbar"                        => Set(() => Scrollbar = value),
             "indentguides" or "ig"             => Set(() => IndentGuides = value),
+            "colorpreview" or "cpv"            => Set(() => ColorPreview = value),
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => null,
             "startofline" or "sol"             => null,

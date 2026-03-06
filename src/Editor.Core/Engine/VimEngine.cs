@@ -826,6 +826,8 @@ public class VimEngine
             }
             case "]s": NavigateSpellError(true, count, events); break;
             case "[s": NavigateSpellError(false, count, events); break;
+            case "]c": events.Add(VimEvent.HunkNavigateRequested(true)); break;
+            case "[c": events.Add(VimEvent.HunkNavigateRequested(false)); break;
             case "F2":
                 events.Add(VimEvent.LspRenameRequested());
                 break;

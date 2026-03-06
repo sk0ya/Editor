@@ -41,6 +41,24 @@ public partial class GitDiffProvider
         return string.IsNullOrEmpty(output) ? "(no commits)" : output;
     }
 
+    public (bool Success, string Output) RunCommit(string filePath, string message)
+    {
+        string? workDir = null;
+        if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+        {
+            var dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(dir))
+                workDir = FindGitRoot(dir);
+        }
+        workDir ??= FindGitRoot(Environment.CurrentDirectory);
+        if (workDir == null)
+            return (false, "Not a git repository");
+
+        var output = RunGit(workDir, ["commit", "-m", message], captureStderr: true);
+        bool success = !string.IsNullOrEmpty(output) && !output.StartsWith("ERROR:");
+        return (success, output ?? "git commit failed");
+    }
+
     public Dictionary<int, string> GetBlameAnnotations(string filePath)
     {
         var result = new Dictionary<int, string>();
@@ -79,7 +97,11 @@ public partial class GitDiffProvider
         return null;
     }
 
-    private static string? RunGit(string workDir, string[] args)
+    /// <summary>
+    /// Run a git command. When <paramref name="captureStderr"/> is true, stderr is also read,
+    /// exit code is checked, and errors are returned as "ERROR: …" strings.
+    /// </summary>
+    private static string? RunGit(string workDir, string[] args, bool captureStderr = false)
     {
         try
         {
@@ -96,13 +118,21 @@ public partial class GitDiffProvider
 
             using var proc = Process.Start(psi);
             if (proc == null) return null;
-            var output = proc.StandardOutput.ReadToEnd();
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = captureStderr ? proc.StandardError.ReadToEnd() : null;
             proc.WaitForExit(5000);
-            return output;
+
+            if (captureStderr)
+            {
+                if (proc.ExitCode != 0)
+                    return $"ERROR: {(string.IsNullOrEmpty(stderr) ? stdout : stderr!).Trim()}";
+                return string.IsNullOrEmpty(stdout) ? stderr!.Trim() : stdout.Trim();
+            }
+            return stdout;
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            return captureStderr ? $"ERROR: {ex.Message}" : null;
         }
     }
 

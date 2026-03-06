@@ -49,6 +49,14 @@ public record LspFoldingRange(int StartLine, int EndLine, string? Kind = null);
 // Code actions
 public record LspCodeAction(string Title, string? Kind, LspWorkspaceEdit? Edit);
 
+// Document symbols (hierarchical, returned by textDocument/documentSymbol)
+public record DocumentSymbol(
+    string Name,
+    SymbolKind Kind,
+    LspRange Range,
+    LspRange SelectionRange,
+    DocumentSymbol[]? Children);
+
 // Workspace symbols
 public enum SymbolKind
 {

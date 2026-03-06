@@ -836,6 +836,7 @@ public partial class MainWindow : Window
         editor.SourceRequested        += Editor_SourceRequested;
         editor.TerminalRequested      += Editor_TerminalRequested;
         editor.GitOutputRequested     += Editor_GitOutputRequested;
+        editor.GitCommitRequested     += Editor_GitCommitRequested;
     }
 
     private void Editor_BufferChanged(object? sender, EventArgs e)
@@ -883,6 +884,21 @@ public partial class MainWindow : Window
         SelectFileTab(ft);
         ft.UpdateHeader(isModified: false, label: e.Title);
         _focusedEditor?.SetText(e.Content);
+    }
+
+    private void Editor_GitCommitRequested(object? sender, GitCommitRequestedEventArgs e)
+    {
+        if (sender is not VimEditorControl editor) return;
+
+        // Show a commit message input dialog
+        var message = ShowInputDialog("Git Commit", "Commit message:", "");
+        if (string.IsNullOrWhiteSpace(message)) return;
+
+        var (success, output) = editor.ExecuteGitCommit(message);
+        if (success)
+            MessageBox.Show(output, "Git Commit", MessageBoxButton.OK, MessageBoxImage.Information);
+        else
+            MessageBox.Show(output, "Git Commit Failed", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
     private void ShowTerminalPanel()

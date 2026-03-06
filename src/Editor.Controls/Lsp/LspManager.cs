@@ -41,6 +41,12 @@ public sealed class LspManager : IDisposable
     private int _codeActionsScrollOffset = 0;
     private bool _codeActionsVisible;
 
+    // Document symbols (for breadcrumb and :Symbols)
+    private IReadOnlyList<DocumentSymbol> _documentSymbols = [];
+    private System.Threading.Timer? _symbolDebounce;
+    private string _lastBreadcrumb = "";
+    private const int SymbolDebounceMs = 1000;
+
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => _diagnostics;
     public IReadOnlyList<LspCompletionItem> CompletionItems => _completionItems;
     public int CompletionSelection => _completionSelection;
@@ -67,6 +73,9 @@ public sealed class LspManager : IDisposable
     /// <summary>Fired on the dispatcher thread whenever LSP state changes.</summary>
     public event Action? StateChanged;
 
+    /// <summary>Fired on the dispatcher thread when the breadcrumb path changes (cursor moved).</summary>
+    public event Action<string>? BreadcrumbChanged;
+
     /// <summary>Fired on the dispatcher thread when LSP returns folding ranges for the current file.</summary>
     public event Action<IReadOnlyList<LspFoldingRange>>? FoldingRangesChanged;
 
@@ -80,8 +89,12 @@ public sealed class LspManager : IDisposable
         HideCompletion();
         HideCodeActions();
         _diagnostics = [];
+        _documentSymbols = [];
+        _lastBreadcrumb = "";
         _documentReady = false;
         _pendingFoldRangeUri = null;
+        _symbolDebounce?.Dispose();
+        _symbolDebounce = null;
 
         if (filePath == null)
         {
@@ -157,6 +170,33 @@ public sealed class LspManager : IDisposable
     {
         if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return;
         _ = _currentClient.ChangeDocumentAsync(_currentUri, ++_docVersion, text);
+        ScheduleSymbolRefresh();
+    }
+
+    private void ScheduleSymbolRefresh()
+    {
+        _symbolDebounce?.Dispose();
+        _symbolDebounce = new System.Threading.Timer(_ =>
+        {
+            var client = _currentClient;
+            var uri = _currentUri;
+            if (client?.IsRunning == true && uri != null && _documentReady)
+                _ = RefreshDocumentSymbolsAsync(client, uri);
+        }, null, SymbolDebounceMs, Timeout.Infinite);
+    }
+
+    private async Task RefreshDocumentSymbolsAsync(LspClient client, string uri)
+    {
+        try
+        {
+            var symbols = await client.GetDocumentSymbolsAsync(uri);
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (_currentUri != uri) return;
+                _documentSymbols = symbols;
+            });
+        }
+        catch { }
     }
 
     /// <summary>Trigger LSP completion at the given position. Returns a status message.</summary>
@@ -348,6 +388,65 @@ public sealed class LspManager : IDisposable
         return await _currentClient.GetFormattingEditsAsync(_currentUri, tabSize, insertSpaces);
     }
 
+    /// <summary>Returns the current cached document symbols for the active file.</summary>
+    public IReadOnlyList<DocumentSymbol> GetDocumentSymbols() => _documentSymbols;
+
+    /// <summary>Fetches document symbols directly from the server (bypasses debounce), updates the cache, and returns the result.</summary>
+    public async Task<IReadOnlyList<DocumentSymbol>> RequestDocumentSymbolsAsync()
+    {
+        var client = _currentClient;
+        var uri = _currentUri;
+        if (client?.IsRunning != true || uri == null || !_documentReady) return [];
+        await RefreshDocumentSymbolsAsync(client, uri);
+        return _documentSymbols;
+    }
+
+    /// <summary>
+    /// Returns breadcrumb path string for the given 0-based line/column (e.g. "MyClass > MyMethod").
+    /// Returns null if no symbols are loaded or no symbol contains the cursor.
+    /// </summary>
+    public string? GetBreadcrumb(int line, int col)
+    {
+        if (_documentSymbols.Count == 0) return null;
+        var path = new List<string>();
+        FindSymbolPath(_documentSymbols, line, col, path);
+        return path.Count > 0 ? string.Join(" > ", path) : null;
+    }
+
+    private static bool FindSymbolPath(IReadOnlyList<DocumentSymbol> symbols, int line, int col, List<string> path)
+    {
+        foreach (var sym in symbols)
+        {
+            if (!ContainsPosition(sym.Range, line, col)) continue;
+            path.Add(sym.Name);
+            if (sym.Children != null && sym.Children.Length > 0)
+                FindSymbolPath(sym.Children, line, col, path);
+            return true;
+        }
+        return false;
+    }
+
+    private static bool ContainsPosition(LspRange range, int line, int col)
+    {
+        if (line < range.Start.Line || line > range.End.Line) return false;
+        if (line == range.Start.Line && col < range.Start.Character) return false;
+        if (line == range.End.Line && col > range.End.Character) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Update breadcrumb for the current cursor position.
+    /// Should be called when the cursor moves (in Normal mode).
+    /// Fires BreadcrumbChanged if the path changed.
+    /// </summary>
+    public void UpdateBreadcrumb(int line, int col)
+    {
+        var path = GetBreadcrumb(line, col) ?? "";
+        if (path == _lastBreadcrumb) return;
+        _lastBreadcrumb = path;
+        BreadcrumbChanged?.Invoke(path);
+    }
+
     /// <summary>Search workspace symbols by query; when isClass=true, restricts to type-definition kinds.</summary>
     public async Task<IReadOnlyList<LspSymbolInformation>> GetWorkspaceSymbolsAsync(
         string query, bool isClass, CancellationToken ct = default)
@@ -405,6 +504,7 @@ public sealed class LspManager : IDisposable
             // immediately after didOpen and will return an empty list.
             await RequestFoldingRangesInternalAsync(client, uri);
             _pendingFoldRangeUri = uri;
+            _ = RefreshDocumentSymbolsAsync(client, uri);
         }
         catch (Exception ex)
         {
@@ -524,6 +624,7 @@ public sealed class LspManager : IDisposable
 
     public void Dispose()
     {
+        _symbolDebounce?.Dispose();
         foreach (var c in _clients.Values) c.Dispose();
         _clients.Clear();
     }

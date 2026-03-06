@@ -256,6 +256,10 @@ public class ExCommandProcessor
         if (cmd is "Git blame" or "git blame" or "Gblame" or "gblame")
             return new ExResult(true, null, VimEvent.GitBlameRequested());
 
+        // :Git commit / :Gcommit — open commit message editor
+        if (cmd is "Git commit" or "git commit" or "Gcommit" or "gcommit")
+            return new ExResult(true, null, VimEvent.GitCommitRequested());
+
         // :Git diff / :Gdiff — show git diff output in a new buffer
         if (cmd is "Git diff" or "git diff" or "Gdiff" or "gdiff")
             return new ExResult(true, null, VimEvent.GitDiffRequested());
@@ -1113,6 +1117,7 @@ public class ExCommandProcessor
         "Format", "Rename", "digraphs",
         "read", "r",
         "Git blame", "Gblame",
+        "Git commit", "Gcommit",
         "Git diff", "Gdiff",
         "Git log", "Glog",
         "copen", "cope", "clist", "cl",

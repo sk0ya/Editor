@@ -21,7 +21,10 @@
       "Bash(grep:*)",
       "Bash(git:*)",
       "Bash(dotnet build:*)",
-      "Bash(dotnet test:*)"
+      "Bash(dotnet test:*)",
+      "Bash(sed:*)",
+      "Bash(/dev/null:*)",
+      "Read(//tmp/**)"
     ]
   }
 }

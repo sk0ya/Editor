@@ -38,7 +38,8 @@ public sealed class LspClient : ILspClient
                     formatting = new { },
                     rename = new { },
                     references = new { },
-                    foldingRange = new { }
+                    foldingRange = new { },
+                    documentSymbol = new { hierarchicalDocumentSymbolSupport = true }
                 },
                 workspace = new
                 {
@@ -264,6 +265,58 @@ public sealed class LspClient : ILspClient
             return list;
         }
         catch { return []; }
+    }
+
+    public async Task<IReadOnlyList<DocumentSymbol>> GetDocumentSymbolsAsync(
+        string uri, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/documentSymbol", new
+            {
+                textDocument = new { uri }
+            }, ct);
+
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
+            return ParseDocumentSymbols(result.Value);
+        }
+        catch { return []; }
+    }
+
+    private static IReadOnlyList<DocumentSymbol> ParseDocumentSymbols(JsonElement array)
+    {
+        var list = new List<DocumentSymbol>();
+        foreach (var item in array.EnumerateArray())
+        {
+            if (!item.TryGetProperty("name", out var nameEl)) continue;
+            var name = nameEl.GetString() ?? "";
+            var kind = item.TryGetProperty("kind", out var kindEl)
+                ? (SymbolKind)kindEl.GetInt32() : SymbolKind.Variable;
+
+            // Hierarchical DocumentSymbol has "selectionRange"; flat SymbolInformation has "location"
+            if (item.TryGetProperty("selectionRange", out var selRangeEl))
+            {
+                var range = item.TryGetProperty("range", out var rangeEl)
+                    ? ParseRange(rangeEl)
+                    : new LspRange(new LspPosition(0, 0), new LspPosition(0, 0));
+                var selRange = ParseRange(selRangeEl);
+                DocumentSymbol[]? children = null;
+                if (item.TryGetProperty("children", out var childrenEl) &&
+                    childrenEl.ValueKind == JsonValueKind.Array)
+                    children = ParseDocumentSymbols(childrenEl).ToArray();
+                list.Add(new DocumentSymbol(name, kind, range, selRange, children));
+            }
+            else if (item.TryGetProperty("location", out var locEl))
+            {
+                // SymbolInformation format — flatten into DocumentSymbol with no children
+                var range = locEl.TryGetProperty("range", out var rangeEl)
+                    ? ParseRange(rangeEl)
+                    : new LspRange(new LspPosition(0, 0), new LspPosition(0, 0));
+                list.Add(new DocumentSymbol(name, kind, range, range, null));
+            }
+            if (list.Count >= 500) break;
+        }
+        return list;
     }
 
     public async Task<IReadOnlyList<LspFoldingRange>> GetFoldingRangesAsync(
