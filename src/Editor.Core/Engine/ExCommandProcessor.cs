@@ -340,6 +340,18 @@ public class ExCommandProcessor
         if (cmd == "changes")
             return new ExResult(true, _markManager.FormatChangeList());
 
+        // :[range]center [width]  :[range]right [width]  :[range]left
+        if (cmd == "center" || cmd.StartsWith("center ") ||
+            cmd == "right"  || cmd.StartsWith("right ")  ||
+            cmd == "left"   || cmd.StartsWith("left "))
+        {
+            int sp = cmd.IndexOf(' ');
+            string verb = sp >= 0 ? cmd[..sp] : cmd;
+            int width = _options.TextWidth;
+            if (sp >= 0 && int.TryParse(cmd[(sp + 1)..].Trim(), out var w)) width = w;
+            return ExecuteAlign(verb, width, range, cursor);
+        }
+
         // :[range]move {addr}   :m[ove]
         if (cmd.StartsWith("move ") || cmd.StartsWith("m ") || cmd == "move" || cmd == "m")
         {
@@ -523,6 +535,32 @@ public class ExCommandProcessor
         buf.InsertLines(dest, buf.GetLines(startLine, endLine));
 
         return new ExResult(true, $"{endLine - startLine + 1} line(s) copied", TextModified: true);
+    }
+
+    private ExResult ExecuteAlign(string verb, int width, string range, CursorPosition cursor)
+    {
+        var (buf, startLine, endLine) = ResolveRangeClamped(range, cursor);
+        for (int l = startLine; l <= endLine; l++)
+        {
+            var line = buf.GetLine(l);
+            var trimmed = line.Trim();
+            string aligned = verb switch
+            {
+                "left"   => trimmed,
+                "right"  => trimmed.PadLeft(width),
+                _        => CenterText(trimmed, width),
+            };
+            if (aligned != line)
+                buf.ReplaceLine(l, aligned);
+        }
+        return new ExResult(true, $"{endLine - startLine + 1} line(s) aligned", TextModified: true);
+    }
+
+    private static string CenterText(string text, int width)
+    {
+        if (text.Length >= width) return text;
+        int totalPad = width - text.Length;
+        return text.PadLeft(text.Length + totalPad / 2);
     }
 
     private ExResult ExecuteSubstitute(string cmd, string range, CursorPosition cursor)
@@ -904,6 +942,7 @@ public class ExCommandProcessor
         "cn", "cnext", "cp", "cprev",
         "sort",
         "move", "m", "copy", "co", "t",
+        "center", "right", "left",
         "normal", "norm", "normal!", "norm!",
         "g", "global", "v", "vglobal",
         "grep", "vimgrep",
