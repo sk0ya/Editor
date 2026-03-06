@@ -39,6 +39,9 @@ public class VimOptions
     // Column guide
     public int ColorColumn { get; set; } = 0;
 
+    // Indent guides
+    public bool IndentGuides { get; set; } = false;
+
     // Paste mode
     public bool Paste { get; set; } = false;
     public string PasteToggle { get; set; } = "";
@@ -116,6 +119,7 @@ public class VimOptions
             "list"                             => Set(() => List = value),
             "spell"                            => Set(() => Spell = value),
             "paste"                            => Set(() => Paste = value),
+            "indentguides" or "ig"             => Set(() => IndentGuides = value),
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => null,
             "startofline" or "sol"             => null,

@@ -731,6 +731,22 @@ public partial class VimEditorControl : UserControl
         _ = RefreshGitDiffAsync();
     }
 
+    private void ReloadCurrentFile()
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
+        var text = File.ReadAllText(filePath);
+        _engine.CurrentBuffer.Text.SetText(text);
+        _engine.CurrentBuffer.Text.MarkSaved();
+        _engine.CurrentBuffer.Undo.Clear();
+        _engine.CurrentBuffer.Folds.Clear();
+        _engine.SetCursorPosition(CursorPosition.Zero);
+        UpdateAll();
+        _lspManager.OnFileOpened(filePath, text);
+        _ = RefreshGitDiffAsync();
+        ActiveStatusBar.UpdateStatus($"\"{filePath}\" reloaded");
+    }
+
     public void RefreshGitDiff() => _ = RefreshGitDiffAsync();
 
     private async Task RefreshGitDiffAsync()
@@ -2197,6 +2213,9 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.TerminalRequested when evt is TerminalRequestedEvent tre:
                     TerminalRequested?.Invoke(this, tre.ShellCmd);
                     break;
+                case VimEventType.ReloadFileRequested:
+                    ReloadCurrentFile();
+                    break;
                 case VimEventType.NewTabRequested when evt is NewTabRequestedEvent ntre:
                     NewTabRequested?.Invoke(this, new NewTabRequestedEventArgs(ntre.FilePath));
                     break;
@@ -2300,6 +2319,7 @@ public partial class VimEditorControl : UserControl
         Canvas.SetScrollOff(_engine.Options.ScrollOff);
         Canvas.SetList(_engine.Options.List, _engine.Options.ListChars);
         Canvas.SetColorColumn(_engine.Options.ColorColumn);
+        Canvas.SetIndentGuides(_engine.Options.IndentGuides, _engine.Options.TabStop);
 
         // Syntax tokens
         if (_engine.Options.Syntax)

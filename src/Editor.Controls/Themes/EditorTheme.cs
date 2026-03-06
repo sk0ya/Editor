@@ -36,6 +36,9 @@ public class EditorTheme
     // Listchars color
     public Brush ListCharBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x60));
 
+    // Indent guide lines
+    public Brush IndentGuideBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x4A));
+
     // Diagnostic colors
     public Brush DiagnosticError   { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0x00));
     public Brush DiagnosticWarning { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0xA5, 0x00));
@@ -99,6 +102,7 @@ public class EditorTheme
         ListCharBrush = new SolidColorBrush(Color.FromRgb(0x44, 0x47, 0x5A)),
         ColorColumnBrush = new SolidColorBrush(Color.FromRgb(0x3D, 0x3D, 0x50)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x4F, 0x7A)),
+        IndentGuideBrush = new SolidColorBrush(Color.FromRgb(0x3A, 0x3C, 0x4E)),
     };
 
     public static EditorTheme Dark { get; } = new();
@@ -138,6 +142,7 @@ public class EditorTheme
         ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x43, 0x4C, 0x5E)),
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x3B, 0x42, 0x52)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4C, 0x60, 0x80)),
+        IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x38, 0x3F, 0x4D)),
     };
 
     // Tokyo Night — dark variant
@@ -175,6 +180,7 @@ public class EditorTheme
         ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x28, 0x3B, 0x4D)),
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x1F, 0x20, 0x35)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x36, 0x4A, 0x82)),
+        IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x25, 0x27, 0x38)),
     };
 
     // One Dark — Atom One Dark inspired
@@ -212,6 +218,7 @@ public class EditorTheme
         ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x3E, 0x44, 0x50)),
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x2C, 0x31, 0x3A)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x3E, 0x52, 0x7A)),
+        IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x42)),
     };
 
     public static EditorTheme GetByName(string name) => name.ToLower() switch

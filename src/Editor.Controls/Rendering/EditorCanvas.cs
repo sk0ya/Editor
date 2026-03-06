@@ -54,6 +54,10 @@ public class EditorCanvas : FrameworkElement
     // Color column
     private int _colorColumn = 0;
 
+    // Indent guides
+    private bool _showIndentGuides = false;
+    private int _indentGuideTabStop = 4;
+
     // List chars
     private bool _showList = false;
     private string _listCharsRaw = "";
@@ -197,6 +201,14 @@ public class EditorCanvas : FrameworkElement
     {
         if (_colorColumn == col) return;
         _colorColumn = col;
+        InvalidateVisual();
+    }
+
+    public void SetIndentGuides(bool show, int tabStop)
+    {
+        if (_showIndentGuides == show && _indentGuideTabStop == tabStop) return;
+        _showIndentGuides = show;
+        _indentGuideTabStop = Math.Max(1, tabStop);
         InvalidateVisual();
     }
 
@@ -775,6 +787,40 @@ public class EditorCanvas : FrameworkElement
             {
                 var ccPen = new Pen(Theme.ColorColumnBrush, 1);
                 dc.DrawLine(ccPen, new Point(ccX, 0), new Point(ccX, size.Height));
+            }
+        }
+
+        // Indent guide lines
+        if (_showIndentGuides && _charWidth > 0)
+        {
+            double indentWidth = _indentGuideTabStop * _charWidth;
+            var guidePen = new Pen(Theme.IndentGuideBrush, 1);
+
+            // Find the deepest indent level among all visible non-blank lines
+            int maxIndentLevel = 0;
+            for (int vi = firstLine; vi <= lastLine; vi++)
+            {
+                var seg = GetVisualSegment(vi);
+                int l = seg.BufferLine;
+                if (l >= _lines.Length) continue;
+                var line = _lines[l];
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                int spaces = 0;
+                foreach (char ch in line)
+                {
+                    if (ch == ' ') spaces++;
+                    else if (ch == '\t') spaces += _indentGuideTabStop;
+                    else break;
+                }
+                int level = spaces / _indentGuideTabStop;
+                if (level > maxIndentLevel) maxIndentLevel = level;
+            }
+
+            for (int level = 1; level <= maxIndentLevel; level++)
+            {
+                double x = gutterWidth + level * indentWidth - _scrollOffsetX;
+                if (x < gutterWidth || x >= size.Width) continue;
+                dc.DrawLine(guidePen, new Point(x, 0), new Point(x, size.Height));
             }
         }
 
