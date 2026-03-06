@@ -125,9 +125,9 @@ public partial class MainWindow : Window
         public required TextBlock HeaderLabel { get; init; }
         public string? FilePath { get; set; }
 
-        public void UpdateHeader(bool isModified)
+        public void UpdateHeader(bool isModified, string? label = null)
         {
-            var name = FilePath != null ? Path.GetFileName(FilePath) : "[No Name]";
+            var name = label ?? (FilePath != null ? Path.GetFileName(FilePath) : "[No Name]");
             HeaderLabel.Text = isModified ? $"• {name}" : name;
         }
     }
@@ -835,6 +835,7 @@ public partial class MainWindow : Window
         editor.MkSessionRequested     += Editor_MkSessionRequested;
         editor.SourceRequested        += Editor_SourceRequested;
         editor.TerminalRequested      += Editor_TerminalRequested;
+        editor.GitOutputRequested     += Editor_GitOutputRequested;
     }
 
     private void Editor_BufferChanged(object? sender, EventArgs e)
@@ -873,6 +874,15 @@ public partial class MainWindow : Window
     private void Editor_TerminalRequested(object? sender, string? shellCmd)
     {
         ShowTerminalPanel();
+    }
+
+    private void Editor_GitOutputRequested(object? sender, GitOutputRequestedEventArgs e)
+    {
+        // Open a new tab with in-memory git output content
+        var ft = AddFileTabEntry(null);
+        SelectFileTab(ft);
+        ft.UpdateHeader(isModified: false, label: e.Title);
+        _focusedEditor?.SetText(e.Content);
     }
 
     private void ShowTerminalPanel()

@@ -73,6 +73,23 @@ public class GrepRequestedEventArgs(string pattern, string? fileGlob, bool ignor
     public string? FileGlob { get; } = fileGlob;
     public bool IgnoreCase { get; } = ignoreCase;
 }
+public class DocumentSymbolItem(string name, SymbolKind kind, int line, int col, int depth)
+{
+    public string Name { get; } = name;
+    public SymbolKind Kind { get; } = kind;
+    public int Line { get; } = line;
+    public int Col { get; } = col;
+    public int Depth { get; } = depth;
+}
+public class DocumentSymbolsResultEventArgs(IReadOnlyList<DocumentSymbolItem> items) : EventArgs
+{
+    public IReadOnlyList<DocumentSymbolItem> Items { get; } = items;
+}
+public class GitOutputRequestedEventArgs(string title, string content) : EventArgs
+{
+    public string Title { get; } = title;
+    public string Content { get; } = content;
+}
 
 public partial class VimEditorControl : UserControl
 {
@@ -209,12 +226,14 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<ModeChangedEventArgs>? ModeChanged;
     public event EventHandler? BufferChanged;
     public event EventHandler<FindReferencesResultEventArgs>? FindReferencesResult;
+    public event EventHandler<DocumentSymbolsResultEventArgs>? DocumentSymbolsResult;
     public event EventHandler? QuickfixOpenRequested;
     public event EventHandler? QuickfixCloseRequested;
     public event EventHandler<int>? QuickfixNextRequested;
     public event EventHandler<int>? QuickfixPrevRequested;
     public event EventHandler<int>? QuickfixGotoRequested;
     public event EventHandler<GrepRequestedEventArgs>? GrepRequested;
+    public event EventHandler<GitOutputRequestedEventArgs>? GitOutputRequested;
     public event EventHandler<WindowNavRequestedEventArgs>? WindowNavRequested;
     public event EventHandler<WindowCloseRequestedEventArgs>? WindowCloseRequested;
     public event EventHandler<string>? MkSessionRequested;
@@ -239,6 +258,7 @@ public partial class VimEditorControl : UserControl
         _lspManager.StateChanged += OnLspStateChanged;
         _lspManager.StatusMessage += OnLspStatusMessage;
         _lspManager.FoldingRangesChanged += OnLspFoldingRangesChanged;
+        _lspManager.BreadcrumbChanged += OnLspBreadcrumbChanged;
 
         _completionDebounce = new System.Windows.Threading.DispatcherTimer
         {
@@ -287,6 +307,14 @@ public partial class VimEditorControl : UserControl
     private void OnLspStatusMessage(string msg)
     {
         ActiveStatusBar.UpdateStatus(msg);
+    }
+
+    private void OnLspBreadcrumbChanged(string breadcrumb)
+    {
+        // Show current symbol path in the status area (only when non-empty, to avoid
+        // wiping real status messages when the cursor is outside any symbol range)
+        if (!string.IsNullOrEmpty(breadcrumb))
+            ActiveStatusBar.UpdateStatus(breadcrumb);
     }
 
     private void OnLspFoldingRangesChanged(IReadOnlyList<LspFoldingRange> ranges)
@@ -907,6 +935,32 @@ public partial class VimEditorControl : UserControl
                 ? $"Git blame: {annotations.Count} lines annotated"
                 : "Git blame: no blame data (file not committed?)");
         }
+    }
+
+    private async Task ShowGitDiffAsync()
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        if (string.IsNullOrEmpty(filePath))
+        {
+            ActiveStatusBar.UpdateStatus("Git diff: no file open");
+            return;
+        }
+        await ShowGitOutputAsync("[Git Diff]", () => _gitProvider.GetDiffOutput(filePath));
+    }
+
+    private async Task ShowGitLogAsync()
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        var repoPath = string.IsNullOrEmpty(filePath) ? Environment.CurrentDirectory : filePath;
+        await ShowGitOutputAsync("[Git Log]", () => _gitProvider.GetLogOutput(repoPath));
+    }
+
+    private async Task ShowGitOutputAsync(string title, Func<string> fetch)
+    {
+        ActiveStatusBar.UpdateStatus($"{title}: loading...");
+        var output = await Task.Run(fetch);
+        GitOutputRequested?.Invoke(this, new GitOutputRequestedEventArgs(title, output));
+        ActiveStatusBar.UpdateStatus($"{title}: done");
     }
 
     public void NavigateTo(int line, int column)
@@ -1931,6 +1985,52 @@ public partial class VimEditorControl : UserControl
         FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(items, symbol));
     }
 
+    private async Task HandleDocumentSymbolsAsync()
+    {
+        // Use cached symbols if available
+        var cached = _lspManager.GetDocumentSymbols();
+        if (cached.Count > 0)
+        {
+            ShowDocumentSymbols(cached);
+            return;
+        }
+
+        if (!_lspManager.IsConnected || _lspManager.CurrentUri == null)
+        {
+            ActiveStatusBar.UpdateStatus("Symbols: LSP not connected or no file open");
+            return;
+        }
+
+        // Cache empty — request fresh symbols directly (bypasses debounce)
+        ActiveStatusBar.UpdateStatus("Symbols: loading…");
+        var symbols = await _lspManager.RequestDocumentSymbolsAsync();
+        ShowDocumentSymbols(symbols);
+    }
+
+    private void ShowDocumentSymbols(IReadOnlyList<DocumentSymbol> symbols)
+    {
+        if (symbols.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus("Symbols: none found (LSP not ready or no symbols)");
+            return;
+        }
+        var items = new List<DocumentSymbolItem>();
+        FlattenSymbols(symbols, items, 0);
+        ActiveStatusBar.UpdateStatus($"Symbols: {items.Count} symbol(s)");
+        DocumentSymbolsResult?.Invoke(this, new DocumentSymbolsResultEventArgs(items));
+    }
+
+    private static void FlattenSymbols(IReadOnlyList<DocumentSymbol> symbols, List<DocumentSymbolItem> result, int depth)
+    {
+        foreach (var sym in symbols)
+        {
+            result.Add(new DocumentSymbolItem(sym.Name, sym.Kind,
+                sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, depth));
+            if (sym.Children != null && sym.Children.Length > 0)
+                FlattenSymbols(sym.Children, result, depth + 1);
+        }
+    }
+
     private async Task HandleCodeActionAsync()
     {
         if (!_lspManager.IsConnected) { ActiveStatusBar.UpdateStatus("Code actions: LSP not connected"); return; }
@@ -2269,6 +2369,8 @@ public partial class VimEditorControl : UserControl
                         ActiveStatusBar.UpdateCursor(ce.Position, _engine.CurrentBuffer.Text.LineCount);
                         if (_engine.Mode is VimMode.Insert or VimMode.Replace)
                             UpdateImeWindowPos();
+                        else
+                            _lspManager.UpdateBreadcrumb(ce.Position.Line, ce.Position.Column);
                     }
                     break;
                 case VimEventType.ModeChanged when evt is ModeChangedEvent me:
@@ -2398,6 +2500,15 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.GitBlameRequested:
                     ToggleBlame();
                     break;
+                case VimEventType.GitDiffRequested:
+                    _ = ShowGitDiffAsync();
+                    break;
+                case VimEventType.GitLogRequested:
+                    _ = ShowGitLogAsync();
+                    break;
+                case VimEventType.SymbolsRequested:
+                    _ = HandleDocumentSymbolsAsync();
+                    break;
                 case VimEventType.FoldsChanged:
                     needFullUpdate = true;
                     break;
@@ -2438,6 +2549,7 @@ public partial class VimEditorControl : UserControl
         Canvas.SetColorColumn(_engine.Options.ColorColumn);
         Canvas.SetIndentGuides(_engine.Options.IndentGuides, _engine.Options.TabStop);
         Canvas.SetScrollbar(_engine.Options.Scrollbar);
+        Canvas.SetColorPreview(_engine.Options.ColorPreview);
 
         // Syntax tokens
         if (_engine.Options.Syntax)

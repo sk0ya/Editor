@@ -247,9 +247,22 @@ public class ExCommandProcessor
             return new ExResult(true, null, VimEvent.LspRenameRequested(newName));
         }
 
+        // :Symbols / :outline — list document symbols
+        if (cmd.Equals("Symbols", StringComparison.OrdinalIgnoreCase) ||
+            cmd.Equals("outline", StringComparison.OrdinalIgnoreCase))
+            return new ExResult(true, null, VimEvent.SymbolsRequested());
+
         // :Git blame / :Gblame — toggle inline git blame annotations
         if (cmd is "Git blame" or "git blame" or "Gblame" or "gblame")
             return new ExResult(true, null, VimEvent.GitBlameRequested());
+
+        // :Git diff / :Gdiff — show git diff output in a new buffer
+        if (cmd is "Git diff" or "git diff" or "Gdiff" or "gdiff")
+            return new ExResult(true, null, VimEvent.GitDiffRequested());
+
+        // :Git log / :Glog — show git log output in a new buffer
+        if (cmd is "Git log" or "git log" or "Glog" or "glog")
+            return new ExResult(true, null, VimEvent.GitLogRequested());
 
         // Quickfix commands
         if (cmd is "copen" or "cope" or "clist" or "cl")
@@ -1100,6 +1113,8 @@ public class ExCommandProcessor
         "Format", "Rename", "digraphs",
         "read", "r",
         "Git blame", "Gblame",
+        "Git diff", "Gdiff",
+        "Git log", "Glog",
         "copen", "cope", "clist", "cl",
         "cclose", "ccl",
         "cn", "cnext", "cp", "cprev",

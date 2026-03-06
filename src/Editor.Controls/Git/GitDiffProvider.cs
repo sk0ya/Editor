@@ -14,10 +14,7 @@ public partial class GitDiffProvider
     public Dictionary<int, GitLineState> GetDiff(string filePath)
     {
         var result = new Dictionary<int, GitLineState>();
-        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return result;
-
-        string? workDir = Path.GetDirectoryName(filePath);
-        if (string.IsNullOrEmpty(workDir) || FindGitRoot(workDir) == null) return result;
+        if (!TryGetFileWorkDir(filePath, out var workDir)) return result;
 
         var output = RunGit(workDir, ["diff", "HEAD", "--", filePath]);
         if (string.IsNullOrEmpty(output)) return result;
@@ -26,19 +23,48 @@ public partial class GitDiffProvider
         return result;
     }
 
+    public string GetDiffOutput(string filePath)
+    {
+        if (!TryGetFileWorkDir(filePath, out var workDir)) return "(no file or not a git repository)";
+        var output = RunGit(workDir, ["diff", "HEAD", "--", filePath]);
+        return string.IsNullOrEmpty(output) ? "(no changes)" : output;
+    }
+
+    public string GetLogOutput(string repoPath, int count = 30)
+    {
+        string? workDir = string.IsNullOrEmpty(repoPath) ? null
+            : File.Exists(repoPath) ? Path.GetDirectoryName(repoPath) : repoPath;
+        if (string.IsNullOrEmpty(workDir)) return "(no path)";
+        var root = FindGitRoot(workDir);
+        if (root == null) return "(not a git repository)";
+        var output = RunGit(root, ["log", "--oneline", $"-{count}"]);
+        return string.IsNullOrEmpty(output) ? "(no commits)" : output;
+    }
+
     public Dictionary<int, string> GetBlameAnnotations(string filePath)
     {
         var result = new Dictionary<int, string>();
-        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return result;
-
-        string? workDir = Path.GetDirectoryName(filePath);
-        if (string.IsNullOrEmpty(workDir) || FindGitRoot(workDir) == null) return result;
+        if (!TryGetFileWorkDir(filePath, out var workDir)) return result;
 
         var output = RunGit(workDir, ["blame", "--porcelain", filePath]);
         if (string.IsNullOrEmpty(output)) return result;
 
         ParsePorcelainBlame(output, result);
         return result;
+    }
+
+    /// <summary>
+    /// Validates that <paramref name="filePath"/> exists and is inside a git repo.
+    /// On success sets <paramref name="workDir"/> to the file's directory; returns false otherwise.
+    /// </summary>
+    private static bool TryGetFileWorkDir(string filePath, out string workDir)
+    {
+        workDir = "";
+        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return false;
+        var dir = Path.GetDirectoryName(filePath);
+        if (string.IsNullOrEmpty(dir) || FindGitRoot(dir) == null) return false;
+        workDir = dir;
+        return true;
     }
 
     private static string? FindGitRoot(string dir)

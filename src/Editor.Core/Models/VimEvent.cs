@@ -31,6 +31,8 @@ public enum VimEventType
     OptionsChanged,
     GrepRequested,
     GitBlameRequested,
+    GitDiffRequested,
+    GitLogRequested,
     WindowNavRequested,
     WindowCloseRequested,
     LspHoverRequested,
@@ -43,6 +45,7 @@ public enum VimEventType
     SourceRequested,
     TerminalRequested,
     ReloadFileRequested,
+    SymbolsRequested,
 }
 
 public enum ViewportAlign
@@ -143,6 +146,12 @@ public record VimEvent(VimEventType Type)
     public static VimEvent GitBlameRequested() =>
         new(VimEventType.GitBlameRequested);
 
+    public static VimEvent GitDiffRequested() =>
+        new(VimEventType.GitDiffRequested);
+
+    public static VimEvent GitLogRequested() =>
+        new(VimEventType.GitLogRequested);
+
     public static VimEvent LspHoverRequested() =>
         new(VimEventType.LspHoverRequested);
 
@@ -172,6 +181,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent ReloadFileRequested(bool force) =>
         new ReloadFileRequestedEvent(force);
+
+    public static VimEvent SymbolsRequested() =>
+        new(VimEventType.SymbolsRequested);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
