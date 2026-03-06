@@ -7,7 +7,7 @@ public class VimOptions
     public bool RelativeNumber { get; set; } = false;
     public bool CursorLine { get; set; } = true;
     public bool Wrap { get; set; } = false;
-    public int ScrollOff { get; set; } = 5;
+    public int ScrollOff { get; set; } = 0;
     public bool ShowMode { get; set; } = true;
     public bool ShowCmd { get; set; } = true;
 
@@ -35,6 +35,9 @@ public class VimOptions
     public bool List { get; set; } = false;
     public bool Spell { get; set; } = false;
     public string ListChars { get; set; } = "tab:→ ,trail:·,eol:¶";
+
+    // Column guide
+    public int ColorColumn { get; set; } = 0;
 
     // Paste mode
     public bool Paste { get; set; } = false;
@@ -148,7 +151,8 @@ public class VimOptions
             "softtabstop" or "sts"          => null,
             "textwidth" or "tw"             when int.TryParse(value, out var n) => Set(() => TextWidth = n),
             "pastetoggle" or "pt"           => Set(() => PasteToggle = value),
-            "colorcolumn" or "cc"           => null,
+            "colorcolumn" or "cc"           when int.TryParse(value, out var n) => Set(() => ColorColumn = n),
+            "colorcolumn" or "cc"           => null, // non-integer values (e.g. comma list) silently ignored
             "foldmethod" or "fdm"           => null,
             "completeopt" or "cot"          => null,
             "updatetime" or "ut"            => null,

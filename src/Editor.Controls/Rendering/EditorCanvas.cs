@@ -23,6 +23,7 @@ public class EditorCanvas : FrameworkElement
     private double _scrollOffsetX;
     private int _visibleLines;
     private int _visibleColumns;
+    private int _scrollOff;
 
     private string[] _lines = [""];
     private CursorPosition _cursor;
@@ -49,6 +50,9 @@ public class EditorCanvas : FrameworkElement
     private HashSet<int> _closedFoldStarts = [];   // buffer lines with closed fold (▶)
     private HashSet<int> _openFoldStarts = [];     // buffer lines with open fold (▼)
     private int _hoveredFoldLine = -1;             // buffer line currently hovered in fold gutter
+
+    // Color column
+    private int _colorColumn = 0;
 
     // List chars
     private bool _showList = false;
@@ -184,6 +188,15 @@ public class EditorCanvas : FrameworkElement
     public void ShowRelativeLineNumbers(bool relative)
     {
         _relativeNumber = relative;
+        InvalidateVisual();
+    }
+
+    public void SetScrollOff(int scrollOff) { _scrollOff = Math.Max(0, scrollOff); }
+
+    public void SetColorColumn(int col)
+    {
+        if (_colorColumn == col) return;
+        _colorColumn = col;
         InvalidateVisual();
     }
 
@@ -747,6 +760,17 @@ public class EditorCanvas : FrameworkElement
         DrawSignatureHelp(dc, textLeft, size);
         DrawCompletionPopup(dc, textLeft, size);
         DrawCodeActionPopup(dc, textLeft, size);
+
+        // Color column guide line
+        if (_colorColumn > 0 && _charWidth > 0)
+        {
+            double ccX = gutterWidth + (_colorColumn - 1) * _charWidth - _scrollOffsetX;
+            if (ccX >= gutterWidth && ccX < size.Width)
+            {
+                var ccPen = new Pen(Theme.ColorColumnBrush, 1);
+                dc.DrawLine(ccPen, new Point(ccX, 0), new Point(ccX, size.Height));
+            }
+        }
 
         // Gutter border
         if (_showLineNumbers)
@@ -1408,7 +1432,7 @@ public class EditorCanvas : FrameworkElement
 
         double cursorY = GetCursorVisualLine() * _lineHeight;
         double viewHeight = RenderSize.Height;
-        double margin = 5 * _lineHeight;
+        double margin = _scrollOff * _lineHeight;
 
         if (cursorY < _scrollOffsetY + margin)
             _scrollOffsetY = Math.Max(0, cursorY - margin);
