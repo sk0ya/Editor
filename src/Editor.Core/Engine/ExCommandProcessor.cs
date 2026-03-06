@@ -452,6 +452,17 @@ public class ExCommandProcessor
             return ExecuteHistory(arg);
         }
 
+        // :bufdo {cmd}  — execute ex command on every buffer
+        // :windo {cmd}  — treated as :bufdo (pane management lives in WPF layer)
+        // :tabdo {cmd}  — treated as :bufdo (tab management lives in WPF layer)
+        if (cmd.StartsWith("bufdo ") || cmd.StartsWith("windo ") || cmd.StartsWith("tabdo "))
+        {
+            var subCmd = cmd[(cmd.IndexOf(' ') + 1)..].Trim();
+            if (string.IsNullOrEmpty(subCmd))
+                return new ExResult(false, "E471: Argument required");
+            return ExecuteBufdo(subCmd);
+        }
+
         return new ExResult(false, $"Not an editor command: {cmd}");
     }
 
@@ -879,6 +890,39 @@ public class ExCommandProcessor
             return new ExResult(true, "No history");
 
         return new ExResult(true, sb.ToString().TrimEnd());
+    }
+
+    private ExResult ExecuteBufdo(string subCmd)
+    {
+        var buffers = _bufferManager.Buffers;
+        if (buffers.Count == 0) return new ExResult(true);
+
+        var errors = new List<string>();
+        var zero = new CursorPosition(0, 0);
+        for (int i = 0; i < buffers.Count; i++)
+        {
+            _bufferManager.GoTo(i);
+            // Execute sub-command without recording it in history (it's an internal iteration).
+            // Commands like :%s/…/…/g work correctly because they carry their own range.
+            var result = ExecuteNoHistory(subCmd, zero);
+            if (!result.Success && result.Message != null)
+                errors.Add($"[{buffers[i].Name}] {result.Message}");
+        }
+
+        if (errors.Count > 0)
+            return new ExResult(false, string.Join("; ", errors));
+        return new ExResult(true, null, null, true);
+    }
+
+    // Execute a command without recording it in the command history (used for internal iteration).
+    private ExResult ExecuteNoHistory(string cmdLine, CursorPosition cursor)
+    {
+        string? prevTop = _history.Count > 0 ? _history[0] : null;
+        var result = Execute(cmdLine, cursor);
+        // Undo the history entry that Execute added so the sub-command doesn't pollute history.
+        if (_history.Count > 0 && _history[0] == cmdLine && _history[0] != prevTop)
+            _history.RemoveAt(0);
+        return result;
     }
 
     private static readonly Regex NumericSortRegex = new(@"-?\d+", RegexOptions.Compiled);

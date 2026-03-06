@@ -42,6 +42,7 @@ public enum VimEventType
     MkSessionRequested,
     SourceRequested,
     TerminalRequested,
+    ReloadFileRequested,
 }
 
 public enum ViewportAlign
@@ -168,6 +169,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent TerminalRequested(string? shellCmd = null) =>
         new TerminalRequestedEvent(shellCmd);
+
+    public static VimEvent ReloadFileRequested(bool force) =>
+        new ReloadFileRequestedEvent(force);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -197,3 +201,4 @@ public record OpenUrlRequestedEvent(string Url) : VimEvent(VimEventType.OpenUrlR
 public record MkSessionRequestedEvent(string FilePath) : VimEvent(VimEventType.MkSessionRequested);
 public record SourceRequestedEvent(string FilePath) : VimEvent(VimEventType.SourceRequested);
 public record TerminalRequestedEvent(string? ShellCmd) : VimEvent(VimEventType.TerminalRequested);
+public record ReloadFileRequestedEvent(bool Force) : VimEvent(VimEventType.ReloadFileRequested);
