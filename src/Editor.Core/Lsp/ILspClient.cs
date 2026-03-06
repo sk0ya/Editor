@@ -13,6 +13,10 @@ public interface ILspClient : IDisposable
     bool SupportsFoldingRange { get; }
     /// <summary>サーバーが workspace/symbol をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsWorkspaceSymbol { get; }
+    /// <summary>サーバーが textDocument/semanticTokens/full をサポートしているか。InitializeAsync 後に確定する。</summary>
+    bool SupportsSemanticTokens { get; }
+    /// <summary>セマンティックトークンの凡例（トークン種別・修飾子）。InitializeAsync 後に確定する。</summary>
+    SemanticTokensLegend? SemanticTokensLegend { get; }
     event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
 
     Task InitializeAsync(string rootUri);
@@ -31,4 +35,15 @@ public interface ILspClient : IDisposable
     Task<IReadOnlyList<DocumentSymbol>> GetDocumentSymbolsAsync(string uri, CancellationToken ct = default);
     Task<IReadOnlyList<LspCodeAction>> GetCodeActionsAsync(string uri, LspRange range, CancellationToken ct = default);
     Task<IReadOnlyList<InlayHint>> GetInlayHintsAsync(string uri, LspRange range, CancellationToken ct = default);
+    Task<SemanticToken[]?> GetSemanticTokensAsync(string uri, CancellationToken ct = default);
+
+    // Call hierarchy
+    Task<CallHierarchyItem?> PrepareCallHierarchyAsync(string uri, LspPosition pos, CancellationToken ct = default);
+    Task<CallHierarchyIncomingCall[]?> GetIncomingCallsAsync(CallHierarchyItem item, CancellationToken ct = default);
+    Task<CallHierarchyOutgoingCall[]?> GetOutgoingCallsAsync(CallHierarchyItem item, CancellationToken ct = default);
+
+    // Type hierarchy
+    Task<TypeHierarchyItem?> PrepareTypeHierarchyAsync(string uri, LspPosition pos, CancellationToken ct = default);
+    Task<TypeHierarchyItem[]?> GetSupertypesAsync(TypeHierarchyItem item, CancellationToken ct = default);
+    Task<TypeHierarchyItem[]?> GetSubtypesAsync(TypeHierarchyItem item, CancellationToken ct = default);
 }

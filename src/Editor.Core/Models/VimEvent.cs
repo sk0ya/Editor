@@ -48,6 +48,8 @@ public enum VimEventType
     SymbolsRequested,
     GitCommitRequested,
     HunkNavigateRequested,
+    CallHierarchyRequested,
+    TypeHierarchyRequested,
 }
 
 public enum ViewportAlign
@@ -184,14 +186,20 @@ public record VimEvent(VimEventType Type)
     public static VimEvent ReloadFileRequested(bool force) =>
         new ReloadFileRequestedEvent(force);
 
-    public static VimEvent SymbolsRequested() =>
-        new(VimEventType.SymbolsRequested);
+    public static VimEvent SymbolsRequested(string? query = null) =>
+        query is null ? new VimEvent(VimEventType.SymbolsRequested) : new SymbolsRequestedEvent(query);
 
     public static VimEvent GitCommitRequested() =>
         new(VimEventType.GitCommitRequested);
 
     public static VimEvent HunkNavigateRequested(bool forward) =>
         new HunkNavigateRequestedEvent(forward);
+
+    public static VimEvent CallHierarchyRequested() =>
+        new(VimEventType.CallHierarchyRequested);
+
+    public static VimEvent TypeHierarchyRequested() =>
+        new(VimEventType.TypeHierarchyRequested);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -223,3 +231,4 @@ public record SourceRequestedEvent(string FilePath) : VimEvent(VimEventType.Sour
 public record TerminalRequestedEvent(string? ShellCmd) : VimEvent(VimEventType.TerminalRequested);
 public record ReloadFileRequestedEvent(bool Force) : VimEvent(VimEventType.ReloadFileRequested);
 public record HunkNavigateRequestedEvent(bool Forward) : VimEvent(VimEventType.HunkNavigateRequested);
+public record SymbolsRequestedEvent(string Query) : VimEvent(VimEventType.SymbolsRequested);

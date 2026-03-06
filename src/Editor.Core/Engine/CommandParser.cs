@@ -126,6 +126,10 @@ public class CommandParser
         if (rest == "g") return (CommandState.Incomplete, null);
         if (rest.StartsWith("g") && rest.Length >= 2)
         {
+            // gch — call hierarchy (must come before gc operator check)
+            if (rest[1] == 'c' && rest.Length >= 3 && rest[2] == 'h')
+                return Finalize(count, null, "gch");
+
             // gc operator: gcc = linewise, gc{motion} = operator+motion
             if (rest[1] == 'c')
             {
@@ -156,6 +160,7 @@ public class CommandParser
                 'k' => Finalize(count, null, "gk"),
                 't' => Finalize(count, null, "gt"),
                 'T' => Finalize(count, null, "gT"),
+                'h' => Finalize(count, null, "gh"),
                 'd' => Finalize(count, null, "gd"),
                 'r' => Finalize(count, null, "gr"),
                 'a' => Finalize(count, null, "ga"),

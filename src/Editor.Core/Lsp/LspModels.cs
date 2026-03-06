@@ -61,6 +61,18 @@ public record DocumentSymbol(
     LspRange SelectionRange,
     DocumentSymbol[]? Children);
 
+// Call hierarchy
+public record CallHierarchyItem(string Name, int Kind, string Uri, LspRange Range, LspRange SelectionRange);
+public record CallHierarchyIncomingCall(CallHierarchyItem From, LspRange[] FromRanges);
+public record CallHierarchyOutgoingCall(CallHierarchyItem To, LspRange[] FromRanges);
+
+// Type hierarchy
+public record TypeHierarchyItem(string Name, int Kind, string Uri, LspRange Range, LspRange SelectionRange);
+
+// Semantic tokens
+public record SemanticTokensLegend(string[] TokenTypes, string[] TokenModifiers);
+public record SemanticToken(int Line, int StartChar, int Length, string TokenType, string[] Modifiers);
+
 // Workspace symbols
 public enum SymbolKind
 {

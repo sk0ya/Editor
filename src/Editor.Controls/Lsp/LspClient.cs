@@ -13,6 +13,8 @@ public sealed class LspClient : ILspClient
     public bool SupportsFoldingRange { get; private set; }
     public bool SupportsWorkspaceSymbol { get; private set; }
     public bool SupportsInlayHint { get; private set; }
+    public bool SupportsSemanticTokens { get; private set; }
+    public SemanticTokensLegend? SemanticTokensLegend { get; private set; }
 
     public LspClient(string executable, IEnumerable<string> args, string? workingDir = null)
     {
@@ -41,7 +43,26 @@ public sealed class LspClient : ILspClient
                     references = new { },
                     foldingRange = new { },
                     documentSymbol = new { hierarchicalDocumentSymbolSupport = true },
-                    inlayHint = new { }
+                    inlayHint = new { },
+                    callHierarchy = new { },
+                    typeHierarchy = new { },
+                    semanticTokens = new
+                    {
+                        requests = new { full = true },
+                        tokenTypes = new[]
+                        {
+                            "namespace", "type", "class", "enum", "interface", "struct",
+                            "typeParameter", "parameter", "variable", "property", "enumMember",
+                            "event", "function", "method", "macro", "keyword", "modifier",
+                            "comment", "string", "number", "regexp", "operator", "decorator"
+                        },
+                        tokenModifiers = new[]
+                        {
+                            "declaration", "definition", "readonly", "static", "deprecated",
+                            "abstract", "async", "modification", "documentation", "defaultLibrary"
+                        },
+                        formats = new[] { "relative" }
+                    }
                 },
                 workspace = new
                 {
@@ -63,7 +84,29 @@ public sealed class LspClient : ILspClient
                 SupportsWorkspaceSymbol = wsp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("inlayHintProvider", out var ihp))
                 SupportsInlayHint = ihp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            if (caps.TryGetProperty("semanticTokensProvider", out var stp) &&
+                stp.ValueKind == JsonValueKind.Object &&
+                stp.TryGetProperty("legend", out var legend))
+            {
+                var types = ParseStringArray(legend, "tokenTypes");
+                var mods  = ParseStringArray(legend, "tokenModifiers");
+                if (types.Length > 0)
+                {
+                    SemanticTokensLegend = new SemanticTokensLegend(types, mods);
+                    SupportsSemanticTokens = true;
+                }
+            }
         }
+    }
+
+    private static string[] ParseStringArray(JsonElement el, string propName)
+    {
+        if (!el.TryGetProperty(propName, out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return [];
+        var list = new List<string>();
+        foreach (var item in arr.EnumerateArray())
+            if (item.GetString() is string s) list.Add(s);
+        return [.. list];
     }
 
     public Task OpenDocumentAsync(string uri, string languageId, string text)
@@ -461,6 +504,233 @@ public sealed class LspClient : ILspClient
         }
         catch { return []; }
     }
+
+    public async Task<SemanticToken[]?> GetSemanticTokensAsync(string uri, CancellationToken ct = default)
+    {
+        if (!SupportsSemanticTokens || SemanticTokensLegend is null) return null;
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/semanticTokens/full", new
+            {
+                textDocument = new { uri }
+            }, ct);
+
+            if (result is null || result.Value.ValueKind == JsonValueKind.Null) return null;
+            if (!result.Value.TryGetProperty("data", out var dataEl) ||
+                dataEl.ValueKind != JsonValueKind.Array) return null;
+
+            var data = new List<int>(dataEl.GetArrayLength());
+            foreach (var n in dataEl.EnumerateArray())
+                data.Add(n.GetInt32());
+
+            return DecodeSemanticTokens(data, SemanticTokensLegend);
+        }
+        catch { return null; }
+    }
+
+    private static SemanticToken[] DecodeSemanticTokens(List<int> data, SemanticTokensLegend legend)
+    {
+        // Each token is encoded as 5 ints: [deltaLine, deltaStartChar, length, tokenTypeIndex, tokenModifiersBitmask]
+        var tokens = new List<SemanticToken>(data.Count / 5);
+        int line = 0, startChar = 0;
+        for (int i = 0; i + 4 < data.Count; i += 5)
+        {
+            int deltaLine      = data[i];
+            int deltaStartChar = data[i + 1];
+            int length         = data[i + 2];
+            int typeIdx        = data[i + 3];
+            int modsBitmask    = data[i + 4];
+
+            line = line + deltaLine;
+            startChar = deltaLine == 0 ? startChar + deltaStartChar : deltaStartChar;
+
+            string tokenType = typeIdx >= 0 && typeIdx < legend.TokenTypes.Length
+                ? legend.TokenTypes[typeIdx] : "";
+            if (string.IsNullOrEmpty(tokenType)) continue;
+
+            var mods = new List<string>();
+            for (int bit = 0; bit < legend.TokenModifiers.Length; bit++)
+                if ((modsBitmask & (1 << bit)) != 0)
+                    mods.Add(legend.TokenModifiers[bit]);
+
+            tokens.Add(new SemanticToken(line, startChar, length, tokenType, [.. mods]));
+        }
+        return [.. tokens];
+    }
+
+    public async Task<CallHierarchyItem?> PrepareCallHierarchyAsync(
+        string uri, LspPosition pos, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/prepareCallHierarchy", new
+            {
+                textDocument = new { uri },
+                position = new { line = pos.Line, character = pos.Character }
+            }, ct);
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
+            var first = result.Value.EnumerateArray().FirstOrDefault();
+            if (first.ValueKind == JsonValueKind.Undefined) return null;
+            return ParseHierarchyItem<CallHierarchyItem>(first,
+                (name, kind, itemUri, range, sel) => new CallHierarchyItem(name, kind, itemUri, range, sel));
+        }
+        catch { return null; }
+    }
+
+    public async Task<CallHierarchyIncomingCall[]?> GetIncomingCallsAsync(
+        CallHierarchyItem item, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("callHierarchy/incomingCalls", new
+            {
+                item = SerializeHierarchyItem(item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange)
+            }, ct);
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
+            var list = new List<CallHierarchyIncomingCall>();
+            foreach (var el in result.Value.EnumerateArray())
+            {
+                if (!el.TryGetProperty("from", out var fromEl)) continue;
+                var from = ParseHierarchyItem<CallHierarchyItem>(fromEl,
+                    (name, kind, u, r, s) => new CallHierarchyItem(name, kind, u, r, s));
+                if (from is null) continue;
+                var ranges = ParseFromRanges(el);
+                list.Add(new CallHierarchyIncomingCall(from, ranges));
+            }
+            return [.. list];
+        }
+        catch { return null; }
+    }
+
+    public async Task<CallHierarchyOutgoingCall[]?> GetOutgoingCallsAsync(
+        CallHierarchyItem item, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("callHierarchy/outgoingCalls", new
+            {
+                item = SerializeHierarchyItem(item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange)
+            }, ct);
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
+            var list = new List<CallHierarchyOutgoingCall>();
+            foreach (var el in result.Value.EnumerateArray())
+            {
+                if (!el.TryGetProperty("to", out var toEl)) continue;
+                var to = ParseHierarchyItem<CallHierarchyItem>(toEl,
+                    (name, kind, u, r, s) => new CallHierarchyItem(name, kind, u, r, s));
+                if (to is null) continue;
+                var ranges = ParseFromRanges(el);
+                list.Add(new CallHierarchyOutgoingCall(to, ranges));
+            }
+            return [.. list];
+        }
+        catch { return null; }
+    }
+
+    public async Task<TypeHierarchyItem?> PrepareTypeHierarchyAsync(
+        string uri, LspPosition pos, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/prepareTypeHierarchy", new
+            {
+                textDocument = new { uri },
+                position = new { line = pos.Line, character = pos.Character }
+            }, ct);
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
+            var first = result.Value.EnumerateArray().FirstOrDefault();
+            if (first.ValueKind == JsonValueKind.Undefined) return null;
+            return ParseHierarchyItem<TypeHierarchyItem>(first,
+                (name, kind, itemUri, range, sel) => new TypeHierarchyItem(name, kind, itemUri, range, sel));
+        }
+        catch { return null; }
+    }
+
+    public async Task<TypeHierarchyItem[]?> GetSupertypesAsync(
+        TypeHierarchyItem item, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("typeHierarchy/supertypes", new
+            {
+                item = SerializeHierarchyItem(item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange)
+            }, ct);
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
+            return ParseTypeHierarchyItems(result.Value);
+        }
+        catch { return null; }
+    }
+
+    public async Task<TypeHierarchyItem[]?> GetSubtypesAsync(
+        TypeHierarchyItem item, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("typeHierarchy/subtypes", new
+            {
+                item = SerializeHierarchyItem(item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange)
+            }, ct);
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
+            return ParseTypeHierarchyItems(result.Value);
+        }
+        catch { return null; }
+    }
+
+    private static T? ParseHierarchyItem<T>(JsonElement el,
+        Func<string, int, string, LspRange, LspRange, T> factory) where T : class
+    {
+        if (!el.TryGetProperty("name", out var nameEl)) return null;
+        var name = nameEl.GetString() ?? "";
+        var kind = el.TryGetProperty("kind", out var kindEl) ? kindEl.GetInt32() : 0;
+        var itemUri = el.TryGetProperty("uri", out var uriEl) ? uriEl.GetString() ?? "" : "";
+        var range = el.TryGetProperty("range", out var rangeEl)
+            ? ParseRange(rangeEl)
+            : new LspRange(new LspPosition(0, 0), new LspPosition(0, 0));
+        var sel = el.TryGetProperty("selectionRange", out var selEl)
+            ? ParseRange(selEl)
+            : range;
+        return factory(name, kind, itemUri, range, sel);
+    }
+
+    private static TypeHierarchyItem[] ParseTypeHierarchyItems(JsonElement array)
+    {
+        var list = new List<TypeHierarchyItem>();
+        foreach (var el in array.EnumerateArray())
+        {
+            var item = ParseHierarchyItem<TypeHierarchyItem>(el,
+                (name, kind, u, r, s) => new TypeHierarchyItem(name, kind, u, r, s));
+            if (item is not null) list.Add(item);
+        }
+        return [.. list];
+    }
+
+    private static LspRange[] ParseFromRanges(JsonElement el)
+    {
+        if (!el.TryGetProperty("fromRanges", out var frEl) || frEl.ValueKind != JsonValueKind.Array)
+            return [];
+        var list = new List<LspRange>();
+        foreach (var r in frEl.EnumerateArray())
+            list.Add(ParseRange(r));
+        return [.. list];
+    }
+
+    private static object SerializeHierarchyItem(string name, int kind, string uri, LspRange range, LspRange selRange) =>
+        new
+        {
+            name,
+            kind,
+            uri,
+            range = new
+            {
+                start = new { line = range.Start.Line, character = range.Start.Character },
+                end   = new { line = range.End.Line,   character = range.End.Character }
+            },
+            selectionRange = new
+            {
+                start = new { line = selRange.Start.Line, character = selRange.Start.Character },
+                end   = new { line = selRange.End.Line,   character = selRange.End.Character }
+            }
+        };
 
     private void OnNotification(string method, JsonElement @params)
     {

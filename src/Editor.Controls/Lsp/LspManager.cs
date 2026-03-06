@@ -45,6 +45,11 @@ public sealed class LspManager : IDisposable
     private IReadOnlyList<InlayHint> _inlayHints = [];
     private bool _inlayHintsEnabled = false;
 
+    // Semantic tokens
+    private bool _semanticTokensEnabled = false;
+    private System.Threading.Timer? _semanticTokenDebounce;
+    private const int SemanticTokenDebounceMs = 500;
+
     // Document symbols (for breadcrumb and :Symbols)
     private IReadOnlyList<DocumentSymbol> _documentSymbols = [];
     private System.Threading.Timer? _symbolDebounce;
@@ -86,6 +91,9 @@ public sealed class LspManager : IDisposable
     /// <summary>Fired on the dispatcher thread when inlay hints are refreshed.</summary>
     public event Action<IReadOnlyList<InlayHint>>? InlayHintsChanged;
 
+    /// <summary>Fired on the dispatcher thread when semantic tokens are refreshed.</summary>
+    public event Action<SemanticToken[]>? SemanticTokensChanged;
+
     public string? CurrentUri => _currentUri;
 
     public LspManager(Dispatcher dispatcher) => _dispatcher = dispatcher;
@@ -98,11 +106,14 @@ public sealed class LspManager : IDisposable
         _diagnostics = [];
         _inlayHints = [];
         _documentSymbols = [];
+        if (_semanticTokensEnabled) SemanticTokensChanged?.Invoke([]);
         _lastBreadcrumb = "";
         _documentReady = false;
         _pendingFoldRangeUri = null;
         _symbolDebounce?.Dispose();
         _symbolDebounce = null;
+        _semanticTokenDebounce?.Dispose();
+        _semanticTokenDebounce = null;
 
         if (filePath == null)
         {
@@ -179,6 +190,20 @@ public sealed class LspManager : IDisposable
         if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return;
         _ = _currentClient.ChangeDocumentAsync(_currentUri, ++_docVersion, text);
         ScheduleSymbolRefresh();
+        if (_semanticTokensEnabled)
+            ScheduleSemanticTokenRefresh();
+    }
+
+    private void ScheduleSemanticTokenRefresh()
+    {
+        _semanticTokenDebounce?.Dispose();
+        _semanticTokenDebounce = new System.Threading.Timer(_ =>
+        {
+            var client = _currentClient;
+            var uri    = _currentUri;
+            if (client?.IsRunning == true && uri != null && _documentReady && _semanticTokensEnabled)
+                _ = RequestSemanticTokensInternalAsync(client, uri);
+        }, null, SemanticTokenDebounceMs, Timeout.Infinite);
     }
 
     private void ScheduleSymbolRefresh()
@@ -465,6 +490,48 @@ public sealed class LspManager : IDisposable
         return SymbolSearchFilter.FilterByKind(symbols, isClass);
     }
 
+    /// <summary>Prepare call hierarchy item at the given position.</summary>
+    public async Task<CallHierarchyItem?> PrepareCallHierarchyAsync(int line, int character)
+    {
+        if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return null;
+        return await _currentClient.PrepareCallHierarchyAsync(_currentUri, new LspPosition(line, character));
+    }
+
+    /// <summary>Get incoming calls for a call hierarchy item.</summary>
+    public async Task<CallHierarchyIncomingCall[]?> GetIncomingCallsAsync(CallHierarchyItem item)
+    {
+        if (_currentClient?.IsRunning != true) return null;
+        return await _currentClient.GetIncomingCallsAsync(item);
+    }
+
+    /// <summary>Get outgoing calls for a call hierarchy item.</summary>
+    public async Task<CallHierarchyOutgoingCall[]?> GetOutgoingCallsAsync(CallHierarchyItem item)
+    {
+        if (_currentClient?.IsRunning != true) return null;
+        return await _currentClient.GetOutgoingCallsAsync(item);
+    }
+
+    /// <summary>Prepare type hierarchy item at the given position.</summary>
+    public async Task<TypeHierarchyItem?> PrepareTypeHierarchyAsync(int line, int character)
+    {
+        if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return null;
+        return await _currentClient.PrepareTypeHierarchyAsync(_currentUri, new LspPosition(line, character));
+    }
+
+    /// <summary>Get supertypes for a type hierarchy item.</summary>
+    public async Task<TypeHierarchyItem[]?> GetSupertypesAsync(TypeHierarchyItem item)
+    {
+        if (_currentClient?.IsRunning != true) return null;
+        return await _currentClient.GetSupertypesAsync(item);
+    }
+
+    /// <summary>Get subtypes for a type hierarchy item.</summary>
+    public async Task<TypeHierarchyItem[]?> GetSubtypesAsync(TypeHierarchyItem item)
+    {
+        if (_currentClient?.IsRunning != true) return null;
+        return await _currentClient.GetSubtypesAsync(item);
+    }
+
     // ── Async helpers ──────────────────────────────────────────────────────
 
     private async Task InitThenOpenAsync(LspClient client, string filePath, string uri, string languageId, string text)
@@ -516,6 +583,9 @@ public sealed class LspManager : IDisposable
             // Refresh inlay hints if enabled
             if (_inlayHintsEnabled)
                 _ = RequestInlayHintsInternalAsync(client, uri, 0, int.MaxValue);
+            // Refresh semantic tokens if enabled
+            if (_semanticTokensEnabled)
+                _ = RequestSemanticTokensInternalAsync(client, uri);
         }
         catch (Exception ex)
         {
@@ -598,6 +668,37 @@ public sealed class LspManager : IDisposable
         catch { }
     }
 
+    /// <summary>Enable or disable semantic token highlighting. When enabled, immediately fetches tokens for the current file.</summary>
+    public void SetSemanticTokensEnabled(bool enabled)
+    {
+        _semanticTokensEnabled = enabled;
+        if (enabled)
+            RequestSemanticTokens();
+        else
+            SemanticTokensChanged?.Invoke([]);
+    }
+
+    /// <summary>Request semantic tokens for the current document.</summary>
+    public void RequestSemanticTokens()
+    {
+        if (!_semanticTokensEnabled || !_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return;
+        _ = RequestSemanticTokensInternalAsync(_currentClient, _currentUri);
+    }
+
+    private async Task RequestSemanticTokensInternalAsync(LspClient client, string uri)
+    {
+        try
+        {
+            var tokens = await client.GetSemanticTokensAsync(uri);
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (_currentUri != uri) return;
+                SemanticTokensChanged?.Invoke(tokens ?? []);
+            });
+        }
+        catch { }
+    }
+
     private static async Task CloseSafeAsync(LspClient client, string uri)
     {
         try { await client.CloseDocumentAsync(uri); }
@@ -675,6 +776,7 @@ public sealed class LspManager : IDisposable
     public void Dispose()
     {
         _symbolDebounce?.Dispose();
+        _semanticTokenDebounce?.Dispose();
         foreach (var c in _clients.Values) c.Dispose();
         _clients.Clear();
     }

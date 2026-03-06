@@ -247,10 +247,25 @@ public class ExCommandProcessor
             return new ExResult(true, null, VimEvent.LspRenameRequested(newName));
         }
 
-        // :Symbols / :outline — list document symbols
-        if (cmd.Equals("Symbols", StringComparison.OrdinalIgnoreCase) ||
+        // :Symbols [query] / :sym [query] / :outline — list document or workspace symbols
+        // With a query argument: workspace/symbol search. Without: document symbols outline.
+        if (cmd.StartsWith("Symbols", StringComparison.OrdinalIgnoreCase) ||
+            cmd.StartsWith("sym", StringComparison.OrdinalIgnoreCase) ||
             cmd.Equals("outline", StringComparison.OrdinalIgnoreCase))
-            return new ExResult(true, null, VimEvent.SymbolsRequested());
+        {
+            var spaceIdx = cmd.IndexOf(' ');
+            var query = spaceIdx >= 0 ? cmd[(spaceIdx + 1)..].Trim() : null;
+            if (string.IsNullOrEmpty(query)) query = null;
+            return new ExResult(true, null, VimEvent.SymbolsRequested(query));
+        }
+
+        // :CallHierarchy — LSP call hierarchy for symbol under cursor
+        if (cmd.Equals("CallHierarchy", StringComparison.OrdinalIgnoreCase))
+            return new ExResult(true, null, VimEvent.CallHierarchyRequested());
+
+        // :TypeHierarchy — LSP type hierarchy for symbol under cursor
+        if (cmd.Equals("TypeHierarchy", StringComparison.OrdinalIgnoreCase))
+            return new ExResult(true, null, VimEvent.TypeHierarchyRequested());
 
         // :Git blame / :Gblame — toggle inline git blame annotations
         if (cmd is "Git blame" or "git blame" or "Gblame" or "gblame")
@@ -1114,7 +1129,7 @@ public class ExCommandProcessor
         "tabc", "tabc!", "tabclose", "tabclose!",
         "split", "sp", "new",
         "vsplit", "vs", "vnew",
-        "Format", "Rename", "digraphs",
+        "Format", "Rename", "Symbols", "sym", "outline", "digraphs",
         "read", "r",
         "Git blame", "Gblame",
         "Git commit", "Gcommit",
