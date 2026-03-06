@@ -340,6 +340,21 @@ public class ExCommandProcessor
         if (cmd == "changes")
             return new ExResult(true, _markManager.FormatChangeList());
 
+        // :[range]move {addr}   :m[ove]
+        if (cmd.StartsWith("move ") || cmd.StartsWith("m ") || cmd == "move" || cmd == "m")
+        {
+            int sp = cmd.IndexOf(' ');
+            return ExecuteMove(sp >= 0 ? cmd[(sp + 1)..].Trim() : "", range, cursor);
+        }
+
+        // :[range]copy {addr}   :co[py]  :t
+        if (cmd.StartsWith("copy ") || cmd.StartsWith("co ") || cmd.StartsWith("t ") ||
+            cmd == "copy" || cmd == "co" || cmd == "t")
+        {
+            int sp = cmd.IndexOf(' ');
+            return ExecuteCopy(sp >= 0 ? cmd[(sp + 1)..].Trim() : "", range, cursor);
+        }
+
         return new ExResult(false, $"Not an editor command: {cmd}");
     }
 
@@ -453,6 +468,61 @@ public class ExCommandProcessor
             else if (parts.Length == 1 && int.TryParse(parts[0], out var n))
             { startLine = endLine = n - 1; }
         }
+    }
+
+    // Returns 0-based destination line index, or -1 for "before line 0", or -2 on error.
+    private static int ResolveAddress(string addr, CursorPosition cursor, int lineCount)
+    {
+        addr = addr.Trim();
+        if (addr == "0") return -1;
+        if (addr == "." || addr == "") return cursor.Line;
+        if (addr == "$") return lineCount - 1;
+        if (int.TryParse(addr, out var n)) return n - 1;
+        if (addr.StartsWith(".+") && int.TryParse(addr[2..], out var dp)) return cursor.Line + dp;
+        if (addr.StartsWith(".-") && int.TryParse(addr[2..], out var dm)) return cursor.Line - dm;
+        if (addr.StartsWith("$-") && int.TryParse(addr[2..], out var sm)) return lineCount - 1 - sm;
+        return -2;
+    }
+
+    private (TextBuffer buf, int startLine, int endLine) ResolveRangeClamped(string range, CursorPosition cursor)
+    {
+        var buf = _bufferManager.Current.Text;
+        int startLine = cursor.Line, endLine = cursor.Line;
+        ResolveRange(range, cursor, buf.LineCount, ref startLine, ref endLine);
+        startLine = Math.Clamp(startLine, 0, buf.LineCount - 1);
+        endLine = Math.Clamp(endLine, startLine, buf.LineCount - 1);
+        return (buf, startLine, endLine);
+    }
+
+    private ExResult ExecuteMove(string addrStr, string range, CursorPosition cursor)
+    {
+        var (buf, startLine, endLine) = ResolveRangeClamped(range, cursor);
+
+        int dest = ResolveAddress(addrStr, cursor, buf.LineCount);
+        if (dest < -1) return new ExResult(false, "E14: Invalid address");
+        if (dest >= startLine && dest <= endLine)
+            return new ExResult(false, "E134: Move lines into themselves");
+
+        var lines = buf.GetLines(startLine, endLine);
+        buf.DeleteLines(startLine, endLine);
+
+        // If destination was after the deleted range, shift it back
+        int adjustedDest = dest > endLine ? dest - lines.Length : dest;
+        buf.InsertLines(adjustedDest, lines);
+
+        return new ExResult(true, $"{lines.Length} line(s) moved", TextModified: true);
+    }
+
+    private ExResult ExecuteCopy(string addrStr, string range, CursorPosition cursor)
+    {
+        var (buf, startLine, endLine) = ResolveRangeClamped(range, cursor);
+
+        int dest = ResolveAddress(addrStr, cursor, buf.LineCount);
+        if (dest < -1) return new ExResult(false, "E14: Invalid address");
+
+        buf.InsertLines(dest, buf.GetLines(startLine, endLine));
+
+        return new ExResult(true, $"{endLine - startLine + 1} line(s) copied", TextModified: true);
     }
 
     private ExResult ExecuteSubstitute(string cmd, string range, CursorPosition cursor)
@@ -833,6 +903,7 @@ public class ExCommandProcessor
         "cclose", "ccl",
         "cn", "cnext", "cp", "cprev",
         "sort",
+        "move", "m", "copy", "co", "t",
         "normal", "norm", "normal!", "norm!",
         "g", "global", "v", "vglobal",
         "grep", "vimgrep",
