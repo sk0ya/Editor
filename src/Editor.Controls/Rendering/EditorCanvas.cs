@@ -81,6 +81,9 @@ public class EditorCanvas : FrameworkElement
     private IReadOnlyList<InlayHint> _inlayHints = [];
     private Dictionary<int, List<InlayHint>> _inlayHintsByLine = [];
 
+    // Semantic tokens — line-keyed lookup: line → list of (startChar, length, brush)
+    private Dictionary<int, List<(int StartChar, int Length, Brush Brush)>> _semanticTokensByLine = [];
+
     // LSP
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
     private IReadOnlyList<LspCompletionItem> _completionItems = [];
@@ -207,6 +210,42 @@ public class EditorCanvas : FrameworkElement
         _blameAnnotations = annotations ?? [];
         InvalidateVisual();
     }
+
+    public void SetSemanticTokens(SemanticToken[] tokens)
+    {
+        _semanticTokensByLine = [];
+        foreach (var tok in tokens)
+        {
+            var brush = SemanticTokenTypeToBrush(tok.TokenType);
+            if (brush is null) continue;
+            if (!_semanticTokensByLine.TryGetValue(tok.Line, out var list))
+                _semanticTokensByLine[tok.Line] = list = [];
+            list.Add((tok.StartChar, tok.Length, brush));
+        }
+        // Pre-sort each line's tokens by start column so the render loop needs no LINQ allocation per frame.
+        foreach (var list in _semanticTokensByLine.Values)
+            list.Sort((a, b) => a.StartChar.CompareTo(b.StartChar));
+        InvalidateVisual();
+    }
+
+    private Brush? SemanticTokenTypeToBrush(string tokenType) => tokenType switch
+    {
+        "namespace"                          => Theme.TokenType,
+        "class" or "struct" or "enum"
+            or "interface" or "type"
+            or "typeParameter"               => Theme.TokenType,
+        "function" or "method"               => Theme.TokenIdentifier,
+        "keyword" or "modifier"              => Theme.TokenKeyword,
+        "string" or "regexp"                 => Theme.TokenString,
+        "number"                             => Theme.TokenNumber,
+        "comment"                            => Theme.TokenComment,
+        "decorator" or "attribute"           => Theme.TokenAttribute,
+        "macro" or "operator"               => Theme.TokenKeyword,
+        "variable" or "parameter"
+            or "property" or "enumMember"
+            or "event"                       => null,  // use default foreground (no override)
+        _                                    => null
+    };
 
     public void SetTokens(LineTokens[] tokens) { _tokens = tokens; InvalidateVisual(); }
     public void SetSearchMatches(List<CursorPosition> matches, string pattern) { _searchMatches = matches; _searchPattern = pattern; InvalidateVisual(); }
@@ -1363,6 +1402,15 @@ public class EditorCanvas : FrameworkElement
 
         if (string.IsNullOrEmpty(lineText)) return;
 
+        // Semantic tokens take priority over regex-based syntax tokens when present for this line.
+        // The list is pre-sorted by StartChar at SetSemanticTokens time.
+        if (_semanticTokensByLine.TryGetValue(lineIndex, out var semTokens) && semTokens.Count > 0)
+        {
+            DrawLineTextWithSegments(dc, lineText, y, textLeft,
+                semTokens.Select(t => (t.StartChar, t.Length, (Brush?)t.Brush)));
+            return;
+        }
+
         var tokens = _tokens.FirstOrDefault(t => t.Line == lineIndex).Tokens;
 
         if (tokens == null || tokens.Length == 0)
@@ -1374,29 +1422,42 @@ public class EditorCanvas : FrameworkElement
         }
 
         // Draw segments with colors
+        DrawLineTextWithSegments(dc, lineText, y, textLeft,
+            tokens.OrderBy(t => t.StartColumn)
+                  .Select(t => (t.StartColumn, t.Length, (Brush?)Theme.GetTokenBrush(t.Kind))));
+    }
+
+    /// <summary>
+    /// Draws a line of text using a sequence of colored segments.
+    /// Each segment is (startCol, length, brush?); gaps between segments use the default foreground.
+    /// Null brush means "use default foreground".
+    /// </summary>
+    private void DrawLineTextWithSegments(DrawingContext dc, string lineText, double y, double textLeft,
+        IEnumerable<(int StartCol, int Length, Brush? Brush)> segments)
+    {
         int pos = 0;
-        foreach (var tok in tokens.OrderBy(t => t.StartColumn))
+        foreach (var (startCol, length, brush) in segments)
         {
-            // Gap before token in default color
-            if (tok.StartColumn > pos)
+            // Gap before segment in default color
+            if (startCol > pos)
             {
-                var gap = lineText[pos..Math.Min(tok.StartColumn, lineText.Length)];
+                var gap = lineText[pos..Math.Min(startCol, lineText.Length)];
                 if (gap.Length > 0)
                 {
                     var ft = FormatText(gap, Theme.Foreground);
                     dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, pos) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
                 }
             }
-            // Token text
-            int end = Math.Min(tok.StartColumn + tok.Length, lineText.Length);
-            if (tok.StartColumn < end)
+            // Segment text
+            int end = Math.Min(startCol + length, lineText.Length);
+            if (startCol < end)
             {
-                var tokText = lineText[tok.StartColumn..end];
-                var brush = Theme.GetTokenBrush(tok.Kind);
-                var ft = FormatText(tokText, brush);
-                dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, tok.StartColumn) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+                var segText = lineText[startCol..end];
+                var segBrush = brush ?? Theme.Foreground;
+                var ft = FormatText(segText, segBrush);
+                dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
             }
-            pos = Math.Max(pos, tok.StartColumn + tok.Length);
+            pos = Math.Max(pos, startCol + length);
         }
         // Remaining text
         if (pos < lineText.Length)

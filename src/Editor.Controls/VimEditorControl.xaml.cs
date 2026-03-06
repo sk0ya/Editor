@@ -266,6 +266,7 @@ public partial class VimEditorControl : UserControl
         _lspManager.FoldingRangesChanged += OnLspFoldingRangesChanged;
         _lspManager.BreadcrumbChanged += OnLspBreadcrumbChanged;
         _lspManager.InlayHintsChanged += OnLspInlayHintsChanged;
+        _lspManager.SemanticTokensChanged += OnLspSemanticTokensChanged;
 
         _completionDebounce = new System.Windows.Threading.DispatcherTimer
         {
@@ -329,6 +330,11 @@ public partial class VimEditorControl : UserControl
         Canvas.SetInlayHints(hints);
     }
 
+    private void OnLspSemanticTokensChanged(SemanticToken[] tokens)
+    {
+        Canvas.SetSemanticTokens(tokens);
+    }
+
     private void OnLspFoldingRangesChanged(IReadOnlyList<LspFoldingRange> ranges)
     {
         var method = _engine.Options.FoldMethod;
@@ -384,6 +390,11 @@ public partial class VimEditorControl : UserControl
     private void ApplyInlayHintsOption()
     {
         _lspManager.SetInlayHintsEnabled(_engine.Options.InlayHints);
+    }
+
+    private void ApplySemanticTokensOption()
+    {
+        _lspManager.SetSemanticTokensEnabled(_engine.Options.SemanticTokens);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -2062,6 +2073,115 @@ public partial class VimEditorControl : UserControl
         FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(items, symbol));
     }
 
+    private async Task HandleCallHierarchyAsync()
+    {
+        if (!_lspManager.IsConnected) { ActiveStatusBar.UpdateStatus("Call hierarchy: LSP not connected"); return; }
+        var symbol = GetWordAtCursor();
+        ActiveStatusBar.UpdateStatus("Call hierarchy: searching…");
+
+        var cursor = _engine.Cursor;
+        var item = await _lspManager.PrepareCallHierarchyAsync(cursor.Line, cursor.Column);
+        if (item is null)
+        {
+            ActiveStatusBar.UpdateStatus("Call hierarchy: no symbol found");
+            return;
+        }
+
+        var incomingTask = _lspManager.GetIncomingCallsAsync(item);
+        var outgoingTask = _lspManager.GetOutgoingCallsAsync(item);
+        await Task.WhenAll(incomingTask, outgoingTask);
+        var incoming = incomingTask.Result;
+        var outgoing = outgoingTask.Result;
+
+        var resultItems = new List<FindReferenceItem>();
+
+        if (incoming is { Length: > 0 })
+        {
+            foreach (var call in incoming)
+            {
+                // Use first fromRange if available, else selectionRange
+                int line = call.FromRanges.Length > 0
+                    ? call.FromRanges[0].Start.Line
+                    : call.From.SelectionRange.Start.Line;
+                int col = call.FromRanges.Length > 0
+                    ? call.FromRanges[0].Start.Character
+                    : call.From.SelectionRange.Start.Character;
+                resultItems.Add(new FindReferenceItem(UriToLocalPath(call.From.Uri), line, col));
+            }
+        }
+
+        if (outgoing is { Length: > 0 })
+        {
+            foreach (var call in outgoing)
+            {
+                int line = call.FromRanges.Length > 0
+                    ? call.FromRanges[0].Start.Line
+                    : call.To.SelectionRange.Start.Line;
+                int col = call.FromRanges.Length > 0
+                    ? call.FromRanges[0].Start.Character
+                    : call.To.SelectionRange.Start.Character;
+                resultItems.Add(new FindReferenceItem(UriToLocalPath(call.To.Uri), line, col));
+            }
+        }
+
+        if (resultItems.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus($"Call hierarchy: no callers/callees found for '{symbol}'");
+            return;
+        }
+
+        int inCount = incoming?.Length ?? 0;
+        int outCount = outgoing?.Length ?? 0;
+        ActiveStatusBar.UpdateStatus($"Call hierarchy: {inCount} caller(s), {outCount} callee(s) for '{symbol}'");
+        FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(resultItems, $"Call hierarchy: {symbol}"));
+    }
+
+    private async Task HandleTypeHierarchyAsync()
+    {
+        if (!_lspManager.IsConnected) { ActiveStatusBar.UpdateStatus("Type hierarchy: LSP not connected"); return; }
+        var symbol = GetWordAtCursor();
+        ActiveStatusBar.UpdateStatus("Type hierarchy: searching…");
+
+        var cursor = _engine.Cursor;
+        var item = await _lspManager.PrepareTypeHierarchyAsync(cursor.Line, cursor.Column);
+        if (item is null)
+        {
+            ActiveStatusBar.UpdateStatus("Type hierarchy: no type found");
+            return;
+        }
+
+        var supertypesTask = _lspManager.GetSupertypesAsync(item);
+        var subtypesTask   = _lspManager.GetSubtypesAsync(item);
+        await Task.WhenAll(supertypesTask, subtypesTask);
+        var supertypes = supertypesTask.Result;
+        var subtypes   = subtypesTask.Result;
+
+        var resultItems = new List<FindReferenceItem>();
+
+        if (supertypes is { Length: > 0 })
+        {
+            foreach (var t in supertypes)
+                resultItems.Add(new FindReferenceItem(UriToLocalPath(t.Uri), t.SelectionRange.Start.Line, t.SelectionRange.Start.Character));
+        }
+
+        if (subtypes is { Length: > 0 })
+        {
+            foreach (var t in subtypes)
+                resultItems.Add(new FindReferenceItem(UriToLocalPath(t.Uri), t.SelectionRange.Start.Line, t.SelectionRange.Start.Character));
+        }
+
+        if (resultItems.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus($"Type hierarchy: no supertypes/subtypes found for '{symbol}'");
+            return;
+        }
+
+        int superCount = supertypes?.Length ?? 0;
+        int subCount   = subtypes?.Length ?? 0;
+        ActiveStatusBar.UpdateStatus($"Type hierarchy: {superCount} supertype(s), {subCount} subtype(s) for '{symbol}'");
+        FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(resultItems, $"Type hierarchy: {symbol}"));
+    }
+
     private async Task HandleDocumentSymbolsAsync()
     {
         // Use cached symbols if available
@@ -2106,6 +2226,33 @@ public partial class VimEditorControl : UserControl
             if (sym.Children != null && sym.Children.Length > 0)
                 FlattenSymbols(sym.Children, result, depth + 1);
         }
+    }
+
+    private async Task HandleWorkspaceSymbolsAsync(string query)
+    {
+        if (!_lspManager.IsConnected)
+        {
+            ActiveStatusBar.UpdateStatus("Symbols: LSP not connected");
+            return;
+        }
+
+        ActiveStatusBar.UpdateStatus($"Symbols: searching '{query}'…");
+        var symbols = await _lspManager.GetWorkspaceSymbolsAsync(query, false);
+        if (symbols.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus($"Symbols: no results for '{query}'");
+            return;
+        }
+
+        var seenUris = new HashSet<string>();
+        var items = symbols.Select(s =>
+        {
+            seenUris.Add(s.Location.Uri);
+            return new FindReferenceItem(UriToLocalPath(s.Location.Uri), s.Location.Range.Start.Line, s.Location.Range.Start.Character);
+        }).ToList();
+
+        ActiveStatusBar.UpdateStatus($"Symbols: {items.Count} result(s) in {seenUris.Count} file(s) for '{query}'");
+        FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(items, query));
     }
 
     private async Task HandleCodeActionAsync()
@@ -2544,6 +2691,12 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.FindReferencesRequested:
                     _ = HandleFindReferencesAsync();
                     break;
+                case VimEventType.CallHierarchyRequested:
+                    _ = HandleCallHierarchyAsync();
+                    break;
+                case VimEventType.TypeHierarchyRequested:
+                    _ = HandleTypeHierarchyAsync();
+                    break;
                 case VimEventType.LspRenameRequested when evt is LspRenameRequestedEvent rre:
                     _ = HandleRenameAsync(rre.NewName);
                     break;
@@ -2589,6 +2742,9 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.HunkNavigateRequested when evt is HunkNavigateRequestedEvent hnr:
                     NavigateHunk(hnr.Forward);
                     break;
+                case VimEventType.SymbolsRequested when evt is SymbolsRequestedEvent sre:
+                    _ = HandleWorkspaceSymbolsAsync(sre.Query);
+                    break;
                 case VimEventType.SymbolsRequested:
                     _ = HandleDocumentSymbolsAsync();
                     break;
@@ -2598,6 +2754,7 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.OptionsChanged:
                     ApplyFoldMethod();
                     ApplyInlayHintsOption();
+                    ApplySemanticTokensOption();
                     needFullUpdate = true;
                     break;
             }
@@ -2783,6 +2940,11 @@ public partial class VimEditorControl : UserControl
         Key.D6 => "6",
         _ => null
     };
+
+    private static string UriToLocalPath(string uri)
+    {
+        try { return new Uri(uri).LocalPath; } catch { return uri; }
+    }
 
     private static bool ShouldPreferTextInput(VimMode mode, Key key)
     {

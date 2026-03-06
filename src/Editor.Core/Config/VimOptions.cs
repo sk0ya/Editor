@@ -61,6 +61,9 @@ public class VimOptions
     // LSP Inlay Hints
     public bool InlayHints { get; set; } = false;
 
+    // LSP Semantic Tokens
+    public bool SemanticTokens { get; set; } = false;
+
     // Folding
     public string FoldMethod { get; set; } = "manual"; // manual, indent, marker, syntax
 
@@ -141,6 +144,7 @@ public class VimOptions
             "indentguides" or "ig"             => Set(() => IndentGuides = value),
             "colorpreview" or "cpv"            => Set(() => ColorPreview = value),
             "inlayhints" or "ih"               => Set(() => InlayHints = value),
+            "semantictokens" or "st"           => Set(() => SemanticTokens = value),
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => null,
             "startofline" or "sol"             => null,
