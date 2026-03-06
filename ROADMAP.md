@@ -64,8 +64,8 @@
 |------|------|
 | ~~**`:Git diff`**~~ | ~~ファイルの git diff をエディタ内に表示~~ |
 | ~~**`:Git log`**~~ | ~~コミットログをエディタ内に表示~~ |
-| **`:Git commit`** | コミットメッセージ入力 UI |
-| **Hunk 操作** | `]c`/`[c` で diff hunk 間移動、`Stage Hunk` |
+| ~~**`:Git commit`**~~ | ~~コミットメッセージ入力 UI~~ |
+| ~~**Hunk 操作**~~ | ~~`]c`/`[c` で diff hunk 間移動~~ |
 
 ---
 
@@ -145,3 +145,5 @@
 | **`:[range]center` / `:right` / `:left`** 範囲内テキスト整列 | ✅ 2026-03-06 |
 | **`set paste` / `pastetoggle`** ペーストモード（auto-indent・auto-pairs を一時無効化） | ✅ 2026-03-06 |
 | **ファイルエンコーディング変換** `set fileencoding=utf-8` 等で BOM 自動検出・保存時エンコーディング変換（utf-8/utf-16/latin1/ascii/shift-jis/euc-jp 等対応） | ✅ 2026-03-06 |
+| **`:Git commit` / `:Gcommit`** コミットメッセージ入力ダイアログ、`git commit -m` 実行、成否表示 | ✅ 2026-03-07 |
+| **Hunk 操作 `]c` / `[c`** git diff hunk 間移動（wrap-around・状態バーに "Hunk N/M" 表示） | ✅ 2026-03-07 |
