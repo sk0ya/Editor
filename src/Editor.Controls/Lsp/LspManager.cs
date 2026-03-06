@@ -480,6 +480,17 @@ public sealed class LspManager : IDisposable
         BreadcrumbChanged?.Invoke(path);
     }
 
+    /// <summary>
+    /// Clear the current breadcrumb (e.g. when the feature is disabled).
+    /// Fires BreadcrumbChanged with an empty string if there was a previous breadcrumb.
+    /// </summary>
+    public void ClearBreadcrumb()
+    {
+        if (_lastBreadcrumb == "") return;
+        _lastBreadcrumb = "";
+        BreadcrumbChanged?.Invoke("");
+    }
+
     /// <summary>Search workspace symbols by query; when isClass=true, restricts to type-definition kinds.</summary>
     public async Task<IReadOnlyList<LspSymbolInformation>> GetWorkspaceSymbolsAsync(
         string query, bool isClass, CancellationToken ct = default)

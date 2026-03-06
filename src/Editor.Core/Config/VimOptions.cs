@@ -67,6 +67,9 @@ public class VimOptions
     // LSP Semantic Tokens
     public bool SemanticTokens { get; set; } = false;
 
+    // LSP Breadcrumb (symbol path in status bar)
+    public bool Breadcrumb { get; set; } = false;
+
     // Folding
     public string FoldMethod { get; set; } = "manual"; // manual, indent, marker, syntax
 
@@ -149,6 +152,7 @@ public class VimOptions
             "minimap" or "mm"                  => Set(() => Minimap = value),
             "inlayhints" or "ih"               => Set(() => InlayHints = value),
             "semantictokens" or "st"           => Set(() => SemanticTokens = value),
+            "breadcrumb" or "bc"               => Set(() => Breadcrumb = value),
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => null,
             "startofline" or "sol"             => null,

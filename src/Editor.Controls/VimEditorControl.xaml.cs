@@ -332,6 +332,8 @@ public partial class VimEditorControl : UserControl
 
     private void OnLspBreadcrumbChanged(string breadcrumb)
     {
+        // Only show breadcrumb when the option is enabled
+        if (!_engine.Options.Breadcrumb) return;
         // Show current symbol path in the status area (only when non-empty, to avoid
         // wiping real status messages when the cursor is outside any symbol range)
         if (!string.IsNullOrEmpty(breadcrumb))
@@ -408,6 +410,21 @@ public partial class VimEditorControl : UserControl
     private void ApplySemanticTokensOption()
     {
         _lspManager.SetSemanticTokensEnabled(_engine.Options.SemanticTokens);
+    }
+
+    private void ApplyBreadcrumbOption()
+    {
+        if (!_engine.Options.Breadcrumb)
+        {
+            // Clear any breadcrumb text from the status bar when disabled
+            _lspManager.ClearBreadcrumb();
+        }
+        else
+        {
+            // Immediately show breadcrumb for current cursor position when enabled
+            var cur = _engine.Cursor;
+            _lspManager.UpdateBreadcrumb(cur.Line, cur.Column);
+        }
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -2814,7 +2831,7 @@ public partial class VimEditorControl : UserControl
                         ActiveStatusBar.UpdateCursor(ce.Position, _engine.CurrentBuffer.Text.LineCount);
                         if (_engine.Mode is VimMode.Insert or VimMode.Replace)
                             UpdateImeWindowPos();
-                        else
+                        else if (_engine.Options.Breadcrumb)
                             _lspManager.UpdateBreadcrumb(ce.Position.Line, ce.Position.Column);
                     }
                     break;
@@ -2976,6 +2993,7 @@ public partial class VimEditorControl : UserControl
                     ApplyFoldMethod();
                     ApplyInlayHintsOption();
                     ApplySemanticTokensOption();
+                    ApplyBreadcrumbOption();
                     needFullUpdate = true;
                     break;
             }
