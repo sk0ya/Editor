@@ -340,6 +340,10 @@ public class ExCommandProcessor
         if (cmd == "changes")
             return new ExResult(true, _markManager.FormatChangeList());
 
+        // :jumps
+        if (cmd == "jumps")
+            return new ExResult(true, _markManager.FormatJumpList());
+
         // :[range]center [width]  :[range]right [width]  :[range]left
         if (cmd == "center" || cmd.StartsWith("center ") ||
             cmd == "right"  || cmd.StartsWith("right ")  ||

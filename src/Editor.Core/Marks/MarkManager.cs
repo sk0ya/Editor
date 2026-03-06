@@ -37,6 +37,15 @@ public class MarkManager
             (p, i) => $"{(i == cur ? '>' : ' ')} {i + 1,3}  {p.Line + 1,5}  {p.Column,4}"));
     }
 
+    public string FormatJumpList()
+    {
+        var list = _jumps.Items;
+        if (list.Count == 0) return "jump list is empty";
+        int cur = _jumps.Index;
+        return " jump  line  col\n" + string.Join("\n", list.Select(
+            (p, i) => $"{(i == cur ? '>' : ' ')} {Math.Abs(cur - i),4}  {p.Line + 1,5}  {p.Column,4}"));
+    }
+
     public void ClearMarks() => _marks.Clear();
 
     private sealed class BoundedHistory(int maxSize)
