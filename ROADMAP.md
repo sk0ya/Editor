@@ -46,7 +46,6 @@
 |------|------|
 | **ファイルウォッチャー** | 外部変更を検知して自動リロード / 確認ダイアログ |
 | **`:e!`** | ディスクから強制リロード |
-| **ファイルエンコーディング変換** | `set fileencoding=utf-8` 等で保存時に変換 |
 | **改行コード切り替え** | `set fileformat=unix/dos/mac` |
 
 ### LSP 拡張
@@ -148,3 +147,4 @@
 | **`:[range]move` / `:[range]copy`** 行の移動・コピー（`:m`/`:co`/`:t` エイリアス対応） | ✅ 2026-03-06 |
 | **`:[range]center` / `:right` / `:left`** 範囲内テキスト整列 | ✅ 2026-03-06 |
 | **`set paste` / `pastetoggle`** ペーストモード（auto-indent・auto-pairs を一時無効化） | ✅ 2026-03-06 |
+| **ファイルエンコーディング変換** `set fileencoding=utf-8` 等で BOM 自動検出・保存時エンコーディング変換（utf-8/utf-16/latin1/ascii/shift-jis/euc-jp 等対応） | ✅ 2026-03-06 |
