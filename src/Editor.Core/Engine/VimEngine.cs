@@ -44,6 +44,7 @@ public class VimEngine
     private bool _ctrlWPending;
     private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
+    private bool _awaitingBlockReplace;   // Visual Block r — waiting for the replacement character
     private bool _awaitingInsertRegister; // Ctrl+R in Insert mode — waiting for register name
     private bool _awaitingExprRegister;   // Ctrl+R = in Insert mode — accumulating expression
     private string _exprBuffer = "";      // accumulated expression input
@@ -779,6 +780,12 @@ public class VimEngine
             case "ga":
                 events.Add(VimEvent.CodeActionRequested());
                 break;
+            case "gch":
+                events.Add(VimEvent.CallHierarchyRequested());
+                break;
+            case "gh":
+                events.Add(VimEvent.TypeHierarchyRequested());
+                break;
             case "gf":
             {
                 var line = buf.GetLine(_cursor.Line);
@@ -1458,6 +1465,14 @@ public class VimEngine
             return;
         }
 
+        if (_awaitingBlockReplace)
+        {
+            _awaitingBlockReplace = false;
+            if (key.Length == 1)
+                ExecuteBlockReplace(key[0], events);
+            return;
+        }
+
         if (ctrl)
         {
             if (key == "[")
@@ -1601,6 +1616,15 @@ public class VimEngine
                 _commandParser.Reset();
                 ExecuteVisualToggleCase(events);
                 return;
+            case "r":
+                if (_mode == VimMode.VisualBlock)
+                {
+                    _commandParser.Reset();
+                    _awaitingBlockReplace = true;
+                    EmitStatus(events, "r");
+                    return;
+                }
+                break;
         }
 
         var (state, cmd) = _commandParser.Feed(key);
@@ -2288,6 +2312,28 @@ public class VimEngine
         events.Add(VimEvent.SelectionChanged(null));
         _blockInsertState = new BlockInsertState(startLine, endLine, leftColumn);
         EnterInsertMode(false, events);
+    }
+
+    private void ExecuteBlockReplace(char ch, List<VimEvent> events)
+    {
+        if (_selection == null) { ExitVisualMode(events); return; }
+        var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(_selection.Value);
+        var buf = _bufferManager.Current.Text;
+        Snapshot();
+        for (int line = startLine; line <= endLine; line++)
+        {
+            int lineLen = buf.GetLineLength(line);
+            if (lineLen <= leftColumn) continue; // line too short, skip
+            int colEnd = Math.Min(rightColumn, lineLen - 1);
+            for (int col = leftColumn; col <= colEnd; col++)
+            {
+                buf.DeleteChar(line, col);
+                buf.InsertChar(line, col, ch);
+            }
+        }
+        _cursor = new CursorPosition(startLine, leftColumn);
+        ExitVisualMode(events);
+        EmitText(events);
     }
 
     private void MoveVertical(int delta, List<VimEvent> events)
