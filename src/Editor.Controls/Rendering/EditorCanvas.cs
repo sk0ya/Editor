@@ -77,6 +77,9 @@ public class EditorCanvas : FrameworkElement
     private string _listEol   = "¶";
     private string _listSpace = "";   // empty = don't show spaces
 
+    // Multi-cursor extra cursors (line, col) pairs — primary cursor is drawn by DrawCursor
+    private IReadOnlyList<(int Line, int Col)> _extraCursors = [];
+
     // Git
     private Dictionary<int, GitLineState> _gitDiff = [];
     private Dictionary<int, string> _blameAnnotations = [];
@@ -177,6 +180,7 @@ public class EditorCanvas : FrameworkElement
     }
 
     public void SetCursor(CursorPosition cursor) { _cursor = cursor; EnsureCursorVisible(); InvalidateVisual(); }
+    public void SetExtraCursors(IReadOnlyList<(int Line, int Col)> cursors) { _extraCursors = cursors; InvalidateVisual(); }
     public void SetSelection(Selection? sel) { _selection = sel; InvalidateVisual(); }
     public void SetMode(VimMode mode) { _mode = mode; InvalidateVisual(); }
 
@@ -908,6 +912,9 @@ public class EditorCanvas : FrameworkElement
 
             // Cursor
             DrawCursor(dc, l, y, textLeft, lineText);
+
+            // Extra cursors (multi-cursor mode)
+            DrawExtraCursors(dc, l, y, textLeft, lineText);
 
             dc.Pop();
         }
@@ -1710,6 +1717,41 @@ public class EditorCanvas : FrameworkElement
                 var ch = lineText[_cursor.Column].ToString();
                 var ft = FormatText(ch, Theme.CursorForeground);
                 dc.DrawText(ft, new Point(cursorX, cursorY + (_lineHeight - ft.Height) / 2));
+            }
+        }
+    }
+
+    private void DrawExtraCursors(DrawingContext dc, int line, double y, double textLeft, string lineText)
+    {
+        if (!_isActive || _extraCursors.Count == 0) return;
+        if (!_cursorVisible) return;
+
+        foreach (var (ecLine, ecCol) in _extraCursors)
+        {
+            if (ecLine != line) continue;
+            double cx = textLeft + GetVisualX(lineText, ecCol) - _scrollOffsetX;
+            double cw = ecCol < lineText.Length ? CharW(lineText[ecCol]) : _charWidth;
+
+            if (_mode == VimMode.Insert || _mode == VimMode.Command ||
+                _mode == VimMode.SearchForward || _mode == VimMode.SearchBackward)
+            {
+                // Thin line cursor in insert mode
+                var pen = new Pen(Theme.InsertCursor, 2);
+                dc.DrawLine(pen, new Point(cx, y), new Point(cx, y + _lineHeight));
+            }
+            else
+            {
+                // Block cursor in normal mode — use a slightly transparent version of the cursor color
+                var extraBrush = new SolidColorBrush(Color.FromArgb(180,
+                    Theme.CursorBackground is SolidColorBrush scb ? scb.Color.R : (byte)0x50,
+                    Theme.CursorBackground is SolidColorBrush scb2 ? scb2.Color.G : (byte)0xFA,
+                    Theme.CursorBackground is SolidColorBrush scb3 ? scb3.Color.B : (byte)0x78));
+                dc.DrawRectangle(extraBrush, null, new Rect(cx, y, cw, _lineHeight));
+                if (ecCol < lineText.Length)
+                {
+                    var ft = FormatText(lineText[ecCol].ToString(), Theme.CursorForeground);
+                    dc.DrawText(ft, new Point(cx, y + (_lineHeight - ft.Height) / 2));
+                }
             }
         }
     }

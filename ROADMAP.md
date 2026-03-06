@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-07 (Type hierarchy)
+> 作成日: 2026-03-02 / 更新日: 2026-03-07 (Multi-cursor)
 
 ---
 
@@ -42,7 +42,6 @@
 
 | 機能 | 説明 |
 |------|------|
-| **マルチカーソル** | 複数箇所を同時編集（VS Code 風、`Ctrl+D` で選択追加） |
 | **スニペット** | タブ展開スニペット（LSP `insertTextFormat: Snippet` 対応含む） |
 | **Breadcrumb** | 現在のカーソル位置のシンボルパスをステータスバーに表示 |
 
@@ -85,6 +84,7 @@
 | **Document symbols / Outline** `:Outline` コマンドまたはアクティビティバーボタンでサイドバーにシンボル一覧を表示、クリックでジャンプ | ✅ 2026-03-07 |
 | **LSP Call hierarchy** `gch` で関数の呼び出し元/先を References パネルに表示（`callHierarchy/prepare` + `incomingCalls` + `outgoingCalls`） | ✅ 2026-03-07 |
 | **LSP Type hierarchy** `gct` / `:TypeHierarchy` で型の継承ツリー（supertypes + subtypes）を References パネルに表示 | ✅ 2026-03-07 |
+| **マルチカーソル** `Ctrl+D` で次の同単語にカーソル追加、`Ctrl+Alt+Down/Up` で上下にカーソル追加、Insert モードで全カーソルに同時編集、`Esc` (Normal) で終了 | ✅ 2026-03-07 |
 
 ## 実装済み
 
