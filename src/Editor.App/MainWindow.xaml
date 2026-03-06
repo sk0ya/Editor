@@ -736,6 +736,17 @@
                                    Foreground="{Binding Foreground,
                                        RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
                     </ToggleButton>
+                    <ToggleButton x:Name="OutlineBtn"
+                                  DockPanel.Dock="Top"
+                                  Style="{StaticResource ActivityBarButton}"
+                                  Click="OutlineBtn_Click"
+                                  ToolTip="アウトライン (:Outline)">
+                        <TextBlock Text="&#xE8FD;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="22"
+                                   Foreground="{Binding Foreground,
+                                       RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
+                    </ToggleButton>
                     <ToggleButton x:Name="SettingsBtn"
                                   DockPanel.Dock="Bottom"
                                   Style="{StaticResource ActivityBarButton}"
@@ -902,6 +913,82 @@
 
                     </StackPanel>
                 </ScrollViewer>
+            </Grid>
+
+            <!-- Sidebar: Outline -->
+            <Grid x:Name="OutlinePanel" Grid.Column="1" Background="#252526"
+                  ClipToBounds="True" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="35"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Padding="12,0,4,0">
+                    <TextBlock Text="アウトライン"
+                               FontSize="11" FontWeight="Bold"
+                               Foreground="#BBBBBB"
+                               FontFamily="Cascadia Code, Consolas"
+                               VerticalAlignment="Center"/>
+                </Border>
+
+                <ListBox x:Name="OutlineList"
+                         Grid.Row="1"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         Foreground="#CCCCCC"
+                         FontFamily="Cascadia Code, Consolas"
+                         FontSize="13"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         VirtualizingStackPanel.IsVirtualizing="True"
+                         SelectionChanged="OutlineList_SelectionChanged">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Foreground" Value="#CCCCCC"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Padding" Value="0,2"/>
+                            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Bd"
+                                                Background="{TemplateBinding Background}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="#094771"/>
+                                                <Setter Property="Foreground" Value="White"/>
+                                            </Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="#2A2D36"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type local:OutlineItem}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Indent}"
+                                           Foreground="Transparent"
+                                           FontFamily="Cascadia Code, Consolas"
+                                           FontSize="13"/>
+                                <TextBlock Text="{Binding KindIcon}"
+                                           Foreground="{Binding KindColor}"
+                                           FontFamily="Segoe MDL2 Assets"
+                                           FontSize="12"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,5,0"/>
+                                <TextBlock Text="{Binding Name}"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
             </Grid>
 
             <!-- Resizable splitter -->

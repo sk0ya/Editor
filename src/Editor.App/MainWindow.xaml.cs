@@ -132,7 +132,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private enum SidebarPanel { None, Explorer, Settings }
+    private enum SidebarPanel { None, Explorer, Settings, Outline }
 
     // ── Search popup ────────────────────────────────────────
 
@@ -358,19 +358,28 @@ public partial class MainWindow : Window
         _sidebarVisible = true;
         _activeSidebarPanel = panel;
 
-        if (panel == SidebarPanel.Settings)
+        // Hide all panels first, then show the requested one
+        ExplorerPanel.Visibility = Visibility.Collapsed;
+        SettingsPanel.Visibility  = Visibility.Collapsed;
+        OutlinePanel.Visibility   = Visibility.Collapsed;
+        ExplorerBtn.IsChecked = false;
+        SettingsBtn.IsChecked  = false;
+        OutlineBtn.IsChecked   = false;
+
+        switch (panel)
         {
-            ExplorerPanel.Visibility = Visibility.Collapsed;
-            SettingsPanel.Visibility = Visibility.Visible;
-            ExplorerBtn.IsChecked = false;
-            SettingsBtn.IsChecked = true;
-        }
-        else
-        {
-            SettingsPanel.Visibility = Visibility.Collapsed;
-            ExplorerPanel.Visibility = Visibility.Visible;
-            ExplorerBtn.IsChecked = true;
-            SettingsBtn.IsChecked = false;
+            case SidebarPanel.Settings:
+                SettingsPanel.Visibility = Visibility.Visible;
+                SettingsBtn.IsChecked = true;
+                break;
+            case SidebarPanel.Outline:
+                OutlinePanel.Visibility = Visibility.Visible;
+                OutlineBtn.IsChecked = true;
+                break;
+            default: // Explorer
+                ExplorerPanel.Visibility = Visibility.Visible;
+                ExplorerBtn.IsChecked = true;
+                break;
         }
     }
 
@@ -382,7 +391,8 @@ public partial class MainWindow : Window
         SplitterCol.Width = new GridLength(0);
         SplitterCol.MinWidth = 0;
         ExplorerBtn.IsChecked = false;
-        SettingsBtn.IsChecked = false;
+        SettingsBtn.IsChecked  = false;
+        OutlineBtn.IsChecked   = false;
         _sidebarVisible = false;
         _activeSidebarPanel = SidebarPanel.None;
     }
@@ -837,6 +847,7 @@ public partial class MainWindow : Window
         editor.TerminalRequested      += Editor_TerminalRequested;
         editor.GitOutputRequested     += Editor_GitOutputRequested;
         editor.GitCommitRequested     += Editor_GitCommitRequested;
+        editor.DocumentSymbolsResult  += Editor_DocumentSymbolsResult;
     }
 
     private void Editor_BufferChanged(object? sender, EventArgs e)
@@ -1689,6 +1700,96 @@ public partial class MainWindow : Window
         else
             ShowSidebar(SidebarPanel.Settings);
     }
+
+    private void OutlineBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_sidebarVisible && _activeSidebarPanel == SidebarPanel.Outline)
+        {
+            HideSidebar();
+            return;
+        }
+        ShowSidebar(SidebarPanel.Outline);
+        // Request document symbols from the focused editor
+        CurrentEditor?.RequestOutlineAsync();
+    }
+
+    private void OutlineList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (OutlineList.SelectedItem is not OutlineItem item) return;
+        // Deselect so the user can click again to jump
+        OutlineList.SelectedItem = null;
+        var editor = CurrentEditor;
+        if (editor == null) return;
+        editor.JumpToLine(item.Line, item.Col);
+        editor.Focus();
+    }
+
+    /// <summary>Populate the Outline panel from a DocumentSymbolsResult event.</summary>
+    private void Editor_DocumentSymbolsResult(object? sender, DocumentSymbolsResultEventArgs e)
+    {
+        // Always show the outline panel (e.g. triggered via :Outline command)
+        if (!_sidebarVisible || _activeSidebarPanel != SidebarPanel.Outline)
+            ShowSidebar(SidebarPanel.Outline);
+        PopulateOutlineList(e.Items);
+    }
+
+    private void PopulateOutlineList(IReadOnlyList<DocumentSymbolItem> items)
+    {
+        OutlineList.Items.Clear();
+        foreach (var item in items)
+        {
+            var indent = new string(' ', item.Depth * 2);
+            OutlineList.Items.Add(new OutlineItem
+            {
+                Name      = item.Name,
+                Indent    = indent,
+                KindIcon  = SymbolKindIcon(item.Kind),
+                KindColor = SymbolKindColor(item.Kind),
+                Line      = item.Line,
+                Col       = item.Col,
+            });
+        }
+    }
+
+    private static string SymbolKindIcon(SymbolKind kind) => kind switch
+    {
+        SymbolKind.Class       => "\uE8B1", // Contact / class-like
+        SymbolKind.Interface   => "\uE8EC",
+        SymbolKind.Struct      => "\uE8B1",
+        SymbolKind.Enum        => "\uE8B1",
+        SymbolKind.Method      => "\uE8A3",
+        SymbolKind.Constructor => "\uE8A3",
+        SymbolKind.Function    => "\uE8A3",
+        SymbolKind.Field       => "\uE8D4",
+        SymbolKind.Property    => "\uE8D4",
+        SymbolKind.Variable    => "\uE8D4",
+        SymbolKind.Constant    => "\uE8D4",
+        SymbolKind.EnumMember  => "\uE8D4",
+        SymbolKind.Module      => "\uED41",
+        SymbolKind.Namespace   => "\uED41",
+        SymbolKind.Package     => "\uED41",
+        SymbolKind.File        => "\uE7C3",
+        _                      => "\uE8A5",
+    };
+
+    private static string SymbolKindColor(SymbolKind kind) => kind switch
+    {
+        SymbolKind.Class       => "#8BE9FD",
+        SymbolKind.Interface   => "#50FA7B",
+        SymbolKind.Struct      => "#8BE9FD",
+        SymbolKind.Enum        => "#FFB86C",
+        SymbolKind.Method      => "#BD93F9",
+        SymbolKind.Constructor => "#BD93F9",
+        SymbolKind.Function    => "#BD93F9",
+        SymbolKind.Field       => "#F1FA8C",
+        SymbolKind.Property    => "#F1FA8C",
+        SymbolKind.Variable    => "#FF79C6",
+        SymbolKind.Constant    => "#FFB86C",
+        SymbolKind.EnumMember  => "#FFB86C",
+        SymbolKind.Module      => "#E6C07B",
+        SymbolKind.Namespace   => "#E6C07B",
+        _                      => "#AAAAAA",
+    };
 
     private void TabPosition_Checked(object sender, RoutedEventArgs e)
     {
@@ -2748,6 +2849,17 @@ public partial class MainWindow : Window
 }
 
 // ─────────── File tree model ─────────────────────────────────
+
+/// <summary>Document symbol entry shown in the Outline sidebar panel.</summary>
+public sealed class OutlineItem
+{
+    public required string Name     { get; init; }
+    public required string Indent   { get; init; }
+    public required string KindIcon { get; init; }
+    public required string KindColor{ get; init; }
+    public required int    Line     { get; init; }
+    public required int    Col      { get; init; }
+}
 
 public sealed class FileTreeItem
 {

@@ -36,7 +36,6 @@
 
 | 機能 | 説明 |
 |------|------|
-| **Document symbols / Outline** | 現在ファイルのシンボル一覧をサイドバーに表示 |
 ~~| **LSP: `textDocument/semanticTokens`** | セマンティックトークンによる高精度ハイライト |~~
 | **LSP: Call hierarchy** | 関数の呼び出し元/先を表示（`gch`） |
 | **LSP: Type hierarchy** | 型の継承ツリーを表示 |
@@ -85,6 +84,7 @@
 | **Workspace symbols** プロジェクト横断シンボル検索（`:Symbols {query}` / `:WorkspaceSymbols {query}`）、結果を References パネルに表示 | ✅ 2026-03-07 |
 | **LSP semantic tokens** セマンティックトークンによる高精度ハイライト（`set semantictokens`）、レガシー正規表現より優先 | ✅ 2026-03-07 |
 | **カラープレビュー** CSS/HTML カラーコード（`#RGB`/`#RRGGBB`/`#RRGGBBAA`/`rgb()`/`rgba()`）の横にインラインスウォッチ表示（`set colorpreview`） | ✅ 2026-03-07 |
+| **Document symbols / Outline** `:Outline` コマンドまたはアクティビティバーボタンでサイドバーにシンボル一覧を表示、クリックでジャンプ | ✅ 2026-03-07 |
 
 ## 実装済み
 

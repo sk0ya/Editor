@@ -2228,6 +2228,26 @@ public partial class VimEditorControl : UserControl
         }
     }
 
+    /// <summary>
+    /// Called by the host (MainWindow) when the user opens the Outline sidebar panel.
+    /// Requests document symbols and fires <see cref="DocumentSymbolsResult"/>.
+    /// </summary>
+    public void RequestOutlineAsync() => _ = HandleDocumentSymbolsAsync();
+
+    /// <summary>
+    /// Move the editor cursor to the given 0-indexed line and column and centre the viewport.
+    /// </summary>
+    public void JumpToLine(int line, int col)
+    {
+        var totalLines = _engine.CurrentBuffer.Text.LineCount;
+        line = Math.Max(0, Math.Min(line, totalLines - 1));
+        col  = Math.Max(0, col);
+        _engine.SetCursorPosition(new Editor.Core.Models.CursorPosition(line, col));
+        Canvas.SetCursor(_engine.Cursor);
+        AlignViewport(Editor.Core.Models.ViewportAlign.Center);
+        Canvas.InvalidateVisual();
+    }
+
     private async Task HandleWorkspaceSymbolsAsync(string query)
     {
         if (!_lspManager.IsConnected)
