@@ -662,6 +662,9 @@ public class EditorCanvas : FrameworkElement
         int lastLine = Math.Min(TotalVisualLines - 1, firstLine + _visibleLines + 1);
         double baseOffsetX = _scrollOffsetX;
 
+        // Compute matching bracket once — reused for every visible line
+        var bracketMatch = FindMatchingBracket(_cursor.Line, _cursor.Column);
+
         // Draw each visible line (vi = visual index, l = buffer line)
         for (int vi = firstLine; vi <= lastLine; vi++)
         {
@@ -732,6 +735,9 @@ public class EditorCanvas : FrameworkElement
 
             // Search highlights
             DrawSearchHighlights(dc, l, y, textLeft, lineText);
+
+            // Matching bracket highlight
+            DrawMatchingBrackets(dc, l, y, textLeft, lineText, bracketMatch);
 
             // Text with syntax coloring
             DrawLineText(dc, l, lineText, y, textLeft);
@@ -1063,6 +1069,77 @@ public class EditorCanvas : FrameworkElement
                 dc.DrawRectangle(Theme.SelectionBg, null, new Rect(x + 1, rowY, popupW - 2, rowH));
             dc.DrawText(texts[i], new Point(x + padX, rowY + (rowH - texts[i].Height) / 2));
         }
+    }
+
+    // Returns the (line, col) of the bracket that matches the one at (cursorLine, cursorCol),
+    // or null if the cursor is not on a bracket or no match is found.
+    private (int line, int col)? FindMatchingBracket(int cursorLine, int cursorCol)
+    {
+        if (cursorLine < 0 || cursorLine >= _lines.Length) return null;
+        string line = _lines[cursorLine];
+        if (cursorCol < 0 || cursorCol >= line.Length) return null;
+
+        char ch = line[cursorCol];
+        bool searchForward = ch is '(' or '[' or '{';
+        if (!searchForward && ch is not (')' or ']' or '}')) return null;
+
+        char open  = ch is '(' or ')' ? '(' : ch is '[' or ']' ? '[' : '{';
+        char close = ch is '(' or ')' ? ')' : ch is '[' or ']' ? ']' : '}';
+
+        int depth = 0;
+
+        if (searchForward)
+        {
+            for (int l = cursorLine; l < _lines.Length; l++)
+            {
+                string ln = _lines[l];
+                int startCol = l == cursorLine ? cursorCol : 0;
+                for (int c = startCol; c < ln.Length; c++)
+                {
+                    if (ln[c] == open)  depth++;
+                    else if (ln[c] == close) { depth--; if (depth == 0) return (l, c); }
+                }
+            }
+        }
+        else
+        {
+            for (int l = cursorLine; l >= 0; l--)
+            {
+                string ln = _lines[l];
+                int startCol = l == cursorLine ? cursorCol : ln.Length - 1;
+                for (int c = startCol; c >= 0; c--)
+                {
+                    if (ln[c] == close) depth++;
+                    else if (ln[c] == open) { depth--; if (depth == 0) return (l, c); }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private void DrawMatchingBrackets(DrawingContext dc, int line, double y, double textLeft, string lineText,
+        (int line, int col)? bracketMatch)
+    {
+        // Highlight the bracket under the cursor (on the cursor's line only)
+        if (line == _cursor.Line)
+        {
+            int col = _cursor.Column;
+            if (col < lineText.Length && lineText[col] is '(' or ')' or '[' or ']' or '{' or '}')
+            {
+                double x = textLeft + GetVisualX(lineText, col) - _scrollOffsetX;
+                double w = CharW(lineText[col]);
+                dc.DrawRectangle(Theme.MatchingBracketBackground, null, new Rect(x, y, w, _lineHeight));
+            }
+        }
+
+        // Highlight the matching bracket if it falls on this line
+        if (bracketMatch == null || bracketMatch.Value.line != line) return;
+
+        int matchCol = bracketMatch.Value.col;
+        double mx = textLeft + GetVisualX(lineText, matchCol) - _scrollOffsetX;
+        double mw = CharW(lineText[matchCol]);
+        dc.DrawRectangle(Theme.MatchingBracketBackground, null, new Rect(mx, y, mw, _lineHeight));
     }
 
     private void DrawSelection(DrawingContext dc, int line, double y, double textLeft, string lineText)

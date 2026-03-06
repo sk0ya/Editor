@@ -27,6 +27,9 @@ public class EditorTheme
     public Brush GitModified { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0xA0, 0x00));
     public Brush GitDeleted  { get; init; } = new SolidColorBrush(Color.FromRgb(0xCC, 0x00, 0x00));
 
+    // Matching bracket highlight
+    public Brush MatchingBracketBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x4F, 0x7A));
+
     // Color column guide line
     public Brush ColorColumnBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x3D, 0x3D, 0x3D));
 
@@ -95,6 +98,7 @@ public class EditorTheme
         GitDeleted  = new SolidColorBrush(Color.FromRgb(0xFF, 0x55, 0x55)),
         ListCharBrush = new SolidColorBrush(Color.FromRgb(0x44, 0x47, 0x5A)),
         ColorColumnBrush = new SolidColorBrush(Color.FromRgb(0x3D, 0x3D, 0x50)),
+        MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x4F, 0x7A)),
     };
 
     public static EditorTheme Dark { get; } = new();
@@ -133,6 +137,7 @@ public class EditorTheme
         GitDeleted          = new SolidColorBrush(Color.FromRgb(0xBF, 0x61, 0x6A)),
         ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x43, 0x4C, 0x5E)),
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x3B, 0x42, 0x52)),
+        MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4C, 0x60, 0x80)),
     };
 
     // Tokyo Night — dark variant
@@ -169,6 +174,7 @@ public class EditorTheme
         GitDeleted          = new SolidColorBrush(Color.FromRgb(0xF7, 0x76, 0x8E)),
         ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x28, 0x3B, 0x4D)),
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x1F, 0x20, 0x35)),
+        MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x36, 0x4A, 0x82)),
     };
 
     // One Dark — Atom One Dark inspired
@@ -205,6 +211,7 @@ public class EditorTheme
         GitDeleted          = new SolidColorBrush(Color.FromRgb(0xE0, 0x6C, 0x75)),
         ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x3E, 0x44, 0x50)),
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x2C, 0x31, 0x3A)),
+        MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x3E, 0x52, 0x7A)),
     };
 
     public static EditorTheme GetByName(string name) => name.ToLower() switch
@@ -258,6 +265,7 @@ public class EditorTheme
             TokenType = TokenType,
             TokenAttribute = TokenAttribute,
             TokenIdentifier = TokenIdentifier,
+            MatchingBracketBackground = MatchingBracketBackground,
         };
     }
 
@@ -293,6 +301,7 @@ public class EditorTheme
             TokenType = TokenType,
             TokenAttribute = TokenAttribute,
             TokenIdentifier = TokenIdentifier,
+            MatchingBracketBackground = MatchingBracketBackground,
         };
     }
 }
