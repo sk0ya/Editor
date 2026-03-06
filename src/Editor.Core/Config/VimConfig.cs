@@ -1,3 +1,5 @@
+using Editor.Core.Snippets;
+
 namespace Editor.Core.Config;
 
 public class VimConfig
@@ -7,6 +9,7 @@ public class VimConfig
     public Dictionary<string, string> InsertMaps { get; } = [];
     public Dictionary<string, string> VisualMaps { get; } = [];
     public Dictionary<string, string> Abbreviations { get; } = [];
+    public SnippetManager Snippets { get; } = new();
 
     // The mapleader character (default backslash, set by `let mapleader=...`)
     public string Leader { get; private set; } = "\\";
@@ -101,6 +104,28 @@ public class VimConfig
         {
             if (unabbrevLhs != null)
                 Abbreviations.Remove(unabbrevLhs);
+            return null;
+        }
+
+        // :snippet {trigger} {body} — define a user snippet
+        if (cmd.StartsWith("snippet ", StringComparison.OrdinalIgnoreCase))
+        {
+            var snippetArgs = cmd[8..].Trim();
+            var snippetSpace = snippetArgs.IndexOf(' ');
+            if (snippetSpace > 0)
+            {
+                var trigger = snippetArgs[..snippetSpace].Trim();
+                var body = snippetArgs[(snippetSpace + 1)..]; // preserve body as-is (may contain \n)
+                if (!string.IsNullOrEmpty(trigger))
+                    Snippets.Register(trigger, body);
+            }
+            return null;
+        }
+
+        // :unsnippet {trigger} — remove a user snippet
+        if (cmd.StartsWith("unsnippet ", StringComparison.OrdinalIgnoreCase))
+        {
+            Snippets.Unregister(cmd[10..].Trim());
             return null;
         }
 

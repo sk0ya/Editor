@@ -34,7 +34,7 @@ public sealed class LspClient : ILspClient
                 {
                     synchronization = new { openClose = true, change = 1 },
                     publishDiagnostics = new { relatedInformation = false },
-                    completion = new { completionItem = new { snippetSupport = false } },
+                    completion = new { completionItem = new { snippetSupport = true } },
                     hover = new { contentFormat = new[] { "plaintext", "markdown" } },
                     definition = new { },
                     signatureHelp = new { signatureInformation = new { documentationFormat = new[] { "plaintext" } } },
@@ -821,6 +821,9 @@ public sealed class LspClient : ILspClient
             var detail = item.TryGetProperty("detail", out var d) ? d.GetString() : null;
             var insertText = item.TryGetProperty("insertText", out var ins) ? ins.GetString() : null;
             var filterText = item.TryGetProperty("filterText", out var ft) ? ft.GetString() : null;
+            var textFormat = item.TryGetProperty("insertTextFormat", out var itf) && itf.GetInt32() == 2
+                ? Editor.Core.Lsp.InsertTextFormat.Snippet
+                : Editor.Core.Lsp.InsertTextFormat.PlainText;
             string? documentation = null;
             if (item.TryGetProperty("documentation", out var doc))
             {
@@ -829,7 +832,7 @@ public sealed class LspClient : ILspClient
                 else if (doc.ValueKind == JsonValueKind.Object && doc.TryGetProperty("value", out var docVal))
                     documentation = docVal.GetString();
             }
-            list.Add(new LspCompletionItem(label, kind, detail, insertText ?? label, filterText, documentation));
+            list.Add(new LspCompletionItem(label, kind, detail, insertText ?? label, filterText, documentation, textFormat));
             if (list.Count >= 500) break;
         }
         return list;

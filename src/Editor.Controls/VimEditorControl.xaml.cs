@@ -14,6 +14,7 @@ using Editor.Core.Engine;
 using Editor.Core.Folds;
 using Editor.Core.Lsp;
 using Editor.Core.Models;
+using Editor.Core.Snippets;
 
 namespace Editor.Controls;
 
@@ -208,6 +209,10 @@ public partial class VimEditorControl : UserControl
     private string? _multiCursorWord = null;
     // Last cursor position from which to start the next forward search
     private (int Line, int Col) _multiCursorSearchFrom;
+
+    // ─── Snippet tab-stop state ───
+    private Editor.Core.Snippets.SnippetTabStop[]? _snippetTabStops;
+    private int _snippetTabStopIndex = -1; // index into _snippetTabStops; -1 = no active snippet
 
     // ─── File Watcher ───
     private FileSystemWatcher? _fileWatcher;
@@ -1563,8 +1568,41 @@ public partial class VimEditorControl : UserControl
                 {
                     // Let OnKeyDown handle Tab when completion popup is visible.
                     if (_lspManager.CompletionVisible) return;
-                    ProcessKey("Tab", false, false, false);
-                    e.Handled = true;
+
+                    bool shift = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
+
+                    // Snippet: Shift+Tab → go back to previous tab stop
+                    if (shift && _snippetTabStops != null && _snippetTabStopIndex > 0)
+                    {
+                        _snippetTabStopIndex--;
+                        JumpToSnippetTabStop();
+                        e.Handled = true;
+                        return;
+                    }
+
+                    // Snippet: Tab → advance to next tab stop (if active snippet)
+                    if (!shift && _snippetTabStops != null &&
+                        _snippetTabStopIndex < _snippetTabStops.Length - 1)
+                    {
+                        _snippetTabStopIndex++;
+                        JumpToSnippetTabStop();
+                        e.Handled = true;
+                        return;
+                    }
+
+                    // No active snippet or past last stop — try to expand a trigger word
+                    if (!shift && TryExpandSnippetAtCursor())
+                    {
+                        e.Handled = true;
+                        return;
+                    }
+
+                    // Fall through to normal Tab behaviour (indent)
+                    if (!shift)
+                    {
+                        ProcessKey("Tab", false, false, false);
+                        e.Handled = true;
+                    }
                 }
                 else if (actualKey == Key.Return)
                 {
@@ -1602,6 +1640,8 @@ public partial class VimEditorControl : UserControl
         if (actualKey == Key.Escape && e.Key != Key.ImeProcessed)
         {
             ClearImeCompositionOverlay();
+            // Clear any active snippet session on Escape
+            ClearSnippetState();
             // Multi-cursor: Escape in Normal mode exits multi-cursor mode instead of passing to engine
             if (_multiCursorMode && mode == VimMode.Normal)
             {
@@ -2024,14 +2064,125 @@ public partial class VimEditorControl : UserControl
         while (wordStart > 0 && (char.IsLetterOrDigit(line[wordStart - 1]) || line[wordStart - 1] == '_'))
             wordStart--;
 
-        // Delete the partial prefix with Backspace keys, then insert completion
+        // Delete the partial prefix with Backspace keys
         int deleteCount = col - wordStart;
         for (int i = 0; i < deleteCount; i++)
             ProcessKey("Back", false, false, false);
 
         var insertText = item.InsertText ?? item.Label;
+
+        // LSP Snippet format (insertTextFormat == 2): expand tab stops
+        if (item.TextFormat == InsertTextFormat.Snippet && insertText.Contains('$'))
+        {
+            var insertCursor = _engine.Cursor;
+            var expansion = SnippetManager.ExpandLsp(
+                insertText,
+                insertCursor.Line, insertCursor.Column,
+                _engine.Options.TabStop, _engine.Options.ExpandTab);
+            ApplySnippetExpansion(expansion);
+            return;
+        }
+
         foreach (var ch in insertText)
             ProcessKey(ch.ToString(), false, false, false);
+    }
+
+    // ─── Snippet helpers ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Check whether the word immediately before the cursor is a snippet trigger.
+    /// If so, delete the trigger, insert the expanded snippet, and arm tab-stop navigation.
+    /// Returns true if a snippet was expanded.
+    /// </summary>
+    private bool TryExpandSnippetAtCursor()
+    {
+        var cursor = _engine.Cursor;
+        var lineText = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
+        int col = cursor.Column;
+
+        // Walk back over word characters to find the trigger
+        int triggerStart = col;
+        while (triggerStart > 0 && (char.IsLetterOrDigit(lineText[triggerStart - 1]) || lineText[triggerStart - 1] == '_'))
+            triggerStart--;
+
+        if (triggerStart >= col) return false; // no word before cursor
+
+        var trigger = lineText[triggerStart..col];
+        var ext = System.IO.Path.GetExtension(_engine.CurrentBuffer.FilePath ?? "").ToLowerInvariant();
+
+        if (!_engine.Config.Snippets.TryGet(trigger, ext, out var body))
+            return false;
+
+        // Delete the trigger word
+        for (int i = 0; i < trigger.Length; i++)
+            ProcessKey("Back", false, false, false);
+
+        // Insert the expanded snippet
+        var insertCursor = _engine.Cursor;
+        var expansion = SnippetManager.Expand(
+            body,
+            insertCursor.Line, insertCursor.Column,
+            _engine.Options.TabStop, _engine.Options.ExpandTab);
+
+        ApplySnippetExpansion(expansion);
+        return true;
+    }
+
+    /// <summary>
+    /// Insert the expanded snippet text into the buffer and arm tab-stop navigation.
+    /// </summary>
+    private void ApplySnippetExpansion(Editor.Core.Snippets.SnippetExpansion expansion)
+    {
+        // Insert each line of the snippet
+        for (int li = 0; li < expansion.Lines.Length; li++)
+        {
+            var snippetLine = expansion.Lines[li];
+            foreach (var ch in snippetLine)
+                ProcessKey(ch.ToString(), false, false, false);
+            if (li < expansion.Lines.Length - 1)
+                ProcessKey("Return", false, false, false);
+        }
+
+        // Arm tab stops (skip if there's only $0 — nothing to navigate)
+        if (expansion.TabStops.Count > 1)
+        {
+            _snippetTabStops = [.. expansion.TabStops];
+            _snippetTabStopIndex = 0;
+            JumpToSnippetTabStop();
+        }
+        else if (expansion.TabStops.Count == 1)
+        {
+            // Just jump to $0 (end position)
+            _snippetTabStops = null;
+            _snippetTabStopIndex = -1;
+            var stop = expansion.TabStops[0];
+            var events = _engine.SetCursorPosition(new Editor.Core.Models.CursorPosition(stop.Line, stop.Column));
+            ProcessVimEvents(events);
+        }
+    }
+
+    /// <summary>Move the cursor to the current tab stop index.</summary>
+    private void JumpToSnippetTabStop()
+    {
+        if (_snippetTabStops == null || _snippetTabStopIndex < 0 ||
+            _snippetTabStopIndex >= _snippetTabStops.Length) return;
+
+        var stop = _snippetTabStops[_snippetTabStopIndex];
+
+        // If this is the last tab stop ($0), clear snippet state after jump
+        bool isLast = _snippetTabStopIndex == _snippetTabStops.Length - 1;
+
+        var events = _engine.SetCursorPosition(new Editor.Core.Models.CursorPosition(stop.Line, stop.Column));
+        ProcessVimEvents(events);
+        UpdateAll();
+
+        if (isLast) ClearSnippetState();
+    }
+
+    private void ClearSnippetState()
+    {
+        _snippetTabStops = null;
+        _snippetTabStopIndex = -1;
     }
 
     private async Task HandleGoToDefinitionAsync()

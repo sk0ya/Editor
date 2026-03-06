@@ -19,13 +19,17 @@ public enum CompletionItemKind
     Color = 16, File = 17, Reference = 18
 }
 
+/// <summary>LSP insertTextFormat: 1 = PlainText, 2 = Snippet</summary>
+public enum InsertTextFormat { PlainText = 1, Snippet = 2 }
+
 public record LspCompletionItem(
     string Label,
     CompletionItemKind Kind = CompletionItemKind.Text,
     string? Detail = null,
     string? InsertText = null,
     string? FilterText = null,
-    string? Documentation = null);
+    string? Documentation = null,
+    InsertTextFormat TextFormat = InsertTextFormat.PlainText);
 
 public record LspHover(string Value);
 

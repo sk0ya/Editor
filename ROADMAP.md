@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-07 (Multi-cursor)
+> 作成日: 2026-03-02 / 更新日: 2026-03-07 (Snippets)
 
 ---
 
@@ -42,7 +42,6 @@
 
 | 機能 | 説明 |
 |------|------|
-| **スニペット** | タブ展開スニペット（LSP `insertTextFormat: Snippet` 対応含む） |
 | **Breadcrumb** | 現在のカーソル位置のシンボルパスをステータスバーに表示 |
 
 ### Git 拡張
@@ -85,6 +84,7 @@
 | **LSP Call hierarchy** `gch` で関数の呼び出し元/先を References パネルに表示（`callHierarchy/prepare` + `incomingCalls` + `outgoingCalls`） | ✅ 2026-03-07 |
 | **LSP Type hierarchy** `gct` / `:TypeHierarchy` で型の継承ツリー（supertypes + subtypes）を References パネルに表示 | ✅ 2026-03-07 |
 | **マルチカーソル** `Ctrl+D` で次の同単語にカーソル追加、`Ctrl+Alt+Down/Up` で上下にカーソル追加、Insert モードで全カーソルに同時編集、`Esc` (Normal) で終了 | ✅ 2026-03-07 |
+| **スニペット** Insert モードでトリガーワード+`Tab` で展開、`$1`/`$2`/.../`$0` タブストップを `Tab`/`Shift+Tab` でナビゲート、LSP `insertTextFormat: Snippet` 対応、7言語組み込みスニペット、vimrc で `:snippet {trigger} {body}` 定義 | ✅ 2026-03-07 |
 
 ## 実装済み
 
