@@ -1266,40 +1266,51 @@ public partial class MainWindow : Window
         if (sender is not VimEditorControl editor) return;
         var buf = editor.Engine.CurrentBuffer;
 
-        if (e.FilePath != null)
+        editor.OnSaveStarted();
+        try
         {
-            try { buf.Save(e.FilePath); }
-            catch (Exception ex)
+            if (e.FilePath != null)
             {
-                MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
+                try { buf.Save(e.FilePath); }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+                // Ensure a tab exists for the new path
+                EnsureFileTab(e.FilePath);
+            }
+            else if (buf.FilePath == null)
+            {
+                var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "All Files|*.*", Title = "Save File" };
+                if (dlg.ShowDialog() != true) return;
+                try { buf.Save(dlg.FileName); }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+                var ft = FindFileTabByPath(null) ?? EnsureFileTab(dlg.FileName);
+                ft.FilePath = dlg.FileName;
+                ft.UpdateHeader(isModified: false);
                 return;
             }
-            // Ensure a tab exists for the new path
-            EnsureFileTab(e.FilePath);
+            else
+            {
+                try { buf.Save(); }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+            }
         }
-        else if (buf.FilePath == null)
+        finally
         {
-            var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "All Files|*.*", Title = "Save File" };
-            if (dlg.ShowDialog() != true) return;
-            try { buf.Save(dlg.FileName); }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
-            var ft = FindFileTabByPath(null) ?? EnsureFileTab(dlg.FileName);
-            ft.FilePath = dlg.FileName;
-            ft.UpdateHeader(isModified: false);
-            return;
-        }
-        else
-        {
-            try { buf.Save(); }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
+            // Re-enable the file watcher after a short delay to let the OS
+            // finish flushing the file so we don't trigger a spurious reload.
+            editor.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                () => editor.OnSaveFinished());
         }
         var fileTab = FindFileTabByPath(buf.FilePath);
         fileTab?.UpdateHeader(isModified: false);

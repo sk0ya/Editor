@@ -179,6 +179,11 @@ public partial class VimEditorControl : UserControl
     private VimStatusBar ActiveStatusBar => _sharedStatusBar ?? StatusBar;
     private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
 
+    // ─── File Watcher ───
+    private FileSystemWatcher? _fileWatcher;
+    private volatile bool _suppressFileWatcher;
+    private bool _pendingWatcherReload;
+
     // Buffer that tracks ImeProcessed key characters typed in Insert mode.
     // Used to detect imap sequences (e.g. "jj" → <Esc>) even when IME is ON.
     private readonly List<string> _imeInsertBuffer = [];
@@ -286,7 +291,13 @@ public partial class VimEditorControl : UserControl
 
     private void OnLspFoldingRangesChanged(IReadOnlyList<LspFoldingRange> ranges)
     {
-        if (ranges.Count > 0)
+        var method = _engine.Options.FoldMethod;
+        if (method is "indent" or "marker")
+        {
+            // indent/marker モードでは LSP フォールドを無視して専用検出器を使用
+            ApplyFoldMethod();
+        }
+        else if (ranges.Count > 0)
         {
             // LSP がフォールド範囲を返した → そのまま使用
             _engine.LoadFoldRanges(ranges.Select(r => (r.StartLine, r.EndLine)));
@@ -307,6 +318,27 @@ public partial class VimEditorControl : UserControl
         var lines = _engine.CurrentBuffer.Text.Snapshot();
         var ranges = SyntaxFoldDetector.Detect(ext, lines);
         _engine.LoadFoldRanges(ranges);
+    }
+
+    // Applies folds according to the current foldmethod option.
+    // Called when the option changes and when a file is opened (after LSP decides).
+    private void ApplyFoldMethod()
+    {
+        var method = _engine.Options.FoldMethod;
+        var lines  = _engine.CurrentBuffer.Text.Snapshot();
+        switch (method)
+        {
+            case "indent":
+                _engine.LoadFoldRanges(IndentFoldDetector.Detect(lines, _engine.Options.TabStop));
+                break;
+            case "marker":
+                _engine.LoadFoldRanges(MarkerFoldDetector.Detect(lines));
+                break;
+            case "syntax":
+                ApplySyntaxFolds();
+                break;
+            // "manual", "expr", "diff": no auto-detection
+        }
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -340,6 +372,8 @@ public partial class VimEditorControl : UserControl
             hwndSource.RemoveHook(ImeWndProc);
         _completionDebounce.Stop();
         _lspManager.Dispose();
+        _fileWatcher?.Dispose();
+        _fileWatcher = null;
     }
 
     /// <summary>
@@ -729,6 +763,7 @@ public partial class VimEditorControl : UserControl
         UpdateAll();
         _lspManager.OnFileOpened(path, _engine.CurrentBuffer.Text.GetText());
         _ = RefreshGitDiffAsync();
+        SetupFileWatcher(path);
     }
 
     private void ReloadCurrentFile()
@@ -754,6 +789,78 @@ public partial class VimEditorControl : UserControl
         _lspManager.OnFileOpened(filePath, text);
         _ = RefreshGitDiffAsync();
         ActiveStatusBar.UpdateStatus($"\"{filePath}\" reloaded");
+    }
+
+    /// <summary>Call before writing a file to disk to prevent the watcher from triggering a reload prompt.</summary>
+    public void OnSaveStarted()  => _suppressFileWatcher = true;
+    /// <summary>Call after the file has been written to disk to re-enable the watcher.</summary>
+    public void OnSaveFinished() => _suppressFileWatcher = false;
+
+    private void SetupFileWatcher(string filePath)
+    {
+        // Dispose previous watcher
+        _fileWatcher?.Dispose();
+        _fileWatcher = null;
+
+        var dir = Path.GetDirectoryName(filePath);
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+
+        var watcher = new FileSystemWatcher(dir, Path.GetFileName(filePath))
+        {
+            NotifyFilter        = NotifyFilters.LastWrite,
+            EnableRaisingEvents = true,
+        };
+        watcher.Changed += OnWatcherChanged;
+        watcher.Renamed += OnWatcherRenamed;
+        watcher.Deleted += OnWatcherDeleted;
+        _fileWatcher = watcher;
+    }
+
+    private void OnWatcherChanged(object sender, FileSystemEventArgs e)
+    {
+        if (_suppressFileWatcher) return;
+        // FSW fires Changed multiple times per save; guard against duplicate dispatches.
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_pendingWatcherReload) return;
+            _pendingWatcherReload = true;
+            HandleExternalFileChange(e.FullPath);
+            _pendingWatcherReload = false;
+        });
+    }
+
+    private void OnWatcherRenamed(object sender, RenamedEventArgs e)
+    {
+        Dispatcher.BeginInvoke(() =>
+            ActiveStatusBar.UpdateStatus($"File renamed to \"{e.Name}\""));
+    }
+
+    private void OnWatcherDeleted(object sender, FileSystemEventArgs e)
+    {
+        Dispatcher.BeginInvoke(() =>
+            ActiveStatusBar.UpdateStatus($"Warning: \"{e.Name}\" was deleted on disk"));
+    }
+
+    private void HandleExternalFileChange(string fullPath)
+    {
+        // Verify the change is still for the currently loaded file.
+        if (!string.Equals(fullPath, _engine.CurrentBuffer.FilePath, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (!_engine.CurrentBuffer.Text.IsModified)
+        {
+            ReloadCurrentFile();  // sets status to "\"<path>\" reloaded"
+        }
+        else
+        {
+            var result = MessageBox.Show(
+                "File changed on disk. Reload? (loses unsaved changes)",
+                "File Changed",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (result == MessageBoxResult.Yes)
+                ReloadCurrentFile();
+        }
     }
 
     public void RefreshGitDiff() => _ = RefreshGitDiffAsync();
@@ -2295,6 +2402,7 @@ public partial class VimEditorControl : UserControl
                     needFullUpdate = true;
                     break;
                 case VimEventType.OptionsChanged:
+                    ApplyFoldMethod();
                     needFullUpdate = true;
                     break;
             }
