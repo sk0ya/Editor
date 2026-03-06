@@ -1,0 +1,87 @@
+namespace Editor.Core;
+
+/// <summary>
+/// Vim-compatible digraph table. Keys are two-character strings; values are the resulting Unicode string.
+/// </summary>
+public static class DiGraphs
+{
+    public static readonly Dictionary<string, string> Table = new(StringComparer.Ordinal)
+    {
+        // Arrows
+        { "->", "→" }, { "<-", "←" }, { "-v", "↓" }, { "-^", "↑" },
+        { "=>", "⇒" }, { "l=", "⇐" }, { "lr", "↔" },
+
+        // Math
+        { "+-", "±" }, { "-+", "∓" }, { "~=", "≈" }, { "!=", "≠" },
+        { "=<", "≤" }, { ">=", "≥" }, { "00", "∞" }, { "SR", "√" },
+        { "Sb", "∑" }, { "PI", "∏" }, { "Di", "∂" },
+        { "In", "∫" }, { "fa", "∀" }, { "te", "∃" },
+        { "AN", "∧" }, { "OR", "∨" }, { "(-", "∈" }, { "-)", "∋" },
+        { "(C", "⊂" }, { ")C", "⊃" }, { "0.", "∅" },
+
+        // Currency
+        { "Eu", "€" }, { "Pd", "£" }, { "Ye", "¥" }, { "Ct", "¢" },
+
+        // Copyright / trademark
+        { "Co", "©" }, { "Rg", "®" }, { "TM", "™" },
+
+        // Dashes / punctuation
+        { "--", "–" },
+        { "-N", "—" },  // em-dash (Vim: -N)
+        { "..", "·" }, { "._", "…" },
+        { "12", "½" }, { "14", "¼" }, { "34", "¾" },
+
+        // Quotes
+        { "``", "\u201C" }, { "''", "\u201D" }, { ",.", "\u201E" },
+        { "<'", "\u2018" }, { ">'", "\u2019" },
+        { "<<", "«" }, { ">>", "»" },
+
+        // Accented Latin (lowercase)
+        { "a:", "ä" }, { "e:", "ë" }, { "i:", "ï" }, { "o:", "ö" }, { "u:", "ü" }, { "y:", "ÿ" },
+        { "a'", "á" }, { "e'", "é" }, { "i'", "í" }, { "o'", "ó" }, { "u'", "ú" }, { "y'", "ý" },
+        { "a`", "à" }, { "e`", "è" }, { "i`", "ì" }, { "o`", "ò" }, { "u`", "ù" },
+        { "a^", "â" }, { "e^", "ê" }, { "i^", "î" }, { "o^", "ô" }, { "u^", "û" },
+        { "a~", "ã" }, { "n~", "ñ" }, { "o~", "õ" },
+        { "ae", "æ" }, { "oe", "œ" }, { "ss", "ß" }, { "c,", "ç" }, { "d-", "ð" }, { "t/", "þ" },
+        { "aa", "å" },
+
+        // Accented Latin (uppercase)
+        { "A:", "Ä" }, { "E:", "Ë" }, { "I:", "Ï" }, { "O:", "Ö" }, { "U:", "Ü" },
+        { "A'", "Á" }, { "E'", "É" }, { "I'", "Í" }, { "O'", "Ó" }, { "U'", "Ú" }, { "Y'", "Ý" },
+        { "A`", "À" }, { "E`", "È" }, { "I`", "Ì" }, { "O`", "Ò" }, { "U`", "Ù" },
+        { "A^", "Â" }, { "E^", "Ê" }, { "I^", "Î" }, { "O^", "Ô" }, { "U^", "Û" },
+        { "A~", "Ã" }, { "N~", "Ñ" }, { "O~", "Õ" },
+        { "AE", "Æ" }, { "OE", "Œ" }, { "C,", "Ç" }, { "D-", "Ð" }, { "T/", "Þ" },
+        { "AA", "Å" },
+
+        // Greek lowercase
+        { "a*", "α" }, { "b*", "β" }, { "g*", "γ" }, { "d*", "δ" }, { "e*", "ε" },
+        { "z*", "ζ" }, { "y*", "η" }, { "h*", "θ" }, { "i*", "ι" }, { "k*", "κ" },
+        { "l*", "λ" }, { "m*", "μ" }, { "n*", "ν" }, { "c*", "ξ" }, { "o*", "ο" },
+        { "p*", "π" }, { "r*", "ρ" }, { "s*", "σ" }, { "t*", "τ" }, { "u*", "υ" },
+        { "f*", "φ" }, { "x*", "χ" }, { "q*", "ψ" }, { "w*", "ω" },
+
+        // Greek uppercase
+        { "A*", "Α" }, { "B*", "Β" }, { "G*", "Γ" }, { "D*", "Δ" }, { "E*", "Ε" },
+        { "Z*", "Ζ" }, { "Y*", "Η" }, { "H*", "Θ" }, { "I*", "Ι" }, { "K*", "Κ" },
+        { "L*", "Λ" }, { "M*", "Μ" }, { "N*", "Ν" }, { "C*", "Ξ" }, { "O*", "Ο" },
+        { "P*", "Π" }, { "R*", "Ρ" }, { "S*", "Σ" }, { "T*", "Τ" }, { "U*", "Υ" },
+        { "F*", "Φ" }, { "X*", "Χ" }, { "Q*", "Ψ" }, { "W*", "Ω" },
+
+        // Box-drawing (common subset)
+        { "hh", "─" }, { "HH", "━" }, { "vv", "│" }, { "VV", "┃" },
+        { "dr", "┌" }, { "dl", "┐" }, { "ur", "└" }, { "ul", "┘" },
+        { "vr", "├" }, { "vl", "┤" }, { "dh", "┬" }, { "uh", "┴" }, { "vh", "┼" },
+    };
+
+    // Pre-computed display string for :digraphs — built once from the static table.
+    public static readonly string DisplayText = string.Join("  ",
+        Table.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+             .Select(kv => $"{kv.Key} {kv.Value}"));
+
+    /// <summary>
+    /// Look up a digraph by its two-character key.
+    /// </summary>
+    public static string? Lookup(string key) =>
+        Table.TryGetValue(key, out var val) ? val : null;
+}

@@ -6,6 +6,7 @@ using Editor.Core.Models;
 using Editor.Core.Registers;
 using Editor.Core.Spell;
 using Editor.Core.Syntax;
+using Editor.Core;
 
 namespace Editor.Core.Engine;
 
@@ -45,6 +46,7 @@ public class VimEngine
     private bool _awaitingInsertRegister; // Ctrl+R in Insert mode — waiting for register name
     private bool _awaitingExprRegister;   // Ctrl+R = in Insert mode — accumulating expression
     private string _exprBuffer = "";      // accumulated expression input
+    private char? _digraphPendingChar;     // non-null = awaiting digraph input; holds first char once entered (null char = awaiting first)
     private string[] _kwCompletions = []; // Ctrl+N/P keyword completion candidates
     private int _kwCompletionIndex = -1;  // current completion index (-1 = prefix only)
     private string _kwCompletionPrefix = "";
@@ -1167,6 +1169,29 @@ public class VimEngine
             }
         }
 
+        if (_digraphPendingChar.HasValue)
+        {
+            if (key == "Escape") { _digraphPendingChar = null; events.Add(VimEvent.CommandLineChanged("")); return; }
+            if (key.Length != 1) return; // ignore non-printable keys while in digraph input
+            if (_digraphPendingChar.Value == '\0')
+            {
+                // Received first char — store it and prompt for second
+                _digraphPendingChar = key[0];
+                events.Add(VimEvent.CommandLineChanged($"^K {key}"));
+            }
+            else
+            {
+                // Received second char — look up and insert
+                var digraphKey = new string([_digraphPendingChar.Value, key[0]]);
+                _digraphPendingChar = null;
+                events.Add(VimEvent.CommandLineChanged(""));
+                var ch = DiGraphs.Lookup(digraphKey);
+                if (ch != null) { Snapshot(); InsertTextAtCursor(ch, events); }
+                else EmitStatus(events, $"Unknown digraph: {digraphKey}");
+            }
+            return;
+        }
+
         if (ctrl && (key.ToLower() == "n" || key.ToLower() == "p"))
         {
             CycleKeywordCompletion(key.ToLower() == "n" ? +1 : -1, events);
@@ -1227,6 +1252,10 @@ public class VimEngine
                 case "r": // Ctrl+R {reg} = insert register contents
                     _awaitingInsertRegister = true;
                     EmitStatus(events, "\"");
+                    return;
+                case "k": // Ctrl+K {a}{b} = insert digraph
+                    _digraphPendingChar = '\0';
+                    events.Add(VimEvent.CommandLineChanged("^K"));
                     return;
             }
             // Unhandled Ctrl combo — do not insert as text.
@@ -1986,6 +2015,7 @@ public class VimEngine
         _awaitingInsertRegister = false;
         _awaitingExprRegister = false;
         _exprBuffer = "";
+        _digraphPendingChar = null;
         _kwCompletions = [];
         _kwCompletionIndex = -1;
         _kwCompletionApplied = 0;

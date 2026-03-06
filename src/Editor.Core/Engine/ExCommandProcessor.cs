@@ -5,6 +5,7 @@ using Editor.Core.Buffer;
 using Editor.Core.Config;
 using Editor.Core.Marks;
 using Editor.Core.Models;
+using Editor.Core;
 
 namespace Editor.Core.Engine;
 
@@ -109,16 +110,35 @@ public class ExCommandProcessor
             return new ExResult(true, $"\"{targetPath}\" written", VimEvent.SaveRequested(targetPath));
         }
 
-        // :e [file] :edit [file]
-        if (cmd == "e" || cmd == "edit" || cmd.StartsWith("e ") || cmd.StartsWith("edit "))
+        // :e[!] [file] :edit[!] [file]
+        if (cmd == "e" || cmd == "e!" || cmd == "edit" || cmd == "edit!" ||
+            cmd.StartsWith("e ") || cmd.StartsWith("e! ") || cmd.StartsWith("edit ") || cmd.StartsWith("edit! "))
         {
-            var path = cmd.StartsWith("edit ", StringComparison.Ordinal)
-                ? cmd[5..].Trim()
-                : cmd.StartsWith("e ", StringComparison.Ordinal)
-                    ? cmd[2..].Trim()
-                    : null;
-            if (string.IsNullOrWhiteSpace(path)) return new ExResult(false, "No file name");
-            return new ExResult(true, null, VimEvent.OpenFileRequested(path));
+            bool bang = cmd.StartsWith("e!") || cmd.StartsWith("edit!");
+            string rest = cmd switch
+            {
+                _ when cmd.StartsWith("edit! ") => cmd[6..].Trim(),
+                _ when cmd.StartsWith("edit ")  => cmd[5..].Trim(),
+                _ when cmd.StartsWith("e! ")    => cmd[3..].Trim(),
+                _ when cmd.StartsWith("e ")     => cmd[2..].Trim(),
+                _ => ""
+            };
+
+            if (string.IsNullOrWhiteSpace(rest))
+            {
+                // :e / :e! with no argument — reload current file
+                var buf = _bufferManager.Current;
+                if (string.IsNullOrEmpty(buf.FilePath))
+                    return new ExResult(false, "No file name");
+                if (!bang && buf.Text.IsModified)
+                    return new ExResult(false, "No write since last change (add ! to override)");
+                return new ExResult(true, null, VimEvent.ReloadFileRequested(bang));
+            }
+
+            // :e [file] / :e! [file] — open a different file
+            if (!bang && _bufferManager.Current.Text.IsModified)
+                return new ExResult(false, "No write since last change (add ! to override)");
+            return new ExResult(true, null, VimEvent.OpenFileRequested(rest));
         }
 
         // :set
@@ -370,6 +390,10 @@ public class ExCommandProcessor
             int sp = cmd.IndexOf(' ');
             return ExecuteCopy(sp >= 0 ? cmd[(sp + 1)..].Trim() : "", range, cursor);
         }
+
+        // :digraphs — list all available digraphs
+        if (cmd is "digraphs" or "digraph")
+            return new ExResult(true, DiGraphs.DisplayText);
 
         return new ExResult(false, $"Not an editor command: {cmd}");
     }
@@ -927,7 +951,7 @@ public class ExCommandProcessor
         "wq", "wq!", "x", "x!", "xit", "exit",
         "qa", "qa!", "qall", "qall!",
         "w", "write",
-        "e", "edit",
+        "e", "e!", "edit", "edit!",
         "set",
         "colorscheme", "colo",
         "syntax",
@@ -938,7 +962,7 @@ public class ExCommandProcessor
         "tabc", "tabc!", "tabclose", "tabclose!",
         "split", "sp", "new",
         "vsplit", "vs", "vnew",
-        "Format", "Rename",
+        "Format", "Rename", "digraphs",
         "read", "r",
         "Git blame", "Gblame",
         "copen", "cope", "clist", "cl",
@@ -954,7 +978,7 @@ public class ExCommandProcessor
     ];
 
     private static readonly HashSet<string> FileCommands = new(StringComparer.Ordinal)
-        { "e", "edit", "w", "write", "split", "sp", "vsplit", "vs", "new", "vnew", "tabnew", "tabedit", "tabe" };
+        { "e", "e!", "edit", "edit!", "w", "write", "split", "sp", "vsplit", "vs", "new", "vnew", "tabnew", "tabedit", "tabe" };
 
     private static readonly string[] KnownColorschemes = ["dracula", "nord", "tokyonight", "onedark", "dark", "light"];
 
