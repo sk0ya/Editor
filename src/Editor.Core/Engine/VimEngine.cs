@@ -981,6 +981,26 @@ public class VimEngine
                 var mk2 = _markManager.GetMark(apos[1]); if (mk2.HasValue) MoveCursor(mk2.Value with { Column = 0 }, events); break;
             case "'": _awaitingMarkJumpLine = true; break;
 
+            // q: / q/ / q? — open command/search history in command line
+            case "q:":
+            {
+                _exProcessor.ResetHistoryIndex();
+                var qcCmd = _exProcessor.LastCommand ?? "";
+                EnterCommandMode(events);
+                if (qcCmd.Length > 0) { _cmdLine = qcCmd; EmitCmdLine(events); }
+                break;
+            }
+            case "q/":
+            case "q?":
+            {
+                _exProcessor.ResetSearchHistoryIndex();
+                var qsLastSearch = _exProcessor.GetSearchHistory();
+                var qsPattern = qsLastSearch.Count > 0 ? qsLastSearch[0] : "";
+                EnterSearchMode(cmd.Motion == "q/", events);
+                if (qsPattern.Length > 0) { _cmdLine = qsPattern; EmitCmdLine(events); }
+                break;
+            }
+
             // Macros
             case var q when q?.StartsWith('q') == true && q.Length == 2:
                 if (_macroManager.IsRecording) _macroManager.StopRecording();
@@ -1846,12 +1866,28 @@ public class VimEngine
                 EmitCmdLine(events);
                 break;
             case "Up":
-                var prev = _exProcessor.HistoryPrev();
-                if (prev != null) { _cmdLine = prev; EmitCmdLine(events); }
+                if (isSearch)
+                {
+                    var sprev = _exProcessor.SearchHistoryPrev();
+                    if (sprev != null) { _cmdLine = sprev; if (_config.Options.IncrSearch) DoIncrSearch(events); EmitCmdLine(events); }
+                }
+                else
+                {
+                    var prev = _exProcessor.HistoryPrev();
+                    if (prev != null) { _cmdLine = prev; EmitCmdLine(events); }
+                }
                 break;
             case "Down":
-                var next = _exProcessor.HistoryNext();
-                if (next != null) { _cmdLine = next; EmitCmdLine(events); }
+                if (isSearch)
+                {
+                    var snext = _exProcessor.SearchHistoryNext();
+                    if (snext != null) { _cmdLine = snext; if (_config.Options.IncrSearch) DoIncrSearch(events); EmitCmdLine(events); }
+                }
+                else
+                {
+                    var next = _exProcessor.HistoryNext();
+                    if (next != null) { _cmdLine = next; EmitCmdLine(events); }
+                }
                 break;
             default:
                 if (key.Length == 1 && !ctrl)
@@ -1906,6 +1942,8 @@ public class VimEngine
         {
             _searchPattern = _cmdLine;
             _searchForward = _mode == VimMode.SearchForward;
+            if (!string.IsNullOrEmpty(_cmdLine))
+                _exProcessor.AddSearchHistory(_cmdLine);
             _cmdLine = "";
             _cursor = _preSearchCursor; // search from where we started, not incsearch preview pos
             ChangeMode(VimMode.Normal, events);

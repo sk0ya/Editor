@@ -19,6 +19,8 @@ public class ExCommandProcessor
     private readonly Dictionary<string, string> _abbreviations;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
+    private readonly List<string> _searchHistory = [];
+    private int _searchHistoryIndex = -1;
 
     public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager,
         Dictionary<string, string>? abbreviations = null)
@@ -30,32 +32,49 @@ public class ExCommandProcessor
     }
 
     public string? LastCommand => _history.Count > 0 ? _history[0] : null;
+    public IReadOnlyList<string> GetCommandHistory() => _history;
+    public IReadOnlyList<string> GetSearchHistory() => _searchHistory;
 
-    public void AddHistory(string cmd)
+    // ── shared history helpers ──────────────────────────────────────────────
+
+    private void AddToHistory(List<string> list, ref int index, string entry)
     {
-        if (!string.IsNullOrWhiteSpace(cmd))
+        if (!string.IsNullOrWhiteSpace(entry))
         {
-            _history.Remove(cmd);
-            _history.Insert(0, cmd);
-            if (_history.Count > _options.History)
-                _history.RemoveAt(_history.Count - 1);
+            list.Remove(entry);
+            list.Insert(0, entry);
+            if (list.Count > _options.History)
+                list.RemoveAt(list.Count - 1);
         }
-        _historyIndex = -1;
+        index = -1;
     }
 
-    public string? HistoryPrev()
+    private static string? HistoryNavigatePrev(List<string> list, ref int index)
     {
-        if (_history.Count == 0) return null;
-        _historyIndex = Math.Min(_historyIndex + 1, _history.Count - 1);
-        return _history[_historyIndex];
+        if (list.Count == 0) return null;
+        index = Math.Min(index + 1, list.Count - 1);
+        return list[index];
     }
 
-    public string? HistoryNext()
+    private static string? HistoryNavigateNext(List<string> list, ref int index)
     {
-        if (_historyIndex <= 0) { _historyIndex = -1; return ""; }
-        _historyIndex--;
-        return _history[_historyIndex];
+        if (index <= 0) { index = -1; return ""; }
+        return list[--index];
     }
+
+    // ── command history ─────────────────────────────────────────────────────
+
+    public void AddHistory(string cmd) => AddToHistory(_history, ref _historyIndex, cmd);
+    public void ResetHistoryIndex() => _historyIndex = -1;
+    public string? HistoryPrev() => HistoryNavigatePrev(_history, ref _historyIndex);
+    public string? HistoryNext() => HistoryNavigateNext(_history, ref _historyIndex);
+
+    // ── search history ──────────────────────────────────────────────────────
+
+    public void AddSearchHistory(string pattern) => AddToHistory(_searchHistory, ref _searchHistoryIndex, pattern);
+    public void ResetSearchHistoryIndex() => _searchHistoryIndex = -1;
+    public string? SearchHistoryPrev() => HistoryNavigatePrev(_searchHistory, ref _searchHistoryIndex);
+    public string? SearchHistoryNext() => HistoryNavigateNext(_searchHistory, ref _searchHistoryIndex);
 
     public ExResult Execute(string cmdLine, CursorPosition cursor)
     {
@@ -423,6 +442,14 @@ public class ExCommandProcessor
             if (!_abbreviations.Remove(lhs))
                 return new ExResult(false, $"No such abbreviation: {lhs}");
             return new ExResult(true);
+        }
+
+        // :history [type]  :his [type]
+        if (cmd == "history" || cmd == "his" ||
+            cmd.StartsWith("history ") || cmd.StartsWith("his "))
+        {
+            var arg = cmd.Contains(' ') ? cmd[(cmd.IndexOf(' ') + 1)..].Trim() : "";
+            return ExecuteHistory(arg);
         }
 
         return new ExResult(false, $"Not an editor command: {cmd}");
@@ -823,6 +850,37 @@ public class ExCommandProcessor
         pattern = rest;
     }
 
+    private ExResult ExecuteHistory(string type)
+    {
+        bool showCmd    = type is "" or ":" or "cmd" or "command" or "all";
+        bool showSearch = type is "" or "all" or "/" or "?" or "search";
+
+        if (type.Length > 0 && !showCmd && !showSearch)
+            return new ExResult(false, $"E488: Trailing characters: {type}");
+
+        var sb = new System.Text.StringBuilder();
+
+        if (showCmd && _history.Count > 0)
+        {
+            sb.AppendLine("  #  cmd history");
+            for (int i = 0; i < _history.Count; i++)
+                sb.AppendLine($"{_history.Count - i,4}  {_history[i]}");
+        }
+
+        if (showSearch && _searchHistory.Count > 0)
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.AppendLine("  #  search history");
+            for (int i = 0; i < _searchHistory.Count; i++)
+                sb.AppendLine($"{_searchHistory.Count - i,4}  {_searchHistory[i]}");
+        }
+
+        if (sb.Length == 0)
+            return new ExResult(true, "No history");
+
+        return new ExResult(true, sb.ToString().TrimEnd());
+    }
+
     private static readonly Regex NumericSortRegex = new(@"-?\d+", RegexOptions.Compiled);
 
     private ExResult ExecuteSort(string cmd, string range, CursorPosition cursor)
@@ -1005,6 +1063,7 @@ public class ExCommandProcessor
         "g", "global", "v", "vglobal",
         "grep", "vimgrep",
         "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",
+        "history", "his",
     ];
 
     private static readonly HashSet<string> FileCommands = new(StringComparer.Ordinal)
