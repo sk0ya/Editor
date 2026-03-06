@@ -43,6 +43,10 @@ public class EditorTheme
     public Brush ScrollbarTrack { get; init; } = new SolidColorBrush(Color.FromArgb(0x40, 0x00, 0x00, 0x00));
     public Brush ScrollbarThumb { get; init; } = new SolidColorBrush(Color.FromArgb(0x80, 0xAA, 0xAA, 0xAA));
 
+    // Minimap
+    public Brush MinimapBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0xC8, 0x1A, 0x1A, 0x1A));
+    public Brush MinimapViewport   { get; init; } = new SolidColorBrush(Color.FromArgb(0x55, 0xAA, 0xAA, 0xAA));
+
     // Diagnostic colors
     public Brush DiagnosticError   { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0x00));
     public Brush DiagnosticWarning { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0xA5, 0x00));
@@ -107,6 +111,8 @@ public class EditorTheme
         ColorColumnBrush = new SolidColorBrush(Color.FromRgb(0x3D, 0x3D, 0x50)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x4F, 0x7A)),
         IndentGuideBrush = new SolidColorBrush(Color.FromRgb(0x3A, 0x3C, 0x4E)),
+        MinimapBackground = new SolidColorBrush(Color.FromArgb(0xD0, 0x1E, 0x1F, 0x29)),
+        MinimapViewport   = new SolidColorBrush(Color.FromArgb(0x55, 0xBB, 0xBB, 0xCC)),
     };
 
     public static EditorTheme Dark { get; } = new();
@@ -147,6 +153,8 @@ public class EditorTheme
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x3B, 0x42, 0x52)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4C, 0x60, 0x80)),
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x38, 0x3F, 0x4D)),
+        MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x22, 0x27, 0x30)),
+        MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x88, 0xC0, 0xD0)),
     };
 
     // Tokyo Night — dark variant
@@ -185,6 +193,8 @@ public class EditorTheme
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x1F, 0x20, 0x35)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x36, 0x4A, 0x82)),
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x25, 0x27, 0x38)),
+        MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x13, 0x14, 0x1E)),
+        MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x7A, 0xA2, 0xF7)),
     };
 
     // One Dark — Atom One Dark inspired
@@ -223,6 +233,8 @@ public class EditorTheme
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x2C, 0x31, 0x3A)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x3E, 0x52, 0x7A)),
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x42)),
+        MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x1C, 0x1F, 0x26)),
+        MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x61, 0xAF, 0xEF)),
     };
 
     public static EditorTheme GetByName(string name) => name.ToLower() switch

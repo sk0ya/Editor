@@ -55,6 +55,10 @@ public class EditorCanvas : FrameworkElement
     // Scrollbar
     private bool _showScrollbar = true;
 
+    // Minimap
+    private bool _showMinimap = false;
+    private const double MinimapWidth = 80.0;
+
     // Color column
     private int _colorColumn = 0;
 
@@ -270,6 +274,14 @@ public class EditorCanvas : FrameworkElement
         InvalidateVisual();
     }
 
+    public void SetMinimap(bool show)
+    {
+        if (_showMinimap == show) return;
+        _showMinimap = show;
+        RebuildVisualLayout();
+        InvalidateVisual();
+    }
+
     public void SetColorColumn(int col)
     {
         if (_colorColumn == col) return;
@@ -399,7 +411,8 @@ public class EditorCanvas : FrameworkElement
     {
         MeasureChar();
         var (_, _, gutterWidth) = GetGutterMetrics();
-        double availableTextWidth = Math.Max(1, RenderSize.Width - gutterWidth);
+        double minimapReserve = _showMinimap ? MinimapWidth : 0;
+        double availableTextWidth = Math.Max(1, RenderSize.Width - gutterWidth - minimapReserve);
 
         var visibleLines = _visibleLineMap.Length > 0
             ? _visibleLineMap
@@ -536,6 +549,33 @@ public class EditorCanvas : FrameworkElement
         _isDragging = false;
 
         var point = e.GetPosition(this);
+
+        // Minimap click — scroll to the clicked position
+        if (_showMinimap && point.X >= RenderSize.Width - MinimapWidth)
+        {
+            int totalLines = Math.Max(1, _lines.Length);
+            double lineStripH = Math.Max(1.0, Math.Min(2.0, RenderSize.Height / totalLines));
+            double totalMapH  = totalLines * lineStripH;
+
+            double viewportTopLine    = _scrollOffsetY / _lineHeight;
+            double viewportCentreLine = viewportTopLine + _visibleLines / 2.0;
+            double mapOffsetY = 0;
+            if (totalMapH > RenderSize.Height)
+            {
+                double idealCentre = viewportCentreLine * lineStripH;
+                mapOffsetY = Math.Clamp(idealCentre - RenderSize.Height / 2.0, 0, totalMapH - RenderSize.Height);
+            }
+
+            double clickedLine = (point.Y + mapOffsetY) / lineStripH;
+            double newScrollY = Math.Clamp((clickedLine - _visibleLines / 2.0) * _lineHeight, 0,
+                Math.Max(0, TotalContentHeight - RenderSize.Height));
+            _scrollOffsetY = newScrollY;
+            ClampScrollOffsets(raiseScrollChanged: true);
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+
         int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
         double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
         int gutterWidth = (int)(lineNumWidth + foldColWidth);
@@ -566,8 +606,20 @@ public class EditorCanvas : FrameworkElement
         if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed && IsMouseCaptured)
         {
             _isDragging = true;
-            var (line, col) = HitTest(point);
-            MouseDragging?.Invoke(line, col);
+            // Don't fire MouseDragging when dragging in minimap area
+            if (!(_showMinimap && point.X >= RenderSize.Width - MinimapWidth))
+            {
+                var (line, col) = HitTest(point);
+                MouseDragging?.Invoke(line, col);
+            }
+            return;
+        }
+
+        // Show pointer cursor over minimap
+        if (_showMinimap && point.X >= RenderSize.Width - MinimapWidth)
+        {
+            if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+            Cursor = System.Windows.Input.Cursors.Arrow;
             return;
         }
 
@@ -731,7 +783,8 @@ public class EditorCanvas : FrameworkElement
         if (_charWidth > 0)
         {
             var (_, _, gutterWidth) = GetGutterMetrics();
-            double textAreaWidth = Math.Max(1, finalSize.Width - gutterWidth);
+            double minimapReserve = _showMinimap ? MinimapWidth : 0;
+            double textAreaWidth = Math.Max(1, finalSize.Width - gutterWidth - minimapReserve);
             _visibleColumns = (int)(textAreaWidth / _charWidth) + 2;
         }
 
@@ -918,9 +971,69 @@ public class EditorCanvas : FrameworkElement
             dc.DrawLine(pen, new Point(gutterWidth - 1, 0), new Point(gutterWidth - 1, size.Height));
         }
 
+        // Minimap
+        if (_showMinimap)
+            DrawMinimap(dc, size);
+
         // Overlay scrollbars
         if (_showScrollbar)
             DrawScrollbars(dc, size);
+    }
+
+    private void DrawMinimap(DrawingContext dc, Size size)
+    {
+        if (_lineHeight <= 0 || _lines.Length == 0) return;
+
+        double mmLeft = size.Width - MinimapWidth;
+
+        // Background
+        dc.DrawRectangle(Theme.MinimapBackground, null, new Rect(mmLeft, 0, MinimapWidth, size.Height));
+
+        int totalLines = _lines.Length;
+        // Each buffer line is represented as a tiny strip
+        double lineStripH = Math.Max(1.0, Math.Min(2.0, size.Height / totalLines));
+        double totalMapH  = totalLines * lineStripH;
+
+        // Scroll the minimap so the viewport center stays centred when file is larger than minimap
+        double viewportTopLine    = _scrollOffsetY / _lineHeight;
+        double viewportBottomLine = viewportTopLine + _visibleLines;
+        double viewportCentreLine = (viewportTopLine + viewportBottomLine) / 2.0;
+
+        // Offset so the center of the visible region maps to the center of the minimap
+        double mapOffsetY = 0;
+        if (totalMapH > size.Height)
+        {
+            double idealCentre = viewportCentreLine * lineStripH;
+            mapOffsetY = Math.Clamp(idealCentre - size.Height / 2.0, 0, totalMapH - size.Height);
+        }
+
+        // Foreground brush at low opacity for content strips
+        var fgColor = (Theme.Foreground is SolidColorBrush sb) ? sb.Color : Color.FromRgb(0xCC, 0xCC, 0xCC);
+        var contentBrush = new SolidColorBrush(Color.FromArgb(0x50, fgColor.R, fgColor.G, fgColor.B));
+
+        // Draw each line as a colored block proportional to line length
+        for (int l = 0; l < totalLines; l++)
+        {
+            double y = l * lineStripH - mapOffsetY;
+            if (y + lineStripH < 0 || y > size.Height) continue;
+
+            int lineLen = _lines[l].Length;
+            if (lineLen == 0) continue;
+
+            // Cap line width at minimap width, scale proportionally to a reasonable max (120 chars)
+            double lineW = Math.Min(MinimapWidth - 4, lineLen / 120.0 * (MinimapWidth - 4));
+            if (lineW < 1) lineW = 1;
+
+            dc.DrawRectangle(contentBrush, null, new Rect(mmLeft + 2, y, lineW, Math.Max(1, lineStripH - 0.5)));
+        }
+
+        // Viewport highlight rectangle
+        double vpTop = viewportTopLine * lineStripH - mapOffsetY;
+        double vpH   = _visibleLines * lineStripH;
+        vpTop = Math.Clamp(vpTop, 0, size.Height);
+        vpH   = Math.Min(vpH, size.Height - vpTop);
+        if (vpH > 0)
+            dc.DrawRectangle(Theme.MinimapViewport, null, new Rect(mmLeft, vpTop, MinimapWidth, vpH));
     }
 
     private const double ScrollbarSize = 6.0;

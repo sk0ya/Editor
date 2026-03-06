@@ -58,6 +58,9 @@ public class VimOptions
     public bool Paste { get; set; } = false;
     public string PasteToggle { get; set; } = "";
 
+    // Minimap
+    public bool Minimap { get; set; } = false;
+
     // LSP Inlay Hints
     public bool InlayHints { get; set; } = false;
 
@@ -143,6 +146,7 @@ public class VimOptions
             "scrollbar"                        => Set(() => Scrollbar = value),
             "indentguides" or "ig"             => Set(() => IndentGuides = value),
             "colorpreview" or "cpv"            => Set(() => ColorPreview = value),
+            "minimap" or "mm"                  => Set(() => Minimap = value),
             "inlayhints" or "ih"               => Set(() => InlayHints = value),
             "semantictokens" or "st"           => Set(() => SemanticTokens = value),
             "compatible" or "cp"               => null,

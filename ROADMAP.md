@@ -29,7 +29,6 @@
 
 | 機能 | 説明 |
 |------|------|
-| **ミニマップ** | ファイル全体の縮小表示（右端スクロールバー型） |
 | **カラープレビュー** | CSS/HTML のカラーコード横にインラインスウォッチ表示 |
 
 ### ファイル管理
@@ -45,7 +44,7 @@
 |------|------|
 | **Workspace symbols** | プロジェクト横断シンボル検索（`:Symbols {query}`） |
 | **Document symbols / Outline** | 現在ファイルのシンボル一覧をサイドバーに表示 |
-| **LSP: `textDocument/semanticTokens`** | セマンティックトークンによる高精度ハイライト |
+~~| **LSP: `textDocument/semanticTokens`** | セマンティックトークンによる高精度ハイライト |~~
 | **LSP: Call hierarchy** | 関数の呼び出し元/先を表示（`gch`） |
 | **LSP: Type hierarchy** | 型の継承ツリーを表示 |
 
@@ -88,7 +87,9 @@
 | **スクロールバー** 垂直/水平オーバーレイスクロールバー（`set scrollbar` / `noscrollbar`） | ✅ 2026-03-06 |
 | **`:Git diff` / `:Gdiff`** ファイルの git diff を新規タブで表示 | ✅ 2026-03-07 |
 | **`:Git log` / `:Glog`** コミットログ（直近30件）を新規タブで表示 | ✅ 2026-03-07 |
+| **ミニマップ** ファイル全体の縮小表示、クリックでスクロール（`set minimap`） | ✅ 2026-03-07 |
 | **Inlay hints** 変数の型・パラメータ名をインライン表示（`set inlayhints`） | ✅ 2026-03-07 |
+| **LSP semantic tokens** セマンティックトークンによる高精度ハイライト（`set semantictokens`）、レガシー正規表現より優先 | ✅ 2026-03-07 |
 
 ## 実装済み
 
