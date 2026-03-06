@@ -92,7 +92,7 @@ public class VimEngine
         _macroManager = new MacroManager();
         _syntaxEngine = new SyntaxEngine();
         _commandParser = new CommandParser();
-        _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager);
+        _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -1292,6 +1292,7 @@ public class VimEngine
                 EmitText(events);
                 break;
             case "Return":
+                TryExpandAbbreviation(buf, events);
                 InsertNewline(events);
                 break;
             case "Left":
@@ -1366,6 +1367,9 @@ public class VimEngine
                     }
                     buf.InsertChar(_cursor.Line, _cursor.Column, key[0]);
                     _cursor = _cursor with { Column = _cursor.Column + 1 };
+                    // Expand abbreviation when a non-word character is typed as trigger
+                    if (!MotionEngine.IsWordChar(key[0]))
+                        TryExpandAbbreviation(buf, events, triggerCharAlreadyInserted: true);
                     EmitText(events);
                 }
                 break;
@@ -1493,6 +1497,14 @@ public class VimEngine
                     return;
                 }
                 if (key == "i") { _awaitingVisualTextObj = 'i'; return; }
+                break;
+            case "A":
+                if (_mode == VimMode.VisualBlock)
+                {
+                    _commandParser.Reset();
+                    BeginVisualBlockAppend(events);
+                    return;
+                }
                 break;
             case "a":
                 _awaitingVisualTextObj = 'a';
@@ -2164,10 +2176,24 @@ public class VimEngine
     {
         if (_selection == null) { ExitVisualMode(events); return; }
         var (startLine, endLine, leftColumn, _) = GetBlockBounds(_selection.Value);
+        BeginVisualBlockEdit(startLine, endLine, leftColumn, events);
+    }
+
+    private void BeginVisualBlockAppend(List<VimEvent> events)
+    {
+        if (_selection == null) { ExitVisualMode(events); return; }
+        var (startLine, endLine, _, rightColumn) = GetBlockBounds(_selection.Value);
+        BeginVisualBlockEdit(startLine, endLine, rightColumn + 1, events);
+    }
+
+    // Shared setup for block-insert (I) and block-append (A): clears selection,
+    // places cursor at the given column on the first selected line, and enters Insert mode.
+    private void BeginVisualBlockEdit(int startLine, int endLine, int column, List<VimEvent> events)
+    {
         _selection = null;
         events.Add(VimEvent.SelectionChanged(null));
-        _blockInsertState = new BlockInsertState(startLine, endLine, leftColumn);
-        _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn), insertMode: true);
+        _blockInsertState = new BlockInsertState(startLine, endLine, column);
+        _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, column), insertMode: true);
         EnterInsertMode(false, events);
         EmitCursor(events);
     }
@@ -3852,6 +3878,32 @@ public class VimEngine
 
         EmitText(events);
         ExitVisualMode(events);
+    }
+
+    // ─── Abbreviation expansion ───
+    // Called after inserting a non-word trigger character (space/punct) or before Return/Tab.
+    // triggerCharAlreadyInserted=true  → cursor sits just after the trigger, word ends one before.
+    // triggerCharAlreadyInserted=false → cursor sits at end of last word (Return/Tab case).
+    private void TryExpandAbbreviation(TextBuffer buf, List<VimEvent> events,
+        bool triggerCharAlreadyInserted = false)
+    {
+        if (_config.Abbreviations.Count == 0) return;
+        var line = buf.GetLine(_cursor.Line);
+        // The column just before the trigger (or at cursor for Return/Tab)
+        int endCol = triggerCharAlreadyInserted ? _cursor.Column - 1 : _cursor.Column;
+        if (endCol <= 0) return;
+        // Walk back over word characters
+        int startCol = endCol;
+        while (startCol > 0 && MotionEngine.IsWordChar(line[startCol - 1]))
+            startCol--;
+        if (startCol == endCol) return; // no word found
+        var word = line[startCol..endCol];
+        if (!_config.Abbreviations.TryGetValue(word, out var expansion)) return;
+        // Replace the abbreviated word with the expansion
+        buf.DeleteRange(_cursor.Line, startCol, endCol);
+        buf.InsertText(_cursor.Line, startCol, expansion);
+        int delta = expansion.Length - word.Length;
+        _cursor = _cursor with { Column = _cursor.Column + delta };
     }
 
     private void DeleteWordBack(List<VimEvent> events)

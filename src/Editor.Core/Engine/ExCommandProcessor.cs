@@ -16,14 +16,17 @@ public class ExCommandProcessor
     private readonly BufferManager _bufferManager;
     private readonly VimOptions _options;
     private readonly MarkManager _markManager;
+    private readonly Dictionary<string, string> _abbreviations;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
 
-    public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager)
+    public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager,
+        Dictionary<string, string>? abbreviations = null)
     {
         _bufferManager = bufferManager;
         _options = options;
         _markManager = markManager;
+        _abbreviations = abbreviations ?? [];
     }
 
     public string? LastCommand => _history.Count > 0 ? _history[0] : null;
@@ -394,6 +397,33 @@ public class ExCommandProcessor
         // :digraphs — list all available digraphs
         if (cmd is "digraphs" or "digraph")
             return new ExResult(true, DiGraphs.DisplayText);
+
+        // :abbreviate / :ab / :iabbrev / :iab — list or add abbreviations
+        if (cmd is "abbreviate" or "ab" or "iabbrev" or "iab")
+        {
+            if (_abbreviations.Count == 0) return new ExResult(true, "No abbreviations defined");
+            var list = string.Join(", ", _abbreviations.Select(kv => $"{kv.Key} => {kv.Value}"));
+            return new ExResult(true, list);
+        }
+        if (cmd.StartsWith("abbreviate ") || cmd.StartsWith("ab ") ||
+            cmd.StartsWith("iabbrev ") || cmd.StartsWith("iab "))
+        {
+            var rest = cmd[(cmd.IndexOf(' ') + 1)..].Trim();
+            var parts = rest.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 2) return new ExResult(false, "Usage: :iab <lhs> <rhs>");
+            _abbreviations[parts[0]] = parts[1];
+            return new ExResult(true);
+        }
+
+        // :unabbreviate / :una / :iunabbrev / :iuna — remove abbreviation
+        if (cmd.StartsWith("unabbreviate ") || cmd.StartsWith("una ") ||
+            cmd.StartsWith("iunabbrev ") || cmd.StartsWith("iuna "))
+        {
+            var lhs = cmd[(cmd.IndexOf(' ') + 1)..].Trim();
+            if (!_abbreviations.Remove(lhs))
+                return new ExResult(false, $"No such abbreviation: {lhs}");
+            return new ExResult(true);
+        }
 
         return new ExResult(false, $"Not an editor command: {cmd}");
     }

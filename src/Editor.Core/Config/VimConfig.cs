@@ -6,6 +6,7 @@ public class VimConfig
     public Dictionary<string, string> NormalMaps { get; } = [];
     public Dictionary<string, string> InsertMaps { get; } = [];
     public Dictionary<string, string> VisualMaps { get; } = [];
+    public Dictionary<string, string> Abbreviations { get; } = [];
 
     // The mapleader character (default backslash, set by `let mapleader=...`)
     public string Leader { get; private set; } = "\\";
@@ -84,6 +85,22 @@ public class VimConfig
         if (TryParseMapCommand(cmd, out var dict, out var rest))
         {
             ParseMap(dict!, rest!, Leader);
+            return null;
+        }
+
+        // :iab / :iabbrev / :abbreviate / :ab — add abbreviation
+        if (TryParseAbbrevCommand(cmd, out var abbrevLhs, out var abbrevRhs))
+        {
+            if (abbrevLhs != null && abbrevRhs != null)
+                Abbreviations[abbrevLhs] = abbrevRhs;
+            return null;
+        }
+
+        // :iunabbrev / :iuna / :unabbreviate / :una — remove abbreviation
+        if (TryParseUnabbrevCommand(cmd, out var unabbrevLhs))
+        {
+            if (unabbrevLhs != null)
+                Abbreviations.Remove(unabbrevLhs);
             return null;
         }
 
@@ -205,5 +222,42 @@ public class VimConfig
             _ when val.Length == 1   => val,
             _ => "\\"
         };
+    }
+
+    private static readonly string[] AbbrevPrefixes =
+        ["iabbrev ", "iab ", "abbreviate ", "ab "];
+
+    private static readonly string[] UnabbrevPrefixes =
+        ["iunabbrev ", "iuna ", "unabbreviate ", "una "];
+
+    // Returns true and sets suffix if cmd starts with any of the given prefixes.
+    private static bool TryStripPrefix(string cmd, string[] prefixes, out string suffix)
+    {
+        foreach (var prefix in prefixes)
+        {
+            if (cmd.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                suffix = cmd[prefix.Length..].Trim();
+                return true;
+            }
+        }
+        suffix = "";
+        return false;
+    }
+
+    private bool TryParseAbbrevCommand(string cmd, out string? lhs, out string? rhs)
+    {
+        lhs = null; rhs = null;
+        if (!TryStripPrefix(cmd, AbbrevPrefixes, out var rest)) return false;
+        var parts = rest.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 2) { lhs = parts[0]; rhs = parts[1]; }
+        return true;
+    }
+
+    private bool TryParseUnabbrevCommand(string cmd, out string? lhs)
+    {
+        if (!TryStripPrefix(cmd, UnabbrevPrefixes, out var rest)) { lhs = null; return false; }
+        lhs = rest;
+        return true;
     }
 }
