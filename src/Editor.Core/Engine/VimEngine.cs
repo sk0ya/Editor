@@ -116,6 +116,9 @@ public class VimEngine
         _syntaxEngine.DetectLanguage(path);
         _syntaxEngine.Invalidate();
         _bufferManager.Current.Undo.Clear();
+        // Sync detected file format and encoding to options so :set ff?/:set fenc? reflects the loaded file.
+        _config.Options.FileFormat   = _bufferManager.Current.FileFormat;
+        _config.Options.FileEncoding = _bufferManager.Current.FileEncoding;
     }
 
     public void SetText(string text)

@@ -735,7 +735,16 @@ public partial class VimEditorControl : UserControl
     {
         var filePath = _engine.CurrentBuffer.FilePath;
         if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
-        var text = File.ReadAllText(filePath);
+        var bytes = File.ReadAllBytes(filePath);
+        var detectedEnc = Editor.Core.Buffer.VimBuffer.DetectEncodingFromBom(bytes);
+        var enc = Editor.Core.Buffer.VimBuffer.GetEncoding(detectedEnc);
+        var bomLen = Editor.Core.Buffer.VimBuffer.GetBomLength(bytes, enc);
+        var text = enc.GetString(bytes, bomLen, bytes.Length - bomLen);
+        var detectedFmt = Editor.Core.Buffer.VimBuffer.DetectFileFormat(text);
+        _engine.CurrentBuffer.FileFormat   = detectedFmt;
+        _engine.CurrentBuffer.FileEncoding = detectedEnc;
+        _engine.Options.FileFormat   = detectedFmt;
+        _engine.Options.FileEncoding = detectedEnc;
         _engine.CurrentBuffer.Text.SetText(text);
         _engine.CurrentBuffer.Text.MarkSaved();
         _engine.CurrentBuffer.Undo.Clear();
@@ -862,7 +871,7 @@ public partial class VimEditorControl : UserControl
     {
         var buf = _engine.CurrentBuffer;
         ActiveStatusBar.UpdateMode(_engine.Mode);
-        ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified);
+        ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified, buf.FileFormat);
         ActiveStatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount);
     }
 

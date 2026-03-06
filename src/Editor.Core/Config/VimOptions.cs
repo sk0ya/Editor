@@ -42,6 +42,12 @@ public class VimOptions
     // Indent guides
     public bool IndentGuides { get; set; } = false;
 
+    // File format (line endings)
+    public string FileFormat { get; set; } = "unix"; // "unix" (\n), "dos" (\r\n), "mac" (\r)
+
+    // File encoding
+    public string FileEncoding { get; set; } = "utf-8";
+
     // Paste mode
     public bool Paste { get; set; } = false;
     public string PasteToggle { get; set; } = "";
@@ -140,10 +146,10 @@ public class VimOptions
             "fontfamily"                                                         => Set(() => FontFamily = value),
             "fontsize"                      when double.TryParse(value, out var d) => Set(() => FontSize = d),
             "clipboard" or "cb"                                                 => Set(() => Clipboard = value),
+            "fileencoding" or "fenc"        => Set(() => FileEncoding = value.ToLowerInvariant()),
             // No-op key=value options
             "mouse"                         => null,
             "encoding" or "enc"             => null,
-            "fileencoding" or "fenc"        => null,
             "iminsert"                      => null,
             "imsearch"                      => null,
             "laststatus" or "ls"            => null,
@@ -163,6 +169,8 @@ public class VimOptions
             "timeoutlen" or "tm"            => null,
             "ttimeoutlen"                   => null,
             "listchars" or "lcs"            => Set(() => ListChars = value),
+            "fileformat" or "ff"            when value is "unix" or "dos" or "mac" => Set(() => FileFormat = value),
+            "fileformat" or "ff"            => null, // invalid value silently ignored
             "formatoptions" or "fo"         => null,
             "t_vb"                          => null,
             "t_si" or "t_ei" or "t_sr"      => null,

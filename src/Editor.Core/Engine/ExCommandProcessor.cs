@@ -169,6 +169,9 @@ public class ExCommandProcessor
             if (cmd == "set") return new ExResult(true, "Options: (use :set option)");
             var opt = cmd[4..].Trim();
             var err = _options.Apply(opt);
+            // Sync fileformat/fileencoding options to the current buffer so Save() uses them.
+            _bufferManager.Current.FileFormat   = _options.FileFormat;
+            _bufferManager.Current.FileEncoding = _options.FileEncoding;
             return err == null ? new ExResult(true) : new ExResult(false, err);
         }
 
@@ -1141,6 +1144,7 @@ public class ExCommandProcessor
         "fontsize=",
         "clipboard=", "cb=",
         "colorscheme=",
+        "fileformat=", "ff=",
     ];
 
     /// <summary>

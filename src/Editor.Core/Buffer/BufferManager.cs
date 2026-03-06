@@ -1,3 +1,4 @@
+using System.Text;
 using Editor.Core.Folds;
 
 namespace Editor.Core.Buffer;
@@ -11,6 +12,12 @@ public class VimBuffer
     public UndoManager Undo { get; } = new();
     public FoldManager Folds { get; } = new();
 
+    /// <summary>Line-ending format: "unix" (\n), "dos" (\r\n), or "mac" (\r).</summary>
+    public string FileFormat { get; set; } = "unix";
+
+    /// <summary>File encoding name (vim-style, e.g. "utf-8", "utf-16", "latin1").</summary>
+    public string FileEncoding { get; set; } = "utf-8";
+
     private static int _nextId = 1;
     public VimBuffer() => Id = _nextId++;
     public VimBuffer(string filePath) : this()
@@ -18,16 +25,79 @@ public class VimBuffer
         FilePath = filePath;
         if (File.Exists(filePath))
         {
-            Text.SetText(File.ReadAllText(filePath));
+            var bytes = File.ReadAllBytes(filePath);
+            FileEncoding = DetectEncodingFromBom(bytes);
+            var enc = GetEncoding(FileEncoding);
+            // Strip BOM bytes before decoding if present
+            int bomLen = GetBomLength(bytes, enc);
+            var raw = enc.GetString(bytes, bomLen, bytes.Length - bomLen);
+            FileFormat = DetectFileFormat(raw);
+            Text.SetText(raw);
             Text.MarkSaved();
         }
+    }
+
+    /// <summary>Detect encoding name from BOM bytes; returns "utf-8" if no BOM is found.</summary>
+    public static string DetectEncodingFromBom(byte[] bytes)
+    {
+        if (bytes.Length >= 2)
+        {
+            if (bytes[0] == 0xFF && bytes[1] == 0xFE) return "utf-16le";
+            if (bytes[0] == 0xFE && bytes[1] == 0xFF) return "utf-16be";
+        }
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            return "utf-8-bom";
+        return "utf-8";
+    }
+
+    public static int GetBomLength(byte[] bytes, Encoding enc)
+    {
+        var preamble = enc.GetPreamble();
+        if (preamble.Length == 0 || bytes.Length < preamble.Length) return 0;
+        for (int i = 0; i < preamble.Length; i++)
+            if (bytes[i] != preamble[i]) return 0;
+        return preamble.Length;
+    }
+
+    /// <summary>Map a vim-style encoding name to a .NET <see cref="Encoding"/>.</summary>
+    public static Encoding GetEncoding(string name) => name.ToLowerInvariant() switch
+    {
+        "utf-8-bom" or "utf-8bom"   => new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+        "utf-16" or "utf-16le"      => new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
+        "utf-16be"                  => new UnicodeEncoding(bigEndian: true,  byteOrderMark: true),
+        "latin1" or "iso-8859-1"    => Encoding.GetEncoding(1252),
+        "ascii"                     => Encoding.ASCII,
+        "shift-jis" or "sjis"       => Encoding.GetEncoding("shift-jis"),
+        "euc-jp"                    => Encoding.GetEncoding("euc-jp"),
+        _                           => new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+    };
+
+    /// <summary>Detect line-ending style from raw file content in a single pass.</summary>
+    public static string DetectFileFormat(string raw)
+    {
+        for (int i = 0; i < raw.Length; i++)
+        {
+            if (raw[i] == '\r')
+                return i + 1 < raw.Length && raw[i + 1] == '\n' ? "dos" : "mac";
+            if (raw[i] == '\n')
+                return "unix";
+        }
+        return "unix";
     }
 
     public void Save(string? path = null)
     {
         path ??= FilePath ?? throw new InvalidOperationException("No file path specified.");
         FilePath = path;
-        File.WriteAllText(path, Text.GetText());
+        // GetText() joins lines with \n; replace with the desired line ending.
+        var text = Text.GetText();
+        var content = FileFormat switch
+        {
+            "dos" => text.Replace("\n", "\r\n"),
+            "mac" => text.Replace("\n", "\r"),
+            _     => text,
+        };
+        File.WriteAllText(path, content, GetEncoding(FileEncoding));
         Text.MarkSaved();
     }
 }

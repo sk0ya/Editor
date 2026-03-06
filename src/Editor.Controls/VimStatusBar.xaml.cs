@@ -35,10 +35,11 @@ public partial class VimStatusBar : UserControl
         ModeText.Foreground = Theme.StatusBarFg;
     }
 
-    public void UpdateFile(string? filePath, bool modified)
+    public void UpdateFile(string? filePath, bool modified, string? fileFormat = null)
     {
         var name = filePath != null ? System.IO.Path.GetFileName(filePath) : "[No Name]";
-        FileText.Text = modified ? $"{name} [+]" : name;
+        var fmt = fileFormat != null ? $" [{fileFormat}]" : "";
+        FileText.Text = modified ? $"{name}{fmt} [+]" : $"{name}{fmt}";
     }
 
     public void UpdateCursor(CursorPosition pos, int totalLines)
