@@ -36,6 +36,10 @@ public class VimOptions
     public bool Spell { get; set; } = false;
     public string ListChars { get; set; } = "tab:→ ,trail:·,eol:¶";
 
+    // Paste mode
+    public bool Paste { get; set; } = false;
+    public string PasteToggle { get; set; } = "";
+
     // Behaviour
     public bool Hidden { get; set; } = true; // Allow hidden buffers
     public int History { get; set; } = 1000;
@@ -108,7 +112,7 @@ public class VimOptions
             "lazyredraw" or "lz"               => null,
             "list"                             => Set(() => List = value),
             "spell"                            => Set(() => Spell = value),
-            "paste"                            => null,
+            "paste"                            => Set(() => Paste = value),
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => null,
             "startofline" or "sol"             => null,
@@ -143,6 +147,7 @@ public class VimOptions
             "undodir"                       => null,
             "softtabstop" or "sts"          => null,
             "textwidth" or "tw"             when int.TryParse(value, out var n) => Set(() => TextWidth = n),
+            "pastetoggle" or "pt"           => Set(() => PasteToggle = value),
             "colorcolumn" or "cc"           => null,
             "foldmethod" or "fdm"           => null,
             "completeopt" or "cot"          => null,

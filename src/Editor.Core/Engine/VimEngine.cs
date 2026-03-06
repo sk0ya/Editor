@@ -421,6 +421,15 @@ public class VimEngine
 
     private void ProcessKeyInternal(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
+        // pastetoggle — works in any mode
+        var pt = _config.Options.PasteToggle;
+        if (pt.Length > 0 && key == pt && !ctrl && !shift && !alt)
+        {
+            _config.Options.Paste = !_config.Options.Paste;
+            EmitStatus(events, _config.Options.Paste ? "-- INSERT (paste) --" : "");
+            return;
+        }
+
         switch (_mode)
         {
             case VimMode.Normal:
@@ -1188,7 +1197,7 @@ public class VimEngine
                 ExitInsertMode(events);
                 break;
             case "Back":
-                if (_config.Options.Pairs && _mode == VimMode.Insert && _cursor.Column > 0)
+                if (_config.Options.Pairs && !_config.Options.Paste && _mode == VimMode.Insert && _cursor.Column > 0)
                 {
                     var lineBack = buf.GetLine(_cursor.Line);
                     char prevChar = lineBack[_cursor.Column - 1];
@@ -1246,7 +1255,7 @@ public class VimEngine
             default:
                 if (key.Length == 1)
                 {
-                    if (_config.Options.Pairs && _mode == VimMode.Insert)
+                    if (_config.Options.Pairs && !_config.Options.Paste && _mode == VimMode.Insert)
                     {
                         char ch = key[0];
 
@@ -3828,7 +3837,7 @@ public class VimEngine
     private void InsertNewline(List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
-        var indent = _config.Options.AutoIndent ? GetAutoIndent(buf, _cursor.Line) : "";
+        var indent = !_config.Options.Paste && _config.Options.AutoIndent ? GetAutoIndent(buf, _cursor.Line) : "";
         buf.BreakLine(_cursor.Line, _cursor.Column);
         _cursor = new CursorPosition(_cursor.Line + 1, 0);
         if (indent.Length > 0)
