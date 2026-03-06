@@ -43,6 +43,8 @@ public class VimEngine
     private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
     private bool _awaitingInsertRegister; // Ctrl+R in Insert mode — waiting for register name
+    private bool _awaitingExprRegister;   // Ctrl+R = in Insert mode — accumulating expression
+    private string _exprBuffer = "";      // accumulated expression input
     private string[] _kwCompletions = []; // Ctrl+N/P keyword completion candidates
     private int _kwCompletionIndex = -1;  // current completion index (-1 = prefix only)
     private string _kwCompletionPrefix = "";
@@ -1116,10 +1118,53 @@ public class VimEngine
         if (_awaitingInsertRegister)
         {
             _awaitingInsertRegister = false;
+            if (key == "=")
+            {
+                _awaitingExprRegister = true;
+                _exprBuffer = "";
+                events.Add(VimEvent.CommandLineChanged("="));
+                return;
+            }
             EmitStatus(events, "");
             if (key.Length == 1)
                 InsertRegisterContent(key[0], events);
             return;
+        }
+
+        if (_awaitingExprRegister)
+        {
+            switch (key)
+            {
+                case "Escape":
+                    _awaitingExprRegister = false;
+                    _exprBuffer = "";
+                    events.Add(VimEvent.CommandLineChanged(""));
+                    return;
+                case "Return":
+                    _awaitingExprRegister = false;
+                    var expr = _exprBuffer;
+                    _exprBuffer = "";
+                    events.Add(VimEvent.CommandLineChanged(""));
+                    var result = ExpressionEvaluator.Evaluate(expr);
+                    if (result != null)
+                    {
+                        Snapshot();
+                        InsertTextAtCursor(result, events);
+                    }
+                    return;
+                case "Back":
+                    if (_exprBuffer.Length > 0)
+                        _exprBuffer = _exprBuffer[..^1];
+                    events.Add(VimEvent.CommandLineChanged("=" + _exprBuffer));
+                    return;
+                default:
+                    if (key.Length == 1 && !ctrl)
+                    {
+                        _exprBuffer += key;
+                        events.Add(VimEvent.CommandLineChanged("=" + _exprBuffer));
+                    }
+                    return;
+            }
         }
 
         if (ctrl && (key.ToLower() == "n" || key.ToLower() == "p"))
@@ -1939,6 +1984,8 @@ public class VimEngine
         _lastInsertPos = _cursor;
         _blockInsertState = null;
         _awaitingInsertRegister = false;
+        _awaitingExprRegister = false;
+        _exprBuffer = "";
         _kwCompletions = [];
         _kwCompletionIndex = -1;
         _kwCompletionApplied = 0;
