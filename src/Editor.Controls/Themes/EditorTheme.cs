@@ -39,6 +39,10 @@ public class EditorTheme
     // Indent guide lines
     public Brush IndentGuideBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x4A));
 
+    // Scrollbar
+    public Brush ScrollbarTrack { get; init; } = new SolidColorBrush(Color.FromArgb(0x40, 0x00, 0x00, 0x00));
+    public Brush ScrollbarThumb { get; init; } = new SolidColorBrush(Color.FromArgb(0x80, 0xAA, 0xAA, 0xAA));
+
     // Diagnostic colors
     public Brush DiagnosticError   { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0x00));
     public Brush DiagnosticWarning { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0xA5, 0x00));

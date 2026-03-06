@@ -51,6 +51,9 @@ public class EditorCanvas : FrameworkElement
     private HashSet<int> _openFoldStarts = [];     // buffer lines with open fold (▼)
     private int _hoveredFoldLine = -1;             // buffer line currently hovered in fold gutter
 
+    // Scrollbar
+    private bool _showScrollbar = true;
+
     // Color column
     private int _colorColumn = 0;
 
@@ -196,6 +199,13 @@ public class EditorCanvas : FrameworkElement
     }
 
     public void SetScrollOff(int scrollOff) { _scrollOff = Math.Max(0, scrollOff); }
+
+    public void SetScrollbar(bool show)
+    {
+        if (_showScrollbar == show) return;
+        _showScrollbar = show;
+        InvalidateVisual();
+    }
 
     public void SetColorColumn(int col)
     {
@@ -829,6 +839,50 @@ public class EditorCanvas : FrameworkElement
         {
             var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)), 1);
             dc.DrawLine(pen, new Point(gutterWidth - 1, 0), new Point(gutterWidth - 1, size.Height));
+        }
+
+        // Overlay scrollbars
+        if (_showScrollbar)
+            DrawScrollbars(dc, size);
+    }
+
+    private const double ScrollbarSize = 6.0;
+    private const double ScrollbarThumbMinSize = 20.0;
+
+    private void DrawScrollbars(DrawingContext dc, Size size)
+    {
+        double totalH = TotalContentHeight;
+        double viewH  = size.Height;
+        double totalW = TotalContentWidth;
+        double viewW  = size.Width;
+
+        bool needVert  = totalH > viewH + 1;
+        bool needHoriz = !_wrapLines && totalW > viewW + 1;
+
+        if (!needVert && !needHoriz) return;
+
+        // Reserve space so the two bars don't overlap at the corner
+        double vertTrackH  = needHoriz ? size.Height - ScrollbarSize : size.Height;
+        double horizTrackW = needVert  ? size.Width  - ScrollbarSize : size.Width;
+
+        if (needVert)
+        {
+            double trackX = size.Width - ScrollbarSize;
+            dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(trackX, 0, ScrollbarSize, vertTrackH));
+            double thumbH = Math.Min(vertTrackH, Math.Max(ScrollbarThumbMinSize, vertTrackH * viewH / totalH));
+            double maxOff = totalH - viewH;
+            double thumbY = maxOff > 0 ? (vertTrackH - thumbH) * (_scrollOffsetY / maxOff) : 0;
+            dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(trackX + 1, thumbY + 1, ScrollbarSize - 2, Math.Max(0, thumbH - 2)));
+        }
+
+        if (needHoriz)
+        {
+            double trackY = size.Height - ScrollbarSize;
+            dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(0, trackY, horizTrackW, ScrollbarSize));
+            double thumbW = Math.Min(horizTrackW, Math.Max(ScrollbarThumbMinSize, horizTrackW * viewW / totalW));
+            double maxOff = totalW - viewW;
+            double thumbX = maxOff > 0 ? (horizTrackW - thumbW) * (_scrollOffsetX / maxOff) : 0;
+            dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(thumbX + 1, trackY + 1, Math.Max(0, thumbW - 2), ScrollbarSize - 2));
         }
     }
 

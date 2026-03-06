@@ -48,9 +48,15 @@ public class VimOptions
     // File encoding
     public string FileEncoding { get; set; } = "utf-8";
 
+    // Scrollbar
+    public bool Scrollbar { get; set; } = true;
+
     // Paste mode
     public bool Paste { get; set; } = false;
     public string PasteToggle { get; set; } = "";
+
+    // Folding
+    public string FoldMethod { get; set; } = "manual"; // manual, indent, marker, syntax
 
     // Behaviour
     public bool Hidden { get; set; } = true; // Allow hidden buffers
@@ -125,6 +131,7 @@ public class VimOptions
             "list"                             => Set(() => List = value),
             "spell"                            => Set(() => Spell = value),
             "paste"                            => Set(() => Paste = value),
+            "scrollbar"                        => Set(() => Scrollbar = value),
             "indentguides" or "ig"             => Set(() => IndentGuides = value),
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => null,
@@ -163,7 +170,7 @@ public class VimOptions
             "pastetoggle" or "pt"           => Set(() => PasteToggle = value),
             "colorcolumn" or "cc"           when int.TryParse(value, out var n) => Set(() => ColorColumn = n),
             "colorcolumn" or "cc"           => null, // non-integer values (e.g. comma list) silently ignored
-            "foldmethod" or "fdm"           => null,
+            "foldmethod" or "fdm"           => Set(() => FoldMethod = value.ToLowerInvariant()),
             "completeopt" or "cot"          => null,
             "updatetime" or "ut"            => null,
             "timeoutlen" or "tm"            => null,

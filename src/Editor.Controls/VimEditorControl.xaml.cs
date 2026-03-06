@@ -2437,6 +2437,7 @@ public partial class VimEditorControl : UserControl
         Canvas.SetList(_engine.Options.List, _engine.Options.ListChars);
         Canvas.SetColorColumn(_engine.Options.ColorColumn);
         Canvas.SetIndentGuides(_engine.Options.IndentGuides, _engine.Options.TabStop);
+        Canvas.SetScrollbar(_engine.Options.Scrollbar);
 
         // Syntax tokens
         if (_engine.Options.Syntax)
