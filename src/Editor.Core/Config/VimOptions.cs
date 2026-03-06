@@ -58,6 +58,9 @@ public class VimOptions
     public bool Paste { get; set; } = false;
     public string PasteToggle { get; set; } = "";
 
+    // LSP Inlay Hints
+    public bool InlayHints { get; set; } = false;
+
     // Folding
     public string FoldMethod { get; set; } = "manual"; // manual, indent, marker, syntax
 
@@ -137,6 +140,7 @@ public class VimOptions
             "scrollbar"                        => Set(() => Scrollbar = value),
             "indentguides" or "ig"             => Set(() => IndentGuides = value),
             "colorpreview" or "cpv"            => Set(() => ColorPreview = value),
+            "inlayhints" or "ih"               => Set(() => InlayHints = value),
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => null,
             "startofline" or "sol"             => null,

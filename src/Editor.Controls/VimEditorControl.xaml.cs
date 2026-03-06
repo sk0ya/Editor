@@ -265,6 +265,7 @@ public partial class VimEditorControl : UserControl
         _lspManager.StatusMessage += OnLspStatusMessage;
         _lspManager.FoldingRangesChanged += OnLspFoldingRangesChanged;
         _lspManager.BreadcrumbChanged += OnLspBreadcrumbChanged;
+        _lspManager.InlayHintsChanged += OnLspInlayHintsChanged;
 
         _completionDebounce = new System.Windows.Threading.DispatcherTimer
         {
@@ -323,6 +324,11 @@ public partial class VimEditorControl : UserControl
             ActiveStatusBar.UpdateStatus(breadcrumb);
     }
 
+    private void OnLspInlayHintsChanged(IReadOnlyList<InlayHint> hints)
+    {
+        Canvas.SetInlayHints(hints);
+    }
+
     private void OnLspFoldingRangesChanged(IReadOnlyList<LspFoldingRange> ranges)
     {
         var method = _engine.Options.FoldMethod;
@@ -373,6 +379,11 @@ public partial class VimEditorControl : UserControl
                 break;
             // "manual", "expr", "diff": no auto-detection
         }
+    }
+
+    private void ApplyInlayHintsOption()
+    {
+        _lspManager.SetInlayHintsEnabled(_engine.Options.InlayHints);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -2586,6 +2597,7 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.OptionsChanged:
                     ApplyFoldMethod();
+                    ApplyInlayHintsOption();
                     needFullUpdate = true;
                     break;
             }

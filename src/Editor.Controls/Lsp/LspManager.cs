@@ -41,6 +41,10 @@ public sealed class LspManager : IDisposable
     private int _codeActionsScrollOffset = 0;
     private bool _codeActionsVisible;
 
+    // Inlay hints
+    private IReadOnlyList<InlayHint> _inlayHints = [];
+    private bool _inlayHintsEnabled = false;
+
     // Document symbols (for breadcrumb and :Symbols)
     private IReadOnlyList<DocumentSymbol> _documentSymbols = [];
     private System.Threading.Timer? _symbolDebounce;
@@ -79,6 +83,9 @@ public sealed class LspManager : IDisposable
     /// <summary>Fired on the dispatcher thread when LSP returns folding ranges for the current file.</summary>
     public event Action<IReadOnlyList<LspFoldingRange>>? FoldingRangesChanged;
 
+    /// <summary>Fired on the dispatcher thread when inlay hints are refreshed.</summary>
+    public event Action<IReadOnlyList<InlayHint>>? InlayHintsChanged;
+
     public string? CurrentUri => _currentUri;
 
     public LspManager(Dispatcher dispatcher) => _dispatcher = dispatcher;
@@ -89,6 +96,7 @@ public sealed class LspManager : IDisposable
         HideCompletion();
         HideCodeActions();
         _diagnostics = [];
+        _inlayHints = [];
         _documentSymbols = [];
         _lastBreadcrumb = "";
         _documentReady = false;
@@ -505,6 +513,9 @@ public sealed class LspManager : IDisposable
             await RequestFoldingRangesInternalAsync(client, uri);
             _pendingFoldRangeUri = uri;
             _ = RefreshDocumentSymbolsAsync(client, uri);
+            // Refresh inlay hints if enabled
+            if (_inlayHintsEnabled)
+                _ = RequestInlayHintsInternalAsync(client, uri, 0, int.MaxValue);
         }
         catch (Exception ex)
         {
@@ -546,6 +557,45 @@ public sealed class LspManager : IDisposable
     {
         if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return;
         _ = RequestFoldingRangesInternalAsync(_currentClient, _currentUri);
+    }
+
+    /// <summary>Enable or disable inlay hints. When enabled, immediately fetches hints for the whole file.</summary>
+    public void SetInlayHintsEnabled(bool enabled)
+    {
+        _inlayHintsEnabled = enabled;
+        if (enabled)
+            RequestInlayHints(0, int.MaxValue);
+        else
+            ClearInlayHints();
+    }
+
+    /// <summary>Request inlay hints for the given line range (0-based, inclusive).</summary>
+    public void RequestInlayHints(int startLine, int endLine)
+    {
+        if (!_inlayHintsEnabled || !_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return;
+        _ = RequestInlayHintsInternalAsync(_currentClient, _currentUri, startLine, endLine);
+    }
+
+    private void ClearInlayHints()
+    {
+        _inlayHints = [];
+        InlayHintsChanged?.Invoke(_inlayHints);
+    }
+
+    private async Task RequestInlayHintsInternalAsync(LspClient client, string uri, int startLine, int endLine)
+    {
+        try
+        {
+            var range = new LspRange(new LspPosition(startLine, 0), new LspPosition(endLine, 0));
+            var hints = await client.GetInlayHintsAsync(uri, range);
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (_currentUri != uri) return;
+                _inlayHints = hints;
+                InlayHintsChanged?.Invoke(_inlayHints);
+            });
+        }
+        catch { }
     }
 
     private static async Task CloseSafeAsync(LspClient client, string uri)

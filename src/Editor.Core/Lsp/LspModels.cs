@@ -49,6 +49,10 @@ public record LspFoldingRange(int StartLine, int EndLine, string? Kind = null);
 // Code actions
 public record LspCodeAction(string Title, string? Kind, LspWorkspaceEdit? Edit);
 
+// Inlay hints
+public enum InlayHintKind { Type = 1, Parameter = 2 }
+public record InlayHint(LspPosition Position, string Label, InlayHintKind Kind);
+
 // Document symbols (hierarchical, returned by textDocument/documentSymbol)
 public record DocumentSymbol(
     string Name,

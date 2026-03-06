@@ -15,6 +15,7 @@ public class EditorCanvas : FrameworkElement
     private readonly record struct VisualLineSegment(int BufferLine, int StartColumn, bool IsContinuation);
 
     private Typeface _typeface = new("Consolas");
+    private Typeface _italicTypeface = new(new FontFamily("Consolas"), FontStyles.Italic, FontWeights.Normal, FontStretches.Normal);
     private double _fontSize = 14;
     private double _charWidth;
     private double _lineHeight;
@@ -75,6 +76,10 @@ public class EditorCanvas : FrameworkElement
     // Git
     private Dictionary<int, GitLineState> _gitDiff = [];
     private Dictionary<int, string> _blameAnnotations = [];
+
+    // Inlay hints — raw list plus a line-keyed lookup rebuilt on SetInlayHints
+    private IReadOnlyList<InlayHint> _inlayHints = [];
+    private Dictionary<int, List<InlayHint>> _inlayHintsByLine = [];
 
     // LSP
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
@@ -141,6 +146,7 @@ public class EditorCanvas : FrameworkElement
     public void UpdateFont(string family, double size)
     {
         _typeface = new Typeface(family);
+        _italicTypeface = new Typeface(new FontFamily(family), FontStyles.Italic, FontWeights.Normal, FontStretches.Normal);
         _fontSize = size;
         _charWidth = 0;
         _charWidthCache.Clear();
@@ -182,6 +188,19 @@ public class EditorCanvas : FrameworkElement
     }
 
     public Dictionary<int, GitLineState>? GetGitDiff() => _gitDiff;
+
+    public void SetInlayHints(IReadOnlyList<InlayHint> hints)
+    {
+        _inlayHints = hints;
+        _inlayHintsByLine = [];
+        foreach (var h in hints)
+        {
+            if (!_inlayHintsByLine.TryGetValue(h.Position.Line, out var list))
+                _inlayHintsByLine[h.Position.Line] = list = [];
+            list.Add(h);
+        }
+        InvalidateVisual();
+    }
 
     public void SetBlameAnnotations(Dictionary<int, string>? annotations)
     {
@@ -786,6 +805,9 @@ public class EditorCanvas : FrameworkElement
             // Git blame annotation (virtual text at end of line)
             DrawBlameAnnotation(dc, l, lineText, y, textLeft);
 
+            // LSP inlay hints (inline ghost text)
+            DrawInlayHints(dc, l, lineText, y, textLeft);
+
             // LSP diagnostics (wavy underlines)
             DrawDiagnostics(dc, l, y, textLeft, lineText);
 
@@ -910,6 +932,39 @@ public class EditorCanvas : FrameworkElement
         double lineWidth = string.IsNullOrEmpty(lineText) ? 0 : GetVisualX(lineText, lineText.Length);
         var ft = FormatText(blame, Theme.LineNumberFg);
         dc.DrawText(ft, new Point(textLeft + lineWidth - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+    }
+
+    private static readonly SolidColorBrush s_inlayHintBg =
+        Freeze(new SolidColorBrush(Color.FromArgb(0x40, 0x88, 0x88, 0xAA)));
+    private static readonly SolidColorBrush s_inlayHintFg =
+        Freeze(new SolidColorBrush(Color.FromArgb(0xB0, 0xAA, 0xAA, 0xCC)));
+
+    private void DrawInlayHints(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft)
+    {
+        if (_inlayHintsByLine.Count == 0) return;
+        if (!_inlayHintsByLine.TryGetValue(lineIndex, out var hints)) return;
+
+        foreach (var hint in hints)
+        {
+            int col = Math.Min(hint.Position.Character, lineText.Length);
+            double xBase = textLeft + GetVisualX(lineText, col) - _scrollOffsetX;
+
+            var ft = new FormattedText(
+                hint.Label,
+                CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                _italicTypeface,
+                _fontSize * 0.85,
+                s_inlayHintFg,
+                GetDpi());
+
+            double hintY = y + (_lineHeight - ft.Height) / 2;
+
+            // Draw a subtle background pill
+            var bgRect = new Rect(xBase - 1, hintY - 1, ft.Width + 2, ft.Height + 2);
+            dc.DrawRectangle(s_inlayHintBg, null, bgRect);
+            dc.DrawText(ft, new Point(xBase, hintY));
+        }
     }
 
     private void DrawDiagnostics(DrawingContext dc, int line, double y, double textLeft, string lineText)

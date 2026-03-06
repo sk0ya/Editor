@@ -12,6 +12,7 @@ public sealed class LspClient : ILspClient
     public bool IsRunning => _process.IsRunning;
     public bool SupportsFoldingRange { get; private set; }
     public bool SupportsWorkspaceSymbol { get; private set; }
+    public bool SupportsInlayHint { get; private set; }
 
     public LspClient(string executable, IEnumerable<string> args, string? workingDir = null)
     {
@@ -39,7 +40,8 @@ public sealed class LspClient : ILspClient
                     rename = new { },
                     references = new { },
                     foldingRange = new { },
-                    documentSymbol = new { hierarchicalDocumentSymbolSupport = true }
+                    documentSymbol = new { hierarchicalDocumentSymbolSupport = true },
+                    inlayHint = new { }
                 },
                 workspace = new
                 {
@@ -59,6 +61,8 @@ public sealed class LspClient : ILspClient
                 SupportsFoldingRange = frp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("workspaceSymbolProvider", out var wsp))
                 SupportsWorkspaceSymbol = wsp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            if (caps.TryGetProperty("inlayHintProvider", out var ihp))
+                SupportsInlayHint = ihp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
         }
     }
 
@@ -397,6 +401,61 @@ public sealed class LspClient : ILspClient
                 if (item.TryGetProperty("edit", out var editEl))
                     edit = ParseWorkspaceEdit(editEl);
                 list.Add(new LspCodeAction(title, kind, edit));
+            }
+            return list;
+        }
+        catch { return []; }
+    }
+
+    public async Task<IReadOnlyList<InlayHint>> GetInlayHintsAsync(
+        string uri, LspRange range, CancellationToken ct = default)
+    {
+        if (!SupportsInlayHint) return [];
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/inlayHint", new
+            {
+                textDocument = new { uri },
+                range = new
+                {
+                    start = new { line = range.Start.Line, character = range.Start.Character },
+                    end   = new { line = range.End.Line,   character = range.End.Character }
+                }
+            }, ct);
+
+            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
+            var list = new List<InlayHint>();
+            foreach (var item in result.Value.EnumerateArray())
+            {
+                if (!item.TryGetProperty("position", out var posEl)) continue;
+                int line = posEl.TryGetProperty("line", out var lEl) ? lEl.GetInt32() : 0;
+                int ch   = posEl.TryGetProperty("character", out var cEl) ? cEl.GetInt32() : 0;
+
+                // label can be a string or array of InlayHintLabelPart
+                string label = "";
+                if (item.TryGetProperty("label", out var labelEl))
+                {
+                    if (labelEl.ValueKind == JsonValueKind.String)
+                        label = labelEl.GetString() ?? "";
+                    else if (labelEl.ValueKind == JsonValueKind.Array)
+                    {
+                        var sb = new System.Text.StringBuilder();
+                        foreach (var part in labelEl.EnumerateArray())
+                        {
+                            if (part.TryGetProperty("value", out var valEl))
+                                sb.Append(valEl.GetString());
+                        }
+                        label = sb.ToString();
+                    }
+                }
+
+                if (string.IsNullOrEmpty(label)) continue;
+
+                var kind = item.TryGetProperty("kind", out var kindEl)
+                    ? (InlayHintKind)kindEl.GetInt32()
+                    : InlayHintKind.Type;
+
+                list.Add(new InlayHint(new LspPosition(line, ch), label, kind));
             }
             return list;
         }
