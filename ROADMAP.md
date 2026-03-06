@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-07 (Call hierarchy)
+> 作成日: 2026-03-02 / 更新日: 2026-03-07 (Type hierarchy)
 
 ---
 
@@ -37,7 +37,6 @@
 | 機能 | 説明 |
 |------|------|
 ~~| **LSP: `textDocument/semanticTokens`** | セマンティックトークンによる高精度ハイライト |~~
-| **LSP: Type hierarchy** | 型の継承ツリーを表示 |
 
 ### 編集補助
 
@@ -85,6 +84,7 @@
 | **カラープレビュー** CSS/HTML カラーコード（`#RGB`/`#RRGGBB`/`#RRGGBBAA`/`rgb()`/`rgba()`）の横にインラインスウォッチ表示（`set colorpreview`） | ✅ 2026-03-07 |
 | **Document symbols / Outline** `:Outline` コマンドまたはアクティビティバーボタンでサイドバーにシンボル一覧を表示、クリックでジャンプ | ✅ 2026-03-07 |
 | **LSP Call hierarchy** `gch` で関数の呼び出し元/先を References パネルに表示（`callHierarchy/prepare` + `incomingCalls` + `outgoingCalls`） | ✅ 2026-03-07 |
+| **LSP Type hierarchy** `gct` / `:TypeHierarchy` で型の継承ツリー（supertypes + subtypes）を References パネルに表示 | ✅ 2026-03-07 |
 
 ## 実装済み
 

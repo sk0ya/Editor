@@ -783,7 +783,7 @@ public class VimEngine
             case "gch":
                 events.Add(VimEvent.CallHierarchyRequested());
                 break;
-            case "gh":
+            case "gct":
                 events.Add(VimEvent.TypeHierarchyRequested());
                 break;
             case "gf":
