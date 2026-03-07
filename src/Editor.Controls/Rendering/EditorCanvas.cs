@@ -827,7 +827,7 @@ public class EditorCanvas : FrameworkElement
             bool drawNumberAndFold = !_wrapLines || !segment.IsContinuation;
 
             // Current line highlight
-            if (l == _cursor.Line && Theme.CurrentLineBg != null)
+            if (l == _cursor.Line && Theme.CurrentLineBg != null && size.Width > textLeft)
                 dc.DrawRectangle(Theme.CurrentLineBg, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
 
             // Line number gutter
@@ -1062,7 +1062,7 @@ public class EditorCanvas : FrameworkElement
         double vertTrackH  = needHoriz ? size.Height - ScrollbarSize : size.Height;
         double horizTrackW = needVert  ? size.Width  - ScrollbarSize : size.Width;
 
-        if (needVert)
+        if (needVert && vertTrackH > 0)
         {
             double trackX = size.Width - ScrollbarSize;
             dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(trackX, 0, ScrollbarSize, vertTrackH));
@@ -1072,7 +1072,7 @@ public class EditorCanvas : FrameworkElement
             dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(trackX + 1, thumbY + 1, ScrollbarSize - 2, Math.Max(0, thumbH - 2)));
         }
 
-        if (needHoriz)
+        if (needHoriz && horizTrackW > 0)
         {
             double trackY = size.Height - ScrollbarSize;
             dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(0, trackY, horizTrackW, ScrollbarSize));
