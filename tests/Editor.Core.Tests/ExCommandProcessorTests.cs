@@ -18,8 +18,9 @@ public class ExCommandProcessorTests
     private static (ExCommandProcessor Processor, BufferManager Buffers, RegisterManager Registers) CreateProcessorWithRegisters()
     {
         var buffers = new BufferManager();
-        var registers = new RegisterManager(new VimOptions());
-        return (new ExCommandProcessor(buffers, new VimOptions(), new MarkManager(), registerManager: registers), buffers, registers);
+        var options = new VimOptions();
+        var registers = new RegisterManager(options);
+        return (new ExCommandProcessor(buffers, options, new MarkManager(), registerManager: registers), buffers, registers);
     }
 
     [Fact]

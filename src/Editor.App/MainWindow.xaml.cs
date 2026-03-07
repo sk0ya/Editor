@@ -2838,10 +2838,12 @@ public partial class MainWindow : Window
             }
         }
 
-        // Persist command/search history to viminfo
-        if (_focusedEditor != null)
+        // Persist command/search history to viminfo — merge across all editors
+        var allEditors = AllEditors().ToList();
+        if (allEditors.Count > 0)
         {
-            var ex = _focusedEditor.Engine.ExProcessor;
+            var ex = allEditors[0].Engine.ExProcessor;
+            // All editors share history (loaded identically at startup), so any one suffices
             ViminfoManager.Save(ex.CommandHistory, ex.SearchHistory);
         }
 

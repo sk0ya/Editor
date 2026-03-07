@@ -546,12 +546,11 @@ public class ExCommandProcessor
             if (!string.IsNullOrEmpty(range))
                 ResolveRange(range, cursor, buf.LineCount, ref startLine, ref endLine);
 
-            var text = string.Join("\n",
-                Enumerable.Range(startLine, endLine - startLine + 1).Select(buf.GetLine));
+            if (_registerManager == null)
+                return new ExResult(false, "No register manager available");
 
-            if (_registerManager != null)
-                _registerManager.SetYank(regName, new Register(text, RegisterType.Line));
-
+            var text = string.Join("\n", buf.GetLines(startLine, endLine));
+            _registerManager.SetYank(regName, new Register(text, RegisterType.Line));
             return new ExResult(true, $"{endLine - startLine + 1} line(s) yanked");
         }
 

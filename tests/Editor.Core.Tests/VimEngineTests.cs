@@ -1688,7 +1688,7 @@ public class VimEngineTests
     public void Insert_CtrlU_DeletesToLineStart()
     {
         var engine = CreateEngine("hello world");
-        // Move to col 5 ("o") via l×5
+        // Move to col 5 (the space between "hello" and "world") via l×5
         for (int i = 0; i < 5; i++) engine.ProcessKey("l");
         engine.ProcessKey("i");
         // Ctrl+U should delete from col 5 back to col 0
