@@ -992,6 +992,38 @@ public class VimEngine
             case "z=":
                 ShowSpellSuggestions(events);
                 break;
+            case "zj":
+            {
+                int next = CurrentBuffer.Folds.NextFoldStart(_cursor.Line);
+                if (next >= 0) MoveCursor(new CursorPosition(next, 0), events);
+                break;
+            }
+            case "zk":
+            {
+                int prev = CurrentBuffer.Folds.PrevFoldStart(_cursor.Line);
+                if (prev >= 0) MoveCursor(new CursorPosition(prev, 0), events);
+                break;
+            }
+            case "[z":
+            {
+                int start = CurrentBuffer.Folds.CurrentFoldStart(_cursor.Line);
+                if (start >= 0) MoveCursor(new CursorPosition(start, 0), events);
+                break;
+            }
+            case "]z":
+            {
+                int end = CurrentBuffer.Folds.CurrentFoldEnd(_cursor.Line);
+                if (end >= 0) MoveCursor(new CursorPosition(end, 0), events);
+                break;
+            }
+            case "zd":
+                CurrentBuffer.Folds.DeleteFold(_cursor.Line);
+                events.Add(VimEvent.FoldsChanged());
+                break;
+            case "zD":
+                CurrentBuffer.Folds.DeleteFoldsAt(_cursor.Line);
+                events.Add(VimEvent.FoldsChanged());
+                break;
 
             // Editing
             case "x":
@@ -1954,6 +1986,12 @@ public class VimEngine
             case "zc": CurrentBuffer.Folds.CloseFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); return false;
             case "zM": CurrentBuffer.Folds.CloseAll(); events.Add(VimEvent.FoldsChanged()); return false;
             case "zR": CurrentBuffer.Folds.OpenAll(); events.Add(VimEvent.FoldsChanged()); return false;
+            case "zj": { int next = CurrentBuffer.Folds.NextFoldStart(_cursor.Line); if (next >= 0) MoveCursor(new CursorPosition(next, 0), events); return false; }
+            case "zk": { int prev = CurrentBuffer.Folds.PrevFoldStart(_cursor.Line); if (prev >= 0) MoveCursor(new CursorPosition(prev, 0), events); return false; }
+            case "[z": { int fs = CurrentBuffer.Folds.CurrentFoldStart(_cursor.Line); if (fs >= 0) MoveCursor(new CursorPosition(fs, 0), events); return false; }
+            case "]z": { int fe = CurrentBuffer.Folds.CurrentFoldEnd(_cursor.Line); if (fe >= 0) MoveCursor(new CursorPosition(fe, 0), events); return false; }
+            case "zd": CurrentBuffer.Folds.DeleteFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
+            case "zD": CurrentBuffer.Folds.DeleteFoldsAt(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
             case "zf":
             {
                 if (_selection != null)

@@ -2338,4 +2338,105 @@ public class VimEngineTests
         // 4 leading spaces removed
         Assert.Equal("hello", text);
     }
+
+    // ─── Fold navigation commands ───
+
+    [Fact]
+    public void Zj_MovesToNextFoldStart()
+    {
+        var engine = CreateEngine("line0\nline1\nline2\nline3\nline4");
+        // Use SetLspRanges so folds are created open (IsClosed=false), preserving normal cursor movement
+        engine.CurrentBuffer.Folds.SetLspRanges([(1, 2), (3, 4)]);
+        // cursor starts at line 0; zj should move to line 1 (start of first fold)
+        engine.ProcessKey("z");
+        engine.ProcessKey("j");
+        Assert.Equal(1, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void Zj_FromInsideFold_MovesToNextFoldStart()
+    {
+        var engine = CreateEngine("line0\nline1\nline2\nline3\nline4");
+        engine.CurrentBuffer.Folds.SetLspRanges([(1, 2), (3, 4)]);
+        // move cursor to line 1 then zj → next fold start above line 1 is line 3
+        engine.ProcessKey("j");
+        engine.ProcessKey("z");
+        engine.ProcessKey("j");
+        Assert.Equal(3, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void Zk_MovesToPrevFoldStart()
+    {
+        var engine = CreateEngine("line0\nline1\nline2\nline3\nline4");
+        engine.CurrentBuffer.Folds.SetLspRanges([(1, 2), (3, 4)]);
+        // move to line 4; zk → prev fold start before line 4 is line 3
+        engine.ProcessKey("4");
+        engine.ProcessKey("j");
+        engine.ProcessKey("z");
+        engine.ProcessKey("k");
+        Assert.Equal(3, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void BracketZ_MovesToCurrentFoldStart()
+    {
+        var engine = CreateEngine("line0\nline1\nline2\nline3\nline4");
+        engine.CurrentBuffer.Folds.SetLspRanges([(1, 3)]);
+        // move cursor to line 2 (inside open fold) then [z → should go to fold start (line 1)
+        engine.ProcessKey("2");
+        engine.ProcessKey("j");
+        engine.ProcessKey("[");
+        engine.ProcessKey("z");
+        Assert.Equal(1, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void CloseBracketZ_MovesToCurrentFoldEnd()
+    {
+        var engine = CreateEngine("line0\nline1\nline2\nline3\nline4");
+        engine.CurrentBuffer.Folds.SetLspRanges([(1, 3)]);
+        // move cursor to line 2 (inside open fold) then ]z → should go to fold end (line 3)
+        engine.ProcessKey("2");
+        engine.ProcessKey("j");
+        engine.ProcessKey("]");
+        engine.ProcessKey("z");
+        Assert.Equal(3, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void Zd_DeletesInnermostFold()
+    {
+        var engine = CreateEngine("line0\nline1\nline2\nline3\nline4");
+        // Use SetLspRanges to create nested (overlapping) folds — bypasses overlap guard
+        engine.CurrentBuffer.Folds.SetLspRanges([(0, 4), (1, 2)]);
+        // cursor at line 1 → zd deletes innermost fold (1,2); outer (0,4) remains
+        engine.ProcessKey("j");
+        engine.ProcessKey("z");
+        engine.ProcessKey("d");
+        var remaining = engine.CurrentBuffer.Folds.Folds;
+        Assert.Single(remaining);
+        Assert.Equal(0, remaining[0].StartLine);
+        Assert.Equal(4, remaining[0].EndLine);
+    }
+
+    [Fact]
+    public void ZD_DeletesAllFoldsAtCursor()
+    {
+        var engine = CreateEngine("line0\nline1\nline2\nline3\nline4");
+        // Nested folds via SetLspRanges; (3,4) does not contain line 1
+        engine.CurrentBuffer.Folds.SetLspRanges([(0, 4), (1, 2), (3, 4)]);
+        // cursor at line 1 → zD removes outer (0,4) and inner (1,2); (3,4) survives
+        engine.ProcessKey("j");
+        engine.ProcessKey("z");
+        engine.ProcessKey("D");
+        var survivors = engine.CurrentBuffer.Folds.Folds;
+        Assert.Single(survivors);
+        Assert.Equal(3, survivors[0].StartLine);
+        Assert.Equal(4, survivors[0].EndLine);
+    }
 }

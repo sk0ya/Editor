@@ -343,6 +343,10 @@ public class CommandParser
         'R' => Finalize(count, null, "zR"),
         'f' => Finalize(count, null, "zf"),
         '=' => Finalize(count, null, "z="),
+        'j' => Finalize(count, null, "zj"),
+        'k' => Finalize(count, null, "zk"),
+        'd' => Finalize(count, null, "zd"),
+        'D' => Finalize(count, null, "zD"),
         _ => (CommandState.Invalid, null)
     };
 

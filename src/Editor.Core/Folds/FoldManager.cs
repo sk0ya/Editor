@@ -183,4 +183,47 @@ public class FoldManager
         }
         return bestIdx;
     }
+
+    // 指定行の最も内側のフォールドを削除する
+    public void DeleteFold(int line)
+    {
+        var idx = FindFoldIndex(line);
+        if (idx >= 0) { _folds.RemoveAt(idx); InvalidateCache(); }
+    }
+
+    // 指定行を含む全てのフォールドを削除する
+    public void DeleteFoldsAt(int line)
+    {
+        bool changed = false;
+        for (int i = _folds.Count - 1; i >= 0; i--)
+        {
+            var f = _folds[i];
+            if (f.StartLine <= line && f.EndLine >= line) { _folds.RemoveAt(i); changed = true; }
+        }
+        if (changed) InvalidateCache();
+    }
+
+    // 指定行より下にある最初のフォールドの StartLine を返す（なければ -1）
+    // _folds は StartLine 昇順ソート済みなので、最初に line を超えた要素が答え
+    public int NextFoldStart(int line)
+    {
+        foreach (var f in _folds)
+            if (f.StartLine > line) return f.StartLine;
+        return -1;
+    }
+
+    // 指定行より上にある最後のフォールドの StartLine を返す（なければ -1）
+    // _folds は StartLine 昇順ソート済みなので、逆順走査で最初に line 未満の要素が答え
+    public int PrevFoldStart(int line)
+    {
+        for (int i = _folds.Count - 1; i >= 0; i--)
+            if (_folds[i].StartLine < line) return _folds[i].StartLine;
+        return -1;
+    }
+
+    // 指定行を含む最も内側のフォールドの StartLine を返す（なければ -1）
+    public int CurrentFoldStart(int line) => FindFoldAt(line)?.StartLine ?? -1;
+
+    // 指定行を含む最も内側のフォールドの EndLine を返す（なければ -1）
+    public int CurrentFoldEnd(int line) => FindFoldAt(line)?.EndLine ?? -1;
 }
