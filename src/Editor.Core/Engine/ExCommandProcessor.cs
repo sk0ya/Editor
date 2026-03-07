@@ -35,8 +35,19 @@ public class ExCommandProcessor
     }
 
     public string? LastCommand => _history.Count > 0 ? _history[0] : null;
-    public IReadOnlyList<string> GetCommandHistory() => _history;
-    public IReadOnlyList<string> GetSearchHistory() => _searchHistory;
+    public IReadOnlyList<string> CommandHistory => _history.AsReadOnly();
+    public IReadOnlyList<string> SearchHistory  => _searchHistory.AsReadOnly();
+
+    public void LoadHistory(IReadOnlyList<string> cmdHistory, IReadOnlyList<string> searchHistory)
+    {
+        _history.Clear();
+        _history.AddRange(cmdHistory.Take(_options.History));
+        _historyIndex = -1;
+
+        _searchHistory.Clear();
+        _searchHistory.AddRange(searchHistory.Take(_options.History));
+        _searchHistoryIndex = -1;
+    }
 
     // ── shared history helpers ──────────────────────────────────────────────
 

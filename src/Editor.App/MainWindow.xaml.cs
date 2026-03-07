@@ -14,6 +14,7 @@ using System.Windows.Shell;
 using System.Windows.Threading;
 using Editor.Controls;
 using Editor.Controls.Themes;
+using Editor.Core.Config;
 using Editor.Core.Lsp;
 using Editor.Core.Models;
 using Editor.Core.Panes;
@@ -256,6 +257,11 @@ public partial class MainWindow : Window
         ApplyTabPlacement(_recentItems.TabPlacement);
         ApplyColorTheme(_recentItems.ThemeName, _recentItems.CustomBackground, _recentItems.CustomAccent);
         InitColorPalettes();
+
+        // Restore command/search history from viminfo
+        var (cmdHist, searchHist) = ViminfoManager.Load();
+        foreach (var ed in AllEditors())
+            ed.Engine.ExProcessor.LoadHistory(cmdHist, searchHist);
     }
 
     private void RestoreSession()
@@ -2830,6 +2836,13 @@ public partial class MainWindow : Window
                 base.OnClosing(e);
                 return;
             }
+        }
+
+        // Persist command/search history to viminfo
+        if (_focusedEditor != null)
+        {
+            var ex = _focusedEditor.Engine.ExProcessor;
+            ViminfoManager.Save(ex.CommandHistory, ex.SearchHistory);
         }
 
         var tabFiles = _fileTabs

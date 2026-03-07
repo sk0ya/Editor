@@ -89,6 +89,7 @@ public class VimEngine
     public VimBuffer CurrentBuffer => _bufferManager.Current;
     public BufferManager BufferManager => _bufferManager;
     public SyntaxEngine Syntax => _syntaxEngine;
+    public ExCommandProcessor ExProcessor => _exProcessor;
 
     /// <summary>Sets the viewport state so H/M/L motions target correct visible lines.</summary>
     public void SetViewportState(int topLine, int visibleLines)
@@ -1019,7 +1020,7 @@ public class VimEngine
             case "q?":
             {
                 _exProcessor.ResetSearchHistoryIndex();
-                var qsLastSearch = _exProcessor.GetSearchHistory();
+                var qsLastSearch = _exProcessor.SearchHistory;
                 var qsPattern = qsLastSearch.Count > 0 ? qsLastSearch[0] : "";
                 EnterSearchMode(cmd.Motion == "q/", events);
                 if (qsPattern.Length > 0) { _cmdLine = qsPattern; EmitCmdLine(events); }
