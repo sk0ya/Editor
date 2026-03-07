@@ -2267,4 +2267,75 @@ public class VimEngineTests
         Assert.Equal(0, engine.Cursor.Line);
         Assert.Equal(3, engine.Cursor.Column);
     }
+
+    [Fact]
+    public void GE_MovesToEndOfPrevWORD()
+    {
+        // "hello world foo" — cursor starts at 'f' (col 12)
+        // gE should land on 'd' of "world" (col 10)
+        var engine = CreateEngine("hello world foo");
+        engine.ProcessKey("$"); // col 14
+        engine.ProcessKey("b"); // 'f' col 12
+        engine.ProcessKey("g");
+        engine.ProcessKey("E");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(10, engine.Cursor.Column); // last char of "world"
+    }
+
+    [Fact]
+    public void GE_SkipsWhitespaceBetweenWORDs()
+    {
+        // "aaa   bbb" — cursor on 'b' (col 6)
+        // gE should land on 'a' (col 2), the last char of "aaa"
+        var engine = CreateEngine("aaa   bbb");
+        engine.ProcessKey("$"); // col 8 ('b')
+        engine.ProcessKey("b"); // back to col 6 ('b')
+        engine.ProcessKey("g");
+        engine.ProcessKey("E");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(2, engine.Cursor.Column); // last char of "aaa"
+    }
+
+    [Fact]
+    public void Visual_Tilde_TogglesCase()
+    {
+        var engine = CreateEngine("Hello World");
+        // Enter visual mode, select "Hello" (cols 0-4), then ~
+        engine.ProcessKey("v");
+        engine.ProcessKey("e"); // select to end of "Hello"
+        engine.ProcessKey("~");
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        var text = engine.CurrentBuffer.Text.GetText();
+        // "Hello" → "hELLO", rest unchanged
+        Assert.StartsWith("hELLO", text);
+    }
+
+    [Fact]
+    public void InsertCtrlT_IndentsCurrentLine()
+    {
+        var engine = CreateEngine("hello");
+        // Enter insert mode, then Ctrl+T
+        engine.ProcessKey("i");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        engine.ProcessKey("t", ctrl: true);
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        var text = engine.CurrentBuffer.Text.GetText();
+        // Line should now start with 4 spaces (default shiftwidth)
+        Assert.StartsWith("    ", text);
+        Assert.Contains("hello", text);
+    }
+
+    [Fact]
+    public void InsertCtrlD_DedentsCurrentLine()
+    {
+        var engine = CreateEngine("    hello");
+        // Enter insert mode at start of indented line, then Ctrl+D
+        engine.ProcessKey("i");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        engine.ProcessKey("d", ctrl: true);
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        var text = engine.CurrentBuffer.Text.GetText();
+        // 4 leading spaces removed
+        Assert.Equal("hello", text);
+    }
 }

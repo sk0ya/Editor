@@ -160,6 +160,7 @@ public class CommandParser
             return rest[1] switch
             {
                 'e' => Finalize(count, null, "ge"),
+                'E' => Finalize(count, null, "gE"),
                 'j' => Finalize(count, null, "gj"),
                 'k' => Finalize(count, null, "gk"),
                 't' => Finalize(count, null, "gt"),
@@ -221,6 +222,7 @@ public class CommandParser
                 {
                     'g' => Finalize(count, null, "gg"),
                     'e' => Finalize(count, null, "ge"),
+                    'E' => Finalize(count, null, "gE"),
                     'j' => Finalize(count, null, "gj"),
                     'k' => Finalize(count, null, "gk"),
                     't' => Finalize(count, null, "gt"),

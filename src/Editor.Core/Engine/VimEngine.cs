@@ -803,6 +803,7 @@ public class VimEngine
             case "e": MoveCursor(motion.WordEnd(_cursor, count, false), events); break;
             case "E": MoveCursor(motion.WordEnd(_cursor, count, true), events); break;
             case "ge": MoveCursor(WordEndBackward(count), events); break;
+            case "gE": MoveCursor(WordEndBackward(count), events); break;
             case "gj": MoveVertical(count, events); break;
             case "gk": MoveVertical(-count, events); break;
             case "g_":
@@ -1415,6 +1416,23 @@ public class VimEngine
                     _digraphPendingChar = '\0';
                     events.Add(VimEvent.CommandLineChanged("^K"));
                     return;
+                case "t": // Ctrl+T — indent current line by shiftwidth
+                    IndentRange(_cursor.Line, _cursor.Line, true, events);
+                    _cursor = _cursor with { Column = _cursor.Column + _config.Options.ShiftWidth };
+                    EmitCursor(events);
+                    return;
+                case "d": // Ctrl+D — dedent current line by shiftwidth
+                {
+                    var lineBeforeDedent = buf.GetLine(_cursor.Line);
+                    int removedChars = 0;
+                    var sw = _config.Options.ShiftWidth;
+                    for (int i = 0; i < sw && i < lineBeforeDedent.Length && (lineBeforeDedent[i] == ' ' || lineBeforeDedent[i] == '\t'); i++)
+                        removedChars++;
+                    IndentRange(_cursor.Line, _cursor.Line, false, events);
+                    _cursor = _cursor with { Column = Math.Max(0, _cursor.Column - removedChars) };
+                    EmitCursor(events);
+                    return;
+                }
             }
             // Unhandled Ctrl combo — do not insert as text.
             return;
@@ -1830,6 +1848,9 @@ public class VimEngine
                 _cursor = motion.WordEnd(_cursor, count, true);
                 return true;
             case "ge":
+                _cursor = WordEndBackward(count);
+                return true;
+            case "gE":
                 _cursor = WordEndBackward(count);
                 return true;
             case "gj":
@@ -2587,6 +2608,7 @@ public class VimEngine
 
         return pos;
     }
+
 
     private (CursorPosition Start, CursorPosition End)? GetTextObjectRange(string textObject)
     {
