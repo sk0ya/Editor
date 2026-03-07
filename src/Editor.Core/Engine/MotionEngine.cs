@@ -34,6 +34,8 @@ public class MotionEngine
             "G" => new Motion(new CursorPosition(_buffer.LineCount - 1, 0), MotionType.Linewise),
             "{" => ParagraphBackward(cursor),
             "}" => ParagraphForward(cursor),
+            "(" => SentenceBackward(cursor, count),
+            ")" => SentenceForward(cursor, count),
             "%" => MatchBracket(cursor),
             "H" => ScreenTop(cursor),
             "M" => ScreenMiddle(cursor),
@@ -230,6 +232,223 @@ public class MotionEngine
         while (line > 0 && !string.IsNullOrWhiteSpace(_buffer.GetLine(line)))
             line--;
         return new Motion(new CursorPosition(Math.Max(0, line), 0), MotionType.Linewise);
+    }
+
+    private Motion SentenceForward(CursorPosition cursor, int count)
+    {
+        int line = cursor.Line;
+        int col = cursor.Column;
+
+        for (int c = 0; c < count; c++)
+        {
+            bool moved = false;
+
+            // Advance one position to avoid being stuck on current sentence end
+            col++;
+            if (col >= _buffer.GetLineLength(line))
+            {
+                line++;
+                col = 0;
+                if (line >= _buffer.LineCount)
+                {
+                    line = _buffer.LineCount - 1;
+                    col = Math.Max(0, _buffer.GetLineLength(line) - 1);
+                    break;
+                }
+            }
+
+            while (line < _buffer.LineCount)
+            {
+                var ln = _buffer.GetLine(line);
+
+                // Empty line = paragraph boundary = sentence start
+                if (string.IsNullOrWhiteSpace(ln))
+                {
+                    while (line < _buffer.LineCount && string.IsNullOrWhiteSpace(_buffer.GetLine(line)))
+                        line++;
+                    col = 0;
+                    moved = true;
+                    break;
+                }
+
+                // Scan for sentence-ending punctuation followed by whitespace/end
+                while (col < ln.Length)
+                {
+                    if (ln[col] is '.' or '!' or '?')
+                    {
+                        int next = col + 1;
+                        while (next < ln.Length && ln[next] is ')' or ']' or '"' or '\'')
+                            next++;
+
+                        if (next >= ln.Length)
+                        {
+                            // End of line — next sentence starts at first char of next non-blank line
+                            (line, col) = NextSentenceContent(line);
+                            moved = true;
+                            break;
+                        }
+                        else if (char.IsWhiteSpace(ln[next]))
+                        {
+                            // Skip whitespace; if it reaches EOL, jump to next non-blank line
+                            int nextCol = next;
+                            while (nextCol < ln.Length && char.IsWhiteSpace(ln[nextCol])) nextCol++;
+                            if (nextCol < ln.Length)
+                                col = nextCol;
+                            else
+                                (line, col) = NextSentenceContent(line);
+                            moved = true;
+                            break;
+                        }
+                    }
+                    col++;
+                }
+
+                if (moved) break;
+
+                line++;
+                col = 0;
+                if (line >= _buffer.LineCount)
+                {
+                    line = _buffer.LineCount - 1;
+                    col = Math.Max(0, _buffer.GetLineLength(line) - 1);
+                    break;
+                }
+            }
+        }
+
+        line = Math.Clamp(line, 0, _buffer.LineCount - 1);
+        col = Math.Clamp(col, 0, Math.Max(0, _buffer.GetLineLength(line) - 1));
+        return new Motion(new CursorPosition(line, col), MotionType.Exclusive);
+    }
+
+    // Find the first non-whitespace character on the next non-blank line after `afterLine`.
+    private (int line, int col) NextSentenceContent(int afterLine)
+    {
+        int nextLine = afterLine + 1;
+        while (nextLine < _buffer.LineCount && string.IsNullOrWhiteSpace(_buffer.GetLine(nextLine)))
+            nextLine++;
+        if (nextLine < _buffer.LineCount)
+        {
+            var text = _buffer.GetLine(nextLine);
+            int col = 0;
+            while (col < text.Length && char.IsWhiteSpace(text[col])) col++;
+            return (nextLine, col);
+        }
+        int lastLine = _buffer.LineCount - 1;
+        return (lastLine, Math.Max(0, _buffer.GetLineLength(lastLine) - 1));
+    }
+
+    // Given sentence-ending punctuation on `searchLine` with the character after punct at `afterPunctCol`,
+    // return the position of the start of the next sentence.
+    private (int line, int col) SentenceStartAfterPunct(int searchLine, int afterPunctCol)
+    {
+        var text = _buffer.GetLine(searchLine);
+        int startCol = afterPunctCol;
+        while (startCol < text.Length && char.IsWhiteSpace(text[startCol])) startCol++;
+        return startCol < text.Length ? (searchLine, startCol) : NextSentenceContent(searchLine);
+    }
+
+    private Motion SentenceBackward(CursorPosition cursor, int count)
+    {
+        int line = cursor.Line;
+        int col = cursor.Column;
+
+        for (int c = 0; c < count; c++)
+        {
+            col--;
+            if (col < 0)
+            {
+                line--;
+                if (line < 0) { line = 0; col = 0; break; }
+                col = Math.Max(0, _buffer.GetLineLength(line) - 1);
+            }
+            (line, col) = FindPrevSentenceStart(line, col, cursor);
+        }
+
+        line = Math.Clamp(line, 0, _buffer.LineCount - 1);
+        col = Math.Clamp(col, 0, Math.Max(0, _buffer.GetLineLength(line) - 1));
+        return new Motion(new CursorPosition(line, col), MotionType.Exclusive);
+    }
+
+    private (int line, int col) FindPrevSentenceStart(int line, int col, CursorPosition origin)
+    {
+        // Skip whitespace backward to land on a non-whitespace character
+        var ln = _buffer.GetLine(line);
+        while (col >= 0 && (col >= ln.Length || char.IsWhiteSpace(ln[col])))
+        {
+            col--;
+            if (col < 0)
+            {
+                line--;
+                if (line < 0) return (0, 0);
+                ln = _buffer.GetLine(line);
+                col = ln.Length - 1;
+                if (string.IsNullOrWhiteSpace(ln))
+                {
+                    while (line > 0 && string.IsNullOrWhiteSpace(_buffer.GetLine(line - 1)))
+                        line--;
+                    return (line, 0);
+                }
+            }
+        }
+
+        // Scan backward for sentence-ending punctuation
+        int searchLine = line;
+        int searchCol = col;
+
+        while (searchLine >= 0)
+        {
+            var sln = _buffer.GetLine(searchLine);
+
+            if (string.IsNullOrWhiteSpace(sln))
+            {
+                // Blank line: sentence starts at first non-whitespace of next non-blank line
+                return NextSentenceContent(searchLine - 1);
+            }
+
+            bool continueSearch = false;
+            for (int i = searchCol; i >= 0; i--)
+            {
+                if (sln[i] is not ('.' or '!' or '?')) continue;
+
+                int next = i + 1;
+                while (next < sln.Length && sln[next] is ')' or ']' or '"' or '\'') next++;
+
+                if (next >= sln.Length || char.IsWhiteSpace(sln[next]))
+                {
+                    var (startLine, startCol) = SentenceStartAfterPunct(searchLine, next);
+                    if (startLine == origin.Line && startCol == origin.Column)
+                    {
+                        // Same as origin — keep searching further back
+                        searchCol = i - 1;
+                        if (searchCol < 0)
+                        {
+                            searchLine--;
+                            if (searchLine < 0) return (0, 0);
+                            searchCol = Math.Max(0, _buffer.GetLineLength(searchLine) - 1);
+                        }
+                        continueSearch = true;
+                        break;
+                    }
+                    return (startLine, startCol);
+                }
+            }
+            if (continueSearch) continue;
+
+            // No punctuation on this line — go to previous line
+            searchLine--;
+            if (searchLine >= 0 && string.IsNullOrWhiteSpace(_buffer.GetLine(searchLine)))
+            {
+                // Blank line boundary: sentence starts at first char of current block
+                var text = _buffer.GetLine(searchLine + 1);
+                int nextCol = 0;
+                while (nextCol < text.Length && char.IsWhiteSpace(text[nextCol])) nextCol++;
+                return (searchLine + 1, nextCol);
+            }
+            searchCol = searchLine >= 0 ? Math.Max(0, _buffer.GetLineLength(searchLine) - 1) : 0;
+        }
+
+        return (0, 0);
     }
 
     private Motion? MatchBracket(CursorPosition cursor)

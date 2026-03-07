@@ -2057,4 +2057,127 @@ public class VimEngineTests
         Assert.Contains("col 3", msg);
         Assert.Contains("of 3", msg);
     }
+
+    // ── Sentence motions ( and ) ─────────────────────────────────────────
+
+    [Fact]
+    public void SentenceMotion_Forward_MovesToNextSentenceStart()
+    {
+        // Two sentences on one line separated by ". "
+        var engine = CreateEngine("Hello world.  Next sentence here.");
+        // Cursor starts at col 0. ) should jump to "Next"
+        engine.ProcessKey(")");
+        // "Next" starts at col 14 (after "Hello world.  ")
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.True(engine.Cursor.Column > 0, "Cursor should have moved past the first sentence end");
+        var line = engine.CurrentBuffer.Text.GetLine(0);
+        // The character at the new cursor position should be 'N' (start of "Next")
+        Assert.Equal('N', line[engine.Cursor.Column]);
+    }
+
+    [Fact]
+    public void SentenceMotion_Forward_AcrossLines()
+    {
+        // Sentence ends at end of line; next sentence is on the next line
+        var engine = CreateEngine("First sentence.\nSecond sentence.");
+        // ) from line 0 should move to line 1
+        engine.ProcessKey(")");
+        Assert.Equal(1, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void SentenceMotion_Forward_BlankLineBoundary()
+    {
+        // Empty line is a paragraph/sentence boundary
+        var engine = CreateEngine("First para.\n\nSecond para.");
+        engine.ProcessKey(")");
+        // Should land on line 2 (the "Second para." line)
+        Assert.Equal(2, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void SentenceMotion_Backward_MovesToPrevSentenceStart()
+    {
+        // Two sentences on one line; start at the second sentence, move back
+        var engine = CreateEngine("Hello world.  Next sentence.");
+        // Jump forward to "Next"
+        engine.ProcessKey(")");
+        int colAfterForward = engine.Cursor.Column;
+        Assert.True(colAfterForward > 0);
+        // Now ( should move back to column 0
+        engine.ProcessKey("(");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void SentenceMotion_Backward_AcrossLines()
+    {
+        // Two separate lines; start on line 1, ( should go back to line 0
+        var engine = CreateEngine("First sentence.\nSecond sentence.");
+        engine.ProcessKey("j"); // move to line 1
+        engine.ProcessKey("(");
+        Assert.Equal(0, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void SentenceMotion_WithCount_MovesMultipleSentences()
+    {
+        // Three sentences on one line
+        var engine = CreateEngine("One.  Two.  Three.");
+        // 2) should skip two sentence boundaries — land on "Three"
+        engine.ProcessKey("2");
+        engine.ProcessKey(")");
+        Assert.Equal(0, engine.Cursor.Line);
+        var line = engine.CurrentBuffer.Text.GetLine(0);
+        Assert.Equal('T', line[engine.Cursor.Column]);
+    }
+
+    [Fact]
+    public void SentenceMotion_ExclamationAndQuestion_AreSentenceEnders()
+    {
+        // ! and ? are also sentence terminators
+        var engine = CreateEngine("Really!  Next.  End?  Again.");
+        engine.ProcessKey(")"); // move past "Really!"
+        var line = engine.CurrentBuffer.Text.GetLine(0);
+        Assert.Equal('N', line[engine.Cursor.Column]);
+    }
+
+    [Fact]
+    public void SentenceMotion_ForwardAtEndOfBuffer_Stays()
+    {
+        // ) at end of buffer should not crash and cursor stays valid
+        var engine = CreateEngine("Only one sentence.");
+        engine.ProcessKey(")");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.True(engine.Cursor.Column >= 0);
+    }
+
+    [Fact]
+    public void SentenceMotion_BackwardAtStartOfBuffer_Stays()
+    {
+        // ( at file start should not crash and cursor stays at 0,0
+        var engine = CreateEngine("Only one sentence.");
+        engine.ProcessKey("(");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void SentenceMotion_UsableAsOperatorMotion_Delete()
+    {
+        // d) should delete from cursor up to (exclusive) the start of the next sentence.
+        // The engine's ExecuteDelete uses to.Column + 1 (inclusive end), so the character
+        // at the motion target is included in the deletion — leaving text after it.
+        var engine = CreateEngine("Hello world.  Next sentence.");
+        // ) lands on 'N' at col 14; d) deletes cols 0-14 inclusive → "ext sentence."
+        engine.ProcessKey("d");
+        engine.ProcessKey(")");
+        var text = engine.CurrentBuffer.Text.GetText();
+        // Something was deleted — the buffer is shorter than the original
+        Assert.True(text.Length < "Hello world.  Next sentence.".Length, "d) should delete some text");
+        // The deletion removed the first sentence and whitespace
+        Assert.False(text.Contains("Hello"), "First sentence should have been deleted");
+    }
 }
