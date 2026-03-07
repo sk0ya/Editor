@@ -1778,4 +1778,90 @@ public class VimEngineTests
         Assert.DoesNotContain(events, e => e.Type == VimEventType.WindowCloseRequested);
         Assert.Equal(VimMode.Normal, engine.Mode);
     }
+
+    [Fact]
+    public void VisualMark_SetsLessThanGreaterThanMarks()
+    {
+        // line1\nline2\nline3 — start on line 0, go into Visual, move down two lines, then Escape
+        var engine = CreateEngine("line1\nline2\nline3");
+
+        // Move to line 0, col 2
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        Assert.Equal(new CursorPosition(0, 2), engine.Cursor);
+
+        // Enter Visual mode and extend selection down two lines
+        engine.ProcessKey("v");
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        Assert.Equal(VimMode.Visual, engine.Mode);
+        Assert.Equal(new CursorPosition(2, 2), engine.Cursor);
+
+        // Exit visual mode — should set '< and '>
+        engine.ProcessKey("Escape");
+        Assert.Equal(VimMode.Normal, engine.Mode);
+
+        // Jump to '< (start of last visual selection, col preserved)
+        engine.ProcessKey("'");
+        engine.ProcessKey("<");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column); // ' mark jumps to col 0
+
+        // Jump to '> (end of last visual selection, col preserved)
+        engine.ProcessKey("'");
+        engine.ProcessKey(">");
+        Assert.Equal(2, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column); // ' mark jumps to col 0
+    }
+
+    [Fact]
+    public void VisualMark_BacktickJumpsToExactPosition()
+    {
+        // `< and `> jump to exact line+column
+        var engine = CreateEngine("line1\nline2\nline3");
+
+        // Start at col 1
+        engine.ProcessKey("l");
+
+        // Enter Visual, move down one line to col 1
+        engine.ProcessKey("v");
+        engine.ProcessKey("j");
+        engine.ProcessKey("Escape");
+
+        // `< — exact position of selection start
+        engine.ProcessKey("`");
+        engine.ProcessKey("<");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(1, engine.Cursor.Column);
+
+        // `> — exact position of selection end
+        engine.ProcessKey("`");
+        engine.ProcessKey(">");
+        Assert.Equal(1, engine.Cursor.Line);
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void VisualLineMark_SetsCorrectColumns()
+    {
+        // In VisualLine mode, '< should be col 0 and '> should be last col of end line
+        var engine = CreateEngine("hello\nworld\nfoo");
+
+        // Enter VisualLine on line 0, extend to line 1
+        engine.ProcessKey("V");
+        engine.ProcessKey("j");
+        engine.ProcessKey("Escape");
+
+        // `< should be line 0, col 0
+        engine.ProcessKey("`");
+        engine.ProcessKey("<");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+
+        // `> should be line 1, last column of "world" (col 4)
+        engine.ProcessKey("`");
+        engine.ProcessKey(">");
+        Assert.Equal(1, engine.Cursor.Line);
+        Assert.Equal(4, engine.Cursor.Column);
+    }
 }

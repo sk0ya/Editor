@@ -2173,6 +2173,22 @@ public class VimEngine
         _lastVisualStart = _visualStart;
         _lastVisualEnd = _cursor;
         _lastVisualMode = _mode;
+
+        // Set '<' and '>' marks to the normalized selection start/end.
+        // For VisualLine mode, '>' lands on the last column of the end line (Vim behaviour).
+        var selStart = _selection?.NormalizedStart ?? _visualStart;
+        var selEnd   = _selection?.NormalizedEnd   ?? _cursor;
+
+        if (_mode == VimMode.VisualLine)
+        {
+            selStart = selStart with { Column = 0 };
+            var endLineLen = _bufferManager.Current.Text.GetLineLength(selEnd.Line);
+            selEnd = selEnd with { Column = Math.Max(0, endLineLen - 1) };
+        }
+
+        _markManager.SetMark('<', selStart);
+        _markManager.SetMark('>', selEnd);
+
         _selection = null;
         ChangeMode(VimMode.Normal, events);
         events.Add(VimEvent.SelectionChanged(null));

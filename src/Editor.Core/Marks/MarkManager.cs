@@ -11,7 +11,7 @@ public class MarkManager
 
     public void SetMark(char name, CursorPosition pos)
     {
-        if (char.IsLetter(name))
+        if (char.IsLetter(name) || name == '<' || name == '>')
             _marks[name] = pos;
     }
 
