@@ -23,6 +23,7 @@ public class ExCommandProcessor
     private int _historyIndex = -1;
     private readonly List<string> _searchHistory = [];
     private int _searchHistoryIndex = -1;
+    private int _executeDepth;
 
     public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager,
         Dictionary<string, string>? abbreviations = null, RegisterManager? registerManager = null)
@@ -521,14 +522,56 @@ public class ExCommandProcessor
         if (cmd is "pwd")
             return new ExResult(true, Directory.GetCurrentDirectory());
 
-        // :echo {expr} — print message
-        if (cmd.StartsWith("echo ") || cmd == "echo")
+        // :cd [dir] / :lcd [dir] — change working directory
+        if (cmd == "cd" || cmd.StartsWith("cd ") || cmd == "lcd" || cmd.StartsWith("lcd "))
         {
-            var msg = cmd.Length > 5 ? cmd[5..].Trim() : "";
-            // Strip surrounding quotes if present
-            if (msg.Length >= 2 && ((msg[0] == '"' && msg[^1] == '"') || (msg[0] == '\'' && msg[^1] == '\'')))
-                msg = msg[1..^1];
-            return new ExResult(true, msg);
+            string cdArg = GetCommandArg(cmd);
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string targetDir;
+            if (string.IsNullOrEmpty(cdArg) || cdArg == "~")
+                targetDir = home;
+            else if (cdArg.StartsWith("~/") || cdArg.StartsWith("~\\"))
+                targetDir = home + cdArg[1..];
+            else
+                targetDir = cdArg;
+
+            try
+            {
+                Directory.SetCurrentDirectory(targetDir);
+                return new ExResult(true, Directory.GetCurrentDirectory());
+            }
+            catch (Exception ex)
+            {
+                return new ExResult(false, ex.Message);
+            }
+        }
+
+        // :echo {expr} / :echomsg {expr} — print message
+        if (cmd.StartsWith("echo ") || cmd == "echo" ||
+            cmd.StartsWith("echomsg ") || cmd == "echomsg")
+        {
+            string expr;
+            if (cmd.StartsWith("echomsg "))
+                expr = cmd[8..].Trim();
+            else if (cmd == "echomsg")
+                expr = "";
+            else
+                expr = cmd.Length > 5 ? cmd[5..].Trim() : "";
+            return new ExResult(true, EvalExpr(expr));
+        }
+
+        // :execute {expr} — evaluate string and run as Ex command
+        if (cmd.StartsWith("execute ") || cmd == "execute")
+        {
+            if (_executeDepth >= 20)
+                return new ExResult(false, "E169: Command too recursive");
+            var expr = cmd.Length > 8 ? cmd[8..].Trim() : "";
+            var resolved = EvalExpr(expr);
+            if (string.IsNullOrEmpty(resolved))
+                return new ExResult(false, "E471: Argument required");
+            _executeDepth++;
+            try { return Execute(resolved, cursor); }
+            finally { _executeDepth--; }
         }
 
         // :[range]yank [reg] — yank lines to register
@@ -1467,6 +1510,99 @@ public class ExCommandProcessor
         try { return Path.GetRelativePath(basePath, fullPath); }
         catch { return fullPath; }
     }
+
+    // ── Expression evaluator for :echo / :echomsg / :execute ───────────────
+
+    private string EvalExpr(string expr)
+    {
+        expr = expr.Trim();
+
+        // String literal: "..." or '...'
+        if (expr.Length >= 2 &&
+            ((expr[0] == '"' && expr[^1] == '"') ||
+             (expr[0] == '\'' && expr[^1] == '\'')))
+            return StripQuotes(expr);
+
+        // expand('%'), expand('%:t'), expand('%:h'), expand('%:r'), expand('%:e')
+        if (expr.StartsWith("expand(", StringComparison.Ordinal))
+            return EvalExpand(expr);
+
+        // strftime('fmt') / strftime("fmt")
+        if (expr.StartsWith("strftime(", StringComparison.Ordinal))
+            return EvalStrftime(expr);
+
+        // Numeric literal
+        if (int.TryParse(expr, out var n)) return n.ToString();
+
+        // Bare word / unrecognised — return as-is
+        return expr;
+    }
+
+    private string EvalExpand(string expr)
+    {
+        // expr like: expand('%') or expand('%:t') or expand('%:h') etc.
+        var inner = ExtractFunctionArg(expr, "expand");
+        if (inner == null) return expr;
+
+        inner = StripQuotes(inner);
+
+        var filePath = _bufferManager.Current.FilePath ?? "";
+
+        return inner switch
+        {
+            "%"    => filePath,
+            "%:t"  => Path.GetFileName(filePath),
+            "%:h"  => Path.GetDirectoryName(filePath) ?? "",
+            "%:r"  => Path.Combine(
+                          Path.GetDirectoryName(filePath) ?? "",
+                          Path.GetFileNameWithoutExtension(filePath)),
+            "%:e"  => Path.GetExtension(filePath).TrimStart('.'),
+            "%:p"  => string.IsNullOrEmpty(filePath) ? filePath : Path.GetFullPath(filePath),
+            _      => filePath
+        };
+    }
+
+    private static string EvalStrftime(string expr)
+    {
+        // expr like: strftime('%Y-%m-%d') or strftime("%H:%M")
+        var fmt = ExtractFunctionArg(expr, "strftime");
+        if (fmt == null) return expr;
+
+        fmt = StripQuotes(fmt);
+
+        // Convert strftime format specifiers to .NET equivalents
+        fmt = fmt
+            .Replace("%Y", "yyyy")
+            .Replace("%y", "yy")
+            .Replace("%m", "MM")
+            .Replace("%d", "dd")
+            .Replace("%H", "HH")
+            .Replace("%M", "mm")
+            .Replace("%S", "ss")
+            .Replace("%A", "dddd")
+            .Replace("%a", "ddd")
+            .Replace("%B", "MMMM")
+            .Replace("%b", "MMM")
+            .Replace("%I", "hh")
+            .Replace("%p", "tt");
+
+        try { return DateTime.Now.ToString(fmt); }
+        catch { return fmt; }
+    }
+
+    private static string? ExtractFunctionArg(string expr, string funcName)
+    {
+        // funcName + '(' ... ')'
+        var prefix = funcName + "(";
+        if (!expr.StartsWith(prefix, StringComparison.Ordinal)) return null;
+        if (!expr.EndsWith(')')) return null;
+        return expr[prefix.Length..^1].Trim();
+    }
+
+    private static string StripQuotes(string s) =>
+        s.Length >= 2 && ((s[0] == '"' && s[^1] == '"') || (s[0] == '\'' && s[^1] == '\''))
+            ? s[1..^1]
+            : s;
 
     private static bool TryParseWriteCommand(string cmd, out string? path)
     {

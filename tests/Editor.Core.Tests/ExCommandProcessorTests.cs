@@ -1,3 +1,5 @@
+using System.IO;
+using System.Text.RegularExpressions;
 using Editor.Core.Buffer;
 using Editor.Core.Config;
 using Editor.Core.Engine;
@@ -353,6 +355,148 @@ public class ExCommandProcessorTests
 
         Assert.True(result.Success);
         Assert.Equal("hello world", result.Message);
+    }
+
+    [Fact]
+    public void Cd_ChangesCurrentDirectory()
+    {
+        var (processor, _) = CreateProcessor();
+        var original = Directory.GetCurrentDirectory();
+        var target = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        try
+        {
+            var result = processor.Execute($"cd {target}", CursorPosition.Zero);
+
+            Assert.True(result.Success);
+            Assert.Equal(target, Directory.GetCurrentDirectory().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(original);
+        }
+    }
+
+    [Fact]
+    public void Lcd_ChangesCurrentDirectory()
+    {
+        var (processor, _) = CreateProcessor();
+        var original = Directory.GetCurrentDirectory();
+        var target = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        try
+        {
+            var result = processor.Execute($"lcd {target}", CursorPosition.Zero);
+
+            Assert.True(result.Success);
+            Assert.Equal(target, Directory.GetCurrentDirectory().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(original);
+        }
+    }
+
+    [Fact]
+    public void Cd_NoArg_ChangesToHomeDirectory()
+    {
+        var (processor, _) = CreateProcessor();
+        var original = Directory.GetCurrentDirectory();
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        try
+        {
+            var result = processor.Execute("cd", CursorPosition.Zero);
+
+            Assert.True(result.Success);
+            Assert.Equal(home, Directory.GetCurrentDirectory());
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(original);
+        }
+    }
+
+    [Fact]
+    public void Echomsg_PrintsMessage()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("echomsg \"hello world\"", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("hello world", result.Message);
+    }
+
+    [Fact]
+    public void Echo_ExpandPercent_ReturnsFilePath()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.FilePath = "/some/path/file.txt";
+
+        var result = processor.Execute("echo expand('%')", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("/some/path/file.txt", result.Message);
+    }
+
+    [Fact]
+    public void Echo_ExpandPercentT_ReturnsFileName()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.FilePath = "/some/path/file.txt";
+
+        var result = processor.Execute("echo expand('%:t')", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("file.txt", result.Message);
+    }
+
+    [Fact]
+    public void Echo_ExpandPercentH_ReturnsDirectory()
+    {
+        var (processor, buffers) = CreateProcessor();
+        var sep = Path.DirectorySeparatorChar;
+        buffers.Current.FilePath = $"{sep}some{sep}path{sep}file.txt";
+
+        var result = processor.Execute("echo expand('%:h')", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal($"{sep}some{sep}path", result.Message);
+    }
+
+    [Fact]
+    public void Echo_Strftime_ReturnsFormattedDate()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("echo strftime('%Y-%m-%d')", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        // Should look like a date: 4 digits, dash, 2 digits, dash, 2 digits
+        Assert.Matches(@"^\d{4}-\d{2}-\d{2}$", result.Message);
+    }
+
+    [Fact]
+    public void Execute_RunsEchoCommand()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("execute \"echo hello\"", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("hello", result.Message);
+    }
+
+    [Fact]
+    public void Execute_NoArg_ReturnsError()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("execute", CursorPosition.Zero);
+
+        Assert.False(result.Success);
     }
 
     [Fact]
