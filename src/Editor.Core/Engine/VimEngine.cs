@@ -45,6 +45,7 @@ public class VimEngine
     private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
     private bool _awaitingBlockReplace;   // Visual Block r — waiting for the replacement character
+    private bool _pendingInsertReturn;    // Ctrl+O in Insert mode — return to Insert after one Normal command
     private bool _awaitingInsertRegister; // Ctrl+R in Insert mode — waiting for register name
     private bool _awaitingExprRegister;   // Ctrl+R = in Insert mode — accumulating expression
     private string _exprBuffer = "";      // accumulated expression input
@@ -501,10 +502,20 @@ public class VimEngine
             return;
         }
 
+        // Escape while _pendingInsertReturn is set: cancel Ctrl+O, stay in Normal
+        if (key == "Escape" && _pendingInsertReturn)
+        {
+            _pendingInsertReturn = false;
+            _commandParser.Reset();
+            EmitStatus(events, "");
+            return;
+        }
+
         // Ctrl keys
         if (ctrl)
         {
             HandleNormalCtrl(key, events);
+            MaybeReturnToInsertAfterCtrlO(events);
             return;
         }
 
@@ -518,11 +529,24 @@ public class VimEngine
         }
         if (state == CommandState.Invalid || cmd == null)
         {
+            // Invalid key during Ctrl+O: cancel the pending return so the flag doesn't leak.
+            _pendingInsertReturn = false;
             EmitStatus(events, "");
             return;
         }
 
         ExecuteNormalCommand(cmd.Value, events);
+        // Ctrl+O: return to Insert after one Normal command.
+        // Commands like c/i that already enter Insert are left alone (_mode != Normal).
+        MaybeReturnToInsertAfterCtrlO(events);
+    }
+
+    private void MaybeReturnToInsertAfterCtrlO(List<VimEvent> events)
+    {
+        if (!_pendingInsertReturn) return;
+        _pendingInsertReturn = false;
+        if (_mode == VimMode.Normal)
+            ChangeMode(VimMode.Insert, events);
     }
 
     private void HandleNormalCtrl(string key, List<VimEvent> events)
@@ -1322,6 +1346,10 @@ public class VimEngine
                 case "w": DeleteWordBack(events); return;
                 case "u": DeleteLineBack(events); return;
                 case "h": DeleteCharBack(events); return;
+                case "o": // Ctrl+O — execute one Normal command then return to Insert
+                    _pendingInsertReturn = true;
+                    ChangeMode(VimMode.Normal, events);
+                    return;
                 case "j": InsertNewline(events); return;
                 case "m": InsertNewline(events); return;
                 case "a": // Ctrl+A = Select All

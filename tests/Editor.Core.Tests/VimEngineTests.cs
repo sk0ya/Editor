@@ -1717,6 +1717,55 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void InsertMode_CtrlW_DeletesWordBefore()
+    {
+        var engine = CreateEngine("hello world");
+        // Position cursor at end of "world" (col 11)
+        engine.ProcessKey("$");
+        engine.ProcessKey("a"); // append — cursor moves past 'd'
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        // Ctrl+W should delete "world"
+        engine.ProcessKey("w", ctrl: true);
+        engine.ProcessKey("Escape");
+        // "hello " remains
+        Assert.Equal("hello ", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void InsertMode_CtrlU_DeletesToLineStart()
+    {
+        var engine = CreateEngine("hello world");
+        // Move to col 5, enter insert mode
+        for (int i = 0; i < 5; i++) engine.ProcessKey("l");
+        engine.ProcessKey("i");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        // Ctrl+U deletes from cursor (col 5) back to col 0
+        engine.ProcessKey("u", ctrl: true);
+        engine.ProcessKey("Escape");
+        Assert.Equal(" world", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void InsertMode_CtrlO_ExecutesNormalCommandAndReturnsToInsert()
+    {
+        var engine = CreateEngine("hello world");
+        // Enter insert mode at start of "world" (position 6)
+        for (int i = 0; i < 6; i++) engine.ProcessKey("l");
+        engine.ProcessKey("i");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        // Ctrl+O: one Normal command then back to Insert
+        engine.ProcessKey("o", ctrl: true);
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        // Execute 'w' (word forward) as Normal command
+        engine.ProcessKey("w");
+        // Should be back in Insert mode
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        // Cursor should have moved (past "world" to col 11, clamped for normal→insert)
+        Assert.True(engine.Cursor.Column > 6);
+    }
+
+    [Fact]
     public void ZZ_SavesAndEmitsQuitRequested()
     {
         var engine = CreateEngine("hello");
