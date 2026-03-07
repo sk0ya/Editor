@@ -512,12 +512,10 @@ public class ExCommandProcessor
             return ExecuteBufdo(subCmd);
         }
 
-        // :noh / :nohlsearch — clear search highlight
+        // :noh / :nohlsearch — temporarily clear search highlight without disabling hlsearch.
+        // HlSearch stays true so that n/N will re-enable highlights on the next search move.
         if (cmd is "noh" or "nohl" or "nohlsearch" or "nohls")
-        {
-            _options.HlSearch = false;
-            return new ExResult(true);
-        }
+            return new ExResult(true, null, VimEvent.SearchChanged("", 0));
 
         // :pwd — print working directory
         if (cmd is "pwd")

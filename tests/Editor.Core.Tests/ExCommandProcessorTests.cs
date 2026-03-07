@@ -290,7 +290,14 @@ public class ExCommandProcessorTests
         var result = processor.Execute("noh", CursorPosition.Zero);
 
         Assert.True(result.Success);
-        Assert.False(options.HlSearch);
+        // HlSearch must stay true — :noh only clears the visual highlight temporarily;
+        // n/N will re-enable highlights on the next search move.
+        Assert.True(options.HlSearch);
+        // A SearchResultChanged event with an empty pattern is emitted to clear the canvas.
+        Assert.NotNull(result.Event);
+        Assert.Equal(VimEventType.SearchResultChanged, result.Event.Type);
+        var srce = Assert.IsType<SearchResultChangedEvent>(result.Event);
+        Assert.Equal("", srce.Pattern);
     }
 
     [Fact]
@@ -304,7 +311,14 @@ public class ExCommandProcessorTests
         var result = processor.Execute("nohlsearch", CursorPosition.Zero);
 
         Assert.True(result.Success);
-        Assert.False(options.HlSearch);
+        // HlSearch must stay true — :nohlsearch only clears the visual highlight temporarily;
+        // n/N will re-enable highlights on the next search move.
+        Assert.True(options.HlSearch);
+        // A SearchResultChanged event with an empty pattern is emitted to clear the canvas.
+        Assert.NotNull(result.Event);
+        Assert.Equal(VimEventType.SearchResultChanged, result.Event.Type);
+        var srce = Assert.IsType<SearchResultChangedEvent>(result.Event);
+        Assert.Equal("", srce.Pattern);
     }
 
     [Fact]
