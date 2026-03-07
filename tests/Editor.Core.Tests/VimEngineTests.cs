@@ -1977,4 +1977,68 @@ public class VimEngineTests
         engine.ProcessKey("@");
         Assert.Equal("f", engine.CurrentBuffer.Text.GetText());
     }
+
+    [Fact]
+    public void IndentedPaste_AdjustsIndentToCurrentLine()
+    {
+        // yy on line 0 ("  hello"), then move to line 2 ("    world"), ]p pastes below with adjusted indent
+        // Register content: "  hello\n" (indent=2); current line indent=4; delta=+2 → "    hello"
+        var engine = CreateEngine("  hello\nfoo\n    world");
+        // Yank line 0 (indented 2 spaces)
+        engine.ProcessKey("y");
+        engine.ProcessKey("y");
+        // Move to line 2 (indented 4 spaces)
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        // ]p — paste after with indent matched to current line (4 spaces)
+        engine.ProcessKey("]");
+        engine.ProcessKey("p");
+        var lines = engine.CurrentBuffer.Text.GetText().Split('\n');
+        // Pasted line should have 4 spaces of indent (was 2, current line has 4, delta=+2)
+        Assert.Equal("    hello", lines[3]);
+    }
+
+    [Fact]
+    public void IndentedPasteAbove_AdjustsIndentToCurrentLine()
+    {
+        // yy on line 2 ("      deep"), move to line 0 ("  top"), [p pastes above with adjusted indent
+        // Register indent=6; current line indent=2; delta=-4 → "  deep"
+        var engine = CreateEngine("  top\nfoo\n      deep");
+        // Move to line 2
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        // Yank line 2 (indented 6 spaces)
+        engine.ProcessKey("y");
+        engine.ProcessKey("y");
+        // Move back to line 0 (indented 2 spaces)
+        engine.ProcessKey("g");
+        engine.ProcessKey("g");
+        // [p — paste before with indent matched to current line (2 spaces)
+        engine.ProcessKey("[");
+        engine.ProcessKey("p");
+        var lines = engine.CurrentBuffer.Text.GetText().Split('\n');
+        // Pasted line should have 2 spaces of indent (was 6, current line has 2, delta=-4)
+        Assert.Equal("  deep", lines[0]);
+    }
+
+    [Fact]
+    public void IndentedPaste_MultiLine_AdjustsAllLines()
+    {
+        // Yank two lines with different indents, paste with ]p; indent of each line adjusted by delta
+        // Lines 0-1: "  hello\n    world" (min indent=2); current line (line 3) has 6 spaces; delta=+4
+        var engine = CreateEngine("  hello\n    world\nfoo\n      target");
+        // Visual-line select lines 0-1 and yank
+        engine.ProcessKey("V");       // visual line on line 0
+        engine.ProcessKey("j");       // extend to line 1
+        engine.ProcessKey("y");       // yank selection
+        // Move to line 3 (6 spaces)
+        engine.ProcessKey("G");
+        // ]p — paste after with adjusted indent
+        engine.ProcessKey("]");
+        engine.ProcessKey("p");
+        var lines = engine.CurrentBuffer.Text.GetText().Split('\n');
+        // min indent of yanked lines = 2; target indent = 6; delta = +4
+        Assert.Equal("      hello", lines[4]);   // was "  hello" → "      hello"
+        Assert.Equal("        world", lines[5]); // was "    world" → "        world"
+    }
 }

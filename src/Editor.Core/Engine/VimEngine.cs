@@ -1005,6 +1005,14 @@ public class VimEngine
                 SetRepeatChange(cmd);
                 PasteBefore(cmd.Register ?? '"', events);
                 break;
+            case "]p":
+                SetRepeatChange(cmd);
+                ExecuteIndentedPaste(after: true, cmd.Register ?? '"', events);
+                break;
+            case "[p":
+                SetRepeatChange(cmd);
+                ExecuteIndentedPaste(after: false, cmd.Register ?? '"', events);
+                break;
             case "u": ExecuteUndo(events); break;
             case "U": ExecuteUndo(events); break;
             case "\x12": ExecuteRedo(events); break;
@@ -2970,12 +2978,7 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
 
         if (reg.Type == RegisterType.Line)
-        {
-            var lines = reg.GetLines();
-            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line, lines.Length);
-            buf.InsertLines(_cursor.Line, lines);
-            _cursor = new CursorPosition(_cursor.Line + 1, 0);
-        }
+            InsertLinewisePaste(reg.GetLines(), after: true);
         else
         {
             var col = Math.Min(_cursor.Column + 1, buf.GetLineLength(_cursor.Line));
@@ -2993,20 +2996,120 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
 
         if (reg.Type == RegisterType.Line)
-        {
-            var lines = reg.GetLines();
-            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, 1);
-            buf.InsertLineAbove(_cursor.Line);
-            for (int i = 0; i < lines.Length; i++)
-                buf.ReplaceLine(_cursor.Line + i, lines[i]);
-            _cursor = new CursorPosition(_cursor.Line, 0);
-        }
+            InsertLinewisePaste(reg.GetLines(), after: false);
         else
         {
             buf.InsertText(_cursor.Line, _cursor.Column, reg.Text);
             _cursor = _cursor with { Column = _cursor.Column + reg.Text.Length - 1 };
         }
         EmitText(events);
+    }
+
+    // Shared linewise insertion for p/P/]p/[p — does not call Snapshot or EmitText.
+    private void InsertLinewisePaste(string[] lines, bool after)
+    {
+        var buf = _bufferManager.Current.Text;
+        if (after)
+        {
+            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line, lines.Length);
+            buf.InsertLines(_cursor.Line, lines);
+            _cursor = new CursorPosition(_cursor.Line + 1, 0);
+        }
+        else
+        {
+            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, 1);
+            buf.InsertLineAbove(_cursor.Line);
+            for (int i = 0; i < lines.Length; i++)
+                buf.ReplaceLine(_cursor.Line + i, lines[i]);
+            _cursor = new CursorPosition(_cursor.Line, 0);
+        }
+    }
+
+    /// <summary>
+    /// Implements ]p (after=true) and [p (after=false): paste with indent adjusted to match current line.
+    /// Only applies indent adjustment for linewise registers; character registers fall back to normal paste.
+    /// </summary>
+    private void ExecuteIndentedPaste(bool after, char register, List<VimEvent> events)
+    {
+        Snapshot();
+        var reg = _registerManager.Get(register);
+        if (reg.IsEmpty) return;
+        var buf = _bufferManager.Current.Text;
+
+        if (reg.Type == RegisterType.Line)
+        {
+            var lines = reg.GetLines();
+            int tabStop = _config.Options.TabStop;
+
+            // Minimum indent among non-empty lines in the register
+            int minIndent = int.MaxValue;
+            foreach (var line in lines)
+            {
+                if (line.Length == 0) continue;
+                int ind = CountIndentSpaces(line, tabStop);
+                if (ind < minIndent) minIndent = ind;
+            }
+            if (minIndent == int.MaxValue) minIndent = 0;
+
+            int delta = CountIndentSpaces(buf.GetLine(_cursor.Line), tabStop) - minIndent;
+
+            string[] adjusted = new string[lines.Length];
+            for (int i = 0; i < lines.Length; i++)
+                adjusted[i] = ApplyIndentDelta(lines[i], delta, tabStop);
+
+            InsertLinewisePaste(adjusted, after);
+        }
+        else
+        {
+            // Character register: fall back to normal paste (no indent adjustment)
+            if (after)
+            {
+                var col = Math.Min(_cursor.Column + 1, buf.GetLineLength(_cursor.Line));
+                buf.InsertText(_cursor.Line, col, reg.Text);
+                _cursor = _cursor with { Column = col + reg.Text.Length - 1 };
+            }
+            else
+            {
+                buf.InsertText(_cursor.Line, _cursor.Column, reg.Text);
+                _cursor = _cursor with { Column = _cursor.Column + reg.Text.Length - 1 };
+            }
+        }
+        EmitText(events);
+    }
+
+    /// <summary>Returns the number of leading spaces in a line, expanding tabs using tabStop.</summary>
+    private static int CountIndentSpaces(string line, int tabStop)
+    {
+        int spaces = 0;
+        foreach (char c in line)
+        {
+            if (c == ' ') spaces++;
+            else if (c == '\t') spaces += tabStop - (spaces % tabStop);
+            else break;
+        }
+        return spaces;
+    }
+
+    /// <summary>
+    /// Adjusts the leading indent of a line by <paramref name="delta"/> spaces.
+    /// Positive delta adds spaces; negative delta removes them (clamped to 0).
+    /// Preserves the original tab/space style of the line's existing indent.
+    /// </summary>
+    private static string ApplyIndentDelta(string line, int delta, int tabStop)
+    {
+        if (line.Length == 0) return line;
+
+        // Count leading whitespace characters
+        int ws = 0;
+        while (ws < line.Length && (line[ws] == ' ' || line[ws] == '\t'))
+            ws++;
+
+        string content = line[ws..];
+        int currentSpaces = CountIndentSpaces(line[..ws], tabStop);
+        int newSpaces = Math.Max(0, currentSpaces + delta);
+
+        // Rebuild indent as spaces (simplest, consistent with Vim behaviour)
+        return new string(' ', newSpaces) + content;
     }
 
     private void SelectAllVisualLine(List<VimEvent> events)
