@@ -589,6 +589,42 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void CtrlV_BlockAppendA_AppendsAfterRightColumnOfBlock()
+    {
+        // Block spans col 0-2 (full "abc"), A inserts after col 2 = end of line
+        var engine = CreateEngine("abc\nabc\nabc");
+
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("$"); // extend to end of line (col 2)
+        engine.ProcessKey("A");
+        engine.ProcessKey("X");
+        engine.ProcessKey("Escape");
+
+        Assert.Equal("abcX\nabcX\nabcX", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void CtrlV_BlockAppendA_AppendsAtRightColumnOfBlock()
+    {
+        // Select columns 0-1, A inserts after col 1 (between 'b' and 'c')
+        var engine = CreateEngine("abcd\nabcd\nabcd");
+
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("l"); // extend block to col 0-1
+        engine.ProcessKey("A");
+        engine.ProcessKey("X");
+        engine.ProcessKey("Escape");
+
+        Assert.Equal("abXcd\nabXcd\nabXcd", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
     public void CtrlV_BlockChange_C_ChangesRectangularSelectionOnEachLine()
     {
         var engine = CreateEngine("abcd\nabcd");
