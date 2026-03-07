@@ -182,6 +182,18 @@ public class CommandParser
         if (rest.StartsWith("z") && rest.Length >= 2)
             return FinalizeZMotion(rest[1], count);
 
+        // Z prefix: ZZ (save+quit) and ZQ (quit without saving)
+        if (rest == "Z") return (CommandState.Incomplete, null);
+        if (rest.StartsWith("Z"))
+        {
+            return rest[1] switch
+            {
+                'Z' => Finalize(count, null, "ZZ"),
+                'Q' => Finalize(count, null, "ZQ"),
+                _ => (CommandState.Invalid, null)
+            };
+        }
+
         if (op != null)
         {
             string afterOp = rest[1..];

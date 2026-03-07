@@ -1715,4 +1715,67 @@ public class VimEngineTests
         engine.ProcessKey("Escape");
         Assert.Equal("hello ", engine.CurrentBuffer.Text.GetText());
     }
+
+    [Fact]
+    public void ZZ_SavesAndEmitsQuitRequested()
+    {
+        var engine = CreateEngine("hello");
+        // Write to a temp file so Save() has a path
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            engine.CurrentBuffer.FilePath = tmpFile;
+            var events = engine.ProcessKey("Z");
+            // After first Z, should be incomplete (no quit yet)
+            Assert.DoesNotContain(events, e => e.Type == VimEventType.QuitRequested);
+
+            events = engine.ProcessKey("Z");
+            // After ZZ, QuitRequested should be emitted
+            Assert.Contains(events, e => e.Type == VimEventType.QuitRequested);
+            // The file should have been written
+            Assert.Equal("hello", File.ReadAllText(tmpFile));
+        }
+        finally
+        {
+            File.Delete(tmpFile);
+        }
+    }
+
+    [Fact]
+    public void ZZ_NoFilePath_EmitsStatusError()
+    {
+        var engine = CreateEngine("hello");
+        // No file path set — Save() throws, ZZ should emit a StatusMessage error instead of crashing
+        engine.ProcessKey("Z");
+        var events = engine.ProcessKey("Z");
+        Assert.DoesNotContain(events, e => e.Type == VimEventType.QuitRequested);
+        Assert.Contains(events, e => e.Type == VimEventType.StatusMessage);
+    }
+
+    [Fact]
+    public void ZQ_EmitsWindowCloseRequestedForce()
+    {
+        var engine = CreateEngine("hello");
+        var events = engine.ProcessKey("Z");
+        // After first Z, nothing should fire
+        Assert.DoesNotContain(events, e => e.Type == VimEventType.WindowCloseRequested);
+
+        events = engine.ProcessKey("Q");
+        // ZQ should emit WindowCloseRequested with force=true
+        Assert.Contains(events, e => e.Type == VimEventType.WindowCloseRequested);
+        var closeEvent = events.OfType<WindowCloseRequestedEvent>().Single();
+        Assert.True(closeEvent.Force);
+    }
+
+    [Fact]
+    public void Z_InvalidSecondKey_IsInvalid()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("Z");
+        var events = engine.ProcessKey("X"); // not a valid Z command
+        // Should not crash or emit quit/close; parser resets
+        Assert.DoesNotContain(events, e => e.Type == VimEventType.QuitRequested);
+        Assert.DoesNotContain(events, e => e.Type == VimEventType.WindowCloseRequested);
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
 }

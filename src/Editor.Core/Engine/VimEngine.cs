@@ -716,6 +716,19 @@ public class VimEngine
             case "/": EnterSearchMode(true, events); break;
             case "?": EnterSearchMode(false, events); break;
 
+            // ZZ: save and quit (equivalent to :wq)
+            case "ZZ":
+            {
+                var result = _exProcessor.Execute("wq", _cursor);
+                if (!result.Success) EmitStatus(events, result.Message ?? "");
+                else if (result.Event != null) events.Add(result.Event);
+                break;
+            }
+            // ZQ: quit without saving (equivalent to :q!)
+            case "ZQ":
+                events.Add(VimEvent.WindowCloseRequested(true));
+                break;
+
             // Movement
             case "h": MoveCursor(motion.MoveLeft(_cursor, count), events); _preferredColumn = _cursor.Column; break;
             case "l": MoveCursor(motion.MoveRight(_cursor, count), events); _preferredColumn = _cursor.Column; break;
