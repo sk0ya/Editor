@@ -385,4 +385,132 @@ public class ExCommandProcessorTests
         var text = buffers.Current.Text.GetText();
         Assert.Contains("inserted", text);
     }
+
+    // ── :registers tests ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Registers_DisplaysNonEmptyRegisters()
+    {
+        var (processor, _, registers) = CreateProcessorWithRegisters();
+        registers.SetYank('a', new Register("hello world", RegisterType.Character));
+        registers.SetYank('b', new Register("foo\nbar", RegisterType.Line));
+
+        var result = processor.Execute("registers", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("\"a", result.Message);
+        Assert.Contains("hello world", result.Message);
+        // Newlines in register content shown as ^J
+        Assert.Contains("foo^Jbar", result.Message);
+        Assert.Contains("--- Registers ---", result.Message);
+    }
+
+    [Fact]
+    public void Reg_Alias_WorksLikeRegisters()
+    {
+        var (processor, _, registers) = CreateProcessorWithRegisters();
+        registers.SetYank('c', new Register("content", RegisterType.Character));
+
+        var result = processor.Execute("reg", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("\"c", result.Message);
+        Assert.Contains("content", result.Message);
+    }
+
+    [Fact]
+    public void Reg_WithArgs_DisplaysOnlySpecifiedRegisters()
+    {
+        var (processor, _, registers) = CreateProcessorWithRegisters();
+        registers.SetYank('a', new Register("alpha", RegisterType.Character));
+        registers.SetYank('b', new Register("beta", RegisterType.Character));
+        registers.SetYank('c', new Register("gamma", RegisterType.Character));
+
+        var result = processor.Execute("reg ab", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("\"a", result.Message);
+        Assert.Contains("alpha", result.Message);
+        Assert.Contains("\"b", result.Message);
+        Assert.Contains("beta", result.Message);
+        // Register c should NOT appear
+        Assert.DoesNotContain("\"c", result.Message);
+        Assert.DoesNotContain("gamma", result.Message);
+    }
+
+    [Fact]
+    public void Registers_EmptyRegisters_ReturnsEmptyMessage()
+    {
+        var (processor, _, _) = CreateProcessorWithRegisters();
+
+        var result = processor.Execute("registers", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Contains("(empty)", result.Message);
+    }
+
+    // ── :marks tests ─────────────────────────────────────────────────────────
+
+    private static (ExCommandProcessor Processor, BufferManager Buffers, MarkManager Marks) CreateProcessorWithMarks()
+    {
+        var buffers = new BufferManager();
+        var options = new VimOptions();
+        var marks = new MarkManager();
+        return (new ExCommandProcessor(buffers, options, marks), buffers, marks);
+    }
+
+    [Fact]
+    public void Marks_DisplaysAllMarks()
+    {
+        var (processor, buffers, marks) = CreateProcessorWithMarks();
+        buffers.Current.Text.SetText("first line\nsecond line\nthird line");
+        marks.SetMark('a', new CursorPosition(0, 0));
+        marks.SetMark('b', new CursorPosition(2, 5));
+
+        var result = processor.Execute("marks", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("mark  line  col  text", result.Message);
+        Assert.Contains(" a ", result.Message);
+        Assert.Contains(" b ", result.Message);
+        // Lines are 1-based
+        Assert.Contains("1", result.Message);
+        Assert.Contains("3", result.Message);
+        Assert.Contains("first line", result.Message);
+        Assert.Contains("third line", result.Message);
+    }
+
+    [Fact]
+    public void Marks_WithArgs_DisplaysOnlySpecifiedMarks()
+    {
+        var (processor, buffers, marks) = CreateProcessorWithMarks();
+        buffers.Current.Text.SetText("aaa\nbbb\nccc");
+        marks.SetMark('a', new CursorPosition(0, 0));
+        marks.SetMark('b', new CursorPosition(1, 0));
+        marks.SetMark('c', new CursorPosition(2, 0));
+
+        var result = processor.Execute("marks ac", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains(" a ", result.Message);
+        Assert.Contains(" c ", result.Message);
+        // Mark b should NOT appear
+        Assert.DoesNotContain(" b ", result.Message);
+    }
+
+    [Fact]
+    public void Marks_NoMarksSet_ReturnsEmptyMessage()
+    {
+        var (processor, _, _) = CreateProcessorWithMarks();
+
+        var result = processor.Execute("marks", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Contains("(no marks set)", result.Message);
+    }
 }

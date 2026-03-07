@@ -582,6 +582,19 @@ public class ExCommandProcessor
             return new ExResult(true, null, null, TextModified: true);
         }
 
+        // :registers [names]  :reg [names] — display register contents
+        if (cmd == "registers" || cmd == "reg" ||
+            cmd.StartsWith("registers ") || cmd.StartsWith("reg "))
+        {
+            return ExecuteRegisters(cmd);
+        }
+
+        // :marks [names] — display marks
+        if (cmd == "marks" || cmd.StartsWith("marks "))
+        {
+            return ExecuteMarks(cmd);
+        }
+
         return new ExResult(false, $"Not an editor command: {cmd}");
     }
 
@@ -1008,6 +1021,74 @@ public class ExCommandProcessor
         if (sb.Length == 0)
             return new ExResult(true, "No history");
 
+        return new ExResult(true, sb.ToString().TrimEnd());
+    }
+
+    // Extract the optional argument after a command verb: "reg ab" → "ab", "marks" → ""
+    private static string GetCommandArg(string cmd)
+    {
+        var idx = cmd.IndexOf(' ');
+        return idx >= 0 ? cmd[(idx + 1)..].Trim() : "";
+    }
+
+    private ExResult ExecuteRegisters(string cmd)
+    {
+        if (_registerManager == null)
+            return new ExResult(false, "No register manager available");
+
+        var filter = GetCommandArg(cmd);
+        var allRegs = _registerManager.GetAll();
+        if (allRegs.Count == 0)
+            return new ExResult(true, "--- Registers ---\n(empty)");
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("--- Registers ---");
+        bool any = false;
+
+        foreach (var (name, reg) in allRegs)
+        {
+            if (filter.Length > 0 && !filter.Contains(name))
+                continue;
+
+            // Represent newlines as ^J (Vim-compatible)
+            var display = reg.Text.Replace("\n", "^J");
+            if (display.Length > 200) display = display[..200] + "…";
+            var typeLabel = reg.Type switch { RegisterType.Line => "l", RegisterType.Block => "b", _ => "c" };
+            sb.AppendLine($"\"{name}   {typeLabel}   {display}");
+            any = true;
+        }
+
+        if (!any) sb.AppendLine("(no matches)");
+        return new ExResult(true, sb.ToString().TrimEnd());
+    }
+
+    private ExResult ExecuteMarks(string cmd)
+    {
+        var filter = GetCommandArg(cmd);
+        var allMarks = _markManager.GetAllMarks();
+        if (allMarks.Count == 0)
+            return new ExResult(true, "mark  line  col  text\n(no marks set)");
+
+        var buf = _bufferManager.Current.Text;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("mark  line  col  text");
+        bool any = false;
+
+        foreach (var (name, pos) in allMarks)
+        {
+            if (filter.Length > 0 && !filter.Contains(name))
+                continue;
+
+            var lineText = pos.Line >= 0 && pos.Line < buf.LineCount
+                ? buf.GetLine(pos.Line).TrimStart()
+                : "";
+            if (lineText.Length > 50) lineText = lineText[..50] + "…";
+            // 1-based line number (Vim compatible)
+            sb.AppendLine($" {name}  {pos.Line + 1,5}  {pos.Column,3}  {lineText}");
+            any = true;
+        }
+
+        if (!any) sb.AppendLine("(no matches)");
         return new ExResult(true, sb.ToString().TrimEnd());
     }
 

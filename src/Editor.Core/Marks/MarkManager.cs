@@ -48,6 +48,18 @@ public class MarkManager
 
     public void ClearMarks() => _marks.Clear();
 
+    /// <summary>
+    /// Returns all set marks as (name, position) pairs for display by :marks.
+    /// Letters are returned in alphabetical order.
+    /// </summary>
+    public IReadOnlyList<(char Name, CursorPosition Position)> GetAllMarks()
+    {
+        return _marks
+            .OrderBy(kv => kv.Key)
+            .Select(kv => (kv.Key, kv.Value))
+            .ToList();
+    }
+
     private sealed class BoundedHistory(int maxSize)
     {
         private readonly List<CursorPosition> _list = [];

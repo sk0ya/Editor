@@ -109,4 +109,38 @@ public class RegisterManager
     }
 
     public Register GetUnnamed() => _unnamed;
+
+    /// <summary>
+    /// Returns all non-empty registers as (name, register) pairs for display by :registers.
+    /// Includes the unnamed register (""), named registers (a-z), and yank register (0).
+    /// The clipboard register (+) is included when accessible (requires STA thread); silently
+    /// skipped if the provider is unavailable or the call fails.
+    /// </summary>
+    public IReadOnlyList<(char Name, Register Value)> GetAll()
+    {
+        var result = new List<(char, Register)>();
+
+        // Unnamed register
+        if (!string.IsNullOrEmpty(_unnamed.Text))
+            result.Add(('"', _unnamed));
+
+        // Yank and named registers (0-9, a-z); '"' is never a key in _registers
+        foreach (var key in _registers.Keys.OrderBy(k => k))
+        {
+            var reg = _registers[key];
+            if (!string.IsNullOrEmpty(reg.Text))
+                result.Add((key, reg));
+        }
+
+        // Clipboard register — may fail on non-STA threads; swallow silently
+        try
+        {
+            var clipText = _clipboard?.GetText() ?? "";
+            if (!string.IsNullOrEmpty(clipText))
+                result.Add(('+', new Register(clipText, RegisterType.Character)));
+        }
+        catch { }
+
+        return result;
+    }
 }
