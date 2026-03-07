@@ -50,6 +50,7 @@ public enum VimEventType
     HunkNavigateRequested,
     CallHierarchyRequested,
     TypeHierarchyRequested,
+    ScrollLinesRequested,
 }
 
 public enum ViewportAlign
@@ -200,6 +201,14 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent TypeHierarchyRequested() =>
         new(VimEventType.TypeHierarchyRequested);
+
+    /// <summary>
+    /// Scroll the viewport by <paramref name="lines"/> lines (positive = down, negative = up).
+    /// The engine has already clamped the cursor to stay on-screen; the UI layer
+    /// must apply the scroll and then honour the updated cursor position.
+    /// </summary>
+    public static VimEvent ScrollLinesRequested(int lines) =>
+        new ScrollLinesRequestedEvent(lines);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -232,3 +241,4 @@ public record TerminalRequestedEvent(string? ShellCmd) : VimEvent(VimEventType.T
 public record ReloadFileRequestedEvent(bool Force) : VimEvent(VimEventType.ReloadFileRequested);
 public record HunkNavigateRequestedEvent(bool Forward) : VimEvent(VimEventType.HunkNavigateRequested);
 public record SymbolsRequestedEvent(string Query) : VimEvent(VimEventType.SymbolsRequested);
+public record ScrollLinesRequestedEvent(int Lines) : VimEvent(VimEventType.ScrollLinesRequested);

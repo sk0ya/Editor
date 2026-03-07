@@ -536,6 +536,8 @@ public class VimEngine
             case "u": ScrollHalfPage(false, events); break;
             case "f": ScrollPage(true, events); break;
             case "b": ScrollPage(false, events); break;
+            case "e": ScrollLine(true, events); break;
+            case "y": ScrollLine(false, events); break;
             case "r": ExecuteRedo(events); break;
             case "o": var jb = _markManager.JumpBack(); if (jb.HasValue) MoveCursor(jb.Value, events); break;
             case "i": var jf = _markManager.JumpForward(); if (jf.HasValue) MoveCursor(jf.Value, events); break;
@@ -3863,6 +3865,42 @@ public class VimEngine
         var newLine = Math.Clamp(_cursor.Line + lines, 0, _bufferManager.Current.Text.LineCount - 1);
         _cursor = _cursor with { Line = newLine };
         EmitCursor(events);
+    }
+
+    /// <summary>
+    /// Ctrl+E (down=true) / Ctrl+Y (down=false): scroll the viewport by 1 line,
+    /// keeping the cursor in the same buffer position unless that position scrolls
+    /// off-screen, in which case the cursor is clamped to the new top/bottom
+    /// visible line.  The UI layer performs the actual scroll offset change;
+    /// the engine emits ScrollLinesRequested so the canvas knows how far to move,
+    /// plus a CursorMoved if the cursor had to be adjusted.
+    /// </summary>
+    private void ScrollLine(bool down, List<VimEvent> events)
+    {
+        int delta = down ? 1 : -1;
+        int lineCount = _bufferManager.Current.Text.LineCount;
+
+        // Clamp the new top line to valid range.
+        int newTopLine = Math.Clamp(_viewportTopLine + delta, 0, Math.Max(0, lineCount - 1));
+
+        // Update immediately so that batched calls (e.g. 5<C-e>) accumulate correctly.
+        _viewportTopLine = newTopLine;
+
+        // If the cursor would go above the new top line (Ctrl+E scrolled it off top),
+        // move cursor down to the new top.
+        // If cursor would go below the last visible line (Ctrl+Y scrolled it off bottom),
+        // move cursor up to the new bottom.
+        int newBottomLine = Math.Min(lineCount - 1, newTopLine + _viewportVisibleLines - 1);
+        int newLine = Math.Clamp(_cursor.Line, newTopLine, newBottomLine);
+
+        if (newLine != _cursor.Line)
+        {
+            _cursor = _cursor with { Line = newLine };
+            EmitCursor(events);
+        }
+
+        // Tell the UI to scroll by delta lines.
+        events.Add(VimEvent.ScrollLinesRequested(delta));
     }
 
     private void RepeatFind(bool reverse, List<VimEvent> events)

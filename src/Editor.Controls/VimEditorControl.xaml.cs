@@ -2869,6 +2869,9 @@ public partial class VimEditorControl : UserControl
                 case VimEventType.ViewportAlignRequested when evt is ViewportAlignRequestedEvent vare:
                     AlignViewport(vare.Align);
                     break;
+                case VimEventType.ScrollLinesRequested when evt is ScrollLinesRequestedEvent slre:
+                    ScrollLines(slre.Lines);
+                    break;
                 case VimEventType.SearchResultChanged when evt is SearchResultChangedEvent srce:
                     UpdateSearchHighlights(srce.Pattern);
                     break;
@@ -3024,6 +3027,18 @@ public partial class VimEditorControl : UserControl
             : _engine.Options.IgnoreCase;
         var matches = buf.FindAll(pattern, ignoreCase);
         Canvas.SetSearchMatches(matches, pattern);
+    }
+
+    /// <summary>
+    /// Scroll the canvas by <paramref name="lines"/> lines (positive = down, negative = up).
+    /// The engine has already clamped the cursor if necessary; the CursorMoved event
+    /// will update the cursor overlay if needed.
+    /// </summary>
+    private void ScrollLines(int lines)
+    {
+        if (Canvas.LineHeight <= 0) return;
+        double newOffset = Canvas.VerticalOffset + lines * Canvas.LineHeight;
+        Canvas.ScrollTo(newOffset);
     }
 
     private void AlignViewport(ViewportAlign align)
