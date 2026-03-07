@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-03-07 (set scrolloff)
+> 作成日: 2026-03-02 / 更新日: 2026-03-07 (set foldmethod)
 
 ---
 
@@ -12,7 +12,6 @@
 
 | 機能 | 説明 |
 |------|------|
-| **`set foldmethod={expr/indent/marker/syntax}`** | `foldmethod` 追加形式 |
 
 ---
 
@@ -77,6 +76,7 @@
 | **マルチカーソル** `Ctrl+D` で次の同単語にカーソル追加、`Ctrl+Alt+Down/Up` で上下にカーソル追加、Insert モードで全カーソルに同時編集、`Esc` (Normal) で終了 | ✅ 2026-03-07 |
 | **スニペット** Insert モードでトリガーワード+`Tab` で展開、`$1`/`$2`/.../`$0` タブストップを `Tab`/`Shift+Tab` でナビゲート、LSP `insertTextFormat: Snippet` 対応、7言語組み込みスニペット、vimrc で `:snippet {trigger} {body}` 定義 | ✅ 2026-03-07 |
 | **Breadcrumb** カーソル位置のシンボルパスをステータスバーに表示（`set breadcrumb`）、LSP `textDocument/documentSymbol` 利用、`MyNamespace > MyClass > MyMethod` 形式 | ✅ 2026-03-07 |
+| **`set foldmethod={indent/marker/syntax}`** (`fdm`) — `indent`: インデントベース自動フォールド、`marker`: `{{{`/`}}}` マーカーベース、`syntax`: 言語別シンタックスベース（LSP フォールバック含む） | ✅ 2026-03-07 |
 
 ## 実装済み
 
