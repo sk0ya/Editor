@@ -76,7 +76,21 @@ public class RegisterManager
 
     public Register Get(char name)
     {
-        if (name == '"' || name == '\0') return _unnamed;
+        if (name == '"' || name == '\0')
+        {
+            var cb = _options?.Clipboard ?? "";
+            if (cb.Contains("unnamed", StringComparison.OrdinalIgnoreCase) && _clipboard != null)
+            {
+                try
+                {
+                    var text = _clipboard.GetText();
+                    if (!string.IsNullOrEmpty(text))
+                        return new Register(text, RegisterType.Character);
+                }
+                catch { }
+            }
+            return _unnamed;
+        }
 
         if (name == '+' || name == '*')
         {
