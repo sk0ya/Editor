@@ -6,6 +6,7 @@ using Editor.Core.Config;
 using Editor.Core.Marks;
 using Editor.Core.Models;
 using Editor.Core;
+using Editor.Core.Registers;
 
 namespace Editor.Core.Engine;
 
@@ -17,18 +18,20 @@ public class ExCommandProcessor
     private readonly VimOptions _options;
     private readonly MarkManager _markManager;
     private readonly Dictionary<string, string> _abbreviations;
+    private readonly RegisterManager? _registerManager;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
     private readonly List<string> _searchHistory = [];
     private int _searchHistoryIndex = -1;
 
     public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager,
-        Dictionary<string, string>? abbreviations = null)
+        Dictionary<string, string>? abbreviations = null, RegisterManager? registerManager = null)
     {
         _bufferManager = bufferManager;
         _options = options;
         _markManager = markManager;
         _abbreviations = abbreviations ?? [];
+        _registerManager = registerManager;
     }
 
     public string? LastCommand => _history.Count > 0 ? _history[0] : null;
@@ -496,6 +499,79 @@ public class ExCommandProcessor
             if (string.IsNullOrEmpty(subCmd))
                 return new ExResult(false, "E471: Argument required");
             return ExecuteBufdo(subCmd);
+        }
+
+        // :noh / :nohlsearch — clear search highlight
+        if (cmd is "noh" or "nohl" or "nohlsearch" or "nohls")
+        {
+            _options.HlSearch = false;
+            return new ExResult(true);
+        }
+
+        // :pwd — print working directory
+        if (cmd is "pwd")
+            return new ExResult(true, Directory.GetCurrentDirectory());
+
+        // :echo {expr} — print message
+        if (cmd.StartsWith("echo ") || cmd == "echo")
+        {
+            var msg = cmd.Length > 5 ? cmd[5..].Trim() : "";
+            // Strip surrounding quotes if present
+            if (msg.Length >= 2 && ((msg[0] == '"' && msg[^1] == '"') || (msg[0] == '\'' && msg[^1] == '\'')))
+                msg = msg[1..^1];
+            return new ExResult(true, msg);
+        }
+
+        // :[range]yank [reg] — yank lines to register
+        if (cmd is "y" or "yank" || cmd.StartsWith("y ") || cmd.StartsWith("yank "))
+        {
+            char regName = '"';
+            var parts = cmd.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length > 1 && parts[1].Length == 1 && char.IsLetter(parts[1][0]))
+                regName = char.ToLower(parts[1][0]);
+
+            var buf = _bufferManager.Current.Text;
+            int startLine = cursor.Line, endLine = cursor.Line;
+            if (!string.IsNullOrEmpty(range))
+                ResolveRange(range, cursor, buf.LineCount, ref startLine, ref endLine);
+
+            var text = string.Join("\n",
+                Enumerable.Range(startLine, endLine - startLine + 1).Select(buf.GetLine));
+
+            if (_registerManager != null)
+                _registerManager.SetYank(regName, new Register(text, RegisterType.Line));
+
+            return new ExResult(true, $"{endLine - startLine + 1} line(s) yanked");
+        }
+
+        // :[line]put [reg] — paste register after line
+        if (cmd is "pu" or "put" || cmd.StartsWith("pu ") || cmd.StartsWith("put "))
+        {
+            char regName = '"';
+            var parts = cmd.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length > 1 && parts[1].Length == 1 && char.IsLetter(parts[1][0]))
+                regName = char.ToLower(parts[1][0]);
+
+            if (_registerManager == null)
+                return new ExResult(false, "No register manager available");
+
+            var reg = _registerManager.Get(regName);
+            if (string.IsNullOrEmpty(reg.Text))
+                return new ExResult(false, $"Nothing in register {regName}");
+
+            var buf = _bufferManager.Current.Text;
+            int insertAfter = cursor.Line;
+            if (!string.IsNullOrEmpty(range))
+            {
+                int rStart = cursor.Line, rEnd = cursor.Line;
+                ResolveRange(range, cursor, buf.LineCount, ref rStart, ref rEnd);
+                insertAfter = rEnd;
+            }
+
+            var pasteLines = reg.Text.Split('\n');
+            buf.InsertLines(insertAfter, pasteLines);
+
+            return new ExResult(true, null, null, TextModified: true);
         }
 
         return new ExResult(false, $"Not an editor command: {cmd}");

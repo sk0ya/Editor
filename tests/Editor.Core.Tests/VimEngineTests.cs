@@ -1538,4 +1538,181 @@ public class VimEngineTests
         engine.ProcessKey("u");
         Assert.Equal("foo\nbar", engine.CurrentBuffer.Text.GetText());
     }
+
+    // ── VisualBlock extra tests ──────────────────────────────────────────
+
+    [Fact]
+    public void CtrlV_BlockYank_YanksRectangularRegion()
+    {
+        // Select 2 columns (col 0-1) across 3 rows, yank, then paste to verify
+        var engine = CreateEngine("abcd\nefgh\nijkl");
+
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("l");
+        engine.ProcessKey("y");
+
+        // Cursor returns to top-left of block; mode back to Normal
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        Assert.Equal(0, engine.Cursor.Line);
+
+        // Move to end of last line and paste — block paste inserts columns
+        engine.ProcessKey("G");
+        engine.ProcessKey("$");
+        engine.ProcessKey("p");
+
+        // After paste the text should be modified (registers not empty)
+        // Verify text has changed from original (paste occurred)
+        var text = engine.CurrentBuffer.Text.GetText();
+        Assert.NotEqual("abcd\nefgh\nijkl", text);
+    }
+
+    [Fact]
+    public void CtrlV_BlockTilde_TogglesCase()
+    {
+        // Use a single-line block so the column-range logic is unambiguous
+        var engine = CreateEngine("abcdef");
+
+        // CtrlV + ll selects cols 0-2 (3-char wide block on 1 line)
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        engine.ProcessKey("~");
+
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        var text = engine.CurrentBuffer.Text.GetText();
+        // Cols 0-2 toggled to upper; rest unchanged
+        Assert.Equal("ABCdef", text);
+    }
+
+    // ── MotionEngine tests ───────────────────────────────────────────────
+
+    [Fact]
+    public void W_Motion_MovesOverWORD()
+    {
+        // "foo.bar baz" — W skips the whole "foo.bar" token (no whitespace) as one WORD
+        var engine = CreateEngine("foo.bar baz");
+        engine.ProcessKey("W");
+        // After W from col 0, cursor should be at the start of "baz" (col 8)
+        Assert.Equal(8, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void B_Motion_MovesBackwardWORD()
+    {
+        var engine = CreateEngine("foo.bar baz");
+        // Move to "baz"
+        engine.ProcessKey("W");
+        Assert.Equal(8, engine.Cursor.Column);
+        // B should jump back to start of "foo.bar" (col 0)
+        engine.ProcessKey("B");
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void CurlyBrace_Paragraph_Forward()
+    {
+        var engine = CreateEngine("line1\nline2\n\nline4\nline5");
+        // } from line 0 should move past the blank line (paragraph boundary)
+        engine.ProcessKey("}");
+        // Should be on the blank line (line 2) or line 3 depending on Vim semantics
+        Assert.True(engine.Cursor.Line >= 2);
+    }
+
+    [Fact]
+    public void CurlyBrace_Paragraph_Backward()
+    {
+        var engine = CreateEngine("line1\nline2\n\nline4\nline5");
+        // Move to last line first
+        engine.ProcessKey("G");
+        var lastLine = engine.Cursor.Line;
+        // { moves backward past paragraph boundary
+        engine.ProcessKey("{");
+        Assert.True(engine.Cursor.Line < lastLine);
+    }
+
+    [Fact]
+    public void Percent_Motion_JumpsToMatchingBrace()
+    {
+        // "int f() { return 0; }" — '{' is at col 8 (0-indexed)
+        var engine = CreateEngine("int f() { return 0; }");
+        // Use f{ to jump to '{'
+        engine.ProcessKey("f");
+        engine.ProcessKey("{");
+        Assert.Equal(8, engine.Cursor.Column);
+        // % should jump to the matching '}'
+        engine.ProcessKey("%");
+        var line = engine.CurrentBuffer.Text.GetLine(0);
+        var closingCol = line.LastIndexOf('}');
+        Assert.Equal(closingCol, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void GG_Motion_JumpsToLine()
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+        // gg — go to first line
+        engine.ProcessKey("g");
+        engine.ProcessKey("g");
+        Assert.Equal(0, engine.Cursor.Line);
+
+        // G — go to last line
+        engine.ProcessKey("G");
+        Assert.Equal(2, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void HML_Motions_UseViewportState()
+    {
+        // 10 lines of content, viewport top=2 showing 5 lines (lines 2-6)
+        var engine = CreateEngine("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9");
+        engine.SetViewportState(topLine: 2, visibleLines: 5);
+
+        // H — top of viewport = line 2
+        engine.ProcessKey("H");
+        Assert.Equal(2, engine.Cursor.Line);
+
+        // M — middle of viewport = line 2 + 5/2 = line 4
+        engine.ProcessKey("M");
+        Assert.Equal(4, engine.Cursor.Line);
+
+        // L — bottom of viewport = line 2 + 5 - 1 = line 6
+        engine.ProcessKey("L");
+        Assert.Equal(6, engine.Cursor.Line);
+    }
+
+    // ── Insert mode Ctrl tests ───────────────────────────────────────────
+
+    [Fact]
+    public void Insert_CtrlU_DeletesToLineStart()
+    {
+        var engine = CreateEngine("hello world");
+        // Move to col 5 ("o") via l×5
+        for (int i = 0; i < 5; i++) engine.ProcessKey("l");
+        engine.ProcessKey("i");
+        // Ctrl+U should delete from col 5 back to col 0
+        engine.ProcessKey("u", ctrl: true);
+        engine.ProcessKey("Escape");
+        // Remaining text: " world" (the part after col 5, now at start)
+        Assert.Equal(" world", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Insert_CtrlW_DeletesWord()
+    {
+        // Start with text that ends in a word, enter insert mode at end, type a new word, then Ctrl+W deletes it
+        var engine = CreateEngine("hello ");
+        // Press A to append at end of line
+        engine.ProcessKey("A");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        // Type a word
+        engine.ProcessKey("f");
+        engine.ProcessKey("o");
+        engine.ProcessKey("o");
+        // Ctrl+W should delete "foo" (the word just typed)
+        engine.ProcessKey("w", ctrl: true);
+        engine.ProcessKey("Escape");
+        Assert.Equal("hello ", engine.CurrentBuffer.Text.GetText());
+    }
 }

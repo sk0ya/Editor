@@ -106,7 +106,7 @@ public class VimEngine
         _macroManager = new MacroManager();
         _syntaxEngine = new SyntaxEngine();
         _commandParser = new CommandParser();
-        _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations);
+        _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)

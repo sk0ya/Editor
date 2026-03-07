@@ -3,6 +3,7 @@ using Editor.Core.Config;
 using Editor.Core.Engine;
 using Editor.Core.Marks;
 using Editor.Core.Models;
+using Editor.Core.Registers;
 
 namespace Editor.Core.Tests;
 
@@ -12,6 +13,13 @@ public class ExCommandProcessorTests
     {
         var buffers = new BufferManager();
         return (new ExCommandProcessor(buffers, new VimOptions(), new MarkManager()), buffers);
+    }
+
+    private static (ExCommandProcessor Processor, BufferManager Buffers, RegisterManager Registers) CreateProcessorWithRegisters()
+    {
+        var buffers = new BufferManager();
+        var registers = new RegisterManager(new VimOptions());
+        return (new ExCommandProcessor(buffers, new VimOptions(), new MarkManager(), registerManager: registers), buffers, registers);
     }
 
     [Fact]
@@ -266,5 +274,100 @@ public class ExCommandProcessorTests
         var text = buffers.Current.Text.GetText();
         Assert.Contains("keep", text);
         Assert.DoesNotContain("remove", text);
+    }
+
+    // ── Additional ExCommand tests ────────────────────────────────────────
+
+    [Fact]
+    public void Noh_ClearsSearchHighlight()
+    {
+        var options = new VimOptions();
+        options.HlSearch = true;
+        var buffers = new BufferManager();
+        var processor = new ExCommandProcessor(buffers, options, new MarkManager());
+
+        var result = processor.Execute("noh", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.False(options.HlSearch);
+    }
+
+    [Fact]
+    public void Nohlsearch_ClearsSearchHighlight()
+    {
+        var options = new VimOptions();
+        options.HlSearch = true;
+        var buffers = new BufferManager();
+        var processor = new ExCommandProcessor(buffers, options, new MarkManager());
+
+        var result = processor.Execute("nohlsearch", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.False(options.HlSearch);
+    }
+
+    [Fact]
+    public void Pwd_ShowsCurrentDirectory()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("pwd", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.NotEmpty(result.Message);
+    }
+
+    [Fact]
+    public void Echo_PrintsMessage()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("echo hello", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("hello", result.Message);
+    }
+
+    [Fact]
+    public void Echo_PrintsQuotedMessage()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("echo \"hello world\"", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("hello world", result.Message);
+    }
+
+    [Fact]
+    public void RangeYank_YanksLinesToRegister()
+    {
+        var (processor, buffers, registers) = CreateProcessorWithRegisters();
+        buffers.Current.Text.SetText("line1\nline2\nline3");
+
+        // Yank lines 1-2 (1-indexed) to register a
+        var result = processor.Execute("1,2yank a", new CursorPosition(0, 0));
+
+        Assert.True(result.Success);
+        var reg = registers.Get('a');
+        Assert.Equal("line1\nline2", reg.Text);
+        Assert.Equal(RegisterType.Line, reg.Type);
+    }
+
+    [Fact]
+    public void Put_CommandPastesFromRegister()
+    {
+        var (processor, buffers, registers) = CreateProcessorWithRegisters();
+        buffers.Current.Text.SetText("aaa\nbbb");
+        // Pre-fill register a
+        registers.SetYank('a', new Register("inserted", RegisterType.Line));
+
+        // :put a — paste after current line (line 0)
+        var result = processor.Execute("put a", new CursorPosition(0, 0));
+
+        Assert.True(result.Success);
+        var text = buffers.Current.Text.GetText();
+        Assert.Contains("inserted", text);
     }
 }
