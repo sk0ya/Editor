@@ -59,6 +59,9 @@ public class VimEngine
     private bool _surroundLinewise;
     private int _preferredColumn = 0; // Sticky column for j/k
 
+    private int _viewportTopLine = 0;      // First visible buffer line in the viewport
+    private int _viewportVisibleLines = 25; // Number of lines visible in the viewport
+
     private CursorPosition _insertStart;
     private CursorPosition _lastInsertPos;
     private CursorPosition _lastVisualStart;
@@ -86,6 +89,13 @@ public class VimEngine
     public VimBuffer CurrentBuffer => _bufferManager.Current;
     public BufferManager BufferManager => _bufferManager;
     public SyntaxEngine Syntax => _syntaxEngine;
+
+    /// <summary>Sets the viewport state so H/M/L motions target correct visible lines.</summary>
+    public void SetViewportState(int topLine, int visibleLines)
+    {
+        _viewportTopLine = Math.Max(0, topLine);
+        _viewportVisibleLines = Math.Max(1, visibleLines);
+    }
 
     public VimEngine(VimConfig? config = null)
     {
@@ -856,9 +866,9 @@ public class VimEngine
             case "{": MoveCursor(ParagraphBackward(), events); break;
             case "}": MoveCursor(ParagraphForward(), events); break;
             case "%": var mb = MatchBracket(buf, motion); if (mb.HasValue) MoveCursor(mb.Value, events); break;
-            case "H": MoveCursor(ScreenPosition(0), events); break;
-            case "M": MoveCursor(ScreenPosition(10), events); break;
-            case "L": MoveCursor(ScreenPosition(20), events); break;
+            case "H": MoveCursor(ScreenPosition(Math.Max(0, count - 1)), events); break;
+            case "M": MoveCursor(ScreenPosition(_viewportVisibleLines / 2), events); break;
+            case "L": MoveCursor(ScreenPosition(Math.Max(0, _viewportVisibleLines - count)), events); break;
             case ";": RepeatFind(false, events); break;
             case ",": RepeatFind(true, events); break;
             case "n": SearchNext(true, events); break;
@@ -1790,13 +1800,13 @@ public class VimEngine
                     _cursor = mb.Value;
                 return true;
             case "H":
-                _cursor = ScreenPosition(0);
+                _cursor = ScreenPosition(Math.Max(0, count - 1));
                 return true;
             case "M":
-                _cursor = ScreenPosition(10);
+                _cursor = ScreenPosition(_viewportVisibleLines / 2);
                 return true;
             case "L":
-                _cursor = ScreenPosition(20);
+                _cursor = ScreenPosition(Math.Max(0, _viewportVisibleLines - count));
                 return true;
             case ";":
                 for (int i = 0; i < count; i++)
@@ -3894,10 +3904,11 @@ public class VimEngine
         return mot?.Target;
     }
 
-    private CursorPosition ScreenPosition(int offset)
+    private CursorPosition ScreenPosition(int offsetFromTop)
     {
-        var line = Math.Clamp(_cursor.Line + offset, 0, _bufferManager.Current.Text.LineCount - 1);
-        return new CursorPosition(line, 0);
+        var lineCount = _bufferManager.Current.Text.LineCount;
+        var line = Math.Clamp(_viewportTopLine + offsetFromTop, 0, lineCount - 1);
+        return new CursorPosition(line, GetFirstNonBlank(line));
     }
 
     private void ExecuteExCommand(string cmdLine, List<VimEvent> events)

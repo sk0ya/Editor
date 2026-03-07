@@ -311,6 +311,10 @@ public partial class VimEditorControl : UserControl
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.FoldGutterClicked += OnFoldGutterClicked;
 
+        // Keep VimEngine informed of viewport state for H/M/L motions
+        Canvas.ScrollChanged += (_, _) => SyncViewportState();
+        Canvas.SizeChanged += (_, _) => SyncViewportState();
+
         ApplyTheme();
     }
 
@@ -1150,6 +1154,11 @@ public partial class VimEditorControl : UserControl
         ActiveStatusBar.UpdateMode(_engine.Mode);
         ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified, buf.FileFormat);
         ActiveStatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount);
+    }
+
+    private void SyncViewportState()
+    {
+        _engine.SetViewportState(Canvas.FirstVisibleLine, Canvas.VisibleLines);
     }
 
     public bool ScrollHorizontalByWheelDelta(int wheelDelta)
