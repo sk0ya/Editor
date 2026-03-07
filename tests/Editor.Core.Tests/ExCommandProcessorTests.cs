@@ -115,6 +115,60 @@ public class ExCommandProcessorTests
         Assert.Null(evt.FilePath);
     }
 
+    // ── :e! tests ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Edit_WithNoArgAndNoFilePath_ReturnsError()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("e!", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Equal("No file name", result.Message);
+    }
+
+    [Theory]
+    [InlineData("e!")]
+    [InlineData("edit!")]
+    public void ForceEdit_WithFilePath_ProducesReloadFileRequestedEvent(string command)
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.FilePath = "test.txt";
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<ReloadFileRequestedEvent>(result.Event);
+        Assert.True(evt.Force);
+    }
+
+    [Fact]
+    public void Edit_WithModifiedBufferAndNoForce_ReturnsError()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.FilePath = "test.txt";
+        // InsertChar marks the buffer as modified (SetText does not)
+        buffers.Current.Text.InsertChar(0, 0, 'x');
+
+        var result = processor.Execute("e", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Contains("No write since last change", result.Message);
+    }
+
+    [Fact]
+    public void Edit_WithFileArgument_ProducesOpenFileRequestedEvent()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("e other.txt", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<OpenFileRequestedEvent>(result.Event);
+        Assert.Equal("other.txt", evt.FilePath);
+    }
+
     // ── :global tests ──────────────────────────────────────────────────────
 
     [Fact]
