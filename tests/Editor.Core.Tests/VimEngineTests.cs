@@ -1913,4 +1913,68 @@ public class VimEngineTests
         Assert.Equal(1, engine.Cursor.Line);
         Assert.Equal(4, engine.Cursor.Column);
     }
+
+    [Fact]
+    public void AtAt_RepeatsMostRecentMacro()
+    {
+        // Record macro 'a': delete char (x) then go to line start (0).
+        // Stop with q0 — the '0' is recorded as part of the macro but is a clean Normal command.
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("q");
+        engine.ProcessKey("a");  // start recording into register a
+        engine.ProcessKey("x");  // delete first char: "hello" -> "ello"
+        engine.ProcessKey("q");  // begin stop sequence (not recorded)
+        engine.ProcessKey("0");  // completes stop (q0 = stop recording), '0' recorded
+
+        // After recording, macro 'a' = [x, 0], text = "ello", cursor at col 0.
+        Assert.Equal("ello", engine.CurrentBuffer.Text.GetText());
+
+        // Play @a once: deletes 'e' -> "llo"
+        engine.ProcessKey("@");
+        engine.ProcessKey("a");
+        Assert.Equal("llo", engine.CurrentBuffer.Text.GetText());
+
+        // Play @@ — repeats last macro 'a': deletes 'l' -> "lo"
+        engine.ProcessKey("@");
+        engine.ProcessKey("@");
+        Assert.Equal("lo", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void AtAt_BeforeAnyMacro_EmitsError()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("@");
+        var events = engine.ProcessKey("@");
+        Assert.Contains(events, e => e.Type == VimEventType.StatusMessage);
+        var msg = events.OfType<StatusMessageEvent>().FirstOrDefault();
+        Assert.NotNull(msg);
+        Assert.Contains("No previously used register", msg.Message);
+    }
+
+    [Fact]
+    public void AtAt_WithCount_RepeatsCorrectNumberOfTimes()
+    {
+        // Record macro 'b': delete char (x) then go to line start (0).
+        var engine = CreateEngine("abcdef");
+        engine.ProcessKey("q");
+        engine.ProcessKey("b");  // start recording into register b
+        engine.ProcessKey("x");  // delete first char: "abcdef" -> "bcdef"
+        engine.ProcessKey("q");  // begin stop sequence (not recorded)
+        engine.ProcessKey("0");  // completes stop (q0 = stop recording), '0' recorded
+
+        // After recording, macro 'b' = [x, 0], text = "bcdef"
+        Assert.Equal("bcdef", engine.CurrentBuffer.Text.GetText());
+
+        // @b once — deletes 'b' -> "cdef"
+        engine.ProcessKey("@");
+        engine.ProcessKey("b");
+        Assert.Equal("cdef", engine.CurrentBuffer.Text.GetText());
+
+        // 3@@ — repeats macro b three more times: deletes c, d, e -> "f"
+        engine.ProcessKey("3");
+        engine.ProcessKey("@");
+        engine.ProcessKey("@");
+        Assert.Equal("f", engine.CurrentBuffer.Text.GetText());
+    }
 }

@@ -4041,9 +4041,13 @@ public class VimEngine
 
     private void PlayMacro(char register, int count, List<VimEvent> events)
     {
-        var macro = _macroManager.GetMacro(register);
-        if (macro == null) { EmitStatus(events, $"No macro in register @{register}"); return; }
-        _macroManager.SetLastPlayed(register);
+        // @@ repeats the last played macro
+        char resolved = register == '@' ? _macroManager.LastPlayedRegister : register;
+        if (resolved == '\0') { EmitStatus(events, "E748: No previously used register"); return; }
+
+        var macro = _macroManager.GetMacro(resolved);
+        if (macro == null) { EmitStatus(events, $"No macro in register @{resolved}"); return; }
+        _macroManager.SetLastPlayed(resolved);
 
         for (int r = 0; r < count; r++)
         {

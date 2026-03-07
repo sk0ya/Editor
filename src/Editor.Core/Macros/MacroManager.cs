@@ -41,9 +41,11 @@ public class MacroManager
         _recording?.Add(key);
     }
 
+    public char LastPlayedRegister => _lastPlayedRegister;
+
     public List<VimKeyStroke>? GetMacro(char register)
     {
-        var key = register == '@' ? _lastPlayedRegister : char.ToLower(register);
+        var key = char.ToLower(register);
         return _macros.TryGetValue(key, out var macro) ? macro : null;
     }
 
