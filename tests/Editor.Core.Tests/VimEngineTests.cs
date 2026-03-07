@@ -2180,4 +2180,91 @@ public class VimEngineTests
         // The deletion removed the first sentence and whitespace
         Assert.False(text.Contains("Hello"), "First sentence should have been deleted");
     }
+
+    [Fact]
+    public void DoubleQuote_JumpsToLastJumpPosition()
+    {
+        // '' jumps back to the line of the last jump (col 0), '' again goes back
+        var engine = CreateEngine("line1\nline2\nline3\nline4");
+
+        // Start at line 0. Jump to line 3 with G — records '' mark at line 0.
+        engine.ProcessKey("G");
+        Assert.Equal(3, engine.Cursor.Line);
+
+        // '' should jump back to line 0, col 0
+        engine.ProcessKey("'");
+        engine.ProcessKey("'");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void DoubleBacktick_JumpsToLastJumpExactPosition()
+    {
+        // `` jumps to the exact position before the last jump
+        var engine = CreateEngine("line1\nline2\nline3\nline4");
+
+        // Move to col 2 on line 0
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        Assert.Equal(new CursorPosition(0, 2), engine.Cursor);
+
+        // Jump to line 3 with G — records `` mark at (0, 2)
+        engine.ProcessKey("G");
+        Assert.Equal(3, engine.Cursor.Line);
+
+        // `` should jump back to exact position (0, 2)
+        engine.ProcessKey("`");
+        engine.ProcessKey("`");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(2, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void DotMark_JumpsToLastEditPosition()
+    {
+        // '. jumps to the line of the last text change (col 0)
+        var engine = CreateEngine("aaa\nbbb\nccc");
+
+        // Move to line 1 and make a change (delete a char)
+        engine.ProcessKey("j");
+        Assert.Equal(1, engine.Cursor.Line);
+        engine.ProcessKey("x"); // delete 'b', triggers Snapshot → sets '.' mark at (1, 0)
+
+        // Move away to line 0
+        engine.ProcessKey("k");
+        Assert.Equal(0, engine.Cursor.Line);
+
+        // '. should jump to line 1, col 0
+        engine.ProcessKey("'");
+        engine.ProcessKey(".");
+        Assert.Equal(1, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void BacktickDot_JumpsToLastEditExactPosition()
+    {
+        // `. jumps to the exact cursor position of the last text change
+        var engine = CreateEngine("hello\nworld");
+
+        // Move to line 0, col 3
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        Assert.Equal(new CursorPosition(0, 3), engine.Cursor);
+
+        // Delete char at col 3 → Snapshot records '.' mark at (0, 3)
+        engine.ProcessKey("x");
+
+        // Move away
+        engine.ProcessKey("j");
+        Assert.Equal(1, engine.Cursor.Line);
+
+        // `. should jump to exact position (0, 3)
+        engine.ProcessKey("`");
+        engine.ProcessKey(".");
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(3, engine.Cursor.Column);
+    }
 }

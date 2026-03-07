@@ -491,9 +491,30 @@ public class VimEngine
         }
 
         // Awaiting pending chars
-        if (_awaitingMark) { _markManager.SetMark(key[0], _cursor); _awaitingMark = false; EmitCursor(events); return; }
-        if (_awaitingMarkJump) { var m = _markManager.GetMark(key[0]); if (m.HasValue) MoveCursor(m.Value, events); _awaitingMarkJump = false; return; }
-        if (_awaitingMarkJumpLine) { var m = _markManager.GetMark(key[0]); if (m.HasValue) MoveCursor(m.Value with { Column = 0 }, events); _awaitingMarkJumpLine = false; return; }
+        if (_awaitingMark)
+        {
+            // '.' and '\'' are auto-managed; block user from clobbering them via m'/m.
+            if (key[0] != '\'' && key[0] != '.')
+                _markManager.SetMark(key[0], _cursor);
+            _awaitingMark = false;
+            EmitCursor(events);
+            return;
+        }
+        if (_awaitingMarkJump)
+        {
+            var markKey = key[0] == '`' ? '\'' : key[0]; // `` → jump-from mark
+            var m = _markManager.GetMark(markKey);
+            if (m.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(m.Value, events); }
+            _awaitingMarkJump = false;
+            return;
+        }
+        if (_awaitingMarkJumpLine)
+        {
+            var m = _markManager.GetMark(key[0]);
+            if (m.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(m.Value with { Column = 0 }, events); }
+            _awaitingMarkJumpLine = false;
+            return;
+        }
         if (_pendingReplaceChar.HasValue) { ExecuteReplace(key[0], events); _pendingReplaceChar = null; return; }
         if (_awaitingSurroundChar)
         {
@@ -563,8 +584,8 @@ public class VimEngine
             case "e": ScrollLine(true, events); break;
             case "y": ScrollLine(false, events); break;
             case "r": ExecuteRedo(events); break;
-            case "o": var jb = _markManager.JumpBack(); if (jb.HasValue) MoveCursor(jb.Value, events); break;
-            case "i": var jf = _markManager.JumpForward(); if (jf.HasValue) MoveCursor(jf.Value, events); break;
+            case "o": { var jb = _markManager.JumpBack(); if (jb.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(jb.Value, events); } break; }
+            case "i": { var jf = _markManager.JumpForward(); if (jf.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(jf.Value, events); } break; }
             case "v": EnterVisualMode(VimMode.VisualBlock, events); break;
             case "w": _ctrlWPending = true; EmitStatus(events, "^W"); break;
             case "h": MoveCursor(motion.MoveLeft(_cursor, 1), events); _preferredColumn = _cursor.Column; break;
@@ -788,9 +809,10 @@ public class VimEngine
                 var g_m = motion.Calculate("g_", _cursor, count);
                 if (g_m.HasValue) MoveCursor(g_m.Value.Target, events);
                 break;
-            case "gg": MoveCursor(new CursorPosition(0, 0), events); break;
+            case "gg": _markManager.SetMark('\'', _cursor); MoveCursor(new CursorPosition(0, 0), events); break;
             case "G":
                 var lastLine = count == 1 ? buf.LineCount - 1 : count - 1;
+                _markManager.SetMark('\'', _cursor);
                 MoveCursor(new CursorPosition(Math.Clamp(lastLine, 0, buf.LineCount - 1), 0), events);
                 break;
             case "gt":
@@ -1060,10 +1082,10 @@ public class VimEngine
                 break;
             case "m": _awaitingMark = true; break;
             case var tick when tick?.StartsWith('`') == true && tick.Length == 2:
-                var mk = _markManager.GetMark(tick[1]); if (mk.HasValue) MoveCursor(mk.Value, events); break;
+                var mk = _markManager.GetMark(tick[1] == '`' ? '\'' : tick[1]); if (mk.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(mk.Value, events); } break;
             case "`": _awaitingMarkJump = true; break;
             case var apos when apos?.StartsWith('\'') == true && apos.Length == 2:
-                var mk2 = _markManager.GetMark(apos[1]); if (mk2.HasValue) MoveCursor(mk2.Value with { Column = 0 }, events); break;
+                var mk2 = _markManager.GetMark(apos[1]); if (mk2.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(mk2.Value with { Column = 0 }, events); } break;
             case "'": _awaitingMarkJumpLine = true; break;
 
             // q: / q/ / q? — open command/search history in command line
@@ -2141,6 +2163,7 @@ public class VimEngine
         if (found.HasValue)
         {
             _markManager.AddJump(_cursor);
+            _markManager.SetMark('\'', _cursor);
             MoveCursor(found.Value, events);
             var all = buf.FindAll(_searchPattern, ignoreCase);
             events.Add(VimEvent.SearchChanged(_searchPattern, all.Count));
@@ -4443,6 +4466,7 @@ public class VimEngine
         var vbuf = _bufferManager.Current;
         vbuf.Undo.Snapshot(vbuf.Text, _cursor);
         _markManager.AddChange(_cursor);
+        _markManager.SetMark('.', _cursor);
     }
 
     // ─────────────── Event helpers ───────────────
