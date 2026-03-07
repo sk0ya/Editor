@@ -2041,4 +2041,20 @@ public class VimEngineTests
         Assert.Equal("      hello", lines[4]);   // was "  hello" → "      hello"
         Assert.Equal("        world", lines[5]); // was "    world" → "        world"
     }
+
+    [Fact]
+    public void CtrlG_EmitsFileInfo()
+    {
+        // 3-line buffer; cursor is on line 1 col 2 (0-based) = line 2 col 3 (1-based)
+        var engine = CreateEngine("hello\nworld\nfoo");
+        engine.ProcessKey("j");          // move to line 1
+        engine.ProcessKey("l");          // move to col 1
+        engine.ProcessKey("l");          // move to col 2
+        var events = engine.ProcessKey("g", ctrl: true);
+        Assert.Contains(events, e => e.Type == VimEventType.StatusMessage);
+        var msg = events.OfType<StatusMessageEvent>().Last().Message;
+        Assert.Contains("line 2", msg);
+        Assert.Contains("col 3", msg);
+        Assert.Contains("of 3", msg);
+    }
 }
