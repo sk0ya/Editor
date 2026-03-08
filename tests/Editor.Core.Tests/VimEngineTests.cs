@@ -2439,4 +2439,122 @@ public class VimEngineTests
         Assert.Equal(3, survivors[0].StartLine);
         Assert.Equal(4, survivors[0].EndLine);
     }
+
+    // ── Section motions ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Section_DoubleCloseBracket_MovesForwardToNextOpenBrace()
+    {
+        // ]] moves forward to the next { at column 0
+        var text = "void a()\n{\n    x;\n}\nvoid b()\n{\n    y;\n}";
+        var engine = CreateEngine(text);
+        // cursor starts at line 0; ]] should land on line 1 (the {)
+        engine.ProcessKey("]");
+        engine.ProcessKey("]");
+        Assert.Equal(1, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void Section_DoubleOpenBracket_MovesBackwardToPrevOpenBrace()
+    {
+        // [[ moves backward to the previous { at column 0
+        var text = "void a()\n{\n    x;\n}\nvoid b()\n{\n    y;\n}";
+        var engine = CreateEngine(text);
+        // position cursor at line 6 (inside second function body)
+        for (int i = 0; i < 6; i++) engine.ProcessKey("j");
+        engine.ProcessKey("[");
+        engine.ProcessKey("[");
+        Assert.Equal(5, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void Section_CloseBracketOpenBracket_MovesForwardToNextCloseBrace()
+    {
+        // ][ moves forward to the next } at column 0
+        var text = "void a()\n{\n    x;\n}\nvoid b()\n{\n    y;\n}";
+        var engine = CreateEngine(text);
+        engine.ProcessKey("]");
+        engine.ProcessKey("[");
+        Assert.Equal(3, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void Section_OpenBracketCloseBracket_MovesBackwardToPrevCloseBrace()
+    {
+        // [] moves backward to the previous } at column 0
+        var text = "void a()\n{\n    x;\n}\nvoid b()\n{\n    y;\n}";
+        var engine = CreateEngine(text);
+        // position cursor at line 7 (closing brace of second function)
+        for (int i = 0; i < 7; i++) engine.ProcessKey("j");
+        engine.ProcessKey("[");
+        engine.ProcessKey("]");
+        Assert.Equal(3, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    // ── Block jump motions ───────────────────────────────────────────────────
+
+    [Fact]
+    public void BlockJump_OpenBrace_FindsUnclosedBrace()
+    {
+        // [{ finds the unmatched { above the cursor
+        var text = "{\n    {\n        cursor here\n    }\n}";
+        var engine = CreateEngine(text);
+        // Move cursor to line 2 (inside inner block, after inner {)
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("[");
+        engine.ProcessKey("{");
+        // The unmatched { is on line 1 (the inner {)
+        Assert.Equal(1, engine.Cursor.Line);
+        Assert.Equal(4, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void BlockJump_CloseBrace_FindsUnclosedBrace()
+    {
+        // ]} finds the unmatched } below the cursor
+        var text = "{\n    cursor here\n    {\n        x;\n    }\n}";
+        var engine = CreateEngine(text);
+        // Move cursor to line 1 (inside outer block, before inner {)
+        engine.ProcessKey("j");
+        engine.ProcessKey("]");
+        engine.ProcessKey("}");
+        // The unmatched } (matching outer {) is on line 5
+        Assert.Equal(5, engine.Cursor.Line);
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void BlockJump_OpenParen_FindsUnclosedParen()
+    {
+        // [( finds the unmatched ( above the cursor
+        var text = "foo(bar(cursor))";
+        var engine = CreateEngine(text);
+        // Position cursor at column 8 (on 'c' of "cursor")
+        for (int i = 0; i < 8; i++) engine.ProcessKey("l");
+        engine.ProcessKey("[");
+        engine.ProcessKey("(");
+        // The unmatched ( is at column 7 (the inner open paren)
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(7, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void BlockJump_CloseParen_FindsUnclosedParen()
+    {
+        // ]) finds the unmatched ) below the cursor
+        var text = "foo(bar(x)cursor)";
+        var engine = CreateEngine(text);
+        // Position cursor at column 10 (after the inner closing paren)
+        for (int i = 0; i < 10; i++) engine.ProcessKey("l");
+        engine.ProcessKey("]");
+        engine.ProcessKey(")");
+        // The unmatched ) is at column 16 (outer closing paren)
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(16, engine.Cursor.Column);
+    }
 }

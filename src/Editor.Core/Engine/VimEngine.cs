@@ -920,6 +920,18 @@ public class VimEngine
             case "[s": NavigateSpellError(false, count, events); break;
             case "]c": events.Add(VimEvent.HunkNavigateRequested(true)); break;
             case "[c": events.Add(VimEvent.HunkNavigateRequested(false)); break;
+            case "[[": case "]]": case "[]": case "][":
+            case "[{": case "]}": case "[(": case "])":
+            {
+                bool isSection = cmd.Motion is "[[" or "]]" or "[]" or "][";
+                var m = new MotionEngine(buf).Calculate(cmd.Motion, _cursor, count);
+                if (m.HasValue && m.Value.Target != _cursor)
+                {
+                    if (isSection) _markManager.AddJump(_cursor);
+                    MoveCursor(m.Value.Target, events);
+                }
+                break;
+            }
             case "F2":
                 events.Add(VimEvent.LspRenameRequested());
                 break;
@@ -1990,6 +2002,10 @@ public class VimEngine
             case "zk": { int prev = CurrentBuffer.Folds.PrevFoldStart(_cursor.Line); if (prev >= 0) MoveCursor(new CursorPosition(prev, 0), events); return false; }
             case "[z": { int fs = CurrentBuffer.Folds.CurrentFoldStart(_cursor.Line); if (fs >= 0) MoveCursor(new CursorPosition(fs, 0), events); return false; }
             case "]z": { int fe = CurrentBuffer.Folds.CurrentFoldEnd(_cursor.Line); if (fe >= 0) MoveCursor(new CursorPosition(fe, 0), events); return false; }
+            case "[[": case "]]": case "[]": case "][":
+            { var sm = new MotionEngine(_bufferManager.Current.Text).Calculate(cmd.Motion, _cursor, count); if (sm.HasValue && sm.Value.Target != _cursor) _cursor = sm.Value.Target; return true; }
+            case "[{": case "]}": case "[(": case "])":
+            { var bm = new MotionEngine(_bufferManager.Current.Text).Calculate(cmd.Motion, _cursor, count); if (bm.HasValue && bm.Value.Target != _cursor) _cursor = bm.Value.Target; return true; }
             case "zd": CurrentBuffer.Folds.DeleteFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
             case "zD": CurrentBuffer.Folds.DeleteFoldsAt(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
             case "zf":

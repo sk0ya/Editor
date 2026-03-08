@@ -41,8 +41,132 @@ public class MotionEngine
             "M" => ScreenMiddle(cursor),
             "L" => ScreenBottom(cursor),
             "g_" => LastNonBlank(cursor),
+            "[[" => SectionBackward(cursor, count, openBrace: true),
+            "]]" => SectionForward(cursor, count, openBrace: true),
+            "[]" => SectionBackward(cursor, count, openBrace: false),
+            "][" => SectionForward(cursor, count, openBrace: false),
+            "[{" => UnmatchedBraceBackward(cursor, count, '{'),
+            "]}" => UnmatchedBraceForward(cursor, count, '}'),
+            "[(" => UnmatchedBraceBackward(cursor, count, '('),
+            "])" => UnmatchedBraceForward(cursor, count, ')'),
             _ => null
         };
+    }
+
+    // Section motions: navigate to { or } at column 0
+    private Motion SectionForward(CursorPosition cursor, int count, bool openBrace)
+    {
+        char target = openBrace ? '{' : '}';
+        int line = cursor.Line + 1;
+        int found = 0;
+        while (line < _buffer.LineCount)
+        {
+            var ln = _buffer.GetLine(line);
+            if (ln.Length > 0 && ln[0] == target)
+            {
+                found++;
+                if (found >= count)
+                    return new Motion(new CursorPosition(line, 0), MotionType.Linewise);
+            }
+            line++;
+        }
+        return new Motion(cursor, MotionType.Linewise);
+    }
+
+    private Motion SectionBackward(CursorPosition cursor, int count, bool openBrace)
+    {
+        char target = openBrace ? '{' : '}';
+        int line = cursor.Line - 1;
+        int found = 0;
+        while (line >= 0)
+        {
+            var ln = _buffer.GetLine(line);
+            if (ln.Length > 0 && ln[0] == target)
+            {
+                found++;
+                if (found >= count)
+                    return new Motion(new CursorPosition(line, 0), MotionType.Linewise);
+            }
+            line--;
+        }
+        return new Motion(cursor, MotionType.Linewise);
+    }
+
+    // Block-jump motions: find unmatched { } ( )
+    private Motion UnmatchedBraceBackward(CursorPosition cursor, int count, char open)
+    {
+        char close = open == '{' ? '}' : ')';
+        int depth = 0;
+        int l = cursor.Line;
+        int startCol = cursor.Column - 1;
+
+        for (int rep = 0; rep < count; rep++)
+        {
+            bool found = false;
+            int col = 0;
+
+            while (l >= 0)
+            {
+                var ln = _buffer.GetLine(l);
+                // On the first line of each rep, start from startCol (one before previous match)
+                int from = (l == cursor.Line) ? Math.Min(startCol, ln.Length - 1) : ln.Length - 1;
+                for (int i = from; i >= 0; i--)
+                {
+                    char ch = ln[i];
+                    if (ch == close) depth++;
+                    else if (ch == open)
+                    {
+                        if (depth == 0) { col = i; found = true; break; }
+                        depth--;
+                    }
+                }
+                if (found) break;
+                l--;
+            }
+            if (!found) return new Motion(cursor, MotionType.Inclusive);
+            startCol = col - 1;
+            cursor = new CursorPosition(l, col);
+            depth = 0;
+        }
+        return new Motion(cursor, MotionType.Inclusive);
+    }
+
+    private Motion UnmatchedBraceForward(CursorPosition cursor, int count, char close)
+    {
+        char open = close == '}' ? '{' : '(';
+        int depth = 0;
+        int l = cursor.Line;
+        int startCol = cursor.Column + 1;
+
+        for (int rep = 0; rep < count; rep++)
+        {
+            bool found = false;
+            int col = 0;
+
+            while (l < _buffer.LineCount)
+            {
+                var ln = _buffer.GetLine(l);
+                // On the first line of each rep, start from startCol (one after previous match)
+                int from = (l == cursor.Line) ? startCol : 0;
+                for (int i = from; i < ln.Length; i++)
+                {
+                    char ch = ln[i];
+                    if (ch == open) depth++;
+                    else if (ch == close)
+                    {
+                        if (depth == 0) { col = i; found = true; break; }
+                        depth--;
+                    }
+                }
+                if (found) break;
+                l++;
+            }
+            if (!found) return new Motion(cursor, MotionType.Inclusive);
+            startCol = col + 1;
+            cursor = new CursorPosition(l, col);
+            depth = 0;
+        }
+        return new Motion(cursor, MotionType.Inclusive);
     }
 
     public CursorPosition MoveLeft(CursorPosition cursor, int count = 1)

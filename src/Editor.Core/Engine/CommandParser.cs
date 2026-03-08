@@ -324,9 +324,15 @@ public class CommandParser
         if (s is "q" or "@") return (CommandState.Incomplete, null);
         if (s.Length == 2 && s[0] is 'q' or '@') return Finalize(count, op, s);
 
-        // ] and [ prefixed motions: ]s (next misspell), [s (prev misspell)
+        // ] and [ prefixed motions: ]s (next misspell), [s (prev misspell),
+        // ]] ][ [[ [] (section jumps), ]} ]) [{ [( (block jumps)
         if (s is "]" or "[") return (CommandState.Incomplete, null);
-        if (s.Length == 2 && s[0] is ']' or '[') return Finalize(count, op, s);
+        if (s.Length >= 2 && s[0] is ']' or '[')
+        {
+            // Three-char sequences like ][  are handled as two-char bracket motions
+            // All two-char [ and ] prefixed motions complete here
+            return Finalize(count, op, s[..2]);
+        }
 
         return Finalize(count, op, motion);
     }
