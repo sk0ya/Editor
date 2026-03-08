@@ -176,6 +176,8 @@ public class CommandParser
                 'J' => Finalize(count, null, "gJ"),
                 ';' => Finalize(count, null, "g;"),
                 ',' => Finalize(count, null, "g,"),
+                'n' => Finalize(count, null, "gn"),
+                'N' => Finalize(count, null, "gN"),
                 _ => (CommandState.Invalid, null)
             };
         }

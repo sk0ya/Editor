@@ -866,6 +866,25 @@ public class VimEngine
                 SetRepeatChange(cmd);
                 JoinLinesNoSpace(count, events);
                 break;
+            case "gn":
+            case "gN":
+            {
+                if (cmd.Operator != null)
+                {
+                    ExecuteOperatorMotion(cmd, events);
+                    break;
+                }
+                bool gnForward = cmd.Motion == "gn";
+                var gnMatch = FindGnMatch(gnForward);
+                if (gnMatch.HasValue)
+                {
+                    _visualStart = gnMatch.Value.Start;
+                    _cursor = gnMatch.Value.End;
+                    ChangeMode(VimMode.Visual, events);
+                    UpdateSelection(events);
+                }
+                break;
+            }
             case "gd":
                 events.Add(VimEvent.GoToDefinitionRequested());
                 break;
@@ -1204,6 +1223,17 @@ public class VimEngine
             else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
 
             ExecuteOperator(cmd.Operator, range.Value.Start, range.Value.End, cmd.Register ?? '"', false, events);
+            return;
+        }
+
+        // gn/gN — select next/prev search match, then apply operator
+        if (cmd.Motion is "gn" or "gN")
+        {
+            var gnMatch = FindGnMatch(cmd.Motion == "gn");
+            if (gnMatch == null) return;
+            if (cmd.Operator == "c") BeginInsertRepeat(cmd);
+            else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
+            ExecuteOperator(cmd.Operator!, gnMatch.Value.Start, gnMatch.Value.End, cmd.Register ?? '"', false, events);
             return;
         }
 
@@ -1985,6 +2015,18 @@ public class VimEngine
                 for (int i = 0; i < count; i++)
                     SearchNext(false, events);
                 return true;
+            case "gn":
+            {
+                var gnm = FindGnMatch(true);
+                if (gnm.HasValue) _cursor = gnm.Value.End;
+                return true;
+            }
+            case "gN":
+            {
+                var gnm = FindGnMatch(false);
+                if (gnm.HasValue) _cursor = gnm.Value.Start;
+                return true;
+            }
             case "*":
                 SearchWordUnderCursor(true, events);
                 return true;
@@ -2236,13 +2278,14 @@ public class VimEngine
         cmd.StartsWith("inoremap ", StringComparison.OrdinalIgnoreCase) ||
         cmd.StartsWith("vnoremap ", StringComparison.OrdinalIgnoreCase);
 
+    private bool GetSearchIgnoreCase(string pattern) =>
+        _config.Options.SmartCase ? !pattern.Any(char.IsUpper) : _config.Options.IgnoreCase;
+
     private void DoSearch(bool forward, List<VimEvent> events)
     {
         if (string.IsNullOrEmpty(_searchPattern)) return;
         var buf = _bufferManager.Current.Text;
-        var ignoreCase = _config.Options.SmartCase
-            ? !_searchPattern.Any(char.IsUpper)
-            : _config.Options.IgnoreCase;
+        var ignoreCase = GetSearchIgnoreCase(_searchPattern);
 
         var found = buf.FindNext(_searchPattern, _cursor, forward, ignoreCase, _config.Options.WrapScan);
         if (found.HasValue)
@@ -2271,13 +2314,58 @@ public class VimEngine
             events.Add(VimEvent.SearchChanged("", 0));
             return;
         }
-        var ignoreCase = _config.Options.SmartCase
-            ? !_cmdLine.Any(char.IsUpper)
-            : _config.Options.IgnoreCase;
+        var ignoreCase = GetSearchIgnoreCase(_cmdLine);
         var found = buf.FindNext(_cmdLine, _preSearchCursor, _mode == VimMode.SearchForward, ignoreCase);
         MoveCursor(found ?? _preSearchCursor, events);
         var all = buf.FindAll(_cmdLine, ignoreCase);
         events.Add(VimEvent.SearchChanged(_cmdLine, all.Count));
+    }
+
+    private (CursorPosition Start, CursorPosition End)? FindGnMatch(bool forward)
+    {
+        if (string.IsNullOrEmpty(_searchPattern)) return null;
+        var buf = _bufferManager.Current.Text;
+        var ignoreCase = GetSearchIgnoreCase(_searchPattern);
+
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        if (forward)
+        {
+            // If cursor is at the start of a match, select that match directly.
+            var curLine = buf.GetLine(_cursor.Line);
+            if (_cursor.Column + _searchPattern.Length <= curLine.Length)
+            {
+                var onMatchIdx = curLine.IndexOf(_searchPattern, _cursor.Column, comparison);
+                if (onMatchIdx == _cursor.Column)
+                {
+                    var matchEnd = new CursorPosition(_cursor.Line, _cursor.Column + _searchPattern.Length - 1);
+                    return (_cursor, buf.ClampCursor(matchEnd));
+                }
+            }
+            // FindNext skips current column (+1 internally), so pass column - 1 to find matches starting at cursor.Column
+            var searchFrom = new CursorPosition(_cursor.Line, Math.Max(0, _cursor.Column - 1));
+            var found = buf.FindNext(_searchPattern, searchFrom, true, ignoreCase, _config.Options.WrapScan);
+            if (!found.HasValue) return null;
+            var start = found.Value;
+            var end = new CursorPosition(start.Line, start.Column + _searchPattern.Length - 1);
+            return (start, buf.ClampCursor(end));
+        }
+        else
+        {
+            // Backward: search from a position shifted right by (patternLength - 1) so that a match
+            // whose end is at or before _cursor is discovered (FindNext backward uses LastIndexOf with
+            // startIndex = endCol - 1, which limits matches to those starting at ≤ endCol - 1).
+            // We want matches starting at ≤ _cursor.Column, so we need endCol - 1 ≥ _cursor.Column,
+            // i.e. endCol ≥ _cursor.Column + 1, i.e. pass column = _cursor.Column + patternLength - 1.
+            var curLineLen = buf.GetLine(_cursor.Line).Length;
+            int shiftedCol = Math.Min(_cursor.Column + _searchPattern.Length - 1, curLineLen);
+            var searchFrom = new CursorPosition(_cursor.Line, shiftedCol);
+            var found = buf.FindNext(_searchPattern, searchFrom, false, ignoreCase, _config.Options.WrapScan);
+            if (!found.HasValue) return null;
+            var start = found.Value;
+            var end = new CursorPosition(start.Line, start.Column + _searchPattern.Length - 1);
+            return (start, buf.ClampCursor(end));
+        }
     }
 
     // ─────────────── HELPERS ───────────────

@@ -2573,4 +2573,91 @@ public class VimEngineTests
         Assert.Equal(0, engine.Cursor.Line);
         Assert.Equal(16, engine.Cursor.Column);
     }
+
+    // ── gn / gN motion tests ──────────────────────────────────────────────────
+
+    private static void SetSearch(VimEngine engine, string pattern)
+    {
+        engine.ProcessKey("/");
+        foreach (var ch in pattern) engine.ProcessKey(ch.ToString());
+        engine.ProcessKey("Return");
+    }
+
+    [Fact]
+    public void Gn_StandaloneEntersVisualSelectingMatch()
+    {
+        // Text: "foo bar foo", cursor at start. Search for "foo".
+        // gn from beginning should select the first "foo" (cols 0-2) in visual mode.
+        var engine = CreateEngine("foo bar foo");
+        SetSearch(engine, "foo");
+        // After search, cursor is on second "foo" (col 8). Move back to start.
+        engine.ProcessKey("g");
+        engine.ProcessKey("g"); // go to line 0
+        engine.ProcessKey("0"); // col 0
+        engine.ProcessKey("g");
+        engine.ProcessKey("n");
+        Assert.Equal(VimMode.Visual, engine.Mode);
+        // Selection should span the match "foo" at col 0-2
+        Assert.True(engine.Selection.HasValue);
+        var sel = engine.Selection!.Value;
+        Assert.Equal(0, sel.Start.Line);
+        Assert.Equal(0, sel.Start.Column);
+        Assert.Equal(0, sel.End.Line);
+        Assert.Equal(2, sel.End.Column);
+    }
+
+    [Fact]
+    public void GN_StandaloneSelectsPrevMatch()
+    {
+        // Text: "foo bar foo", cursor at end. gN should select previous "foo".
+        var engine = CreateEngine("foo bar foo");
+        SetSearch(engine, "foo");
+        // cursor is at col 8 (start of second "foo") after search
+        // move cursor past the match
+        engine.ProcessKey("$"); // go to end (col 10)
+        engine.ProcessKey("g");
+        engine.ProcessKey("N");
+        Assert.Equal(VimMode.Visual, engine.Mode);
+        Assert.True(engine.Selection.HasValue);
+        var sel = engine.Selection!.Value;
+        // Should select "foo" at col 8-10
+        Assert.Equal(0, sel.Start.Line);
+        Assert.Equal(8, sel.Start.Column);
+        Assert.Equal(0, sel.End.Line);
+        Assert.Equal(10, sel.End.Column);
+    }
+
+    [Fact]
+    public void Gn_WithDeleteOperator_DeletesNextMatch()
+    {
+        // "foo bar foo" → dgn from col 0 should delete the first "foo"
+        var engine = CreateEngine("foo bar foo");
+        SetSearch(engine, "foo");
+        // go back to start
+        engine.ProcessKey("g");
+        engine.ProcessKey("g");
+        engine.ProcessKey("0");
+        engine.ProcessKey("d");
+        engine.ProcessKey("g");
+        engine.ProcessKey("n");
+        Assert.Equal(" bar foo", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void Gn_WithChangeOperator_ChangesNextMatch()
+    {
+        // "foo bar foo" → cgn from col 0 should delete "foo" and enter insert mode
+        var engine = CreateEngine("foo bar foo");
+        SetSearch(engine, "foo");
+        engine.ProcessKey("g");
+        engine.ProcessKey("g");
+        engine.ProcessKey("0");
+        engine.ProcessKey("c");
+        engine.ProcessKey("g");
+        engine.ProcessKey("n");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        // "foo" at start should be deleted
+        Assert.Equal(" bar foo", engine.CurrentBuffer.Text.GetText());
+    }
 }
