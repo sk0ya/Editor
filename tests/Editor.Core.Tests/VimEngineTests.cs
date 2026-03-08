@@ -558,6 +558,22 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void CtrlL_EmitsStatusMessage()
+    {
+        var engine = CreateEngine("hello");
+        var events = engine.ProcessKey("l", ctrl: true, shift: false, alt: false);
+        Assert.True(events.Any(e => e.Type == VimEventType.StatusMessage));
+    }
+
+    [Fact]
+    public void CtrlBracket_EmitsGoToDefinitionRequested()
+    {
+        var engine = CreateEngine("hello");
+        var events = engine.ProcessKey("]", ctrl: true, shift: false, alt: false);
+        Assert.True(events.Any(e => e.Type == VimEventType.GoToDefinitionRequested));
+    }
+
+    [Fact]
     public void CtrlV_BlockDelete_DeletesRectangularSelection()
     {
         var engine = CreateEngine("abcd\nabcd\nabcd");

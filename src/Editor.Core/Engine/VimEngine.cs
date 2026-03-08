@@ -610,6 +610,15 @@ public class VimEngine
                 _commandParser.Reset();
                 EmitStatus(events, "");
                 break;
+            case "l":
+                _commandParser.Reset();
+                EmitStatus(events, "");
+                events.Add(VimEvent.CursorMoved(_cursor));
+                break;
+            case "]":
+                _commandParser.Reset();
+                events.Add(VimEvent.GoToDefinitionRequested());
+                break;
             case "6":
             case "^":
                 SwitchToAlternateBuffer(events);
