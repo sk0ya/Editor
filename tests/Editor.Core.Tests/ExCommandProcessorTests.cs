@@ -657,4 +657,154 @@ public class ExCommandProcessorTests
         Assert.True(result.Success);
         Assert.Contains("(no marks set)", result.Message);
     }
+
+    // ── :unmap / :nunmap / :iunmap / :vunmap tests ───────────────────────────
+
+    private static ExCommandProcessor CreateProcessorWithMaps(
+        Dictionary<string, string>? normalMaps = null,
+        Dictionary<string, string>? insertMaps = null,
+        Dictionary<string, string>? visualMaps = null)
+    {
+        var buffers = new BufferManager();
+        var options = new VimOptions();
+        return new ExCommandProcessor(buffers, options, new MarkManager(),
+            normalMaps: normalMaps, insertMaps: insertMaps, visualMaps: visualMaps);
+    }
+
+    [Fact]
+    public void Nunmap_RemovesNormalMapping()
+    {
+        var normalMaps = new Dictionary<string, string> { ["<Leader>w"] = ":w<CR>" };
+        var processor = CreateProcessorWithMaps(normalMaps: normalMaps);
+
+        var result = processor.Execute("nunmap <Leader>w", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.False(normalMaps.ContainsKey("<Leader>w"));
+    }
+
+    [Fact]
+    public void Iunmap_RemovesInsertMapping()
+    {
+        var insertMaps = new Dictionary<string, string> { ["jk"] = "<Esc>" };
+        var processor = CreateProcessorWithMaps(insertMaps: insertMaps);
+
+        var result = processor.Execute("iunmap jk", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.False(insertMaps.ContainsKey("jk"));
+    }
+
+    [Fact]
+    public void Vunmap_RemovesVisualMapping()
+    {
+        var visualMaps = new Dictionary<string, string> { ["<Leader>y"] = "\"+y" };
+        var processor = CreateProcessorWithMaps(visualMaps: visualMaps);
+
+        var result = processor.Execute("vunmap <Leader>y", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.False(visualMaps.ContainsKey("<Leader>y"));
+    }
+
+    [Fact]
+    public void Unmap_RemovesFromAllModes()
+    {
+        var normalMaps = new Dictionary<string, string> { ["<Leader>t"] = ":tabnew<CR>" };
+        var insertMaps = new Dictionary<string, string> { ["<Leader>t"] = "<Esc>:tabnew<CR>" };
+        var visualMaps = new Dictionary<string, string> { ["<Leader>t"] = ":tabnew<CR>" };
+        var processor = CreateProcessorWithMaps(normalMaps, insertMaps, visualMaps);
+
+        var result = processor.Execute("unmap <Leader>t", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.False(normalMaps.ContainsKey("<Leader>t"));
+        Assert.False(insertMaps.ContainsKey("<Leader>t"));
+        Assert.False(visualMaps.ContainsKey("<Leader>t"));
+    }
+
+    [Fact]
+    public void Nunmap_NonExistentKey_StillSucceeds()
+    {
+        var processor = CreateProcessorWithMaps();
+
+        var result = processor.Execute("nunmap nonexistent", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+    }
+
+    // ── :nmap/:imap/:vmap/:map no-args listing tests ─────────────────────────
+
+    [Fact]
+    public void Nmap_NoArgs_ListsNormalMappings()
+    {
+        var normalMaps = new Dictionary<string, string> { ["\\w"] = ":w<CR>" };
+        var processor = CreateProcessorWithMaps(normalMaps: normalMaps);
+
+        var result = processor.Execute("nmap", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("\\w", result.Message);
+        Assert.Contains(":w<CR>", result.Message);
+        Assert.Contains("n  ", result.Message);
+    }
+
+    [Fact]
+    public void Imap_NoArgs_ListsInsertMappings()
+    {
+        var insertMaps = new Dictionary<string, string> { ["jk"] = "<Esc>" };
+        var processor = CreateProcessorWithMaps(insertMaps: insertMaps);
+
+        var result = processor.Execute("imap", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("jk", result.Message);
+        Assert.Contains("<Esc>", result.Message);
+        Assert.Contains("i  ", result.Message);
+    }
+
+    [Fact]
+    public void Vmap_NoArgs_ListsVisualMappings()
+    {
+        var visualMaps = new Dictionary<string, string> { ["<Leader>y"] = "\"+y" };
+        var processor = CreateProcessorWithMaps(visualMaps: visualMaps);
+
+        var result = processor.Execute("vmap", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("<Leader>y", result.Message);
+        Assert.Contains("\"+y", result.Message);
+        Assert.Contains("v  ", result.Message);
+    }
+
+    [Fact]
+    public void Nmap_NoArgs_NoMappings_ReturnsNoMappingsMessage()
+    {
+        var processor = CreateProcessorWithMaps();
+
+        var result = processor.Execute("nmap", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Contains("(no mappings)", result.Message);
+    }
+
+    [Fact]
+    public void Map_NoArgs_ListsAllModes()
+    {
+        var normalMaps = new Dictionary<string, string> { ["\\w"] = ":w<CR>" };
+        var insertMaps = new Dictionary<string, string> { ["jk"] = "<Esc>" };
+        var visualMaps = new Dictionary<string, string> { ["\\y"] = "\"+y" };
+        var processor = CreateProcessorWithMaps(normalMaps, insertMaps, visualMaps);
+
+        var result = processor.Execute("map", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("n  \\w", result.Message);
+        Assert.Contains("i  jk", result.Message);
+        Assert.Contains("v  \\y", result.Message);
+    }
 }

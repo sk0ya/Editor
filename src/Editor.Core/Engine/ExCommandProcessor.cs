@@ -19,6 +19,9 @@ public class ExCommandProcessor
     private readonly MarkManager _markManager;
     private readonly Dictionary<string, string> _abbreviations;
     private readonly RegisterManager? _registerManager;
+    private readonly Dictionary<string, string> _normalMaps;
+    private readonly Dictionary<string, string> _insertMaps;
+    private readonly Dictionary<string, string> _visualMaps;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
     private readonly List<string> _searchHistory = [];
@@ -26,13 +29,18 @@ public class ExCommandProcessor
     private int _executeDepth;
 
     public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager,
-        Dictionary<string, string>? abbreviations = null, RegisterManager? registerManager = null)
+        Dictionary<string, string>? abbreviations = null, RegisterManager? registerManager = null,
+        Dictionary<string, string>? normalMaps = null, Dictionary<string, string>? insertMaps = null,
+        Dictionary<string, string>? visualMaps = null)
     {
         _bufferManager = bufferManager;
         _options = options;
         _markManager = markManager;
         _abbreviations = abbreviations ?? [];
         _registerManager = registerManager;
+        _normalMaps = normalMaps ?? [];
+        _insertMaps = insertMaps ?? [];
+        _visualMaps = visualMaps ?? [];
     }
 
     public string? LastCommand => _history.Count > 0 ? _history[0] : null;
@@ -219,11 +227,39 @@ public class ExCommandProcessor
             return new ExResult(true);
         }
 
-        // :nmap :imap :vmap :nnoremap :inoremap :vnoremap
-        if (cmd.StartsWith("nmap ") || cmd.StartsWith("nnoremap "))
+        // :nmap :imap :vmap :nnoremap :inoremap :vnoremap (with args — silently accept, already handled by VimConfig)
+        if (cmd.StartsWith("nmap ") || cmd.StartsWith("nnoremap ") ||
+            cmd.StartsWith("imap ") || cmd.StartsWith("inoremap ") ||
+            cmd.StartsWith("vmap ") || cmd.StartsWith("vnoremap "))
         {
             return new ExResult(true, "Key mapping registered");
         }
+
+        // :map/:nmap/:imap/:vmap with no args — list mappings (skip empty sections)
+        if (cmd == "map")
+        {
+            var sections = new[] { ("n", _normalMaps), ("i", _insertMaps), ("v", _visualMaps) };
+            var parts = sections.Where(s => s.Item2.Count > 0).Select(s => BuildMapListing(s.Item1, s.Item2));
+            return new ExResult(true, string.Join('\n', parts) is { Length: > 0 } msg ? msg : "(no mappings)");
+        }
+        if (cmd == "nmap") return new ExResult(true, BuildMapListing("n", _normalMaps));
+        if (cmd == "imap") return new ExResult(true, BuildMapListing("i", _insertMaps));
+        if (cmd == "vmap") return new ExResult(true, BuildMapListing("v", _visualMaps));
+
+        // :unmap {lhs} — remove from all modes
+        if (cmd.StartsWith("unmap "))
+        {
+            var lhs = GetCommandArg(cmd);
+            _normalMaps.Remove(lhs);
+            _insertMaps.Remove(lhs);
+            _visualMaps.Remove(lhs);
+            return new ExResult(true);
+        }
+
+        // :nunmap/:iunmap/:vunmap {lhs} — mode-specific removal
+        if (cmd.StartsWith("nunmap ")) { _normalMaps.Remove(GetCommandArg(cmd)); return new ExResult(true); }
+        if (cmd.StartsWith("iunmap ")) { _insertMaps.Remove(GetCommandArg(cmd)); return new ExResult(true); }
+        if (cmd.StartsWith("vunmap ")) { _visualMaps.Remove(GetCommandArg(cmd)); return new ExResult(true); }
 
         // :tabnew :tabedit :tabe
         if (cmd == "tabnew" || cmd.StartsWith("tabnew ") ||
@@ -1318,6 +1354,14 @@ public class ExCommandProcessor
         return new ExResult(true, $"Retabbed {count} line(s)", TextModified: true);
     }
 
+    // ─────────────── MAP LISTING ───────────────
+
+    private static string BuildMapListing(string modePrefix, Dictionary<string, string> maps)
+    {
+        if (maps.Count == 0) return "(no mappings)";
+        return string.Join('\n', maps.Select(kvp => $"{modePrefix}  {kvp.Key}  {kvp.Value}"));
+    }
+
     // ─────────────── TAB COMPLETION ───────────────
 
     private static readonly string[] AllCommandNames =
@@ -1353,6 +1397,8 @@ public class ExCommandProcessor
         "g", "global", "v", "vglobal",
         "grep", "vimgrep",
         "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",
+        "map",
+        "unmap", "nunmap", "iunmap", "vunmap",
         "history", "his",
     ];
 
