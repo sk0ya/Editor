@@ -2660,4 +2660,92 @@ public class VimEngineTests
         // "foo" at start should be deleted
         Assert.Equal(" bar foo", engine.CurrentBuffer.Text.GetText());
     }
+
+    // Method navigation: [m / ]m / [M / ]M
+
+    [Fact]
+    public void CloseBracketM_MovesToNextMethodStart()
+    {
+        // Allman brace style: each "{" is on its own line preceded by a signature line
+        // The heuristic: line ends with "{" and length > 1, OR
+        // we use a simpler text where the brace is on the same line as the signature
+        var text = "void Foo() {\n    return;\n}\nvoid Bar() {\n    return;\n}";
+        var engine = CreateEngine(text);
+        // cursor at line 0 (which is "void Foo() {" — already ends with "{")
+        // ]m from line 0 should jump to line 3 ("void Bar() {")
+        engine.ProcessKey("]");
+        engine.ProcessKey("m");
+        Assert.Equal(3, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void OpenBracketM_MovesToPrevMethodStart()
+    {
+        var text = "void Foo() {\n    return;\n}\nvoid Bar() {\n    return;\n}";
+        var engine = CreateEngine(text);
+        // move to line 4, [m → previous method start = line 3 ("void Bar() {")
+        // but cursor starts at 0 which itself matches; step to line 4 first
+        for (int i = 0; i < 4; i++) { engine.ProcessKey("j"); }
+        engine.ProcessKey("[");
+        engine.ProcessKey("m");
+        Assert.Equal(3, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void CloseBracketBigM_MovesToNextMethodEnd()
+    {
+        var text = "void Foo() {\n    return;\n}\nvoid Bar() {\n    return;\n}";
+        var engine = CreateEngine(text);
+        // cursor at line 0; ]M should jump to first "}" line (line 2)
+        engine.ProcessKey("]");
+        engine.ProcessKey("M");
+        Assert.Equal(2, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void OpenBracketBigM_MovesToPrevMethodEnd()
+    {
+        var text = "void Foo() {\n    return;\n}\nvoid Bar() {\n    return;\n}";
+        var engine = CreateEngine(text);
+        // move to line 5 (second "}") then [M → previous "}" = line 2
+        for (int i = 0; i < 5; i++) { engine.ProcessKey("j"); }
+        engine.ProcessKey("[");
+        engine.ProcessKey("M");
+        Assert.Equal(2, engine.Cursor.Line);
+    }
+
+    // Fold utility commands: zE / zn / zN
+
+    [Fact]
+    public void ZE_ClearsAllFolds()
+    {
+        var engine = CreateEngine("line0\nline1\nline2\nline3\nline4");
+        engine.CurrentBuffer.Folds.SetLspRanges([(0, 2), (3, 4)]);
+        Assert.Equal(2, engine.CurrentBuffer.Folds.Folds.Count);
+        engine.ProcessKey("z");
+        engine.ProcessKey("E");
+        Assert.Empty(engine.CurrentBuffer.Folds.Folds);
+    }
+
+    [Fact]
+    public void Zn_SetsFoldsDisabled()
+    {
+        var engine = CreateEngine("line0\nline1\nline2");
+        Assert.False(engine.FoldsDisabled);
+        engine.ProcessKey("z");
+        engine.ProcessKey("n");
+        Assert.True(engine.FoldsDisabled);
+    }
+
+    [Fact]
+    public void ZN_ClearsFoldsDisabled()
+    {
+        var engine = CreateEngine("line0\nline1\nline2");
+        engine.ProcessKey("z");
+        engine.ProcessKey("n");
+        Assert.True(engine.FoldsDisabled);
+        engine.ProcessKey("z");
+        engine.ProcessKey("N");
+        Assert.False(engine.FoldsDisabled);
+    }
 }

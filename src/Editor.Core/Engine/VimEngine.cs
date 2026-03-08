@@ -58,6 +58,7 @@ public class VimEngine
     private char _ctrlXMode;              // 'f' = file-path, 'l' = whole-line, '\0' = keyword
     private CursorPosition _surroundStart, _surroundEnd;
     private bool _surroundLinewise;
+    private bool _foldDisabled;
     private int _preferredColumn = 0; // Sticky column for j/k
 
     private int _viewportTopLine = 0;      // First visible buffer line in the viewport
@@ -91,6 +92,7 @@ public class VimEngine
     public BufferManager BufferManager => _bufferManager;
     public SyntaxEngine Syntax => _syntaxEngine;
     public ExCommandProcessor ExProcessor => _exProcessor;
+    public bool FoldsDisabled => _foldDisabled;
 
     /// <summary>Sets the viewport state so H/M/L motions target correct visible lines.</summary>
     public void SetViewportState(int topLine, int visibleLines)
@@ -949,6 +951,10 @@ public class VimEngine
             case "[s": NavigateSpellError(false, count, events); break;
             case "]c": events.Add(VimEvent.HunkNavigateRequested(true)); break;
             case "[c": events.Add(VimEvent.HunkNavigateRequested(false)); break;
+            case "[m": MethodJump(false, false, count, events); break;
+            case "]m": MethodJump(true,  false, count, events); break;
+            case "[M": MethodJump(false, true,  count, events); break;
+            case "]M": MethodJump(true,  true,  count, events); break;
             case "[[": case "]]": case "[]": case "][":
             case "[{": case "]}": case "[(": case "])":
             {
@@ -1063,6 +1069,18 @@ public class VimEngine
                 break;
             case "zD":
                 CurrentBuffer.Folds.DeleteFoldsAt(_cursor.Line);
+                events.Add(VimEvent.FoldsChanged());
+                break;
+            case "zE":
+                CurrentBuffer.Folds.Clear();
+                events.Add(VimEvent.FoldsChanged());
+                break;
+            case "zn":
+                _foldDisabled = true;
+                events.Add(VimEvent.FoldsChanged());
+                break;
+            case "zN":
+                _foldDisabled = false;
                 events.Add(VimEvent.FoldsChanged());
                 break;
 
@@ -2054,12 +2072,19 @@ public class VimEngine
             case "zk": { int prev = CurrentBuffer.Folds.PrevFoldStart(_cursor.Line); if (prev >= 0) MoveCursor(new CursorPosition(prev, 0), events); return false; }
             case "[z": { int fs = CurrentBuffer.Folds.CurrentFoldStart(_cursor.Line); if (fs >= 0) MoveCursor(new CursorPosition(fs, 0), events); return false; }
             case "]z": { int fe = CurrentBuffer.Folds.CurrentFoldEnd(_cursor.Line); if (fe >= 0) MoveCursor(new CursorPosition(fe, 0), events); return false; }
+            case "[m": MethodJump(false, false, count, events); return true;
+            case "]m": MethodJump(true,  false, count, events); return true;
+            case "[M": MethodJump(false, true,  count, events); return true;
+            case "]M": MethodJump(true,  true,  count, events); return true;
             case "[[": case "]]": case "[]": case "][":
             { var sm = new MotionEngine(_bufferManager.Current.Text).Calculate(cmd.Motion, _cursor, count); if (sm.HasValue && sm.Value.Target != _cursor) _cursor = sm.Value.Target; return true; }
             case "[{": case "]}": case "[(": case "])":
             { var bm = new MotionEngine(_bufferManager.Current.Text).Calculate(cmd.Motion, _cursor, count); if (bm.HasValue && bm.Value.Target != _cursor) _cursor = bm.Value.Target; return true; }
             case "zd": CurrentBuffer.Folds.DeleteFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
             case "zD": CurrentBuffer.Folds.DeleteFoldsAt(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
+            case "zE": CurrentBuffer.Folds.Clear(); events.Add(VimEvent.FoldsChanged()); return false;
+            case "zn": _foldDisabled = true; events.Add(VimEvent.FoldsChanged()); return true;
+            case "zN": _foldDisabled = false; events.Add(VimEvent.FoldsChanged()); return true;
             case "zf":
             {
                 if (_selection != null)
@@ -4001,6 +4026,33 @@ public class VimEngine
         if (!_config.Options.Spell || !_spellChecker.IsLoaded) return [];
         var line = _bufferManager.Current.Text.GetLine(lineIndex);
         return _spellChecker.FindErrors(line);
+    }
+
+    private void MethodJump(bool forward, bool toEnd, int count, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        int line = _cursor.Line;
+        int found = 0;
+        int step = forward ? 1 : -1;
+        line += step;
+        while (line >= 0 && line < buf.LineCount)
+        {
+            var ln = buf.GetLine(line).AsSpan().Trim();
+            bool matches = toEnd
+                ? (ln.SequenceEqual("}") || ln.SequenceEqual("};"))
+                : (ln.EndsWith("{") && ln.Length > 1);
+            if (matches)
+            {
+                found++;
+                if (found >= count)
+                {
+                    _markManager.AddJump(_cursor);
+                    MoveCursor(new CursorPosition(line, 0), events);
+                    return;
+                }
+            }
+            line += step;
+        }
     }
 
     private void NavigateSpellError(bool forward, int count, List<VimEvent> events)
