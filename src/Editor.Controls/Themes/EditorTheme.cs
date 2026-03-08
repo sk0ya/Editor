@@ -30,6 +30,9 @@ public class EditorTheme
     // Matching bracket highlight
     public Brush MatchingBracketBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x4F, 0x7A));
 
+    // Document highlight (LSP textDocument/documentHighlight)
+    public Brush DocumentHighlightBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0x44, 0xBD, 0x93, 0xF9));
+
     // Color column guide line
     public Brush ColorColumnBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x3D, 0x3D, 0x3D));
 
@@ -113,6 +116,7 @@ public class EditorTheme
         IndentGuideBrush = new SolidColorBrush(Color.FromRgb(0x3A, 0x3C, 0x4E)),
         MinimapBackground = new SolidColorBrush(Color.FromArgb(0xD0, 0x1E, 0x1F, 0x29)),
         MinimapViewport   = new SolidColorBrush(Color.FromArgb(0x55, 0xBB, 0xBB, 0xCC)),
+        DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0xBD, 0x93, 0xF9)),
     };
 
     public static EditorTheme Dark { get; } = new();
@@ -155,6 +159,7 @@ public class EditorTheme
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x38, 0x3F, 0x4D)),
         MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x22, 0x27, 0x30)),
         MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x88, 0xC0, 0xD0)),
+        DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0x88, 0xC0, 0xD0)),
     };
 
     // Tokyo Night — dark variant
@@ -195,6 +200,7 @@ public class EditorTheme
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x25, 0x27, 0x38)),
         MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x13, 0x14, 0x1E)),
         MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x7A, 0xA2, 0xF7)),
+        DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0x7A, 0xA2, 0xF7)),
     };
 
     // One Dark — Atom One Dark inspired
@@ -235,6 +241,7 @@ public class EditorTheme
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x42)),
         MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x1C, 0x1F, 0x26)),
         MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x61, 0xAF, 0xEF)),
+        DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0x61, 0xAF, 0xEF)),
     };
 
     public static EditorTheme GetByName(string name) => name.ToLower() switch

@@ -280,6 +280,7 @@ public partial class VimEditorControl : UserControl
         _lspManager.BreadcrumbChanged += OnLspBreadcrumbChanged;
         _lspManager.InlayHintsChanged += OnLspInlayHintsChanged;
         _lspManager.SemanticTokensChanged += OnLspSemanticTokensChanged;
+        _lspManager.DocumentHighlightsChanged += OnLspDocumentHighlightsChanged;
 
         _completionDebounce = new System.Windows.Threading.DispatcherTimer
         {
@@ -349,6 +350,11 @@ public partial class VimEditorControl : UserControl
     private void OnLspSemanticTokensChanged(SemanticToken[] tokens)
     {
         Canvas.SetSemanticTokens(tokens);
+    }
+
+    private void OnLspDocumentHighlightsChanged(IReadOnlyList<DocumentHighlight>? highlights)
+    {
+        Canvas.SetDocumentHighlights(highlights);
     }
 
     private void OnLspFoldingRangesChanged(IReadOnlyList<LspFoldingRange> ranges)
@@ -2780,8 +2786,15 @@ public partial class VimEditorControl : UserControl
                         ActiveStatusBar.UpdateCursor(ce.Position, _engine.CurrentBuffer.Text.LineCount);
                         if (_engine.Mode is VimMode.Insert or VimMode.Replace)
                             UpdateImeWindowPos();
-                        else if (_engine.Options.Breadcrumb)
-                            _lspManager.UpdateBreadcrumb(ce.Position.Line, ce.Position.Column);
+                        else
+                        {
+                            if (_engine.Options.Breadcrumb)
+                                _lspManager.UpdateBreadcrumb(ce.Position.Line, ce.Position.Column);
+                            // Request document highlights for the symbol under cursor (Normal mode)
+                            var uri = _lspManager.CurrentUri;
+                            if (uri != null)
+                                _ = _lspManager.RequestDocumentHighlightAsync(uri, ce.Position.Line, ce.Position.Column);
+                        }
                     }
                     break;
                 case VimEventType.ModeChanged when evt is ModeChangedEvent me:
@@ -2795,6 +2808,8 @@ public partial class VimEditorControl : UserControl
                     else
                     {
                         UpdateImeWindowPos();
+                        // Clear document highlights when entering insert mode
+                        _lspManager.ClearDocumentHighlights();
                     }
                     ActiveStatusBar.UpdateMode(me.Mode);
                     Canvas.SetMode(me.Mode);

@@ -91,6 +91,9 @@ public class EditorCanvas : FrameworkElement
     // Semantic tokens — line-keyed lookup: line → list of (startChar, length, brush)
     private Dictionary<int, List<(int StartChar, int Length, Brush Brush)>> _semanticTokensByLine = [];
 
+    // Document highlights
+    private IReadOnlyList<DocumentHighlight>? _documentHighlights;
+
     // LSP
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
     private IReadOnlyList<LspCompletionItem> _completionItems = [];
@@ -216,6 +219,12 @@ public class EditorCanvas : FrameworkElement
     public void SetBlameAnnotations(Dictionary<int, string>? annotations)
     {
         _blameAnnotations = annotations ?? [];
+        InvalidateVisual();
+    }
+
+    public void SetDocumentHighlights(IReadOnlyList<DocumentHighlight>? highlights)
+    {
+        _documentHighlights = highlights ?? [];
         InvalidateVisual();
     }
 
@@ -885,6 +894,9 @@ public class EditorCanvas : FrameworkElement
             // Search highlights
             DrawSearchHighlights(dc, l, y, textLeft, lineText);
 
+            // Document highlights (LSP)
+            DrawDocumentHighlights(dc, l, y, textLeft, lineText);
+
             // Matching bracket highlight
             DrawMatchingBrackets(dc, l, y, textLeft, lineText, bracketMatch);
 
@@ -1507,6 +1519,26 @@ public class EditorCanvas : FrameworkElement
             int matchEnd = Math.Min(match.Column + _searchPattern.Length, lineText.Length);
             double hWidth = GetVisualX(lineText, matchEnd) - GetVisualX(lineText, match.Column);
             dc.DrawRectangle(Theme.SearchHighlightBg, null, new Rect(hLeft, y, hWidth, _lineHeight));
+        }
+    }
+
+    private void DrawDocumentHighlights(DrawingContext dc, int line, double y, double textLeft, string lineText)
+    {
+        if (_documentHighlights is null || _documentHighlights.Count == 0) return;
+        foreach (var hl in _documentHighlights)
+        {
+            if (hl.Range.Start.Line != line && hl.Range.End.Line != line
+                && !(hl.Range.Start.Line < line && hl.Range.End.Line > line)) continue;
+
+            int startCol = hl.Range.Start.Line == line ? hl.Range.Start.Character : 0;
+            int endCol   = hl.Range.End.Line   == line ? hl.Range.End.Character   : lineText.Length;
+            startCol = Math.Clamp(startCol, 0, lineText.Length);
+            endCol   = Math.Clamp(endCol,   0, lineText.Length);
+            if (endCol <= startCol) continue;
+
+            double hLeft  = textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX;
+            double hWidth = GetVisualX(lineText, endCol) - GetVisualX(lineText, startCol);
+            dc.DrawRectangle(Theme.DocumentHighlightBackground, null, new Rect(hLeft, y, Math.Max(0, hWidth), _lineHeight));
         }
     }
 

@@ -42,6 +42,7 @@ public sealed class LspClient : ILspClient
                     rename = new { },
                     references = new { },
                     foldingRange = new { },
+                    documentHighlight = new { },
                     documentSymbol = new { hierarchicalDocumentSymbolSupport = true },
                     inlayHint = new { },
                     callHierarchy = new { },
@@ -892,6 +893,35 @@ public sealed class LspClient : ILspClient
                 return new LspHover(v.GetString() ?? "");
         }
         return null;
+    }
+
+    public async Task<IReadOnlyList<DocumentHighlight>?> RequestDocumentHighlightAsync(
+        string uri, int line, int character, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/documentHighlight", new
+            {
+                textDocument = new { uri },
+                position = new { line, character }
+            }, ct);
+
+            if (result is null || result.Value.ValueKind == JsonValueKind.Null) return null;
+            if (result.Value.ValueKind != JsonValueKind.Array) return null;
+
+            var list = new List<DocumentHighlight>();
+            foreach (var item in result.Value.EnumerateArray())
+            {
+                if (!item.TryGetProperty("range", out var rangeEl)) continue;
+                var range = ParseRange(rangeEl);
+                var kind = item.TryGetProperty("kind", out var kindEl)
+                    ? (DocumentHighlightKind)kindEl.GetInt32()
+                    : DocumentHighlightKind.Text;
+                list.Add(new DocumentHighlight(range, kind));
+            }
+            return list;
+        }
+        catch { return null; }
     }
 
     public void Dispose() => _process.Dispose();

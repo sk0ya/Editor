@@ -77,6 +77,10 @@ public record TypeHierarchyItem(string Name, int Kind, string Uri, LspRange Rang
 public record SemanticTokensLegend(string[] TokenTypes, string[] TokenModifiers);
 public record SemanticToken(int Line, int StartChar, int Length, string TokenType, string[] Modifiers);
 
+// Document highlight
+public enum DocumentHighlightKind { Text = 1, Read = 2, Write = 3 }
+public record DocumentHighlight(LspRange Range, DocumentHighlightKind Kind);
+
 // Workspace symbols
 public enum SymbolKind
 {

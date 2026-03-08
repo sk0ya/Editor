@@ -45,6 +45,10 @@ public sealed class LspManager : IDisposable
     private IReadOnlyList<InlayHint> _inlayHints = [];
     private bool _inlayHintsEnabled = false;
 
+    // Document highlights
+    private IReadOnlyList<DocumentHighlight>? _documentHighlights;
+    private CancellationTokenSource? _highlightCts;
+
     // Semantic tokens
     private bool _semanticTokensEnabled = false;
     private System.Threading.Timer? _semanticTokenDebounce;
@@ -94,6 +98,9 @@ public sealed class LspManager : IDisposable
     /// <summary>Fired on the dispatcher thread when semantic tokens are refreshed.</summary>
     public event Action<SemanticToken[]>? SemanticTokensChanged;
 
+    /// <summary>Fired on the dispatcher thread when document highlights change.</summary>
+    public event Action<IReadOnlyList<DocumentHighlight>?>? DocumentHighlightsChanged;
+
     public string? CurrentUri => _currentUri;
 
     public LspManager(Dispatcher dispatcher) => _dispatcher = dispatcher;
@@ -103,6 +110,10 @@ public sealed class LspManager : IDisposable
     {
         HideCompletion();
         HideCodeActions();
+        _highlightCts?.Cancel();
+        _highlightCts?.Dispose();
+        _highlightCts = null;
+        _documentHighlights = null;
         _diagnostics = [];
         _inlayHints = [];
         _documentSymbols = [];
@@ -189,6 +200,7 @@ public sealed class LspManager : IDisposable
     {
         if (!_documentReady || _currentClient?.IsRunning != true || _currentUri == null) return;
         _ = _currentClient.ChangeDocumentAsync(_currentUri, ++_docVersion, text);
+        ClearDocumentHighlights();
         ScheduleSymbolRefresh();
         if (_semanticTokensEnabled)
             ScheduleSemanticTokenRefresh();
@@ -543,6 +555,43 @@ public sealed class LspManager : IDisposable
         return await _currentClient.GetSubtypesAsync(item);
     }
 
+    /// <summary>Request document highlights at the given position with a 150ms debounce.</summary>
+    public async Task RequestDocumentHighlightAsync(string uri, int line, int character)
+    {
+        // Cancel and dispose any in-flight highlight request
+        _highlightCts?.Cancel();
+        _highlightCts?.Dispose();
+        _highlightCts = new CancellationTokenSource();
+        var ct = _highlightCts.Token;
+
+        try
+        {
+            await Task.Delay(150, ct);
+            if (!_documentReady || _currentClient?.IsRunning != true || _currentUri != uri) return;
+
+            var highlights = await _currentClient.RequestDocumentHighlightAsync(uri, line, character, ct);
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (_currentUri != uri) return;
+                _documentHighlights = highlights ?? [];
+                DocumentHighlightsChanged?.Invoke(_documentHighlights);
+            });
+        }
+        catch (OperationCanceledException) { }
+        catch { }
+    }
+
+    /// <summary>Clear document highlights immediately.</summary>
+    public void ClearDocumentHighlights()
+    {
+        _highlightCts?.Cancel();
+        _highlightCts?.Dispose();
+        _highlightCts = null;
+        if (_documentHighlights is null or { Count: 0 }) return;
+        _documentHighlights = [];
+        DocumentHighlightsChanged?.Invoke([]);
+    }
+
     // ── Async helpers ──────────────────────────────────────────────────────
 
     private async Task InitThenOpenAsync(LspClient client, string filePath, string uri, string languageId, string text)
@@ -786,6 +835,8 @@ public sealed class LspManager : IDisposable
 
     public void Dispose()
     {
+        _highlightCts?.Cancel();
+        _highlightCts?.Dispose();
         _symbolDebounce?.Dispose();
         _semanticTokenDebounce?.Dispose();
         foreach (var c in _clients.Values) c.Dispose();

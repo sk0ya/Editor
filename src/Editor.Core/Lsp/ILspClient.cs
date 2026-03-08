@@ -46,4 +46,7 @@ public interface ILspClient : IDisposable
     Task<TypeHierarchyItem?> PrepareTypeHierarchyAsync(string uri, LspPosition pos, CancellationToken ct = default);
     Task<TypeHierarchyItem[]?> GetSupertypesAsync(TypeHierarchyItem item, CancellationToken ct = default);
     Task<TypeHierarchyItem[]?> GetSubtypesAsync(TypeHierarchyItem item, CancellationToken ct = default);
+
+    // Document highlight
+    Task<IReadOnlyList<DocumentHighlight>?> RequestDocumentHighlightAsync(string uri, int line, int character, CancellationToken ct = default);
 }
