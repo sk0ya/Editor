@@ -42,6 +42,13 @@ public class EditorTheme
     // Indent guide lines
     public Brush IndentGuideBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x4A));
 
+    // Git merge conflict marker colors
+    public SolidColorBrush ConflictOursHeader   { get; init; } = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0x6B, 0x6B));
+    public SolidColorBrush ConflictSeparator    { get; init; } = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xD7, 0x00));
+    public SolidColorBrush ConflictTheirsHeader { get; init; } = new SolidColorBrush(Color.FromArgb(0x55, 0x6B, 0x9D, 0xFF));
+    public SolidColorBrush ConflictOurs         { get; init; } = new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0x6B, 0x6B));
+    public SolidColorBrush ConflictTheirs       { get; init; } = new SolidColorBrush(Color.FromArgb(0x22, 0x6B, 0x9D, 0xFF));
+
     // Scrollbar
     public Brush ScrollbarTrack { get; init; } = new SolidColorBrush(Color.FromArgb(0x40, 0x00, 0x00, 0x00));
     public Brush ScrollbarThumb { get; init; } = new SolidColorBrush(Color.FromArgb(0x80, 0xAA, 0xAA, 0xAA));
@@ -117,6 +124,11 @@ public class EditorTheme
         MinimapBackground = new SolidColorBrush(Color.FromArgb(0xD0, 0x1E, 0x1F, 0x29)),
         MinimapViewport   = new SolidColorBrush(Color.FromArgb(0x55, 0xBB, 0xBB, 0xCC)),
         DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0xBD, 0x93, 0xF9)),
+        ConflictOursHeader   = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0x55, 0x55)),
+        ConflictSeparator    = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xB8, 0x6C)),
+        ConflictTheirsHeader = new SolidColorBrush(Color.FromArgb(0x55, 0x8B, 0xE9, 0xFD)),
+        ConflictOurs         = new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0x55, 0x55)),
+        ConflictTheirs       = new SolidColorBrush(Color.FromArgb(0x22, 0x8B, 0xE9, 0xFD)),
     };
 
     public static EditorTheme Dark { get; } = new();
@@ -160,6 +172,11 @@ public class EditorTheme
         MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x22, 0x27, 0x30)),
         MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x88, 0xC0, 0xD0)),
         DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0x88, 0xC0, 0xD0)),
+        ConflictOursHeader   = new SolidColorBrush(Color.FromArgb(0x55, 0xBF, 0x61, 0x6A)),
+        ConflictSeparator    = new SolidColorBrush(Color.FromArgb(0x55, 0xEB, 0xCB, 0x8B)),
+        ConflictTheirsHeader = new SolidColorBrush(Color.FromArgb(0x55, 0x5E, 0x81, 0xAC)),
+        ConflictOurs         = new SolidColorBrush(Color.FromArgb(0x22, 0xBF, 0x61, 0x6A)),
+        ConflictTheirs       = new SolidColorBrush(Color.FromArgb(0x22, 0x5E, 0x81, 0xAC)),
     };
 
     // Tokyo Night — dark variant
@@ -201,6 +218,11 @@ public class EditorTheme
         MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x13, 0x14, 0x1E)),
         MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x7A, 0xA2, 0xF7)),
         DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0x7A, 0xA2, 0xF7)),
+        ConflictOursHeader   = new SolidColorBrush(Color.FromArgb(0x55, 0xF7, 0x76, 0x8E)),
+        ConflictSeparator    = new SolidColorBrush(Color.FromArgb(0x55, 0xE0, 0xAF, 0x68)),
+        ConflictTheirsHeader = new SolidColorBrush(Color.FromArgb(0x55, 0x7A, 0xA2, 0xF7)),
+        ConflictOurs         = new SolidColorBrush(Color.FromArgb(0x22, 0xF7, 0x76, 0x8E)),
+        ConflictTheirs       = new SolidColorBrush(Color.FromArgb(0x22, 0x7A, 0xA2, 0xF7)),
     };
 
     // One Dark — Atom One Dark inspired
@@ -242,6 +264,11 @@ public class EditorTheme
         MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x1C, 0x1F, 0x26)),
         MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x61, 0xAF, 0xEF)),
         DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0x61, 0xAF, 0xEF)),
+        ConflictOursHeader   = new SolidColorBrush(Color.FromArgb(0x55, 0xE0, 0x6C, 0x75)),
+        ConflictSeparator    = new SolidColorBrush(Color.FromArgb(0x55, 0xD1, 0x9A, 0x66)),
+        ConflictTheirsHeader = new SolidColorBrush(Color.FromArgb(0x55, 0x61, 0xAF, 0xEF)),
+        ConflictOurs         = new SolidColorBrush(Color.FromArgb(0x22, 0xE0, 0x6C, 0x75)),
+        ConflictTheirs       = new SolidColorBrush(Color.FromArgb(0x22, 0x61, 0xAF, 0xEF)),
     };
 
     public static EditorTheme GetByName(string name) => name.ToLower() switch

@@ -823,6 +823,20 @@ public class EditorCanvas : FrameworkElement
         // Compute matching bracket once — reused for every visible line
         var bracketMatch = FindMatchingBracket(_cursor.Line, _cursor.Column);
 
+        // Conflict marker region tracking — scan from line 0 up to firstLine to determine state
+        bool inOursRegion = false, inTheirsRegion = false;
+        for (int si = 0; si < firstLine && si < TotalVisualLines; si++)
+        {
+            var seg = GetVisualSegment(si);
+            if (seg.BufferLine < _lines.Length)
+            {
+                var sl = _lines[seg.BufferLine];
+                if (sl.StartsWith("<<<<<<<", StringComparison.Ordinal))      { inOursRegion = true;  inTheirsRegion = false; }
+                else if (sl.StartsWith("=======", StringComparison.Ordinal)) { inOursRegion = false; inTheirsRegion = true;  }
+                else if (sl.StartsWith(">>>>>>>", StringComparison.Ordinal)) { inOursRegion = false; inTheirsRegion = false; }
+            }
+        }
+
         // Draw each visible line (vi = visual index, l = buffer line)
         for (int vi = firstLine; vi <= lastLine; vi++)
         {
@@ -838,6 +852,27 @@ public class EditorCanvas : FrameworkElement
             // Current line highlight
             if (l == _cursor.Line && Theme.CurrentLineBg != null && size.Width > textLeft)
                 dc.DrawRectangle(Theme.CurrentLineBg, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
+
+            // Conflict marker highlighting
+            if (lineText.StartsWith("<<<<<<<", StringComparison.Ordinal))
+            {
+                DrawConflictBackground(dc, y, textLeft, Theme.ConflictOursHeader);
+                inOursRegion = true; inTheirsRegion = false;
+            }
+            else if (lineText.StartsWith("=======", StringComparison.Ordinal))
+            {
+                DrawConflictBackground(dc, y, textLeft, Theme.ConflictSeparator);
+                inOursRegion = false; inTheirsRegion = true;
+            }
+            else if (lineText.StartsWith(">>>>>>>", StringComparison.Ordinal))
+            {
+                DrawConflictBackground(dc, y, textLeft, Theme.ConflictTheirsHeader);
+                inOursRegion = false; inTheirsRegion = false;
+            }
+            else if (inOursRegion)
+                DrawConflictBackground(dc, y, textLeft, Theme.ConflictOurs);
+            else if (inTheirsRegion)
+                DrawConflictBackground(dc, y, textLeft, Theme.ConflictTheirs);
 
             // Line number gutter
             if (_showLineNumbers)
@@ -1093,6 +1128,13 @@ public class EditorCanvas : FrameworkElement
             double thumbX = maxOff > 0 ? (horizTrackW - thumbW) * (_scrollOffsetX / maxOff) : 0;
             dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(thumbX + 1, trackY + 1, Math.Max(0, thumbW - 2), ScrollbarSize - 2));
         }
+    }
+
+    private void DrawConflictBackground(DrawingContext dc, double y, double textLeft, SolidColorBrush brush)
+    {
+        double width = Math.Max(0, RenderSize.Width - textLeft);
+        if (width > 0)
+            dc.DrawRectangle(brush, null, new Rect(textLeft, y, width, _lineHeight));
     }
 
     private void DrawBlameAnnotation(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft)
