@@ -1069,6 +1069,7 @@ public partial class MainWindow : Window
         // FilePath == null → keep current content (new empty buffer shown as-is)
 
         _focusedEditor.Focus();
+        RefreshOutlineForEditor(_focusedEditor);
     }
 
     private void WireEditorEvents(VimEditorControl editor)
@@ -1814,6 +1815,7 @@ public partial class MainWindow : Window
         _focusedEditor = editor;
         // Sync the selected tab to reflect the focused pane's current file
         UpdateSelectedTabForEditor(editor);
+        RefreshOutlineForEditor(editor);
     }
 
     private void Editor_NextTabRequested(object? sender, EventArgs e)
@@ -1969,8 +1971,7 @@ public partial class MainWindow : Window
             return;
         }
         ShowSidebar(SidebarPanel.Outline);
-        // Request document symbols from the focused editor
-        CurrentEditor?.RequestOutlineAsync();
+        RefreshOutlineForEditor(CurrentEditor);
     }
 
     private void OutlineList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1987,6 +1988,11 @@ public partial class MainWindow : Window
     /// <summary>Populate the Outline panel from a DocumentSymbolsResult event.</summary>
     private void Editor_DocumentSymbolsResult(object? sender, DocumentSymbolsResultEventArgs e)
     {
+        if (sender is VimEditorControl editor &&
+            CurrentEditor != null &&
+            !ReferenceEquals(editor, CurrentEditor))
+            return;
+
         // Always show the outline panel (e.g. triggered via :Outline command)
         if (!_sidebarVisible || _activeSidebarPanel != SidebarPanel.Outline)
             ShowSidebar(SidebarPanel.Outline);
@@ -1998,17 +2004,25 @@ public partial class MainWindow : Window
         OutlineList.Items.Clear();
         foreach (var item in items)
         {
-            var indent = new string(' ', item.Depth * 2);
             OutlineList.Items.Add(new OutlineItem
             {
                 Name      = item.Name,
-                Indent    = indent,
+                Depth     = item.Depth,
                 KindIcon  = SymbolKindIcon(item.Kind),
                 KindColor = SymbolKindColor(item.Kind),
                 Line      = item.Line,
                 Col       = item.Col,
             });
         }
+    }
+
+    private void RefreshOutlineForEditor(VimEditorControl? editor)
+    {
+        if (!_sidebarVisible || _activeSidebarPanel != SidebarPanel.Outline)
+            return;
+
+        PopulateOutlineList([]);
+        editor?.RequestOutlineAsync();
     }
 
     private static string SymbolKindIcon(SymbolKind kind) => kind switch
@@ -2258,6 +2272,7 @@ public partial class MainWindow : Window
         if (fileTab.FilePath != null && File.Exists(fileTab.FilePath))
             _focusedEditor?.LoadFile(fileTab.FilePath);
         _focusedEditor?.Focus();
+        RefreshOutlineForEditor(_focusedEditor);
     }
 
     // ─────────── Title bar controls ─────────────────────────
@@ -3123,11 +3138,12 @@ public partial class MainWindow : Window
 public sealed class OutlineItem
 {
     public required string Name     { get; init; }
-    public required string Indent   { get; init; }
+    public required int    Depth    { get; init; }
     public required string KindIcon { get; init; }
     public required string KindColor{ get; init; }
     public required int    Line     { get; init; }
     public required int    Col      { get; init; }
+    public Thickness IndentMargin => new(Depth * 16, 0, 0, 0);
 }
 
 public sealed class FileTreeItem

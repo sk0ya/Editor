@@ -2368,6 +2368,7 @@ public partial class VimEditorControl : UserControl
         if (!_lspManager.IsConnected || _lspManager.CurrentUri == null)
         {
             ActiveStatusBar.UpdateStatus("Symbols: LSP not connected or no file open");
+            DocumentSymbolsResult?.Invoke(this, new DocumentSymbolsResultEventArgs([]));
             return;
         }
 
@@ -2382,6 +2383,7 @@ public partial class VimEditorControl : UserControl
         if (symbols.Count == 0)
         {
             ActiveStatusBar.UpdateStatus("Symbols: none found (LSP not ready or no symbols)");
+            DocumentSymbolsResult?.Invoke(this, new DocumentSymbolsResultEventArgs([]));
             return;
         }
         var items = new List<DocumentSymbolItem>();
