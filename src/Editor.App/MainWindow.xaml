@@ -268,6 +268,7 @@
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <EventSetter Event="Expanded" Handler="TreeViewItem_Expanded"/>
+            <EventSetter Event="Collapsed" Handler="TreeViewItem_Collapsed"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TreeViewItem">
@@ -798,10 +799,11 @@
                           FontFamily="Cascadia Code, Consolas"
                           FontSize="13"
                           ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                          VirtualizingStackPanel.IsVirtualizing="True"
-                          VirtualizingStackPanel.VirtualizationMode="Recycling"
+                          VirtualizingStackPanel.IsVirtualizing="False"
                           SelectedItemChanged="FileTree_SelectedItemChanged"
-                          MouseRightButtonUp="FileTree_MouseRightButtonUp"/>
+                          MouseRightButtonUp="FileTree_MouseRightButtonUp"
+                          KeyDown="FileTree_KeyDown"
+                          LostKeyboardFocus="FileTree_LostKeyboardFocus"/>
             </Grid>
 
             <!-- Sidebar: Settings -->

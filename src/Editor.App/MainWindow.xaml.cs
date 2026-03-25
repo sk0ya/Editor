@@ -195,6 +195,8 @@ public partial class MainWindow : Window
     private int _quickfixCurrentIndex = -1;
     private SidebarPanel _activeSidebarPanel = SidebarPanel.None;
     private System.Windows.Point _shellMenuScreenPos;
+    private bool _suppressFileOpen;
+    private bool _fileTreeCtrlWPending;
 
     private VimEditorControl? CurrentEditor => _focusedEditor;
 
@@ -307,6 +309,14 @@ public partial class MainWindow : Window
     {
         base.OnPreviewKeyDown(e);
 
+        // Intercept Ctrl+B here (before VimEditorControl sees it as page-up)
+        if (e.Key == Key.B && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            ToggleSidebar();
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control)
         {
             if (!_searchActive)
@@ -346,11 +356,6 @@ public partial class MainWindow : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.Key == Key.B && Keyboard.Modifiers == ModifierKeys.Control)
-        {
-            ToggleSidebar();
-            e.Handled = true;
-        }
     }
 
     // ─────────── Sidebar ───────────────────────────────────
@@ -399,6 +404,7 @@ public partial class MainWindow : Window
         ExplorerBtn.IsChecked = false;
         SettingsBtn.IsChecked  = false;
         OutlineBtn.IsChecked   = false;
+        _fileTreeCtrlWPending = false;
         _sidebarVisible = false;
         _activeSidebarPanel = SidebarPanel.None;
     }
@@ -408,7 +414,10 @@ public partial class MainWindow : Window
         if (_sidebarVisible && _activeSidebarPanel == SidebarPanel.Explorer)
             HideSidebar();
         else
+        {
             ShowSidebar(SidebarPanel.Explorer);
+            FileTree.Focus();
+        }
     }
 
     private void LoadFolder(string folderPath)
@@ -429,7 +438,17 @@ public partial class MainWindow : Window
     {
         if (sender is TreeViewItem { DataContext: FileTreeItem item })
         {
+            item.IsExpanded = true;
             item.Expand();
+            e.Handled = true;
+        }
+    }
+
+    private void TreeViewItem_Collapsed(object sender, RoutedEventArgs e)
+    {
+        if (sender is TreeViewItem { DataContext: FileTreeItem item })
+        {
+            item.IsExpanded = false;
             e.Handled = true;
         }
     }
@@ -437,8 +456,233 @@ public partial class MainWindow : Window
     private void FileTree_SelectedItemChanged(object sender,
         RoutedPropertyChangedEventArgs<object> e)
     {
-        if (e.NewValue is FileTreeItem { IsDirectory: false } item)
+        if (!_suppressFileOpen && e.NewValue is FileTreeItem { IsDirectory: false } item)
             OpenOrFocusFile(item.FullPath);
+    }
+
+    private void FileTree_KeyDown(object sender, KeyEventArgs e)
+    {
+        bool ctrl  = e.KeyboardDevice.Modifiers.HasFlag(ModifierKeys.Control);
+        bool shift = e.KeyboardDevice.Modifiers.HasFlag(ModifierKeys.Shift);
+        var selected = FileTree.SelectedItem as FileTreeItem;
+
+        // Ctrl+W prefix — buffer and wait for second key
+        if (ctrl && e.Key == Key.W)
+        {
+            _fileTreeCtrlWPending = true;
+            e.Handled = true;
+            return;
+        }
+
+        // Second key of Ctrl+W sequence
+        if (_fileTreeCtrlWPending)
+        {
+            _fileTreeCtrlWPending = false;
+            switch (e.Key)
+            {
+                case Key.L:   // Ctrl+W l — move right to editor
+                    CurrentEditor?.Focus();
+                    e.Handled = true;
+                    return;
+                case Key.W:   // Ctrl+W w — cycle to next editor
+                    FocusEditorCycleFromFileTree(reverse: shift);
+                    e.Handled = true;
+                    return;
+                case Key.H:   // Ctrl+W h — already leftmost, no-op
+                case Key.Escape:
+                    e.Handled = true;
+                    return;
+                default:
+                    e.Handled = true;
+                    return;
+            }
+        }
+
+        switch (e.Key)
+        {
+            case Key.J:
+                FileTreeMoveSelection(+1);
+                e.Handled = true;
+                return;
+            case Key.K:
+                FileTreeMoveSelection(-1);
+                e.Handled = true;
+                return;
+            case Key.L:
+            case Key.Return:
+                FileTreeActivate(selected);
+                e.Handled = true;
+                return;
+            case Key.H:
+                FileTreeCollapseOrParent(selected);
+                e.Handled = true;
+                return;
+            case Key.A:
+                if (selected == null) return;
+                if (shift) ContextMenu_NewFolder(selected);
+                else       ContextMenu_NewFile(selected);
+                e.Handled = true;
+                return;
+            case Key.R:
+                if (selected != null) ContextMenu_Rename(selected);
+                e.Handled = true;
+                return;
+            case Key.D:
+            case Key.Delete:
+                if (selected != null) ContextMenu_Delete(selected);
+                e.Handled = true;
+                return;
+            case Key.Escape:
+                CurrentEditor?.Focus();
+                e.Handled = true;
+                return;
+        }
+    }
+
+    private void FileTree_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _fileTreeCtrlWPending = false;
+    }
+
+    // ── File tree navigation helpers ──────────────────────────
+
+    private void FileTreeMoveSelection(int delta)
+    {
+        var flat = FileTreeFlatItems();
+        if (flat.Count == 0) return;
+
+        var current = FileTree.SelectedItem as FileTreeItem;
+        int idx = current == null ? -1 : flat.IndexOf(current);
+        int next = idx < 0
+            ? (delta > 0 ? 0 : flat.Count - 1)
+            : Math.Clamp(idx + delta, 0, flat.Count - 1);
+        if (next == idx) return;
+
+        SelectFileTreeItem(flat[next], suppressFileOpen: true);
+    }
+
+    private void FileTreeActivate(FileTreeItem? item)
+    {
+        if (item == null) return;
+        if (item.IsDirectory)
+        {
+            var tvi = FindTreeViewItem(FileTree, item);
+            item.IsExpanded = !item.IsExpanded;
+            if (item.IsExpanded)
+                item.Expand();
+            if (tvi != null)
+                tvi.IsExpanded = item.IsExpanded;
+        }
+        else
+        {
+            OpenOrFocusFile(item.FullPath);
+            CurrentEditor?.Focus();
+        }
+    }
+
+    private void FileTreeCollapseOrParent(FileTreeItem? item)
+    {
+        if (item == null) return;
+
+        if (item.IsDirectory && item.IsExpanded)
+        {
+            item.IsExpanded = false;
+            if (FindTreeViewItem(FileTree, item) is { } tvi)
+                tvi.IsExpanded = false;
+        }
+        else if (item.Parent != null)
+        {
+            SelectFileTreeItem(item.Parent, suppressFileOpen: true);
+        }
+    }
+
+    /// <summary>Flat list of currently visible FileTreeItems (respects expansion).</summary>
+    private List<FileTreeItem> FileTreeFlatItems()
+    {
+        var result = new List<FileTreeItem>();
+        foreach (var item in FileTree.Items.OfType<FileTreeItem>())
+            CollectVisibleTreeItems(item, result);
+        return result;
+    }
+
+    private void SelectFileTreeItem(FileTreeItem item, bool suppressFileOpen)
+    {
+        bool previous = _suppressFileOpen;
+        _suppressFileOpen = suppressFileOpen || previous;
+        try
+        {
+            FileTree.UpdateLayout();
+            var tvi = FindTreeViewItem(FileTree, item);
+            if (tvi == null) return;
+            tvi.IsSelected = true;
+            tvi.BringIntoView();
+        }
+        finally
+        {
+            _suppressFileOpen = previous;
+        }
+    }
+
+    private static void CollectVisibleTreeItems(FileTreeItem item, List<FileTreeItem> result)
+    {
+        if (item.FullPath.Length == 0) return;
+
+        result.Add(item);
+        if (!item.IsDirectory || !item.IsExpanded) return;
+
+        foreach (var child in item.Children)
+            CollectVisibleTreeItems(child, result);
+    }
+
+    private static TreeViewItem? FindTreeViewItem(ItemsControl parent, FileTreeItem target)
+    {
+        parent.UpdateLayout();
+        if (parent.ItemContainerGenerator.ContainerFromItem(target) is TreeViewItem direct)
+            return direct;
+
+        for (int i = 0; i < parent.Items.Count; i++)
+        {
+            if (parent.ItemContainerGenerator.ContainerFromIndex(i) is not TreeViewItem tvi) continue;
+            if (tvi.DataContext == target)
+                return tvi;
+            if (tvi.IsExpanded)
+            {
+                var found = FindTreeViewItem(tvi, target);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private void FocusEditorCycleFromFileTree(bool reverse)
+    {
+        var editors = AllEditors().ToList();
+        if (editors.Count == 0)
+            return;
+
+        if (_focusedEditor == null)
+        {
+            editors[0].Focus();
+            return;
+        }
+
+        int idx = editors.IndexOf(_focusedEditor);
+        if (idx < 0)
+        {
+            editors[0].Focus();
+            return;
+        }
+
+        if (editors.Count == 1)
+        {
+            editors[0].Focus();
+            return;
+        }
+
+        var next = reverse
+            ? editors[(idx - 1 + editors.Count) % editors.Count]
+            : editors[(idx + 1) % editors.Count];
+        next.Focus();
     }
 
     // ─────────── File tree context menu ────────────────────────
@@ -1517,7 +1761,6 @@ public partial class MainWindow : Window
     private void Editor_WindowNavRequested(object? sender, WindowNavRequestedEventArgs e)
     {
         var editors = AllEditors().ToList();
-        if (editors.Count <= 1) return;
 
         var focused = _focusedEditor;
         var idx = focused != null ? editors.IndexOf(focused) : 0;
@@ -1525,6 +1768,7 @@ public partial class MainWindow : Window
 
         if (e.Dir == WindowNavDir.Next || e.Dir == WindowNavDir.Prev)
         {
+            if (editors.Count <= 1) return;
             var next = e.Dir == WindowNavDir.Prev
                 ? editors[(idx - 1 + editors.Count) % editors.Count]
                 : editors[(idx + 1) % editors.Count];
@@ -1532,15 +1776,25 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Coordinate-based spatial navigation
-        var reference = (UIElement)EditorContent;
-        var rects = editors
-            .Select(ed => GetPaneRect(ed, reference))
-            .ToList();
+        // Coordinate-based spatial navigation (only when multiple panes exist)
+        if (editors.Count > 1)
+        {
+            var reference = (UIElement)EditorContent;
+            var rects = editors.Select(ed => GetPaneRect(ed, reference)).ToList();
+            var targetIdx = PaneNavigator.FindNext(rects[idx], rects, e.Dir);
+            if (targetIdx.HasValue)
+            {
+                editors[targetIdx.Value].Focus();
+                return;
+            }
+        }
 
-        var targetIdx = PaneNavigator.FindNext(rects[idx], rects, e.Dir);
-        if (targetIdx.HasValue)
-            editors[targetIdx.Value].Focus();
+        // No editor pane in that direction — move to Explorer sidebar if applicable
+        if (e.Dir == WindowNavDir.Left
+            && _sidebarVisible && _activeSidebarPanel == SidebarPanel.Explorer)
+        {
+            FileTree.Focus();
+        }
     }
 
     // Returns the bounding PaneRect of 'editor' expressed in 'reference' coordinates.
@@ -2878,7 +3132,7 @@ public sealed class OutlineItem
 
 public sealed class FileTreeItem
 {
-    private bool _expanded;
+    private bool _childrenLoaded;
     private readonly bool _isPlaceholder;
 
     public string FullPath { get; }
@@ -2886,9 +3140,11 @@ public sealed class FileTreeItem
     public bool IsDirectory { get; }
     public string Icon { get; }
     public Brush IconBrush { get; }
+    public FileTreeItem? Parent { get; }
+    public bool IsExpanded { get; set; }
     public ObservableCollection<FileTreeItem> Children { get; } = [];
 
-    public FileTreeItem(string path)
+    public FileTreeItem(string path, FileTreeItem? parent = null)
     {
         FullPath = path;
         Name = Path.GetFileName(path) is { Length: > 0 } n ? n : path;
@@ -2897,6 +3153,7 @@ public sealed class FileTreeItem
         IconBrush = IsDirectory
             ? new SolidColorBrush(Color.FromRgb(0xE6, 0xC0, 0x7B))
             : new SolidColorBrush(Color.FromRgb(0x99, 0xBB, 0xDD));
+        Parent = parent;
 
         if (IsDirectory)
             Children.Add(Placeholder);
@@ -2909,25 +3166,26 @@ public sealed class FileTreeItem
         Name = string.Empty;
         Icon = string.Empty;
         IconBrush = Brushes.Transparent;
-        _expanded = true;
+        _childrenLoaded = true;
+        IsExpanded = true;
     }
 
     private static readonly FileTreeItem Placeholder = new();
 
     public void Expand()
     {
-        if (_expanded || _isPlaceholder) return;
-        _expanded = true;
+        if (_childrenLoaded || _isPlaceholder) return;
+        _childrenLoaded = true;
         Children.Clear();
         if (!Directory.Exists(FullPath)) return;
         try
         {
             foreach (var d in Directory.GetDirectories(FullPath)
                          .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-                Children.Add(new FileTreeItem(d));
+                Children.Add(new FileTreeItem(d, this));
             foreach (var f in Directory.GetFiles(FullPath)
                          .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-                Children.Add(new FileTreeItem(f));
+                Children.Add(new FileTreeItem(f, this));
         }
         catch { /* access denied, etc. */ }
     }
@@ -2935,10 +3193,11 @@ public sealed class FileTreeItem
     public void Refresh()
     {
         if (!IsDirectory) return;
-        _expanded = false;
+        _childrenLoaded = false;
         Children.Clear();
         Children.Add(Placeholder);
-        Expand();
+        if (IsExpanded)
+            Expand();
     }
 
     /// <summary>Load top-level children of a folder (eager, for root display).</summary>
