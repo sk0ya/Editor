@@ -4724,12 +4724,10 @@ public class VimEngine
         string msg;
         if (brief)
         {
-            // Ctrl+G: "filename.cs" line 42 of 100 --42%-- col 5
             msg = $"\"{name}\"{modified} line {currentLine} of {totalLines} --{pct}%-- col {currentCol}";
         }
         else
         {
-            // g<C-g>: Col 5, Line 42 of 100, Word 123, Byte 456
             int wordCount = CountWords(buf);
             long byteOffset = CountBytesToCursor(buf, _cursor);
             msg = $"Col {currentCol}, Line {currentLine} of {totalLines}{modified}, Word {wordCount}, Byte {byteOffset}";

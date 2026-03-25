@@ -1162,7 +1162,6 @@ public class ExCommandProcessor
                 ? buf.GetLine(pos.Line).TrimStart()
                 : "";
             if (lineText.Length > 50) lineText = lineText[..50] + "…";
-            // 1-based line number (Vim compatible)
             sb.AppendLine($" {name}  {pos.Line + 1,5}  {pos.Column,3}  {lineText}");
             any = true;
         }
