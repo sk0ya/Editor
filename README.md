@@ -58,17 +58,55 @@ dotnet test tests/Editor.Core.Tests/ --filter "FullyQualifiedName~VimEngineTests
 
 ```text
 Editor.App -> Editor.Controls -> Editor.Core
+Editor.App -> Editor.Controls.Defaults
+Editor.Controls.Defaults -> Editor.Controls
+Editor.Controls.Defaults -> Editor.Core
 Editor.Core.Tests -> Editor.Core
 ```
 
 - `src/Editor.Core`
   WPF 非依存の Vim エンジン、バッファ、Ex コマンド、シンタックス、フォールドなどの純ロジック層
 - `src/Editor.Controls`
-  `VimEditorControl` / `EditorCanvas` を含む WPF コントロール層
+  `VimEditorControl` / `EditorCanvas` を含む、NuGet 化対象の WPF コントロール層
+- `src/Editor.Controls.Defaults`
+  Git / LSP の既定実装をまとめた補助 DLL。`Editor.Controls` に注入して使う
 - `src/Editor.App`
   メインウィンドウ、タブ管理、ファイルツリーなどのホストアプリ層
 - `tests/Editor.Core.Tests`
   `Editor.Core` のユニットテスト
+
+## NuGet パッケージ
+
+- `Editor.Core`
+  Vim エンジンやテキスト処理のコアロジック
+- `Editor.Controls`
+  再利用可能な `VimEditorControl` 本体
+- `Editor.Controls.Defaults`
+  `Editor.Controls` 用の既定 Git/LSP 実装
+
+GitHub Packages を利用する場合は、まずレジストリを追加します。
+
+```bash
+dotnet nuget add source --username YOUR_GITHUB_USER --password YOUR_GITHUB_PAT --store-password-in-clear-text --name github "https://nuget.pkg.github.com/sk0ya/index.json"
+```
+
+利用側のアプリでは、コントロール本体と既定実装を追加します。
+
+```bash
+dotnet add package Editor.Controls --source github
+dotnet add package Editor.Controls.Defaults --source github
+```
+
+`Editor.App` では `VimEditorControlDefaults.CreateOptions()` を使って既定の Git/LSP 実装を注入しています。
+
+## GitHub Packages 公開
+
+`.github/workflows/publish-nuget.yml` は次の条件でパッケージを公開します。
+
+- `v*` 形式の Git タグを push したとき
+- GitHub Actions の `workflow_dispatch` で手動実行したとき
+
+タグ `v0.1.0` を push すると、`0.1.0` を package version として `Editor.Core` / `Editor.Controls` / `Editor.Controls.Defaults` を GitHub Packages に push します。
 
 ## LSP キーバインド
 

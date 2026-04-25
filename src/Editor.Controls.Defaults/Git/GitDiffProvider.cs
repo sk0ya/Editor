@@ -4,9 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace Editor.Controls.Git;
 
-public enum GitLineState { None, Added, Modified, Deleted }
-
-public partial class GitDiffProvider
+public partial class GitDiffProvider : IEditorGitService
 {
     [GeneratedRegex(@"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")]
     private static partial Regex HunkHeaderRegex();

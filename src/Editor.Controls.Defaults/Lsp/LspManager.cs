@@ -9,7 +9,7 @@ namespace Editor.Controls.Lsp;
 /// Manages LSP clients and bridges them with the editor.
 /// One LspClient per language server executable (shared across files of the same language).
 /// </summary>
-public sealed class LspManager : IDisposable
+public sealed class LspManager : IEditorLspManager
 {
     private readonly Dispatcher _dispatcher;
     private readonly Dictionary<string, LspClient> _clients = new();

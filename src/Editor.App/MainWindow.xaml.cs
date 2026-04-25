@@ -996,7 +996,7 @@ public partial class MainWindow : Window
 
     private VimEditorControl CreateEditor(string? filePath)
     {
-        var editor = new VimEditorControl();
+        var editor = new VimEditorControl(VimEditorControlDefaults.CreateOptions());
         editor.SetTheme(_currentTheme);
         editor.SetSharedStatusBar(SharedStatusBar);
         WireEditorEvents(editor);

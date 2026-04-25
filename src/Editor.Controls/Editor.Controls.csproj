@@ -9,6 +9,9 @@
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>true</IsPackable>
+    <Description>Reusable WPF Vim-like editor control.</Description>
+    <PackageTags>editor;wpf;vim;text-editor</PackageTags>
   </PropertyGroup>
 
 </Project>

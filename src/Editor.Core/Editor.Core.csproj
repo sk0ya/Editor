@@ -4,6 +4,9 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <Description>Core Vim engine, buffer, syntax, and folding logic for the Editor project.</Description>
+    <PackageTags>editor;vim;text-editor;core</PackageTags>
   </PropertyGroup>
 
 </Project>

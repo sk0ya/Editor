@@ -1,4 +1,4 @@
-
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
@@ -12,6 +12,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Editor.App", "src\Editor.App\Editor.App.csproj", "{BDE20CE5-2763-414E-8807-52D2127DF8F5}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Editor.Core.Tests", "tests\Editor.Core.Tests\Editor.Core.Tests.csproj", "{11598EE7-A1D2-4E1D-9CDB-22D675C97AE5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Editor.Controls.Defaults", "src\Editor.Controls.Defaults\Editor.Controls.Defaults.csproj", "{35398D05-C4DE-41C9-8C79-775802155872}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -71,6 +73,18 @@ Global
 		{11598EE7-A1D2-4E1D-9CDB-22D675C97AE5}.Release|x64.Build.0 = Release|Any CPU
 		{11598EE7-A1D2-4E1D-9CDB-22D675C97AE5}.Release|x86.ActiveCfg = Release|Any CPU
 		{11598EE7-A1D2-4E1D-9CDB-22D675C97AE5}.Release|x86.Build.0 = Release|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Debug|x64.Build.0 = Debug|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Debug|x86.Build.0 = Debug|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Release|Any CPU.Build.0 = Release|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Release|x64.ActiveCfg = Release|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Release|x64.Build.0 = Release|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Release|x86.ActiveCfg = Release|Any CPU
+		{35398D05-C4DE-41C9-8C79-775802155872}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -80,5 +94,6 @@ Global
 		{16B66D49-FCCC-4499-B78F-247838EACBBB} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{BDE20CE5-2763-414E-8807-52D2127DF8F5} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{11598EE7-A1D2-4E1D-9CDB-22D675C97AE5} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{35398D05-C4DE-41C9-8C79-775802155872} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

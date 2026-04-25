@@ -1,0 +1,20 @@
+<Project>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Editor.Core' or '$(MSBuildProjectName)' == 'Editor.Controls' or '$(MSBuildProjectName)' == 'Editor.Controls.Defaults'">
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <Authors>sk0ya</Authors>
+    <Company>sk0ya</Company>
+    <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>$(RepositoryUrl)</PackageProjectUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'Editor.Core' or '$(MSBuildProjectName)' == 'Editor.Controls' or '$(MSBuildProjectName)' == 'Editor.Controls.Defaults'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+</Project>

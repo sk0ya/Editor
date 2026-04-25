@@ -195,8 +195,8 @@ public partial class VimEditorControl : UserControl
     private EditorTheme _theme = EditorTheme.Dracula;
     private bool _keyDownHandledByVim;
     private bool _isDragSelecting = false;
-    private LspManager _lspManager = null!;
-    private readonly GitDiffProvider _gitProvider = new();
+    private readonly IEditorLspManager _lspManager;
+    private readonly IEditorGitService _gitProvider;
     private bool _blameActive;
     private VimStatusBar? _sharedStatusBar;
     private VimStatusBar ActiveStatusBar => _sharedStatusBar ?? StatusBar;
@@ -265,15 +265,23 @@ public partial class VimEditorControl : UserControl
     public VimEngine Engine => _engine;
 
     public VimEditorControl()
+        : this(null)
+    {
+    }
+
+    public VimEditorControl(VimEditorControlOptions? options)
     {
         InitializeComponent();
 
-        var config = VimConfig.LoadDefault();
+        options ??= new VimEditorControlOptions();
+
+        var config = options.ConfigFactory?.Invoke() ?? VimConfig.LoadDefault();
         _engine = new VimEngine(config);
-        _engine.SetClipboardProvider(new WpfClipboardProvider());
+        _engine.SetClipboardProvider(options.ClipboardProviderFactory?.Invoke() ?? new WpfClipboardProvider());
         Canvas.WrapLines = _engine.Options.Wrap;
 
-        _lspManager = new LspManager(Dispatcher);
+        _gitProvider = options.GitServiceFactory?.Invoke() ?? NullEditorGitService.Instance;
+        _lspManager = options.LspManagerFactory?.Invoke(Dispatcher) ?? new NullLspManager();
         _lspManager.StateChanged += OnLspStateChanged;
         _lspManager.StatusMessage += OnLspStatusMessage;
         _lspManager.FoldingRangesChanged += OnLspFoldingRangesChanged;
