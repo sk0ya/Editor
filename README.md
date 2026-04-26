@@ -106,8 +106,8 @@ dotnet nuget add source --username YOUR_GITHUB_USER --password YOUR_GITHUB_PAT -
 利用側のアプリでは、コントロール本体と既定実装を追加します。
 
 ```bash
-dotnet add package Editor.Controls --version 0.1.0
-dotnet add package Editor.Controls.Defaults --version 0.1.0
+dotnet add package Editor.Controls --version 0.1.1
+dotnet add package Editor.Controls.Defaults --version 0.1.1
 ```
 
 `Editor.App` では `VimEditorControlDefaults.CreateOptions()` を使って既定の Git/LSP 実装を注入しています。
@@ -124,7 +124,7 @@ GitHub 公式ドキュメント:
 - `v*` 形式の Git タグを push したとき
 - GitHub Actions の `workflow_dispatch` で手動実行したとき
 
-タグ `v0.1.0` を push すると、`0.1.0` を package version として `Editor.Core` / `Editor.Controls` / `Editor.Controls.Defaults` を GitHub Packages に push します。
+タグ `v0.1.1` を push すると、`0.1.1` を package version として `Editor.Core` / `Editor.Controls` / `Editor.Controls.Defaults` を GitHub Packages に push します。
 
 ## LSP キーバインド
 

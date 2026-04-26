@@ -1,7 +1,7 @@
 <Project>
 
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Editor.Core' or '$(MSBuildProjectName)' == 'Editor.Controls' or '$(MSBuildProjectName)' == 'Editor.Controls.Defaults'">
-    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <Version Condition="'$(Version)' == ''">0.1.1</Version>
     <Authors>sk0ya</Authors>
     <Company>sk0ya</Company>
     <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>
