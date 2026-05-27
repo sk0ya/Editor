@@ -51,6 +51,7 @@ public enum VimEventType
     CallHierarchyRequested,
     TypeHierarchyRequested,
     ScrollLinesRequested,
+    MarkdownPreviewRequested,
 }
 
 public enum ViewportAlign
@@ -209,6 +210,9 @@ public record VimEvent(VimEventType Type)
     /// </summary>
     public static VimEvent ScrollLinesRequested(int lines) =>
         new ScrollLinesRequestedEvent(lines);
+
+    public static VimEvent MarkdownPreviewRequested() =>
+        new(VimEventType.MarkdownPreviewRequested);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);

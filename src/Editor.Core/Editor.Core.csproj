@@ -5,6 +5,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>true</IsPackable>
+    <PackageId>sk0ya.Editor.Core</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>shigekazukoya</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>
     <Description>Core Vim engine, buffer, syntax, and folding logic for the Editor project.</Description>
     <PackageTags>editor;vim;text-editor;core</PackageTags>
   </PropertyGroup>

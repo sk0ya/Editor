@@ -11,6 +11,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
+    <PackageId>sk0ya.Editor.Controls.Defaults</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>shigekazukoya</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>
     <Description>Default Git and LSP integrations for the Editor WPF control.</Description>
     <PackageTags>editor;wpf;vim;lsp;git</PackageTags>
   </PropertyGroup>

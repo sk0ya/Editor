@@ -258,6 +258,7 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<string>? MkSessionRequested;
     public event EventHandler<string>? SourceRequested;
     public event EventHandler<string?>? TerminalRequested;
+    public event EventHandler? MarkdownPreviewRequested;
 
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
@@ -2866,6 +2867,9 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.TerminalRequested when evt is TerminalRequestedEvent tre:
                     TerminalRequested?.Invoke(this, tre.ShellCmd);
+                    break;
+                case VimEventType.MarkdownPreviewRequested:
+                    MarkdownPreviewRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 case VimEventType.ReloadFileRequested:
                     ReloadCurrentFile();

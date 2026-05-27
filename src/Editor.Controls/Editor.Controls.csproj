@@ -10,6 +10,11 @@
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>true</IsPackable>
+    <PackageId>sk0ya.Editor.Controls</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>shigekazukoya</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>
     <Description>Reusable WPF Vim-like editor control.</Description>
     <PackageTags>editor;wpf;vim;text-editor</PackageTags>
   </PropertyGroup>

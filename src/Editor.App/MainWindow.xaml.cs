@@ -197,6 +197,9 @@ public partial class MainWindow : Window
     private System.Windows.Point _shellMenuScreenPos;
     private bool _suppressFileOpen;
     private bool _fileTreeCtrlWPending;
+    private bool _previewVisible;
+    private DispatcherTimer? _previewDebounceTimer;
+    private Task? _webView2InitTask;
 
     private VimEditorControl? CurrentEditor => _focusedEditor;
 
@@ -1095,8 +1098,9 @@ public partial class MainWindow : Window
         editor.GotKeyboardFocus       += Editor_GotKeyboardFocus;
         editor.MkSessionRequested     += Editor_MkSessionRequested;
         editor.SourceRequested        += Editor_SourceRequested;
-        editor.TerminalRequested      += Editor_TerminalRequested;
-        editor.GitOutputRequested     += Editor_GitOutputRequested;
+        editor.TerminalRequested          += Editor_TerminalRequested;
+        editor.MarkdownPreviewRequested   += (_, _) => ToggleMarkdownPreview();
+        editor.GitOutputRequested         += Editor_GitOutputRequested;
         editor.GitCommitRequested     += Editor_GitCommitRequested;
         editor.DocumentSymbolsResult  += Editor_DocumentSymbolsResult;
     }
@@ -1107,6 +1111,9 @@ public partial class MainWindow : Window
         var path = editor.Engine.CurrentBuffer.FilePath;
         var ft = FindFileTabByPath(path);
         ft?.UpdateHeader(isModified: editor.Engine.CurrentBuffer.Text.IsModified);
+
+        if (_previewVisible && editor == _focusedEditor)
+            SchedulePreviewUpdate();
     }
 
     private void Editor_MkSessionRequested(object? sender, string sessionPath)
@@ -1193,6 +1200,104 @@ public partial class MainWindow : Window
         TermPanelRow.Height      = new GridLength(0);
         TerminalContent.Content  = null;
         _focusedEditor?.Focus();
+    }
+
+    // ─────────── Markdown Preview ───────────────────────────────────────
+
+    private void ToggleMarkdownPreview()
+    {
+        if (_previewVisible)
+            CloseMarkdownPreview();
+        else
+            ShowMarkdownPreview();
+    }
+
+    private void PreviewBtn_Click(object sender, RoutedEventArgs e) =>
+        ToggleMarkdownPreview();
+
+    private void ShowMarkdownPreview()
+    {
+        _previewVisible = true;
+        PreviewBtn.IsChecked            = true;
+        MarkdownPreviewPanel.Visibility = Visibility.Visible;
+        PreviewSplitter.Visibility      = Visibility.Visible;
+        PreviewSplitterCol.Width        = new GridLength(4);
+        PreviewCol.Width                = new GridLength(420);
+        UpdateMarkdownPreview();
+    }
+
+    private void CloseMarkdownPreview()
+    {
+        _previewVisible = false;
+        PreviewBtn.IsChecked            = false;
+        MarkdownPreviewPanel.Visibility = Visibility.Collapsed;
+        PreviewSplitter.Visibility      = Visibility.Collapsed;
+        PreviewSplitterCol.Width        = new GridLength(0);
+        PreviewCol.Width                = new GridLength(0);
+        _focusedEditor?.Focus();
+    }
+
+    private void ClosePreview_Click(object sender, RoutedEventArgs e) =>
+        CloseMarkdownPreview();
+
+    private void SchedulePreviewUpdate()
+    {
+        if (_previewDebounceTimer == null)
+        {
+            _previewDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            // Use sender to avoid closing over the nullable field
+            _previewDebounceTimer.Tick += (s, _) =>
+            {
+                ((DispatcherTimer)s!).Stop();
+                UpdateMarkdownPreview();
+            };
+        }
+        _previewDebounceTimer.Stop();
+        _previewDebounceTimer.Start();
+    }
+
+    private async void UpdateMarkdownPreview()
+    {
+        if (!_previewVisible || CurrentEditor == null) return;
+
+        // All concurrent callers await the same Task — prevents parallel EnsureCoreWebView2Async calls.
+        _webView2InitTask ??= PreviewBrowser.EnsureCoreWebView2Async();
+        try
+        {
+            await _webView2InitTask;
+        }
+        catch
+        {
+            _webView2InitTask = null; // allow retry on next open
+            if (!_previewVisible) return;
+            PreviewBrowser.CoreWebView2?.NavigateToString(
+                "<html><body style='background:#282A36;color:#FF5555;"
+                + "font-family:Segoe UI,sans-serif;font-size:13px;padding:20px'>"
+                + "WebView2 の初期化に失敗しました。Edge WebView2 ランタイムがインストールされているか確認してください。"
+                + "</body></html>");
+            return;
+        }
+
+        // Re-check state after the async suspension (user may have closed preview or switched editor)
+        if (!_previewVisible || CurrentEditor == null) return;
+        if (PreviewBrowser.CoreWebView2 == null) return;
+
+        var filePath = CurrentEditor.Engine.CurrentBuffer.FilePath;
+        var ext = filePath != null ? Path.GetExtension(filePath).ToLowerInvariant() : string.Empty;
+
+        if (ext != ".md" && ext != ".markdown")
+        {
+            PreviewBrowser.CoreWebView2.NavigateToString(
+                "<html><body style='background:#282A36;color:#6272A4;"
+                + "font-family:Segoe UI,sans-serif;font-size:13px;padding:20px'>"
+                + "Not a Markdown file</body></html>");
+            return;
+        }
+
+        var text = CurrentEditor.Engine.CurrentBuffer.Text.GetText();
+        var title = filePath != null ? Path.GetFileName(filePath) : "Preview";
+        var html = MarkdownRenderer.RenderToHtml(text, title);
+        PreviewBrowser.CoreWebView2.NavigateToString(html);
     }
 
     private void Editor_SourceRequested(object? sender, string filePath)
@@ -1813,9 +1918,11 @@ public partial class MainWindow : Window
     {
         if (sender is not VimEditorControl editor) return;
         _focusedEditor = editor;
-        // Sync the selected tab to reflect the focused pane's current file
         UpdateSelectedTabForEditor(editor);
         RefreshOutlineForEditor(editor);
+
+        if (_previewVisible)
+            SchedulePreviewUpdate();
     }
 
     private void Editor_NextTabRequested(object? sender, EventArgs e)
@@ -3121,6 +3228,8 @@ public partial class MainWindow : Window
             .Select(t => t.FilePath!);
         var activeFile = _focusedEditor?.Engine.CurrentBuffer.FilePath;
         _recentItems.SaveSession(_currentFolderPath, tabFiles, activeFile);
+
+        _previewDebounceTimer?.Stop();
 
         if (_windowSource != null)
         {

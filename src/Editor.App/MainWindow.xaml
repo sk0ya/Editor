@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:Editor.Controls;assembly=Editor.Controls"
         xmlns:local="clr-namespace:Editor.App"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="Editor" Height="700" Width="1100"
         Background="#282A36"
         WindowStyle="None"
@@ -720,6 +721,8 @@
                 <ColumnDefinition x:Name="SidebarCol" Width="0" MinWidth="0"/>
                 <ColumnDefinition x:Name="SplitterCol" Width="0" MinWidth="0"/>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition x:Name="PreviewSplitterCol" Width="0" MinWidth="0"/>
+                <ColumnDefinition x:Name="PreviewCol" Width="0" MinWidth="0"/>
             </Grid.ColumnDefinitions>
 
             <!-- Activity Bar -->
@@ -743,6 +746,17 @@
                                   Click="OutlineBtn_Click"
                                   ToolTip="アウトライン (:Outline)">
                         <TextBlock Text="&#xE8FD;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="22"
+                                   Foreground="{Binding Foreground,
+                                       RelativeSource={RelativeSource AncestorType=ToggleButton}}"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="PreviewBtn"
+                                  DockPanel.Dock="Top"
+                                  Style="{StaticResource ActivityBarButton}"
+                                  Click="PreviewBtn_Click"
+                                  ToolTip="Markdownプレビュー (:preview)">
+                        <TextBlock Text="&#xE890;"
                                    FontFamily="Segoe MDL2 Assets"
                                    FontSize="22"
                                    Foreground="{Binding Foreground,
@@ -1280,6 +1294,53 @@
                         <ContentPresenter x:Name="TerminalContent" Grid.Row="1"/>
                     </Grid>
                 </Border>
+            </Grid>
+
+            <!-- Preview splitter -->
+            <GridSplitter x:Name="PreviewSplitter" Grid.Column="4"
+                          Width="4"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          Background="#252526"
+                          BorderBrush="#3A3D46"
+                          BorderThickness="1,0,0,0"
+                          Visibility="Collapsed"/>
+
+            <!-- Markdown Preview Panel -->
+            <Grid x:Name="MarkdownPreviewPanel" Grid.Column="5"
+                  Background="#282A36"
+                  ClipToBounds="True"
+                  Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="26"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Panel header -->
+                <Border Grid.Row="0" Background="#1A1A1A" Padding="10,0">
+                    <DockPanel>
+                        <Button x:Name="ClosePreviewBtn"
+                                DockPanel.Dock="Right"
+                                Content="✕"
+                                Click="ClosePreview_Click"
+                                Background="Transparent"
+                                Foreground="#888888"
+                                BorderThickness="0"
+                                FontSize="11"
+                                Padding="6,0"
+                                Cursor="Hand"
+                                ToolTip="プレビューを閉じる"/>
+                        <TextBlock Text="MARKDOWN PREVIEW"
+                                   FontFamily="Cascadia Code, Consolas"
+                                   FontSize="11"
+                                   FontWeight="Bold"
+                                   Foreground="#888888"
+                                   VerticalAlignment="Center"/>
+                    </DockPanel>
+                </Border>
+
+                <!-- WebView2 for rendered Markdown -->
+                <wv2:WebView2 x:Name="PreviewBrowser" Grid.Row="1"/>
             </Grid>
         </Grid>
 

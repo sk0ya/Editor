@@ -441,6 +441,10 @@ public class ExCommandProcessor
         if (cmd == "retab" || cmd.StartsWith("retab ") || cmd.StartsWith("retab!"))
             return ExecuteRetab(cmd, range);
 
+        // :preview  :mdpreview
+        if (cmd == "preview" || cmd == "mdpreview")
+            return new ExResult(true, null, VimEvent.MarkdownPreviewRequested());
+
         // :terminal [cmd]  :term [cmd]
         if (cmd == "terminal" || cmd == "term" || cmd.StartsWith("terminal ") || cmd.StartsWith("term "))
         {
@@ -1399,6 +1403,10 @@ public class ExCommandProcessor
         "map",
         "unmap", "nunmap", "iunmap", "vunmap",
         "history", "his",
+        "preview", "mdpreview",
+        "terminal", "term",
+        "mksession", "source",
+        "retab",
     ];
 
     private static readonly HashSet<string> FileCommands = new(StringComparer.Ordinal)
