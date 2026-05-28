@@ -990,11 +990,21 @@ public partial class MainWindow : Window
         if (existing != null)
         {
             SelectFileTab(existing);
+            RecordRecentFile(path);
             return;
         }
 
         // Otherwise add a new tab entry and load
         AddTab(path);
+        RecordRecentFile(path);
+    }
+
+    private void RecordRecentFile(string path)
+    {
+        if (!File.Exists(path)) return;
+        _recentItems.AddFile(path);
+        RefreshRecentMenus();
+        RefreshJumpList();
     }
 
     // ─────────── Tab management ────────────────────────────
@@ -1650,9 +1660,7 @@ public partial class MainWindow : Window
         TabCtrl.SelectedItem = ft.Item;
         _suppressTabSelectionChanged = false;
         Title = $"Editor — {Path.GetFileName(path)}";
-        _recentItems.AddFile(path);
-        RefreshRecentMenus();
-        RefreshJumpList();
+        RecordRecentFile(path);
     }
 
     private string ResolvePath(string path)
@@ -2072,6 +2080,56 @@ public partial class MainWindow : Window
         var path = NativeFolderPicker.Show(hwnd, "フォルダーを開く");
         if (path != null)
             LoadFolder(path);
+    }
+
+    private void Window_DragEnter(object sender, DragEventArgs e) => UpdateDropEffect(e);
+
+    private void Window_DragOver(object sender, DragEventArgs e) => UpdateDropEffect(e);
+
+    private void Window_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        var paths = ((string[]?)e.Data.GetData(DataFormats.FileDrop)) ?? [];
+        OpenDroppedPaths(paths);
+        e.Effects = DragDropEffects.Copy;
+        e.Handled = true;
+    }
+
+    private static void UpdateDropEffect(DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OpenDroppedPaths(IEnumerable<string> paths)
+    {
+        var openedAnyFile = false;
+
+        foreach (var path in paths.Where(p => !string.IsNullOrWhiteSpace(p)))
+        {
+            if (Directory.Exists(path))
+            {
+                LoadFolder(path);
+                continue;
+            }
+
+            if (!File.Exists(path))
+                continue;
+
+            OpenOrFocusFile(path);
+            openedAnyFile = true;
+        }
+
+        if (openedAnyFile)
+            CurrentEditor?.Focus();
     }
 
     private void ExplorerBtn_Click(object sender, RoutedEventArgs e)

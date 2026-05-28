@@ -7,7 +7,11 @@
         Title="Editor" Height="700" Width="1100"
         Background="#282A36"
         WindowStyle="None"
-        Loaded="Window_Loaded">
+        Loaded="Window_Loaded"
+        AllowDrop="True"
+        DragEnter="Window_DragEnter"
+        DragOver="Window_DragOver"
+        Drop="Window_Drop">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="30"
