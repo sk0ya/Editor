@@ -130,7 +130,9 @@ public class VimEngine
 
     public void LoadFile(string path)
     {
-        _bufferManager.OpenFile(path);
+        var editorConfig = EditorConfig.LoadForFile(path);
+        editorConfig.TryGetFileEncoding(out var preferredEncoding);
+        _bufferManager.OpenFile(path, preferredEncoding);
         _cursor = CursorPosition.Zero;
         _syntaxEngine.DetectLanguage(path);
         _syntaxEngine.Invalidate();
@@ -138,6 +140,7 @@ public class VimEngine
         // Sync detected file format and encoding to options so :set ff?/:set fenc? reflects the loaded file.
         _config.Options.FileFormat   = _bufferManager.Current.FileFormat;
         _config.Options.FileEncoding = _bufferManager.Current.FileEncoding;
+        editorConfig.ApplyTo(_config.Options, _bufferManager.Current);
     }
 
     public void SetText(string text)

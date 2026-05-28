@@ -20,13 +20,16 @@ public class VimBuffer
 
     private static int _nextId = 1;
     public VimBuffer() => Id = _nextId++;
-    public VimBuffer(string filePath) : this()
+    public VimBuffer(string filePath, string? preferredEncoding = null) : this()
     {
         FilePath = filePath;
         if (File.Exists(filePath))
         {
             var bytes = File.ReadAllBytes(filePath);
-            FileEncoding = DetectEncodingFromBom(bytes);
+            var detectedEncoding = DetectEncodingFromBom(bytes);
+            FileEncoding = detectedEncoding == "utf-8" && !string.IsNullOrWhiteSpace(preferredEncoding)
+                ? preferredEncoding
+                : detectedEncoding;
             var enc = GetEncoding(FileEncoding);
             // Strip BOM bytes before decoding if present
             int bomLen = GetBomLength(bytes, enc);
@@ -65,7 +68,7 @@ public class VimBuffer
         "utf-8-bom" or "utf-8bom"   => new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
         "utf-16" or "utf-16le"      => new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
         "utf-16be"                  => new UnicodeEncoding(bigEndian: true,  byteOrderMark: true),
-        "latin1" or "iso-8859-1"    => Encoding.GetEncoding(1252),
+        "latin1" or "iso-8859-1"    => Encoding.Latin1,
         "ascii"                     => Encoding.ASCII,
         "shift-jis" or "sjis"       => Encoding.GetEncoding("shift-jis"),
         "euc-jp"                    => Encoding.GetEncoding("euc-jp"),
@@ -125,7 +128,7 @@ public class BufferManager
         return buf;
     }
 
-    public VimBuffer OpenFile(string path)
+    public VimBuffer OpenFile(string path, string? preferredEncoding = null)
     {
         var existingIndex = _buffers.FindIndex(b => b.FilePath == path);
         if (existingIndex >= 0)
@@ -133,7 +136,7 @@ public class BufferManager
             SwitchTo(existingIndex);
             return _buffers[existingIndex];
         }
-        var buf = new VimBuffer(path);
+        var buf = new VimBuffer(path, preferredEncoding);
         _buffers.Add(buf);
         SwitchTo(_buffers.Count - 1);
         return buf;
