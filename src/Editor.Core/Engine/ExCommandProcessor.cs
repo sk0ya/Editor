@@ -747,6 +747,13 @@ public class ExCommandProcessor
             return ExecuteMarks(cmd);
         }
 
+        // :delmarks {marks} / :delmarks! — delete marks
+        if (cmd is "delmarks" or "delm" or "delmarks!" or "delm!" ||
+            cmd.StartsWith("delmarks ") || cmd.StartsWith("delm "))
+        {
+            return ExecuteDelmarks(cmd);
+        }
+
         return new ExResult(false, $"Not an editor command: {cmd}");
     }
 
@@ -1241,6 +1248,80 @@ public class ExCommandProcessor
 
         if (!any) sb.AppendLine("(no matches)");
         return new ExResult(true, sb.ToString().TrimEnd());
+    }
+
+    private ExResult ExecuteDelmarks(string cmd)
+    {
+        if (cmd is "delmarks!" or "delm!")
+        {
+            _markManager.ClearMarks();
+            return new ExResult(true, "All marks deleted");
+        }
+
+        var arg = GetCommandArg(cmd);
+        if (string.IsNullOrWhiteSpace(arg))
+            return new ExResult(false, "E471: Argument required");
+
+        if (!TryParseMarkList(arg, out var marks, out var error))
+            return new ExResult(false, error);
+
+        int deleted = 0;
+        foreach (var mark in marks)
+        {
+            if (_markManager.DeleteMark(mark))
+                deleted++;
+        }
+
+        return new ExResult(true, $"{deleted} mark(s) deleted");
+    }
+
+    private static bool TryParseMarkList(string arg, out IReadOnlyList<char> marks, out string? error)
+    {
+        var result = new List<char>();
+        error = null;
+
+        for (int i = 0; i < arg.Length; i++)
+        {
+            var ch = arg[i];
+            if (char.IsWhiteSpace(ch))
+                continue;
+
+            if (!IsValidMarkName(ch))
+            {
+                marks = [];
+                error = $"E475: Invalid argument: {arg}";
+                return false;
+            }
+
+            if (i + 2 < arg.Length && arg[i + 1] == '-' && IsValidMarkName(arg[i + 2]))
+            {
+                var end = arg[i + 2];
+                if (ch > end)
+                {
+                    marks = [];
+                    error = $"E475: Invalid argument: {arg}";
+                    return false;
+                }
+
+                for (char mark = ch; mark <= end; mark++)
+                {
+                    if (IsValidMarkName(mark))
+                        result.Add(mark);
+                }
+                i += 2;
+                continue;
+            }
+
+            result.Add(ch);
+        }
+
+        marks = result.Distinct().ToList();
+        return true;
+    }
+
+    private static bool IsValidMarkName(char mark)
+    {
+        return char.IsLetter(mark) || mark is '<' or '>' or '.' or '\'';
     }
 
     private ExResult ExecuteBufdo(string subCmd)

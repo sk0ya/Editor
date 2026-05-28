@@ -711,6 +711,66 @@ public class ExCommandProcessorTests
         Assert.Contains("(no marks set)", result.Message);
     }
 
+    [Fact]
+    public void Delmarks_WithNames_DeletesSpecifiedMarks()
+    {
+        var (processor, _, marks) = CreateProcessorWithMarks();
+        marks.SetMark('a', new CursorPosition(0, 0));
+        marks.SetMark('b', new CursorPosition(1, 0));
+        marks.SetMark('c', new CursorPosition(2, 0));
+
+        var result = processor.Execute("delmarks ac", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Null(marks.GetMark('a'));
+        Assert.NotNull(marks.GetMark('b'));
+        Assert.Null(marks.GetMark('c'));
+    }
+
+    [Fact]
+    public void Delmarks_WithRange_DeletesMarksInRange()
+    {
+        var (processor, _, marks) = CreateProcessorWithMarks();
+        marks.SetMark('a', new CursorPosition(0, 0));
+        marks.SetMark('b', new CursorPosition(1, 0));
+        marks.SetMark('c', new CursorPosition(2, 0));
+        marks.SetMark('d', new CursorPosition(3, 0));
+
+        var result = processor.Execute("delmarks b-c", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(marks.GetMark('a'));
+        Assert.Null(marks.GetMark('b'));
+        Assert.Null(marks.GetMark('c'));
+        Assert.NotNull(marks.GetMark('d'));
+    }
+
+    [Fact]
+    public void DelmarksBang_ClearsAllMarks()
+    {
+        var (processor, _, marks) = CreateProcessorWithMarks();
+        marks.SetMark('a', new CursorPosition(0, 0));
+        marks.SetMark('b', new CursorPosition(1, 0));
+
+        var result = processor.Execute("delmarks!", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Empty(marks.GetAllMarks());
+    }
+
+    [Theory]
+    [InlineData("delmarks")]
+    [InlineData("delm")]
+    public void Delmarks_WithoutArgs_ReturnsArgumentRequired(string command)
+    {
+        var (processor, _, _) = CreateProcessorWithMarks();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Equal("E471: Argument required", result.Message);
+    }
+
     // ── :unmap / :nunmap / :iunmap / :vunmap tests ───────────────────────────
 
     private static ExCommandProcessor CreateProcessorWithMaps(

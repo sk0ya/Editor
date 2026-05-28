@@ -20,6 +20,8 @@ public class MarkManager
         return _marks.TryGetValue(name, out var pos) ? pos : null;
     }
 
+    public bool DeleteMark(char name) => _marks.Remove(name);
+
     public void AddJump(CursorPosition pos) => _jumps.Add(pos);
     public CursorPosition? JumpBack() => _jumps.Back();
     public CursorPosition? JumpForward() => _jumps.Forward();
