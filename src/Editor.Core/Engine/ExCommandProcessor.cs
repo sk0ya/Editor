@@ -849,7 +849,7 @@ public class ExCommandProcessor
     {
         error = null;
         var opts = ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
-        try { return new Regex(pattern, opts); }
+        try { return new Regex(VimRegex.ToDotNetPattern(pattern), opts); }
         catch (Exception ex) { error = $"Invalid pattern: {ex.Message}"; return null; }
     }
 

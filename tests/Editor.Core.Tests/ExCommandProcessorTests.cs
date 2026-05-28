@@ -270,6 +270,79 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void Substitute_VeryMagic_UsesUnescapedGroupsAndAlternation()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("cat dog\nbird");
+
+        var result = processor.Execute("%s/\\v(cat|dog)/pet/g", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("pet pet\nbird", buffers.Current.Text.GetText());
+    }
+
+    [Fact]
+    public void Substitute_VeryNomagic_TreatsRegexMetacharactersAsLiteralText()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("a.b axb");
+
+        var result = processor.Execute("%s/\\Va.b/X/g", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("X axb", buffers.Current.Text.GetText());
+    }
+
+    [Fact]
+    public void Substitute_VeryNomagic_PreservesEscapedBackslashAsLiteralBackslash()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText(@"path\name 123");
+
+        var result = processor.Execute("%s/\\V\\\\/slash/g", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("pathslashname 123", buffers.Current.Text.GetText());
+    }
+
+    [Fact]
+    public void Substitute_VeryNomagic_BackslashBeforeDDoesNotBecomeDigitClass()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText(@"x\d x5");
+
+        var result = processor.Execute("%s/\\V\\\\d/TOKEN/g", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("xTOKEN x5", buffers.Current.Text.GetText());
+    }
+
+    [Fact]
+    public void SubstitutePreview_VeryNomagic_TreatsRegexMetacharactersAsLiteralText()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("a.b axb");
+
+        var preview = processor.GetSubstitutePreview("%s/\\Va.b/X/g", CursorPosition.Zero);
+
+        Assert.Single(preview);
+        Assert.Equal("X axb", preview[0]);
+        Assert.Equal("a.b axb", buffers.Current.Text.GetText());
+    }
+
+    [Fact]
+    public void Global_VeryNomagic_TreatsRegexMetacharactersAsLiteralText()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("a.b\naxb\na-b");
+
+        var result = processor.Execute("g/\\Va.b/d", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("axb\na-b", buffers.Current.Text.GetText());
+    }
+
+    [Fact]
     public void SubstitutePreview_IgnoresSeparatorsThatExecuteDoesNotSupport()
     {
         var (processor, buffers) = CreateProcessor();
