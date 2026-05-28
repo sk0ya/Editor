@@ -15,7 +15,10 @@ public partial class TerminalPane : UserControl
     private int _historyIndex = -1;
     private string _workingDir;
     private readonly StringBuilder _outputBuffer = new();
+    private bool _ctrlWPending;
     private const int MaxOutputChars = 50_000;
+
+    public event EventHandler? EditorFocusRequested;
 
     public TerminalPane()
     {
@@ -23,6 +26,12 @@ public partial class TerminalPane : UserControl
         _workingDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        LostKeyboardFocus += OnLostKeyboardFocus;
+    }
+
+    private void OnLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _ctrlWPending = false;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -40,6 +49,12 @@ public partial class TerminalPane : UserControl
     {
         if (dir != null && Directory.Exists(dir))
             _workingDir = dir;
+    }
+
+    public void FocusInput()
+    {
+        InputBox.Focus();
+        Keyboard.Focus(InputBox);
     }
 
     private void StartShell()
@@ -60,6 +75,35 @@ public partial class TerminalPane : UserControl
 
     private void InputBox_KeyDown(object sender, KeyEventArgs e)
     {
+        bool ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+
+        if (ctrl && e.Key == Key.W)
+        {
+            _ctrlWPending = true;
+            e.Handled = true;
+            return;
+        }
+
+        if (_ctrlWPending)
+        {
+            _ctrlWPending = false;
+            switch (e.Key)
+            {
+                case Key.K:
+                case Key.Up:
+                case Key.W:
+                    EditorFocusRequested?.Invoke(this, EventArgs.Empty);
+                    e.Handled = true;
+                    return;
+                case Key.Escape:
+                    e.Handled = true;
+                    return;
+                default:
+                    e.Handled = true;
+                    return;
+            }
+        }
+
         switch (e.Key)
         {
             case Key.Return:

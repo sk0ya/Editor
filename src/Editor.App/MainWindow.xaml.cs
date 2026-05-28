@@ -200,6 +200,7 @@ public partial class MainWindow : Window
     private bool _previewVisible;
     private DispatcherTimer? _previewDebounceTimer;
     private Task? _webView2InitTask;
+    private TerminalPane? _terminalPane;
 
     private VimEditorControl? CurrentEditor => _focusedEditor;
 
@@ -1174,7 +1175,7 @@ public partial class MainWindow : Window
     {
         if (TerminalPanel.Visibility == Visibility.Visible)
         {
-            TerminalContent.Focus();
+            _terminalPane?.FocusInput();
             return;
         }
 
@@ -1183,22 +1184,32 @@ public partial class MainWindow : Window
             ? Path.GetDirectoryName(fp)
             : null;
         terminal.SetWorkingDirectory(workDir);
+        terminal.EditorFocusRequested += Terminal_EditorFocusRequested;
 
+        _terminalPane = terminal;
         TerminalContent.Content = terminal;
         TerminalPanel.Visibility = Visibility.Visible;
         TermSplitter.Visibility  = Visibility.Visible;
         TermSplitterRow.Height   = new GridLength(4);
         TermPanelRow.Height      = new GridLength(200);
-        terminal.Focus();
+        terminal.FocusInput();
+    }
+
+    private void Terminal_EditorFocusRequested(object? sender, EventArgs e)
+    {
+        _focusedEditor?.Focus();
     }
 
     private void CloseTermPanel_Click(object sender, RoutedEventArgs e)
     {
+        if (_terminalPane != null)
+            _terminalPane.EditorFocusRequested -= Terminal_EditorFocusRequested;
         TerminalPanel.Visibility = Visibility.Collapsed;
         TermSplitter.Visibility  = Visibility.Collapsed;
         TermSplitterRow.Height   = new GridLength(0);
         TermPanelRow.Height      = new GridLength(0);
         TerminalContent.Content  = null;
+        _terminalPane = null;
         _focusedEditor?.Focus();
     }
 
@@ -1900,6 +1911,14 @@ public partial class MainWindow : Window
             && _sidebarVisible && _activeSidebarPanel == SidebarPanel.Explorer)
         {
             FileTree.Focus();
+            return;
+        }
+
+        if (e.Dir == WindowNavDir.Down
+            && TerminalPanel.Visibility == Visibility.Visible
+            && _terminalPane != null)
+        {
+            _terminalPane.FocusInput();
         }
     }
 
