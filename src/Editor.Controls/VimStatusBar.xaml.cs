@@ -42,6 +42,19 @@ public partial class VimStatusBar : UserControl
         FileText.Text = modified ? $"{name}{fmt} [+]" : $"{name}{fmt}";
     }
 
+    public void UpdateGitBranch(string? branchName)
+    {
+        if (string.IsNullOrWhiteSpace(branchName))
+        {
+            BranchText.Text = "";
+            BranchText.Visibility = System.Windows.Visibility.Collapsed;
+            return;
+        }
+
+        BranchText.Text = $"git:{branchName}";
+        BranchText.Visibility = System.Windows.Visibility.Visible;
+    }
+
     public void UpdateCursor(CursorPosition pos, int totalLines)
     {
         var pct = totalLines > 0 ? (int)((pos.Line + 1) * 100.0 / totalLines) : 0;

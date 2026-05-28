@@ -16,6 +16,7 @@
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
         <!-- Mode indicator -->
@@ -38,8 +39,13 @@
         <TextBlock x:Name="StatusText" Grid.Column="2" FontFamily="Cascadia Code, Consolas" FontSize="12"
                    Foreground="#AAAAAA" VerticalAlignment="Center" Padding="8,0"/>
 
+        <!-- Git branch -->
+        <TextBlock x:Name="BranchText" Grid.Column="3" FontFamily="Cascadia Code, Consolas" FontSize="12"
+                   Foreground="#8BE9FD" VerticalAlignment="Center" Padding="8,0"
+                   TextTrimming="CharacterEllipsis" MaxWidth="220" Visibility="Collapsed"/>
+
         <!-- Cursor position -->
-        <TextBlock x:Name="PosText" Grid.Column="3" FontFamily="Cascadia Code, Consolas" FontSize="12"
+        <TextBlock x:Name="PosText" Grid.Column="4" FontFamily="Cascadia Code, Consolas" FontSize="12"
                    Foreground="#DDDDDD" VerticalAlignment="Center" Padding="8,0" MinWidth="120" TextAlignment="Right"/>
     </Grid>
     </StackPanel>

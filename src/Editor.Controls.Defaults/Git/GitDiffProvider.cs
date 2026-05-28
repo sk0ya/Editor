@@ -21,6 +21,20 @@ public partial class GitDiffProvider : IEditorGitService
         return result;
     }
 
+    public string? GetBranchName(string repoPath)
+    {
+        var workDir = ResolveWorkDir(repoPath);
+        if (string.IsNullOrEmpty(workDir)) return null;
+        var root = FindGitRoot(workDir);
+        if (root == null) return null;
+
+        var branch = RunGit(root, ["branch", "--show-current"])?.Trim();
+        if (!string.IsNullOrEmpty(branch)) return branch;
+
+        var head = RunGit(root, ["rev-parse", "--short", "HEAD"])?.Trim();
+        return string.IsNullOrEmpty(head) ? null : $"HEAD {head}";
+    }
+
     public string GetDiffOutput(string filePath)
     {
         if (!TryGetFileWorkDir(filePath, out var workDir)) return "(no file or not a git repository)";
@@ -30,8 +44,7 @@ public partial class GitDiffProvider : IEditorGitService
 
     public string GetLogOutput(string repoPath, int count = 30)
     {
-        string? workDir = string.IsNullOrEmpty(repoPath) ? null
-            : File.Exists(repoPath) ? Path.GetDirectoryName(repoPath) : repoPath;
+        string? workDir = ResolveWorkDir(repoPath);
         if (string.IsNullOrEmpty(workDir)) return "(no path)";
         var root = FindGitRoot(workDir);
         if (root == null) return "(not a git repository)";
@@ -81,6 +94,12 @@ public partial class GitDiffProvider : IEditorGitService
         if (string.IsNullOrEmpty(dir) || FindGitRoot(dir) == null) return false;
         workDir = dir;
         return true;
+    }
+
+    private static string? ResolveWorkDir(string repoPath)
+    {
+        if (string.IsNullOrEmpty(repoPath)) return null;
+        return File.Exists(repoPath) ? Path.GetDirectoryName(repoPath) : repoPath;
     }
 
     private static string? FindGitRoot(string dir)

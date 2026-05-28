@@ -10,6 +10,8 @@ internal sealed class NullEditorGitService : IEditorGitService
 
     public Dictionary<int, GitLineState> GetDiff(string filePath) => [];
 
+    public string? GetBranchName(string repoPath) => null;
+
     public string GetDiffOutput(string filePath) => "(git integration is not configured)";
 
     public string GetLogOutput(string repoPath, int count = 30) => "(git integration is not configured)";

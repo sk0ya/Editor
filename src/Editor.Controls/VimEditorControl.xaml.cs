@@ -198,6 +198,9 @@ public partial class VimEditorControl : UserControl
     private readonly IEditorLspManager _lspManager;
     private readonly IEditorGitService _gitProvider;
     private bool _blameActive;
+    private string? _gitBranchName;
+    private string? _gitBranchFilePath;
+    private string? _saveStartedFilePath;
     private VimStatusBar? _sharedStatusBar;
     private VimStatusBar ActiveStatusBar => _sharedStatusBar ?? StatusBar;
     private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
@@ -895,9 +898,22 @@ public partial class VimEditorControl : UserControl
     }
 
     /// <summary>Call before writing a file to disk to prevent the watcher from triggering a reload prompt.</summary>
-    public void OnSaveStarted()  => _suppressFileWatcher = true;
+    public void OnSaveStarted()
+    {
+        _suppressFileWatcher = true;
+        _saveStartedFilePath = _engine.CurrentBuffer.FilePath;
+    }
     /// <summary>Call after the file has been written to disk to re-enable the watcher.</summary>
-    public void OnSaveFinished() => _suppressFileWatcher = false;
+    public void OnSaveFinished()
+    {
+        _suppressFileWatcher = false;
+        var currentPath = _engine.CurrentBuffer.FilePath;
+        if (!string.Equals(_saveStartedFilePath, currentPath, StringComparison.OrdinalIgnoreCase))
+            _ = RefreshGitDiffAsync();
+        else
+            SyncStatusBar();
+        _saveStartedFilePath = null;
+    }
 
     private void SetupFileWatcher(string filePath)
     {
@@ -971,9 +987,24 @@ public partial class VimEditorControl : UserControl
     private async Task RefreshGitDiffAsync()
     {
         var filePath = _engine.CurrentBuffer.FilePath;
-        if (string.IsNullOrEmpty(filePath)) return;
+        if (string.IsNullOrEmpty(filePath))
+        {
+            _gitBranchName = null;
+            _gitBranchFilePath = null;
+            UpdateGitBranchStatusBarIfActive(null);
+            return;
+        }
 
-        var diff = await Task.Run(() => _gitProvider.GetDiff(filePath));
+        var gitInfo = await Task.Run(() => (
+            Diff: _gitProvider.GetDiff(filePath),
+            Branch: _gitProvider.GetBranchName(filePath)));
+        if (!string.Equals(filePath, _engine.CurrentBuffer.FilePath, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _gitBranchName = gitInfo.Branch;
+        _gitBranchFilePath = filePath;
+        UpdateGitBranchStatusBarIfActive(_gitBranchName);
+        var diff = gitInfo.Diff;
         Canvas.SetGitDiff(diff);
 
         if (_blameActive)
@@ -1166,9 +1197,19 @@ public partial class VimEditorControl : UserControl
     public void SyncStatusBar()
     {
         var buf = _engine.CurrentBuffer;
+        bool branchMatchesCurrentFile = string.Equals(_gitBranchFilePath, buf.FilePath, StringComparison.OrdinalIgnoreCase);
+        if (!branchMatchesCurrentFile)
+            _ = RefreshGitDiffAsync();
         ActiveStatusBar.UpdateMode(_engine.Mode);
         ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified, buf.FileFormat);
+        UpdateGitBranchStatusBarIfActive(branchMatchesCurrentFile ? _gitBranchName : null);
         ActiveStatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount);
+    }
+
+    private void UpdateGitBranchStatusBarIfActive(string? branchName)
+    {
+        if (_sharedStatusBar == null || IsKeyboardFocusWithin)
+            ActiveStatusBar.UpdateGitBranch(branchName);
     }
 
     private void SyncViewportState()
