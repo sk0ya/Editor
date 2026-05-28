@@ -332,6 +332,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (e.Key == Key.P && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            OpenCommandPalette();
+            e.Handled = true;
+            return;
+        }
+
         if (!_searchActive) return;
 
         switch (e.Key)
@@ -2361,6 +2368,7 @@ public partial class MainWindow : Window
 
     private void Undo_Click(object sender, RoutedEventArgs e) => CurrentEditor?.Engine.ProcessKey("u");
     private void Redo_Click(object sender, RoutedEventArgs e) => CurrentEditor?.Engine.ProcessKey("r", ctrl: true);
+    private void CommandPalette_Click(object sender, RoutedEventArgs e) => OpenCommandPalette();
 
     private void ColorTheme_Checked(object sender, RoutedEventArgs e)
     {
@@ -2547,6 +2555,23 @@ public partial class MainWindow : Window
             _searchTabsInitialized = true;
         }
         _searchMode = SearchMode.All;
+        UpdateSearchModeUI();
+        SearchBox.Text = "";
+        SearchResultList.ItemsSource = null;
+        SearchOverlay.Visibility = Visibility.Visible;
+        _searchActive = true;
+        SearchBox.Focus();
+        RunSearch("");
+    }
+
+    private void OpenCommandPalette()
+    {
+        if (!_searchTabsInitialized)
+        {
+            InitSearchModeTabs();
+            _searchTabsInitialized = true;
+        }
+        _searchMode = SearchMode.Action;
         UpdateSearchModeUI();
         SearchBox.Text = "";
         SearchResultList.ItemsSource = null;
@@ -2858,28 +2883,68 @@ public partial class MainWindow : Window
 
     private List<SearchResultItem> SearchActions(string query)
     {
-        var all = new (string Name, string Icon, string Color, Action Act)[]
+        var all = new (string Name, string Detail, string Icon, string Color, Action Act)[]
         {
-            ("新しいタブを開く",        "\uE710", "#50FA7B", () => { CloseSearch(); AddTab(null); }),
-            ("ファイルを開く...",        "\uED25", "#8BE9FD", () => { CloseSearch(); OpenFile_Click(this, new RoutedEventArgs()); }),
-            ("フォルダーを開く...",      "\uED41", "#E6C07B", () => { CloseSearch(); OpenFolder_Click(this, new RoutedEventArgs()); }),
-            ("ファイルを保存",           "\uE74E", "#BD93F9", () => { CloseSearch(); Save_Click(this, new RoutedEventArgs()); }),
-            ("エクスプローラーを切替",   "\uE8B7", "#AAAAAA", () => { CloseSearch(); ToggleSidebar(); }),
-            ("設定を開く",               "\uE713", "#AAAAAA", () => { CloseSearch(); ShowSidebar(SidebarPanel.Settings); }),
-            ("ウィンドウを閉じる",       "\uE8BB", "#FF79C6", () => { CloseSearch(); Close(); }),
+            ("新しいタブを開く",        "", "\uE710", "#50FA7B", () => { CloseSearch(); AddTab(null); }),
+            ("ファイルを開く...",        "", "\uED25", "#8BE9FD", () => { CloseSearch(); OpenFile_Click(this, new RoutedEventArgs()); }),
+            ("フォルダーを開く...",      "", "\uED41", "#E6C07B", () => { CloseSearch(); OpenFolder_Click(this, new RoutedEventArgs()); }),
+            ("ファイルを保存",           "", "\uE74E", "#BD93F9", () => { CloseSearch(); Save_Click(this, new RoutedEventArgs()); }),
+            ("エクスプローラーを切替",   "", "\uE8B7", "#AAAAAA", () => { CloseSearch(); ToggleSidebar(); }),
+            ("設定を開く",               "", "\uE713", "#AAAAAA", () => { CloseSearch(); ShowSidebar(SidebarPanel.Settings); }),
+            ("ウィンドウを閉じる",       "", "\uE8BB", "#FF79C6", () => { CloseSearch(); Close(); }),
         };
-        return all
+
+        var results = all
             .Where(a => string.IsNullOrEmpty(query) ||
                         a.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
             .Select(a => new SearchResultItem
             {
                 DisplayName   = a.Name,
+                Detail        = a.Detail,
                 Icon          = a.Icon,
                 IconColor     = a.Color,
                 ActionCallback = a.Act
             })
             .ToList();
+
+        foreach (var file in _recentItems.RecentFiles.Where(File.Exists))
+        {
+            var name = $"最近開いたファイル: {Path.GetFileName(file)}";
+            if (!MatchesActionQuery(name, file, query)) continue;
+            var captured = file;
+            results.Add(new SearchResultItem
+            {
+                DisplayName = name,
+                Detail = file,
+                Icon = "\uE7C3",
+                IconColor = "#8BE9FD",
+                ActionCallback = () => { CloseSearch(); OpenOrFocusFile(captured); }
+            });
+        }
+
+        foreach (var folder in _recentItems.RecentFolders.Where(Directory.Exists))
+        {
+            var folderName = Path.GetFileName(folder) is { Length: > 0 } n ? n : folder;
+            var name = $"最近開いたフォルダー: {folderName}";
+            if (!MatchesActionQuery(name, folder, query)) continue;
+            var captured = folder;
+            results.Add(new SearchResultItem
+            {
+                DisplayName = name,
+                Detail = folder,
+                Icon = "\uED41",
+                IconColor = "#E6C07B",
+                ActionCallback = () => { CloseSearch(); LoadFolder(captured); }
+            });
+        }
+
+        return results;
     }
+
+    private static bool MatchesActionQuery(string name, string detail, string query) =>
+        string.IsNullOrWhiteSpace(query) ||
+        name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+        detail.Contains(query, StringComparison.OrdinalIgnoreCase);
 
     private async void RunSearchLspAsync(string query, bool isClass, CancellationToken ct)
     {

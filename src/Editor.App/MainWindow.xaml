@@ -704,6 +704,8 @@
                 <MenuItem Header="_Edit">
                     <MenuItem Header="_Undo" Click="Undo_Click" InputGestureText="u"/>
                     <MenuItem Header="_Redo" Click="Redo_Click" InputGestureText="Ctrl+r"/>
+                    <Separator/>
+                    <MenuItem Header="_Command Palette..." Click="CommandPalette_Click" InputGestureText="Ctrl+Shift+P"/>
                 </MenuItem>
             </Menu>
 
