@@ -53,6 +53,7 @@ public enum VimEventType
     TypeHierarchyRequested,
     ScrollLinesRequested,
     MarkdownPreviewRequested,
+    SubstitutePreviewChanged,
 }
 
 public enum ViewportAlign
@@ -217,6 +218,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent MarkdownPreviewRequested() =>
         new(VimEventType.MarkdownPreviewRequested);
+
+    public static VimEvent SubstitutePreviewChanged(IReadOnlyDictionary<int, string> previewLines) =>
+        new SubstitutePreviewChangedEvent(previewLines);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -251,3 +255,4 @@ public record HunkNavigateRequestedEvent(bool Forward) : VimEvent(VimEventType.H
 public record HunkStageRequestedEvent(bool Stage) : VimEvent(VimEventType.HunkStageRequested);
 public record SymbolsRequestedEvent(string Query) : VimEvent(VimEventType.SymbolsRequested);
 public record ScrollLinesRequestedEvent(int Lines) : VimEvent(VimEventType.ScrollLinesRequested);
+public record SubstitutePreviewChangedEvent(IReadOnlyDictionary<int, string> PreviewLines) : VimEvent(VimEventType.SubstitutePreviewChanged);

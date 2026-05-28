@@ -47,6 +47,67 @@ public class ExCommandProcessor
     public IReadOnlyList<string> CommandHistory => _history.AsReadOnly();
     public IReadOnlyList<string> SearchHistory  => _searchHistory.AsReadOnly();
 
+    public IReadOnlyDictionary<int, string> GetSubstitutePreview(string cmdLine, CursorPosition cursor)
+    {
+        if (!_options.IncCommand)
+            return new Dictionary<int, string>();
+
+        var cmd = cmdLine.Trim();
+        if (string.IsNullOrEmpty(cmd))
+            return new Dictionary<int, string>();
+
+        string range = "";
+        int cmdStart = 0;
+        if (cmd.StartsWith('%')) { range = "%"; cmdStart = 1; }
+        else if (cmd.StartsWith('.')) { range = "."; cmdStart = 1; }
+        else if (char.IsDigit(cmd[0]))
+        {
+            int end = 0;
+            while (end < cmd.Length && (char.IsDigit(cmd[end]) || cmd[end] == ','))
+                end++;
+            range = cmd[..end];
+            cmdStart = end;
+        }
+
+        cmd = cmd[cmdStart..].Trim();
+        if (cmd.Length < 3 || cmd[0] != 's' || cmd[1] is not ('/' or '!'))
+            return new Dictionary<int, string>();
+
+        char sep = cmd[1];
+        var parts = cmd[2..].Split(sep);
+        if (parts.Length < 2 || string.IsNullOrEmpty(parts[0]))
+            return new Dictionary<int, string>();
+
+        string pattern = parts[0];
+        string replacement = parts.Length > 1 ? parts[1] : "";
+        string flags = parts.Length > 2 ? parts[2] : "";
+
+        bool global = flags.Contains('g');
+        bool ignoreCase = flags.Contains('i') || (!flags.Contains('I') && _options.IgnoreCase);
+        var regex = TryBuildRegex(pattern, ignoreCase, out _);
+        if (regex == null)
+            return new Dictionary<int, string>();
+
+        var buf = _bufferManager.Current.Text;
+        int startLine = 0, endLine = buf.LineCount - 1;
+        ResolveRange(range, cursor, buf.LineCount, ref startLine, ref endLine);
+        startLine = Math.Clamp(startLine, 0, Math.Max(0, buf.LineCount - 1));
+        endLine = Math.Clamp(endLine, startLine, Math.Max(0, buf.LineCount - 1));
+
+        var preview = new Dictionary<int, string>();
+        for (int l = startLine; l <= endLine && l < buf.LineCount; l++)
+        {
+            var line = buf.GetLine(l);
+            var newLine = global
+                ? regex.Replace(line, replacement)
+                : regex.Replace(line, replacement, 1);
+            if (newLine != line)
+                preview[l] = newLine;
+        }
+
+        return preview;
+    }
+
     public void LoadHistory(IReadOnlyList<string> cmdHistory, IReadOnlyList<string> searchHistory)
     {
         _history.Clear();
@@ -1437,6 +1498,7 @@ public class ExCommandProcessor
         "smartcase", "scs", "nosmartcase", "noscs",
         "hlsearch", "hls", "nohlsearch", "nohls",
         "incsearch", "is", "noincsearch", "nois",
+        "inccommand", "icm", "noinccommand", "noicm",
         "wrapscan", "ws", "nowrapscan", "nows",
         "hidden", "nohidden",
         "ruler", "noruler",

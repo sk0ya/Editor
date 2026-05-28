@@ -4770,6 +4770,10 @@ public class VimEngine
     {
         var prefix = _mode switch { VimMode.Command => ":", VimMode.SearchForward => "/", VimMode.SearchBackward => "?", _ => "" };
         events.Add(VimEvent.CommandLineChanged(prefix + _cmdLine));
+        if (_mode == VimMode.Command)
+            events.Add(VimEvent.SubstitutePreviewChanged(_exProcessor.GetSubstitutePreview(_cmdLine, _cursor)));
+        else
+            events.Add(VimEvent.SubstitutePreviewChanged(new Dictionary<int, string>()));
     }
 
     // Expose motion helpers for MotionEngine

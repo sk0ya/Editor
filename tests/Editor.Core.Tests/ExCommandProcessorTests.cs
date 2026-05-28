@@ -244,6 +244,43 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void SubstitutePreview_ReturnsChangedLinesWithoutMutatingBuffer()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("foo one\nbar two\nfoo three");
+
+        var preview = processor.GetSubstitutePreview("%s/foo/baz/", CursorPosition.Zero);
+
+        Assert.Equal("foo one\nbar two\nfoo three", buffers.Current.Text.GetText());
+        Assert.Equal("baz one", preview[0]);
+        Assert.Equal("baz three", preview[2]);
+        Assert.False(preview.ContainsKey(1));
+    }
+
+    [Fact]
+    public void SubstitutePreview_UsesCurrentLineWhenRangeIsOmitted()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("foo one\nfoo two");
+
+        var preview = processor.GetSubstitutePreview("s/foo/baz/", new CursorPosition(1, 0));
+
+        Assert.Single(preview);
+        Assert.Equal("baz two", preview[1]);
+    }
+
+    [Fact]
+    public void SubstitutePreview_IgnoresSeparatorsThatExecuteDoesNotSupport()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("foo");
+
+        var preview = processor.GetSubstitutePreview("s#foo#baz#", CursorPosition.Zero);
+
+        Assert.Empty(preview);
+    }
+
+    [Fact]
     public void Global_Print_ReturnsMatchingLineContent()
     {
         var (processor, buffers) = CreateProcessor();

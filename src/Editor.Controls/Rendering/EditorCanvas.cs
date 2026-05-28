@@ -33,6 +33,7 @@ public class EditorCanvas : FrameworkElement
     private LineTokens[] _tokens = [];
     private List<CursorPosition> _searchMatches = [];
     private string _searchPattern = "";
+    private IReadOnlyDictionary<int, string> _substitutePreviewLines = new Dictionary<int, string>();
     private bool _showLineNumbers = true;
     private bool _relativeNumber = false;
     private int _lineNumberWidth = 4; // digits
@@ -266,6 +267,11 @@ public class EditorCanvas : FrameworkElement
 
     public void SetTokens(LineTokens[] tokens) { _tokens = tokens; InvalidateVisual(); }
     public void SetSearchMatches(List<CursorPosition> matches, string pattern) { _searchMatches = matches; _searchPattern = pattern; InvalidateVisual(); }
+    public void SetSubstitutePreview(IReadOnlyDictionary<int, string>? previewLines)
+    {
+        _substitutePreviewLines = previewLines ?? new Dictionary<int, string>();
+        InvalidateVisual();
+    }
     public void ShowLineNumbers(bool show)
     {
         _showLineNumbers = show;
@@ -845,13 +851,18 @@ public class EditorCanvas : FrameworkElement
             double y = vi * _lineHeight - _scrollOffsetY;
             if (y + _lineHeight < 0 || y > size.Height) continue;
 
-            var lineText = l < _lines.Length ? _lines[l] : "";
+            var lineText = _substitutePreviewLines.TryGetValue(l, out var previewLine)
+                ? previewLine
+                : l < _lines.Length ? _lines[l] : "";
             _scrollOffsetX = _wrapLines ? GetVisualX(lineText, segment.StartColumn) : baseOffsetX;
             bool drawNumberAndFold = !_wrapLines || !segment.IsContinuation;
 
             // Current line highlight
             if (l == _cursor.Line && Theme.CurrentLineBg != null && size.Width > textLeft)
                 dc.DrawRectangle(Theme.CurrentLineBg, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
+
+            if (_substitutePreviewLines.ContainsKey(l) && size.Width > textLeft)
+                dc.DrawRectangle(Theme.DocumentHighlightBackground, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
 
             // Conflict marker highlighting
             if (lineText.StartsWith("<<<<<<<", StringComparison.Ordinal))
@@ -1595,6 +1606,13 @@ public class EditorCanvas : FrameworkElement
         }
 
         if (string.IsNullOrEmpty(lineText)) return;
+
+        if (_substitutePreviewLines.ContainsKey(lineIndex))
+        {
+            var ft = FormatText(lineText, Theme.Foreground);
+            dc.DrawText(ft, new Point(textLeft - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+            return;
+        }
 
         // Semantic tokens take priority over regex-based syntax tokens when present for this line.
         // The list is pre-sorted by StartChar at SetSemanticTokens time.

@@ -2905,6 +2905,9 @@ public partial class VimEditorControl : UserControl
                     else
                         ActiveStatusBar.HideCompletions();
                     break;
+                case VimEventType.SubstitutePreviewChanged when evt is SubstitutePreviewChangedEvent spe:
+                    Canvas.SetSubstitutePreview(spe.PreviewLines);
+                    break;
                 case VimEventType.SaveRequested when evt is SaveRequestedEvent sre:
                     SaveRequested?.Invoke(this, new SaveRequestedEventArgs(sre.FilePath));
                     break;

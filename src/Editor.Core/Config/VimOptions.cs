@@ -25,6 +25,7 @@ public class VimOptions
     public bool SmartCase { get; set; } = true;
     public bool HlSearch { get; set; } = true;
     public bool IncrSearch { get; set; } = true;
+    public bool IncCommand { get; set; } = true;
     public bool WrapScan { get; set; } = true;
 
     // Appearance
@@ -122,6 +123,7 @@ public class VimOptions
             "smartcase" or "scs"               => Set(() => SmartCase = value),
             "hlsearch" or "hls"                => Set(() => HlSearch = value),
             "incsearch" or "is"                => Set(() => IncrSearch = value),
+            "inccommand" or "icm"              => Set(() => IncCommand = value),
             "wrapscan" or "ws"                 => Set(() => WrapScan = value),
             "syntax"                           => Set(() => Syntax = value),
             "hidden"                           => Set(() => Hidden = value),

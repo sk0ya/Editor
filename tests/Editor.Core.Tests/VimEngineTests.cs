@@ -204,6 +204,26 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void CommandLine_SubstituteTyping_EmitsPreviewAndClearsOnExecute()
+    {
+        var engine = CreateEngine("foo\nbar\nfoo");
+        engine.ProcessKey(":");
+
+        IReadOnlyList<VimEvent> events = [];
+        foreach (var ch in "%s/foo/baz/")
+            events = engine.ProcessKey(ch.ToString());
+
+        var preview = events.OfType<SubstitutePreviewChangedEvent>().Last();
+        Assert.Equal("baz", preview.PreviewLines[0]);
+        Assert.Equal("baz", preview.PreviewLines[2]);
+
+        events = engine.ProcessKey("Return");
+
+        Assert.Empty(events.OfType<SubstitutePreviewChangedEvent>().Last().PreviewLines);
+        Assert.Equal("baz\nbar\nbaz", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
     public void PressColon_EntersCommandMode()
     {
         var engine = CreateEngine("hello");
