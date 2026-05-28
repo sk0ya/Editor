@@ -1121,6 +1121,26 @@ public partial class VimEditorControl : UserControl
         ActiveStatusBar.UpdateStatus($"Hunk {targetIndex + 1}/{hunkStarts.Count}");
     }
 
+    private async Task StageCurrentHunkAsync(bool stage)
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        if (string.IsNullOrEmpty(filePath))
+        {
+            ActiveStatusBar.UpdateStatus(stage ? "Git stage: no file open" : "Git unstage: no file open");
+            return;
+        }
+
+        var line = _engine.Cursor.Line;
+        ActiveStatusBar.UpdateStatus(stage ? "Git stage hunk: running..." : "Git unstage hunk: running...");
+        var result = await Task.Run(() => stage
+            ? _gitProvider.StageHunk(filePath, line)
+            : _gitProvider.UnstageHunk(filePath, line));
+
+        ActiveStatusBar.UpdateStatus(result.Output);
+        if (result.Success)
+            _ = RefreshGitDiffAsync();
+    }
+
     private async Task ShowGitOutputAsync(string title, Func<string> fetch)
     {
         ActiveStatusBar.UpdateStatus($"{title}: loading...");
@@ -3001,6 +3021,9 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.HunkNavigateRequested when evt is HunkNavigateRequestedEvent hnr:
                     NavigateHunk(hnr.Forward);
+                    break;
+                case VimEventType.HunkStageRequested when evt is HunkStageRequestedEvent hsr:
+                    _ = StageCurrentHunkAsync(hsr.Stage);
                     break;
                 case VimEventType.SymbolsRequested when evt is SymbolsRequestedEvent sre:
                     _ = HandleWorkspaceSymbolsAsync(sre.Query);

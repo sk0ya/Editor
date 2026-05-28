@@ -326,6 +326,14 @@ public class ExCommandProcessor
         if (cmd is "Git commit" or "git commit" or "Gcommit" or "gcommit")
             return new ExResult(true, null, VimEvent.GitCommitRequested());
 
+        // :Git stage / :Gstage — stage the current git hunk
+        if (cmd is "Git stage" or "git stage" or "Gstage" or "gstage")
+            return new ExResult(true, null, VimEvent.HunkStageRequested(true));
+
+        // :Git unstage / :Gunstage — unstage the current git hunk
+        if (cmd is "Git unstage" or "git unstage" or "Gunstage" or "gunstage")
+            return new ExResult(true, null, VimEvent.HunkStageRequested(false));
+
         // :Git diff / :Gdiff — show git diff output in a new buffer
         if (cmd is "Git diff" or "git diff" or "Gdiff" or "gdiff")
             return new ExResult(true, null, VimEvent.GitDiffRequested());
@@ -1388,6 +1396,8 @@ public class ExCommandProcessor
         "read", "r",
         "Git blame", "Gblame",
         "Git commit", "Gcommit",
+        "Git stage", "Gstage",
+        "Git unstage", "Gunstage",
         "Git diff", "Gdiff",
         "Git log", "Glog",
         "copen", "cope", "clist", "cl",

@@ -19,5 +19,11 @@ internal sealed class NullEditorGitService : IEditorGitService
     public (bool Success, string Output) RunCommit(string filePath, string message) =>
         (false, "git integration is not configured");
 
+    public (bool Success, string Output) StageHunk(string filePath, int line) =>
+        (false, "git integration is not configured");
+
+    public (bool Success, string Output) UnstageHunk(string filePath, int line) =>
+        (false, "git integration is not configured");
+
     public Dictionary<int, string> GetBlameAnnotations(string filePath) => [];
 }

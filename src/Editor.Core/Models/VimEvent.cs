@@ -48,6 +48,7 @@ public enum VimEventType
     SymbolsRequested,
     GitCommitRequested,
     HunkNavigateRequested,
+    HunkStageRequested,
     CallHierarchyRequested,
     TypeHierarchyRequested,
     ScrollLinesRequested,
@@ -197,6 +198,9 @@ public record VimEvent(VimEventType Type)
     public static VimEvent HunkNavigateRequested(bool forward) =>
         new HunkNavigateRequestedEvent(forward);
 
+    public static VimEvent HunkStageRequested(bool stage) =>
+        new HunkStageRequestedEvent(stage);
+
     public static VimEvent CallHierarchyRequested() =>
         new(VimEventType.CallHierarchyRequested);
 
@@ -244,5 +248,6 @@ public record SourceRequestedEvent(string FilePath) : VimEvent(VimEventType.Sour
 public record TerminalRequestedEvent(string? ShellCmd) : VimEvent(VimEventType.TerminalRequested);
 public record ReloadFileRequestedEvent(bool Force) : VimEvent(VimEventType.ReloadFileRequested);
 public record HunkNavigateRequestedEvent(bool Forward) : VimEvent(VimEventType.HunkNavigateRequested);
+public record HunkStageRequestedEvent(bool Stage) : VimEvent(VimEventType.HunkStageRequested);
 public record SymbolsRequestedEvent(string Query) : VimEvent(VimEventType.SymbolsRequested);
 public record ScrollLinesRequestedEvent(int Lines) : VimEvent(VimEventType.ScrollLinesRequested);

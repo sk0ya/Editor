@@ -9,6 +9,9 @@ public partial class GitDiffProvider : IEditorGitService
     [GeneratedRegex(@"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")]
     private static partial Regex HunkHeaderRegex();
 
+    [GeneratedRegex(@"^@@ -(?<oldStart>\d+)(?:,(?<oldCount>\d+))? \+(?<newStart>\d+)(?:,(?<newCount>\d+))? @@")]
+    private static partial Regex FullHunkHeaderRegex();
+
     public Dictionary<int, GitLineState> GetDiff(string filePath)
     {
         var result = new Dictionary<int, GitLineState>();
@@ -68,6 +71,51 @@ public partial class GitDiffProvider : IEditorGitService
         var output = RunGit(workDir, ["commit", "-m", message], captureStderr: true);
         bool success = !string.IsNullOrEmpty(output) && !output.StartsWith("ERROR:");
         return (success, output ?? "git commit failed");
+    }
+
+    public (bool Success, string Output) StageHunk(string filePath, int line)
+    {
+        if (!TryGetFileWorkDir(filePath, out var workDir))
+            return (false, "Not a git repository");
+
+        var diff = RunGit(workDir, ["diff", "--no-ext-diff", "--unified=3", "--", filePath], captureStderr: true);
+        if (string.IsNullOrEmpty(diff) || diff == "(no changes)")
+            return (false, "No unstaged changes");
+        if (diff.StartsWith("ERROR:"))
+            return (false, diff);
+
+        if (!TryBuildSingleHunkPatch(diff, line, out var patch))
+            return (false, "No unstaged hunk at cursor");
+
+        var output = RunGitWithInput(workDir, ["apply", "--cached"], patch);
+        if (output.StartsWith("ERROR:"))
+            return (false, output);
+        return (true, string.IsNullOrWhiteSpace(output) ? "Hunk staged" : output);
+    }
+
+    public (bool Success, string Output) UnstageHunk(string filePath, int line)
+    {
+        if (!TryGetFileWorkDir(filePath, out var workDir))
+            return (false, "Not a git repository");
+
+        var diff = RunGit(workDir, ["diff", "--cached", "--no-ext-diff", "--unified=3", "--", filePath], captureStderr: true);
+        if (string.IsNullOrEmpty(diff) || diff == "(no changes)")
+            return (false, "No staged changes");
+        if (diff.StartsWith("ERROR:"))
+            return (false, diff);
+
+        var worktreeDiff = RunGit(workDir, ["diff", "--no-ext-diff", "--unified=3", "--", filePath], captureStderr: true);
+        if (!string.IsNullOrEmpty(worktreeDiff) && worktreeDiff.StartsWith("ERROR:"))
+            return (false, worktreeDiff);
+
+        var indexLine = MapWorktreeLineToIndexLine(worktreeDiff ?? "", line);
+        if (!TryBuildSingleHunkPatch(diff, indexLine, out var patch))
+            return (false, "No staged hunk at cursor");
+
+        var output = RunGitWithInput(workDir, ["apply", "--cached", "--reverse"], patch);
+        if (output.StartsWith("ERROR:"))
+            return (false, output);
+        return (true, string.IsNullOrWhiteSpace(output) ? "Hunk unstaged" : output);
     }
 
     public Dictionary<int, string> GetBlameAnnotations(string filePath)
@@ -153,6 +201,163 @@ public partial class GitDiffProvider : IEditorGitService
         }
     }
 
+    private static string RunGitWithInput(string workDir, string[] args, string input)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workDir,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            using var proc = Process.Start(psi);
+            if (proc == null) return "ERROR: Failed to start git";
+            proc.StandardInput.Write(input);
+            proc.StandardInput.Close();
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit(5000);
+
+            if (proc.ExitCode != 0)
+                return $"ERROR: {(string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim()}";
+            return string.IsNullOrWhiteSpace(stdout) ? stderr.Trim() : stdout.Trim();
+        }
+        catch (Exception ex)
+        {
+            return $"ERROR: {ex.Message}";
+        }
+    }
+
+    private static bool TryBuildSingleHunkPatch(string diffOutput, int zeroBasedLine, out string patch)
+    {
+        patch = "";
+        var targetLine = zeroBasedLine + 1;
+        var fileHeader = new List<string>();
+        List<string>? currentHunk = null;
+        bool currentContainsTarget = false;
+
+        var diffLines = diffOutput.Split('\n');
+        for (int i = 0; i < diffLines.Length; i++)
+        {
+            var rawLine = diffLines[i];
+            if (i == diffLines.Length - 1 && rawLine.Length == 0)
+                break;
+
+            var line = rawLine.TrimEnd('\r');
+            if (line.StartsWith("@@", StringComparison.Ordinal))
+            {
+                if (currentHunk != null && currentContainsTarget)
+                {
+                    patch = BuildPatch(fileHeader, currentHunk);
+                    return true;
+                }
+
+                currentHunk = [line];
+                currentContainsTarget = HunkContainsLine(line, targetLine);
+                continue;
+            }
+
+            if (currentHunk == null)
+                fileHeader.Add(line);
+            else
+                currentHunk.Add(line);
+        }
+
+        if (currentHunk != null && currentContainsTarget)
+        {
+            patch = BuildPatch(fileHeader, currentHunk);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int MapWorktreeLineToIndexLine(string diffOutput, int zeroBasedWorktreeLine)
+    {
+        if (string.IsNullOrWhiteSpace(diffOutput))
+            return zeroBasedWorktreeLine;
+
+        var targetNewLine = zeroBasedWorktreeLine + 1;
+        var oldLine = 1;
+        var newLine = 1;
+        var inHunk = false;
+
+        foreach (var rawLine in diffOutput.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.StartsWith("@@", StringComparison.Ordinal))
+            {
+                var match = FullHunkHeaderRegex().Match(line);
+                if (!match.Success)
+                    continue;
+
+                var oldStart = int.Parse(match.Groups["oldStart"].Value);
+                var newStart = int.Parse(match.Groups["newStart"].Value);
+
+                if (targetNewLine < newStart)
+                    return Math.Max(0, oldLine + (targetNewLine - newLine) - 1);
+
+                oldLine = oldStart;
+                newLine = newStart;
+                inHunk = true;
+                continue;
+            }
+
+            if (!inHunk || line.Length == 0)
+                continue;
+
+            switch (line[0])
+            {
+                case ' ':
+                    if (newLine == targetNewLine)
+                        return Math.Max(0, oldLine - 1);
+                    oldLine++;
+                    newLine++;
+                    break;
+                case '+':
+                    if (newLine == targetNewLine)
+                        return Math.Max(0, oldLine - 1);
+                    newLine++;
+                    break;
+                case '-':
+                    oldLine++;
+                    break;
+            }
+        }
+
+        return Math.Max(0, oldLine + (targetNewLine - newLine) - 1);
+    }
+
+    private static string BuildPatch(List<string> fileHeader, List<string> hunk)
+    {
+        var lines = new List<string>(fileHeader.Count + hunk.Count);
+        lines.AddRange(fileHeader.Where(l => l.Length > 0));
+        lines.AddRange(hunk);
+        return string.Join('\n', lines) + "\n";
+    }
+
+    private static bool HunkContainsLine(string hunkHeader, int oneBasedLine)
+    {
+        var match = FullHunkHeaderRegex().Match(hunkHeader);
+        if (!match.Success) return false;
+
+        var newStart = int.Parse(match.Groups["newStart"].Value);
+        var newCount = match.Groups["newCount"].Success
+            ? int.Parse(match.Groups["newCount"].Value)
+            : 1;
+
+        var first = newStart;
+        var last = newCount == 0 ? newStart : newStart + newCount - 1;
+        return oneBasedLine >= first && oneBasedLine <= last;
+    }
+
     private static void ParseUnifiedDiff(string diffOutput, Dictionary<int, GitLineState> result)
     {
         var hunkRegex = HunkHeaderRegex();
@@ -160,10 +365,18 @@ public partial class GitDiffProvider : IEditorGitService
         int pendingDeletes = 0;
         bool inHeader = true;
 
+        void FlushDeleted()
+        {
+            if (pendingDeletes <= 0 || newLine < 0) return;
+            result.TryAdd(newLine, GitLineState.Deleted);
+            pendingDeletes = 0;
+        }
+
         foreach (var line in diffOutput.Split('\n'))
         {
             if (line.StartsWith("@@"))
             {
+                FlushDeleted();
                 var m = hunkRegex.Match(line);
                 if (m.Success)
                 {
@@ -187,11 +400,13 @@ public partial class GitDiffProvider : IEditorGitService
                     pendingDeletes++;
                     break;
                 case ' ':
-                    pendingDeletes = 0;
+                    FlushDeleted();
                     newLine++;
                     break;
             }
         }
+
+        FlushDeleted();
     }
 
     private static void ParsePorcelainBlame(string blameOutput, Dictionary<int, string> result)

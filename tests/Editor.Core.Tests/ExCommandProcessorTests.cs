@@ -81,6 +81,22 @@ public class ExCommandProcessorTests
         Assert.Equal("notes.txt", evt.FilePath);
     }
 
+    [Theory]
+    [InlineData("Git stage", true)]
+    [InlineData("Gstage", true)]
+    [InlineData("Git unstage", false)]
+    [InlineData("Gunstage", false)]
+    public void GitHunkStageCommands_ProduceHunkStageRequestedEvent(string command, bool stage)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<HunkStageRequestedEvent>(result.Event);
+        Assert.Equal(stage, evt.Stage);
+    }
+
     [Fact]
     public void NewAndVnew_ProduceSplitEvents()
     {
