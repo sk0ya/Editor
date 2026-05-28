@@ -956,7 +956,8 @@
                          FontSize="13"
                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
                          VirtualizingStackPanel.IsVirtualizing="True"
-                         SelectionChanged="OutlineList_SelectionChanged">
+                         KeyDown="OutlineList_KeyDown"
+                         MouseLeftButtonUp="OutlineList_MouseLeftButtonUp">
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
                             <Setter Property="Background" Value="Transparent"/>

@@ -197,6 +197,7 @@ public partial class MainWindow : Window
     private System.Windows.Point _shellMenuScreenPos;
     private bool _suppressFileOpen;
     private bool _fileTreeCtrlWPending;
+    private bool _focusOutlineAfterPopulate;
     private bool _previewVisible;
     private DispatcherTimer? _previewDebounceTimer;
     private Task? _webView2InitTask;
@@ -2097,14 +2098,57 @@ public partial class MainWindow : Window
             return;
         }
         ShowSidebar(SidebarPanel.Outline);
+        _focusOutlineAfterPopulate = true;
         RefreshOutlineForEditor(CurrentEditor);
     }
 
-    private void OutlineList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void OutlineList_KeyDown(object sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.J:
+            case Key.Down:
+                OutlineMoveSelection(+1);
+                e.Handled = true;
+                return;
+            case Key.K:
+            case Key.Up:
+                OutlineMoveSelection(-1);
+                e.Handled = true;
+                return;
+            case Key.Return:
+                OutlineActivateSelected();
+                e.Handled = true;
+                return;
+            case Key.Escape:
+                CurrentEditor?.Focus();
+                e.Handled = true;
+                return;
+        }
+    }
+
+    private void OutlineList_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (FindVisualAncestor<ListBoxItem>((DependencyObject)e.OriginalSource) == null)
+            return;
+        OutlineActivateSelected();
+    }
+
+    private void OutlineMoveSelection(int delta)
+    {
+        if (OutlineList.Items.Count == 0) return;
+
+        int idx = OutlineList.SelectedIndex;
+        int next = idx < 0
+            ? (delta > 0 ? 0 : OutlineList.Items.Count - 1)
+            : Math.Clamp(idx + delta, 0, OutlineList.Items.Count - 1);
+        OutlineList.SelectedIndex = next;
+        OutlineList.ScrollIntoView(OutlineList.Items[next]);
+    }
+
+    private void OutlineActivateSelected()
     {
         if (OutlineList.SelectedItem is not OutlineItem item) return;
-        // Deselect so the user can click again to jump
-        OutlineList.SelectedItem = null;
         var editor = CurrentEditor;
         if (editor == null) return;
         editor.JumpToLine(item.Line, item.Col);
@@ -2121,7 +2165,10 @@ public partial class MainWindow : Window
 
         // Always show the outline panel (e.g. triggered via :Outline command)
         if (!_sidebarVisible || _activeSidebarPanel != SidebarPanel.Outline)
+        {
             ShowSidebar(SidebarPanel.Outline);
+        }
+        _focusOutlineAfterPopulate = true;
         PopulateOutlineList(e.Items);
     }
 
@@ -2139,6 +2186,17 @@ public partial class MainWindow : Window
                 Line      = item.Line,
                 Col       = item.Col,
             });
+        }
+
+        if (OutlineList.Items.Count > 0 && OutlineList.SelectedIndex < 0)
+            OutlineList.SelectedIndex = 0;
+
+        if (_focusOutlineAfterPopulate)
+        {
+            _focusOutlineAfterPopulate = false;
+            OutlineList.Focus();
+            if (OutlineList.SelectedItem != null)
+                OutlineList.ScrollIntoView(OutlineList.SelectedItem);
         }
     }
 
