@@ -26,7 +26,6 @@
 
 | 機能 | 説明 | 優先度 |
 |------|------|-------|
-| `autocmd` / `augroup` | ファイル種別・イベントに応じた自動コマンド | 中 |
 | `modeline` (`vim: set ...`) | ファイル末尾の modeline 解釈 | 低 |
 | `:if` / `:else` / `:endif` | 条件分岐 | 低 |
 | `:for` / `:endfor` | ループ | 低 |
@@ -95,7 +94,6 @@
 ## 優先度サマリー
 
 ### 中 (次のフェーズ)
-- `autocmd` / `augroup`
 - `:Git status` UI
 - プロジェクト横断 Find & Replace
 - `.editorconfig` サポート
@@ -116,6 +114,7 @@
 
 | 機能 | 日付 |
 |------|------|
+| **`autocmd` / `augroup` 基本対応** `.vimrc` / `:autocmd` で `BufRead` / `BufReadPost` / `BufEnter` / `FileType` に応じた設定コマンドを登録・実行 | ✅ 2026-05-29 |
 | **正規表現の `\v` / `\V` magic モード** `:s` / `:global` / `:sort /pat/` など Ex の正規表現で very magic / very nomagic を解釈 | ✅ 2026-05-29 |
 | **`.editorconfig` サポート** ファイル読み込み時に最寄りの `.editorconfig` を解決し、インデント幅・タブ幅・改行コード・文字コードを適用 | ✅ 2026-05-29 |
 | **コマンドパレット (`Ctrl+Shift+P`)** コマンド名でアクションを絞り込み実行。最近開いたファイル/フォルダーも再オープン可能 | ✅ 2026-05-29 |

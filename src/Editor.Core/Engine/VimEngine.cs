@@ -75,6 +75,7 @@ public class VimEngine
     private bool _isDotReplaying;
     private BlockInsertState? _blockInsertState;
     private readonly List<VimKeyStroke> _pendingMappedInput = [];
+    private int _autocmdDepth;
 
     private sealed record RepeatChange(ParsedCommand Command, IReadOnlyList<VimKeyStroke> InsertKeys);
     private sealed record BlockInsertState(int StartLine, int EndLine, int Column);
@@ -130,6 +131,7 @@ public class VimEngine
 
     public void LoadFile(string path)
     {
+        RunAutocmds("BufReadPre", path);
         var editorConfig = EditorConfig.LoadForFile(path);
         editorConfig.TryGetFileEncoding(out var preferredEncoding);
         _bufferManager.OpenFile(path, preferredEncoding);
@@ -141,6 +143,10 @@ public class VimEngine
         _config.Options.FileFormat   = _bufferManager.Current.FileFormat;
         _config.Options.FileEncoding = _bufferManager.Current.FileEncoding;
         editorConfig.ApplyTo(_config.Options, _bufferManager.Current);
+        RunAutocmds("BufRead", path);
+        RunAutocmds("BufReadPost", path);
+        RunAutocmds("BufEnter", path);
+        RunAutocmds("FileType", GetFileTypeNames(path));
     }
 
     public void SetText(string text)
@@ -2278,6 +2284,12 @@ public class VimEngine
 
         if (IsMapCommand(cmd))
             message = "Key mapping registered";
+        else if (cmd.Equals("autocmd", StringComparison.OrdinalIgnoreCase) ||
+                 cmd.Equals("au", StringComparison.OrdinalIgnoreCase))
+            message = _config.Autocmds.Format();
+        else if (cmd.StartsWith("autocmd ", StringComparison.OrdinalIgnoreCase) ||
+                 cmd.StartsWith("au ", StringComparison.OrdinalIgnoreCase))
+            message = cmd.Contains('!') ? "Autocommands cleared" : "Autocommand registered";
         else if (cmd.StartsWith("colorscheme ", StringComparison.OrdinalIgnoreCase))
             message = $"colorscheme: {_config.Options.ColorScheme}";
         else if (cmd.StartsWith("set ", StringComparison.OrdinalIgnoreCase) ||
@@ -2295,6 +2307,10 @@ public class VimEngine
         return cmd.StartsWith("set ", StringComparison.OrdinalIgnoreCase) ||
             cmd.StartsWith("colorscheme ", StringComparison.OrdinalIgnoreCase) ||
             cmd.StartsWith("syntax ", StringComparison.OrdinalIgnoreCase) ||
+            cmd.StartsWith("augroup", StringComparison.OrdinalIgnoreCase) ||
+            cmd.StartsWith("autocmd", StringComparison.OrdinalIgnoreCase) ||
+            cmd.Equals("au", StringComparison.OrdinalIgnoreCase) ||
+            cmd.StartsWith("au ", StringComparison.OrdinalIgnoreCase) ||
             IsMapCommand(cmd);
     }
 
@@ -2305,6 +2321,75 @@ public class VimEngine
         cmd.StartsWith("nnoremap ", StringComparison.OrdinalIgnoreCase) ||
         cmd.StartsWith("inoremap ", StringComparison.OrdinalIgnoreCase) ||
         cmd.StartsWith("vnoremap ", StringComparison.OrdinalIgnoreCase);
+
+    private void RunAutocmds(string eventName, string filePathOrType) =>
+        RunAutocmds(eventName, [filePathOrType]);
+
+    private void RunAutocmds(string eventName, IEnumerable<string> filePathOrTypes)
+    {
+        if (_autocmdDepth > 8)
+            return;
+
+        _autocmdDepth++;
+        try
+        {
+            var autocmds = filePathOrTypes
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .SelectMany(v => _config.Autocmds.Match(eventName, v))
+                .Distinct()
+                .ToArray();
+
+            foreach (var autocmd in autocmds)
+                ExecuteAutocmdCommand(autocmd.Command);
+        }
+        finally
+        {
+            _autocmdDepth--;
+        }
+    }
+
+    private void ExecuteAutocmdCommand(string command)
+    {
+        foreach (var part in command.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (TryExecuteConfigCommand(part, out _, out _, out _))
+                continue;
+
+            if (part.StartsWith("echo ", StringComparison.OrdinalIgnoreCase) ||
+                part.StartsWith("echomsg ", StringComparison.OrdinalIgnoreCase))
+            {
+                _exProcessor.Execute(part, _cursor);
+            }
+        }
+    }
+
+    private static string[] GetFileTypeNames(string filePath)
+    {
+        var ext = Path.GetExtension(filePath).ToLowerInvariant();
+        return ext switch
+        {
+            ".cs" => ["cs", "csharp"],
+            ".py" => ["python"],
+            ".xml" => ["xml"],
+            ".md" or ".markdown" => ["markdown"],
+            ".js" or ".jsx" => ["javascript"],
+            ".ts" or ".tsx" => ["typescript"],
+            ".rs" => ["rust"],
+            ".json" => ["json"],
+            ".toml" => ["toml"],
+            ".yaml" or ".yml" => ["yaml"],
+            ".sh" or ".bash" or ".zsh" or ".fish" => ["sh", "shell"],
+            ".css" => ["css"],
+            ".sql" => ["sql"],
+            ".c" => ["c"],
+            ".cpp" or ".cc" or ".cxx" or ".hpp" or ".hh" => ["cpp", "c"],
+            ".h" => ["c", "cpp"],
+            ".go" => ["go"],
+            ".bat" or ".cmd" => ["dosbatch", "batch"],
+            ".ps1" or ".psm1" or ".psd1" => ["ps1", "powershell"],
+            _ => [],
+        };
+    }
 
     private bool GetSearchIgnoreCase(string pattern) =>
         _config.Options.SmartCase ? !pattern.Any(char.IsUpper) : _config.Options.IgnoreCase;

@@ -1,3 +1,4 @@
+using System.IO;
 using Editor.Core.Config;
 using Editor.Core.Engine;
 using Editor.Core.Models;
@@ -2767,5 +2768,88 @@ public class VimEngineTests
         engine.ProcessKey("z");
         engine.ProcessKey("N");
         Assert.False(engine.FoldsDisabled);
+    }
+
+    [Fact]
+    public void VimConfig_ParsesAutocmdInsideAugroup()
+    {
+        var config = new VimConfig();
+
+        config.ParseLines([
+            "augroup editor_test",
+            "  autocmd!",
+            "  autocmd BufRead *.cs set tabstop=2",
+            "  autocmd BufRead,BufEnter *.md set expandtab",
+            "augroup END",
+        ]);
+
+        Assert.Equal(3, config.Autocmds.Items.Count);
+        Assert.All(config.Autocmds.Items, a => Assert.Equal("editor_test", a.Group));
+        Assert.Contains(config.Autocmds.Items, a => a.Event == "BufRead" && a.Pattern == "*.cs" && a.Command == "set tabstop=2");
+        Assert.Contains(config.Autocmds.Items, a => a.Event == "BufEnter" && a.Pattern == "*.md" && a.Command == "set expandtab");
+    }
+
+    [Fact]
+    public void VimConfig_ParsesExplicitAutocmdGroup()
+    {
+        var config = new VimConfig();
+
+        config.ParseCommand("autocmd editor_test BufRead *.cs set tabstop=2 shiftwidth=2");
+
+        var autocmd = Assert.Single(config.Autocmds.Items);
+        Assert.Equal("editor_test", autocmd.Group);
+        Assert.Equal("BufRead", autocmd.Event);
+        Assert.Equal("*.cs", autocmd.Pattern);
+        Assert.Equal("set tabstop=2 shiftwidth=2", autocmd.Command);
+    }
+
+    [Fact]
+    public void LoadFile_RunsMatchingBufReadAutocmd()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        File.WriteAllText(path, "class C {}\n");
+
+        try
+        {
+            var config = new VimConfig();
+            config.ParseCommand("autocmd BufRead *.cs set tabstop=2 shiftwidth=2");
+            config.ParseCommand("autocmd BufRead *.md set tabstop=8");
+            var engine = CreateEngine(config: config);
+
+            engine.LoadFile(path);
+
+            Assert.Equal(2, engine.Options.TabStop);
+            Assert.Equal(2, engine.Options.ShiftWidth);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadFile_RunsFileTypeAutocmdsUsingVimFileTypeNames()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        File.WriteAllText(path, "class C {}\n");
+
+        try
+        {
+            var config = new VimConfig();
+            config.ParseCommand("autocmd FileType cs set tabstop=2");
+            config.ParseCommand("autocmd FileType csharp set shiftwidth=2");
+            config.ParseCommand("autocmd FileType C# set scrolloff=9");
+            var engine = CreateEngine(config: config);
+
+            engine.LoadFile(path);
+
+            Assert.Equal(2, engine.Options.TabStop);
+            Assert.Equal(2, engine.Options.ShiftWidth);
+            Assert.NotEqual(9, engine.Options.ScrollOff);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

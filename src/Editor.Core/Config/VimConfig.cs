@@ -10,9 +10,11 @@ public class VimConfig
     public Dictionary<string, string> VisualMaps { get; } = [];
     public Dictionary<string, string> Abbreviations { get; } = [];
     public SnippetManager Snippets { get; } = new();
+    public VimAutocmdRegistry Autocmds { get; } = new();
 
     // The mapleader character (default backslash, set by `let mapleader=...`)
     public string Leader { get; private set; } = "\\";
+    private string? _currentAugroup;
 
     public static VimConfig LoadFromFile(string path)
     {
@@ -129,6 +131,12 @@ public class VimConfig
             return null;
         }
 
+        if (TryParseAugroupCommand(cmd))
+            return null;
+
+        if (TryParseAutocmdCommand(cmd, out var autocmdError))
+            return autocmdError;
+
         if (cmd.StartsWith("colorscheme ", StringComparison.OrdinalIgnoreCase))
         {
             Options.ColorScheme = cmd[12..].Trim();
@@ -143,6 +151,122 @@ public class VimConfig
         // cnoremap, cmap, function, endfunction, if, endif, etc.
         return null;
     }
+
+    private bool TryParseAugroupCommand(string cmd)
+    {
+        if (!cmd.StartsWith("augroup", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var rest = cmd.Length > 7 ? cmd[7..].Trim() : "";
+        if (rest.Equals("END", StringComparison.OrdinalIgnoreCase))
+            _currentAugroup = null;
+        else if (rest.Length > 0)
+            _currentAugroup = rest;
+
+        return true;
+    }
+
+    private bool TryParseAutocmdCommand(string cmd, out string? error)
+    {
+        error = null;
+        if (!cmd.StartsWith("autocmd", StringComparison.OrdinalIgnoreCase) &&
+            !cmd.StartsWith("au ", StringComparison.OrdinalIgnoreCase) &&
+            !cmd.Equals("au", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var rest = cmd.StartsWith("autocmd", StringComparison.OrdinalIgnoreCase)
+            ? cmd[7..].Trim()
+            : cmd.Length > 2 ? cmd[2..].Trim() : "";
+
+        if (rest.StartsWith('!'))
+        {
+            rest = rest[1..].Trim();
+            if (rest.Length == 0)
+            {
+                Autocmds.Clear(_currentAugroup);
+                return true;
+            }
+
+            var clearParts = rest.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+            string? clearGroup = _currentAugroup;
+            string? clearEvent = null;
+            string? clearPattern = null;
+            if (clearParts.Length > 0)
+            {
+                if (IsAutocmdEventList(clearParts[0]))
+                {
+                    clearEvent = clearParts[0];
+                    clearPattern = clearParts.Length > 1 ? clearParts[1].Trim() : null;
+                }
+                else
+                {
+                    clearGroup = clearParts[0];
+                    clearEvent = clearParts.Length > 1 ? clearParts[1] : null;
+                    clearPattern = clearParts.Length > 2 ? clearParts[2].Trim() : null;
+                }
+            }
+
+            Autocmds.Clear(clearGroup, clearEvent, clearPattern);
+            return true;
+        }
+
+        if (rest.Length == 0)
+            return true;
+
+        var parts = rest.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries);
+        string group;
+        string eventList;
+        string patternList;
+        string command;
+
+        if (parts.Length >= 3 && IsAutocmdEventList(parts[0]))
+        {
+            group = _currentAugroup ?? "";
+            eventList = parts[0];
+            patternList = parts[1];
+            command = parts.Length == 4 ? $"{parts[2]} {parts[3]}" : parts[2];
+        }
+        else if (parts.Length >= 4 && IsAutocmdEventList(parts[1]))
+        {
+            group = parts[0];
+            eventList = parts[1];
+            patternList = parts[2];
+            command = parts[3];
+        }
+        else
+        {
+            error = "E216: No such group or event";
+            return true;
+        }
+
+        foreach (var eventName in eventList.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            foreach (var pattern in patternList.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                Autocmds.Add(group, eventName, pattern, command);
+        }
+
+        return true;
+    }
+
+    private static bool IsAutocmdEventList(string value)
+    {
+        foreach (var eventName in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!SupportedAutocmdEvents.Contains(eventName))
+                return false;
+        }
+
+        return value.Length > 0;
+    }
+
+    private static readonly HashSet<string> SupportedAutocmdEvents = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BufReadPre",
+        "BufRead",
+        "BufReadPost",
+        "BufEnter",
+        "FileType",
+    };
 
     private bool TryParseMapCommand(string cmd, out Dictionary<string, string>? dict, out string? rest)
     {
