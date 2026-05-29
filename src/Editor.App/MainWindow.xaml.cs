@@ -41,6 +41,12 @@ public partial class MainWindow : Window
         public override IEnumerable<VimEditorControl> AllEditors() { yield return Editor; }
     }
 
+    private sealed class PreviewPaneNode : PaneNode
+    {
+        public required Grid Panel { get; init; }
+        public override IEnumerable<VimEditorControl> AllEditors() => [];
+    }
+
     private sealed class SplitPaneNode : PaneNode
     {
         public bool Vertical { get; init; }
@@ -96,6 +102,7 @@ public partial class MainWindow : Window
     private static UIElement PaneToElement(PaneNode node) => node switch
     {
         EditorPaneNode e => e.Editor,
+        PreviewPaneNode p => p.Panel,
         SplitPaneNode s  => s.Container,
         _ => throw new InvalidOperationException()
     };
@@ -199,6 +206,8 @@ public partial class MainWindow : Window
     private bool _fileTreeCtrlWPending;
     private bool _focusOutlineAfterPopulate;
     private bool _previewVisible;
+    private PreviewPaneNode? _previewPaneNode;
+    private VimEditorControl? _previewSourceEditor;
     private DispatcherTimer? _previewDebounceTimer;
     private Task? _webView2InitTask;
     private TerminalPane? _terminalPane;
@@ -1092,6 +1101,9 @@ public partial class MainWindow : Window
 
         _focusedEditor.Focus();
         RefreshOutlineForEditor(_focusedEditor);
+
+        if (_previewVisible && _previewSourceEditor == _focusedEditor)
+            SchedulePreviewUpdate();
     }
 
     private void WireEditorEvents(VimEditorControl editor)
@@ -1131,7 +1143,7 @@ public partial class MainWindow : Window
         var ft = FindFileTabByPath(path);
         ft?.UpdateHeader(isModified: editor.Engine.CurrentBuffer.Text.IsModified);
 
-        if (_previewVisible && editor == _focusedEditor)
+        if (_previewVisible && editor == _previewSourceEditor)
             SchedulePreviewUpdate();
     }
 
@@ -1253,28 +1265,132 @@ public partial class MainWindow : Window
 
     private void ShowMarkdownPreview()
     {
+        if (_globalRoot == null || CurrentEditor == null) return;
+
+        CloseMarkdownPreview(focusEditor: false);
+
+        var sourcePane = FindEditorPane(_globalRoot, CurrentEditor);
+        if (sourcePane == null) return;
+
         _previewVisible = true;
-        PreviewBtn.IsChecked            = true;
+        _previewSourceEditor = CurrentEditor;
         MarkdownPreviewPanel.Visibility = Visibility.Visible;
-        PreviewSplitter.Visibility      = Visibility.Visible;
-        PreviewSplitterCol.Width        = new GridLength(4);
-        PreviewCol.Width                = new GridLength(420);
+        PreviewBtn.IsChecked = true;
+
+        PreviewSplitter.Visibility = Visibility.Collapsed;
+        PreviewSplitterCol.Width = new GridLength(0);
+        PreviewCol.Width = new GridLength(0);
+
+        var sourceElement = (UIElement)sourcePane.Editor;
+        var parentSplit = FindParentSplit(_globalRoot, sourcePane);
+        int gridPos = -1;
+        if (parentSplit != null)
+        {
+            gridPos = parentSplit.Vertical
+                ? Grid.GetColumn(sourceElement)
+                : Grid.GetRow(sourceElement);
+            parentSplit.Container.Children.Remove(sourceElement);
+        }
+        else
+        {
+            EditorContent.Child = null;
+        }
+
+        DetachFromParent(MarkdownPreviewPanel);
+        var previewNode = new PreviewPaneNode { Panel = MarkdownPreviewPanel };
+        var newGrid = SplitPaneNode.BuildGrid(vertical: true, sourceElement, MarkdownPreviewPanel);
+        var splitNode = new SplitPaneNode
+        {
+            Vertical = true,
+            First = sourcePane,
+            Second = previewNode,
+            Container = newGrid
+        };
+
+        if (parentSplit == null)
+        {
+            _globalRoot = splitNode;
+            EditorContent.Child = newGrid;
+        }
+        else
+        {
+            if (parentSplit.Vertical) Grid.SetColumn(newGrid, gridPos);
+            else                      Grid.SetRow(newGrid, gridPos);
+            parentSplit.Container.Children.Add(newGrid);
+
+            if (parentSplit.First == sourcePane) parentSplit.First = splitNode;
+            else parentSplit.Second = splitNode;
+        }
+
+        _previewPaneNode = previewNode;
         UpdateMarkdownPreview();
+        CurrentEditor.Focus();
     }
 
-    private void CloseMarkdownPreview()
+    private void CloseMarkdownPreview(bool focusEditor = true)
     {
+        _previewDebounceTimer?.Stop();
+
+        if (_globalRoot != null && _previewPaneNode != null)
+        {
+            var parentSplit = FindParentSplit(_globalRoot, _previewPaneNode);
+            if (parentSplit != null)
+            {
+                var sibling = parentSplit.First == _previewPaneNode
+                    ? parentSplit.Second
+                    : parentSplit.First;
+                var siblingElement = PaneToElement(sibling);
+
+                parentSplit.Container.Children.Remove(siblingElement);
+                parentSplit.Container.Children.Remove(MarkdownPreviewPanel);
+
+                var grandParent = FindParentSplit(_globalRoot, parentSplit);
+                if (grandParent == null)
+                {
+                    _globalRoot = sibling;
+                    EditorContent.Child = siblingElement;
+                }
+                else
+                {
+                    grandParent.ReplaceChild(parentSplit.Container, siblingElement);
+                    if (grandParent.First == parentSplit) grandParent.First = sibling;
+                    else grandParent.Second = sibling;
+                }
+            }
+        }
+
         _previewVisible = false;
-        PreviewBtn.IsChecked            = false;
+        _previewPaneNode = null;
+        _previewSourceEditor = null;
+        PreviewBtn.IsChecked = false;
         MarkdownPreviewPanel.Visibility = Visibility.Collapsed;
-        PreviewSplitter.Visibility      = Visibility.Collapsed;
-        PreviewSplitterCol.Width        = new GridLength(0);
-        PreviewCol.Width                = new GridLength(0);
-        _focusedEditor?.Focus();
+        PreviewSplitter.Visibility = Visibility.Collapsed;
+        PreviewSplitterCol.Width = new GridLength(0);
+        PreviewCol.Width = new GridLength(0);
+        DetachFromParent(MarkdownPreviewPanel);
+
+        if (focusEditor)
+            _focusedEditor?.Focus();
     }
 
     private void ClosePreview_Click(object sender, RoutedEventArgs e) =>
         CloseMarkdownPreview();
+
+    private static void DetachFromParent(UIElement element)
+    {
+        switch (VisualTreeHelper.GetParent(element))
+        {
+            case Panel panel:
+                panel.Children.Remove(element);
+                break;
+            case Decorator decorator when decorator.Child == element:
+                decorator.Child = null;
+                break;
+            case ContentControl contentControl when contentControl.Content == element:
+                contentControl.Content = null;
+                break;
+        }
+    }
 
     private void SchedulePreviewUpdate()
     {
@@ -1294,7 +1410,8 @@ public partial class MainWindow : Window
 
     private async void UpdateMarkdownPreview()
     {
-        if (!_previewVisible || CurrentEditor == null) return;
+        var editor = _previewSourceEditor ?? CurrentEditor;
+        if (!_previewVisible || editor == null) return;
 
         // All concurrent callers await the same Task — prevents parallel EnsureCoreWebView2Async calls.
         _webView2InitTask ??= PreviewBrowser.EnsureCoreWebView2Async();
@@ -1315,10 +1432,11 @@ public partial class MainWindow : Window
         }
 
         // Re-check state after the async suspension (user may have closed preview or switched editor)
-        if (!_previewVisible || CurrentEditor == null) return;
+        editor = _previewSourceEditor ?? CurrentEditor;
+        if (!_previewVisible || editor == null) return;
         if (PreviewBrowser.CoreWebView2 == null) return;
 
-        var filePath = CurrentEditor.Engine.CurrentBuffer.FilePath;
+        var filePath = editor.Engine.CurrentBuffer.FilePath;
         var ext = filePath != null ? Path.GetExtension(filePath).ToLowerInvariant() : string.Empty;
 
         if (ext != ".md" && ext != ".markdown")
@@ -1330,7 +1448,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var text = CurrentEditor.Engine.CurrentBuffer.Text.GetText();
+        var text = editor.Engine.CurrentBuffer.Text.GetText();
         var title = filePath != null ? Path.GetFileName(filePath) : "Preview";
         var html = MarkdownRenderer.RenderToHtml(text, title);
         PreviewBrowser.CoreWebView2.NavigateToString(html);
@@ -1884,6 +2002,9 @@ public partial class MainWindow : Window
     {
         if (sender is not VimEditorControl editor) return;
 
+        if (_previewSourceEditor == editor)
+            CloseMarkdownPreview(focusEditor: false);
+
         if (!AllEditors().Skip(1).Any())
         {
             // Single pane: close the current file's tab
@@ -1963,7 +2084,7 @@ public partial class MainWindow : Window
         UpdateSelectedTabForEditor(editor);
         RefreshOutlineForEditor(editor);
 
-        if (_previewVisible)
+        if (_previewVisible && editor == _previewSourceEditor)
             SchedulePreviewUpdate();
     }
 
