@@ -1162,7 +1162,7 @@ public partial class MainWindow : Window
 
     private void Editor_TerminalRequested(object? sender, string? shellCmd)
     {
-        ShowTerminalPanel();
+        ShowTerminalPanel(shellCmd);
     }
 
     private void Editor_GitOutputRequested(object? sender, GitOutputRequestedEventArgs e)
@@ -1189,19 +1189,26 @@ public partial class MainWindow : Window
             MessageBox.Show(output, "Git Commit Failed", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
-    private void ShowTerminalPanel()
+    private void ShowTerminalPanel(string? shellCmd)
     {
         if (TerminalPanel.Visibility == Visibility.Visible)
         {
-            _terminalPane?.FocusInput();
-            return;
+            if (string.IsNullOrWhiteSpace(shellCmd))
+            {
+                _terminalPane?.FocusInput();
+                return;
+            }
+
+            if (_terminalPane != null)
+                _terminalPane.EditorFocusRequested -= Terminal_EditorFocusRequested;
+            TerminalContent.Content = null;
+            _terminalPane = null;
         }
 
-        var terminal = new TerminalPane();
         var workDir = _focusedEditor?.Engine.CurrentBuffer.FilePath is { } fp
             ? Path.GetDirectoryName(fp)
             : null;
-        terminal.SetWorkingDirectory(workDir);
+        var terminal = new TerminalPane(shellCmd, workDir);
         terminal.EditorFocusRequested += Terminal_EditorFocusRequested;
 
         _terminalPane = terminal;
