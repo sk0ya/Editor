@@ -592,6 +592,24 @@ public sealed class LspManager : IEditorLspManager
         DocumentHighlightsChanged?.Invoke([]);
     }
 
+    /// <summary>Request the selection range tree at the given position.</summary>
+    public async Task<LspSelectionRange?> RequestSelectionRangeAsync(int line, int character)
+    {
+        var client = _currentClient;
+        var uri = _currentUri;
+        if (!_documentReady || client?.IsRunning != true || uri == null)
+            return null;
+
+        if (!client.SupportsSelectionRange)
+            return null;
+
+        var ranges = await client.RequestSelectionRangesAsync(
+            uri,
+            [new LspPosition(line, character)]);
+
+        return ranges is { Count: > 0 } ? ranges[0] : null;
+    }
+
     // ── Async helpers ──────────────────────────────────────────────────────
 
     private async Task InitThenOpenAsync(LspClient client, string filePath, string uri, string languageId, string text)

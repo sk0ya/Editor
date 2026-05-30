@@ -189,6 +189,27 @@ public class VimEngine
         return events;
     }
 
+    public IReadOnlyList<VimEvent> SetSelection(Selection selection)
+    {
+        var events = new List<VimEvent>();
+        var targetMode = selection.Type switch
+        {
+            SelectionType.Line => VimMode.VisualLine,
+            SelectionType.Block => VimMode.VisualBlock,
+            _ => VimMode.Visual
+        };
+
+        _visualStart = CurrentBuffer.Text.ClampCursor(selection.Start);
+        _cursor = CurrentBuffer.Text.ClampCursor(selection.End);
+        _preferredColumn = _cursor.Column;
+
+        if (_mode != targetMode)
+            ChangeMode(targetMode, events);
+
+        UpdateSelection(events);
+        return events;
+    }
+
     // Process a key stroke and return events to update the UI
     public IReadOnlyList<VimEvent> ProcessKey(string key, bool ctrl = false, bool shift = false, bool alt = false)
     {

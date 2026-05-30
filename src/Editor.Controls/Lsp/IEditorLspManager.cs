@@ -61,6 +61,7 @@ public interface IEditorLspManager : IDisposable
     Task<TypeHierarchyItem[]?> GetSubtypesAsync(TypeHierarchyItem item);
     Task RequestDocumentHighlightAsync(string uri, int line, int character);
     void ClearDocumentHighlights();
+    Task<LspSelectionRange?> RequestSelectionRangeAsync(int line, int character);
     void RequestFoldingRanges();
     void SetInlayHintsEnabled(bool enabled);
     void RequestInlayHints(int startLine, int endLine);

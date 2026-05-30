@@ -14,6 +14,7 @@ public sealed class LspClient : ILspClient
     public bool SupportsWorkspaceSymbol { get; private set; }
     public bool SupportsInlayHint { get; private set; }
     public bool SupportsSemanticTokens { get; private set; }
+    public bool SupportsSelectionRange { get; private set; }
     public SemanticTokensLegend? SemanticTokensLegend { get; private set; }
 
     public LspClient(string executable, IEnumerable<string> args, string? workingDir = null)
@@ -42,6 +43,7 @@ public sealed class LspClient : ILspClient
                     rename = new { },
                     references = new { },
                     foldingRange = new { },
+                    selectionRange = new { },
                     documentHighlight = new { },
                     documentSymbol = new { hierarchicalDocumentSymbolSupport = true },
                     inlayHint = new { },
@@ -85,6 +87,8 @@ public sealed class LspClient : ILspClient
                 SupportsWorkspaceSymbol = wsp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("inlayHintProvider", out var ihp))
                 SupportsInlayHint = ihp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            if (caps.TryGetProperty("selectionRangeProvider", out var srp))
+                SupportsSelectionRange = srp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("semanticTokensProvider", out var stp) &&
                 stp.ValueKind == JsonValueKind.Object &&
                 stp.TryGetProperty("legend", out var legend))
@@ -922,6 +926,47 @@ public sealed class LspClient : ILspClient
             return list;
         }
         catch { return null; }
+    }
+
+    public async Task<IReadOnlyList<LspSelectionRange>?> RequestSelectionRangesAsync(
+        string uri, IReadOnlyList<LspPosition> positions, CancellationToken ct = default)
+    {
+        if (!SupportsSelectionRange || positions.Count == 0) return null;
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/selectionRange", new
+            {
+                textDocument = new { uri },
+                positions = positions.Select(p => new { line = p.Line, character = p.Character }).ToArray()
+            }, ct);
+
+            if (result is null || result.Value.ValueKind == JsonValueKind.Null) return null;
+            if (result.Value.ValueKind != JsonValueKind.Array) return null;
+
+            var list = new List<LspSelectionRange>();
+            foreach (var item in result.Value.EnumerateArray())
+            {
+                var range = ParseSelectionRange(item);
+                if (range is not null)
+                    list.Add(range);
+            }
+
+            return list;
+        }
+        catch { return null; }
+    }
+
+    private static LspSelectionRange? ParseSelectionRange(JsonElement el)
+    {
+        if (el.ValueKind != JsonValueKind.Object ||
+            !el.TryGetProperty("range", out var rangeEl))
+            return null;
+
+        var parent = el.TryGetProperty("parent", out var parentEl)
+            ? ParseSelectionRange(parentEl)
+            : null;
+
+        return new LspSelectionRange(ParseRange(rangeEl), parent);
     }
 
     public void Dispose() => _process.Dispose();

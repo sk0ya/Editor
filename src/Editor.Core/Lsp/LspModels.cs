@@ -81,6 +81,9 @@ public record SemanticToken(int Line, int StartChar, int Length, string TokenTyp
 public enum DocumentHighlightKind { Text = 1, Read = 2, Write = 3 }
 public record DocumentHighlight(LspRange Range, DocumentHighlightKind Kind);
 
+// Selection ranges (returned by textDocument/selectionRange)
+public record LspSelectionRange(LspRange Range, LspSelectionRange? Parent = null);
+
 // Workspace symbols
 public enum SymbolKind
 {

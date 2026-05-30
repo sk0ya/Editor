@@ -216,6 +216,9 @@ public partial class VimEditorControl : UserControl
     private VimBuffer? _cachedLinesBuffer;
     private long _cachedLinesVersion = -1;
     private string[] _cachedLines = [];
+    private IReadOnlyList<Selection> _lspSelectionRangeSelections = [];
+    private int _lspSelectionRangeIndex = -1;
+    private CursorPosition? _lspSelectionRangeOrigin;
 
     // ─── Multi-cursor ───
     private readonly List<(int Line, int Col)> _extraCursors = [];
@@ -909,6 +912,7 @@ public partial class VimEditorControl : UserControl
     public void LoadFile(string path)
     {
         ExitMultiCursorMode();
+        ClearSelectionRangeState();
         _engine.LoadFile(path);
         UpdateAll();
         _lspManager.OnFileOpened(path, _engine.CurrentBuffer.Text.GetText());
@@ -935,6 +939,7 @@ public partial class VimEditorControl : UserControl
         _engine.CurrentBuffer.Undo.Clear();
         _engine.CurrentBuffer.Folds.Clear();
         _engine.SetCursorPosition(CursorPosition.Zero);
+        ClearSelectionRangeState();
         UpdateAll();
         _lspManager.OnFileOpened(filePath, text);
         _ = RefreshGitDiffAsync();
@@ -1226,12 +1231,14 @@ public partial class VimEditorControl : UserControl
 
     public void NavigateTo(int line, int column)
     {
+        ClearSelectionRangeState();
         var events = _engine.SetCursorPosition(new CursorPosition(line, column));
         ProcessVimEvents(events);
     }
 
     public void SetText(string text)
     {
+        ClearSelectionRangeState();
         _engine.SetText(text);
         UpdateAll();
     }
@@ -1893,6 +1900,15 @@ public partial class VimEditorControl : UserControl
             }
         }
 
+        if (!ctrl && alt && shift && mode is VimMode.Normal or VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock &&
+            (key == Key.Right || key == Key.Left))
+        {
+            _ = HandleSelectionRangeAsync(expand: key == Key.Right);
+            _keyDownHandledByVim = true;
+            e.Handled = true;
+            return;
+        }
+
         if (!ctrl && alt && !shift && key == Key.Z)
         {
             ToggleWordWrap();
@@ -2027,6 +2043,7 @@ public partial class VimEditorControl : UserControl
     private void ProcessKey(string key, bool ctrl, bool shift, bool alt)
     {
         Canvas.ResetCursorBlink();
+        ClearSelectionRangeState();
 
         bool hadCompletion = _lspManager.CompletionVisible;
 
@@ -2163,6 +2180,64 @@ public partial class VimEditorControl : UserControl
             var firstLine = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? text;
             ActiveStatusBar.UpdateStatus(firstLine.Trim());
         }
+    }
+
+    private async Task HandleSelectionRangeAsync(bool expand)
+    {
+        if (!_lspManager.IsConnected || !_lspManager.IsDocumentReady)
+        {
+            ActiveStatusBar.UpdateStatus("Selection range: LSP not ready");
+            return;
+        }
+
+        if (_lspSelectionRangeSelections.Count == 0)
+        {
+            _lspSelectionRangeOrigin = _engine.Cursor;
+            var root = await _lspManager.RequestSelectionRangeAsync(
+                _lspSelectionRangeOrigin.Value.Line,
+                _lspSelectionRangeOrigin.Value.Column);
+
+            if (root is null)
+            {
+                ActiveStatusBar.UpdateStatus("Selection range: not supported");
+                return;
+            }
+
+            var text = _engine.CurrentBuffer.Text;
+            _lspSelectionRangeSelections = SelectionRangeNavigator.BuildSelections(
+                root,
+                text.LineCount,
+                line => text.GetLineLength(line));
+            _lspSelectionRangeIndex = -1;
+        }
+
+        int? nextIndex = expand
+            ? SelectionRangeNavigator.GetExpansionIndex(
+                _lspSelectionRangeSelections,
+                _engine.Selection,
+                _lspSelectionRangeIndex)
+            : SelectionRangeNavigator.GetShrinkIndex(
+                _lspSelectionRangeSelections,
+                _engine.Selection,
+                _lspSelectionRangeIndex);
+
+        if (nextIndex is null)
+        {
+            ActiveStatusBar.UpdateStatus(expand ? "Selection range: outermost range" : "Selection range: innermost range");
+            return;
+        }
+
+        _lspSelectionRangeIndex = nextIndex.Value;
+        var events = _engine.SetSelection(_lspSelectionRangeSelections[_lspSelectionRangeIndex]);
+        ProcessVimEvents(events);
+        ActiveStatusBar.UpdateStatus($"Selection range: {_lspSelectionRangeIndex + 1}/{_lspSelectionRangeSelections.Count}");
+    }
+
+    private void ClearSelectionRangeState()
+    {
+        _lspSelectionRangeSelections = [];
+        _lspSelectionRangeIndex = -1;
+        _lspSelectionRangeOrigin = null;
     }
 
     private void InsertLspCompletion()

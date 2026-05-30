@@ -9,7 +9,7 @@
 - ドットコマンド (`.`)、レジスタ、マーク、マクロ
 - `:substitute`、`:changes` / `:jumps` / `:undolist` / `:earlier` / `:later`、コマンド履歴、`.vimrc` / `_vimrc` 読み込み
 - シンタックスハイライト（複数言語対応）
-- LSP 連携（補完、ホバー、診断、定義ジャンプ、参照検索、シグネチャヘルプ、フォーマット、リネーム、コードアクション）
+- LSP 連携（補完、ホバー、診断、定義ジャンプ、参照検索、シグネチャヘルプ、フォーマット、リネーム、コードアクション、スマート選択範囲）
 - マルチバッファ、タブ、ウィンドウ分割（`:split` / `:vsplit` / `Ctrl+W` プレフィックス）
 - Quickfix（`:copen` / `:cclose` / `:cn` / `:cp` / `:cc N` / `:cl`）と Location list（`:lopen` / `:lclose` / `:lnext` / `:lprev` / `:ll [N]` / `:llist`）
 - プロジェクト横断検索・置換（`:grep` / `:vimgrep` / `:grepreplace` / `:creplace`、Quickfix 結果から確認付き一括置換）
@@ -138,6 +138,8 @@ GitHub 公式ドキュメント:
 | `gr` | Normal | 全参照を検索（References パネル） |
 | `ga` | Normal | コードアクション（j/k/Enter/Esc で選択） |
 | `F2` | Normal | シンボルのリネーム |
+| `Shift+Alt+Right` | Normal/Visual | LSP selectionRange で選択範囲を親へ拡張 |
+| `Shift+Alt+Left` | Visual | LSP selectionRange で選択範囲を直前段階へ縮小 |
 | `Ctrl+Space` | Insert | 補完トリガー |
 | `↓`/`Ctrl+N`、`↑`/`Ctrl+P` | Insert+補完 | 補完候補を移動 |
 | `Tab`/`Enter` | Insert+補完 | 選択候補を挿入 |

@@ -15,6 +15,8 @@ public interface ILspClient : IDisposable
     bool SupportsWorkspaceSymbol { get; }
     /// <summary>サーバーが textDocument/semanticTokens/full をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsSemanticTokens { get; }
+    /// <summary>サーバーが textDocument/selectionRange をサポートしているか。InitializeAsync 後に確定する。</summary>
+    bool SupportsSelectionRange { get; }
     /// <summary>セマンティックトークンの凡例（トークン種別・修飾子）。InitializeAsync 後に確定する。</summary>
     SemanticTokensLegend? SemanticTokensLegend { get; }
     event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
@@ -49,4 +51,7 @@ public interface ILspClient : IDisposable
 
     // Document highlight
     Task<IReadOnlyList<DocumentHighlight>?> RequestDocumentHighlightAsync(string uri, int line, int character, CancellationToken ct = default);
+
+    // Selection range
+    Task<IReadOnlyList<LspSelectionRange>?> RequestSelectionRangesAsync(string uri, IReadOnlyList<LspPosition> positions, CancellationToken ct = default);
 }

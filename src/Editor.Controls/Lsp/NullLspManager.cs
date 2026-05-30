@@ -131,6 +131,9 @@ internal sealed class NullLspManager : IEditorLspManager
     {
     }
 
+    public Task<LspSelectionRange?> RequestSelectionRangeAsync(int line, int character) =>
+        Task.FromResult<LspSelectionRange?>(null);
+
     public void RequestFoldingRanges()
     {
     }
