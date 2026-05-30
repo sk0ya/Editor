@@ -519,27 +519,43 @@ public sealed class LspManager : IEditorLspManager
     /// <summary>Request workspace diagnostics without opening additional documents.</summary>
     public async Task<LspWorkspaceDiagnosticResult?> RequestWorkspaceDiagnosticsAsync(CancellationToken ct = default)
     {
-        var client = _currentClient;
-        if (client?.IsRunning != true)
+        var runningClients = _clients.Values
+            .Where(c => c.IsRunning)
+            .ToArray();
+        if (runningClients.Length == 0)
         {
             StatusMessage?.Invoke("Workspace diagnostics: LSP not connected");
             return null;
         }
 
-        if (!client.SupportsWorkspaceDiagnostics)
+        var diagnosticClients = runningClients
+            .Where(c => c.SupportsWorkspaceDiagnostics)
+            .ToArray();
+        if (diagnosticClients.Length == 0)
         {
             StatusMessage?.Invoke("Workspace diagnostics: server does not support workspace/diagnostic");
             return null;
         }
 
         StatusMessage?.Invoke("Workspace diagnostics: running...");
-        var result = await client.GetWorkspaceDiagnosticsAsync(ct);
-        if (result == null)
+        var tasks = diagnosticClients
+            .Select(c => c.GetWorkspaceDiagnosticsAsync(ct))
+            .ToArray();
+        await Task.WhenAll(tasks);
+
+        var results = tasks
+            .Select(t => t.Result)
+            .Where(r => r != null)
+            .Cast<LspWorkspaceDiagnosticResult>()
+            .ToArray();
+        if (results.Length == 0)
         {
             StatusMessage?.Invoke("Workspace diagnostics: unavailable");
             return null;
         }
 
+        var result = LspWorkspaceDiagnosticAggregator.CreateResult(
+            results.SelectMany(r => r.Documents));
         var summary = result.Summary;
         StatusMessage?.Invoke(
             $"Workspace diagnostics: {summary.DiagnosticCount} item(s), {summary.ErrorCount} error(s), {summary.WarningCount} warning(s)");

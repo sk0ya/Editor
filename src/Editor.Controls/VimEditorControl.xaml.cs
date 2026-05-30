@@ -3717,7 +3717,12 @@ public partial class VimEditorControl : UserControl
 
     private static string UriToLocalPath(string uri)
     {
-        try { return new Uri(uri).LocalPath; } catch { return uri; }
+        try
+        {
+            var parsed = new Uri(uri);
+            return parsed.IsFile ? parsed.LocalPath : uri;
+        }
+        catch { return uri; }
     }
 
     private static bool ShouldPreferTextInput(VimMode mode, Key key)

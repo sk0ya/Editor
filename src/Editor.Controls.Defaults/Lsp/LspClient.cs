@@ -92,10 +92,7 @@ public sealed class LspClient : ILspClient
                 SupportsInlayHint = ihp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("selectionRangeProvider", out var srp))
                 SupportsSelectionRange = srp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
-            if (caps.TryGetProperty("diagnosticProvider", out var dp) &&
-                dp.ValueKind == JsonValueKind.Object &&
-                dp.TryGetProperty("workspaceDiagnostics", out var wd))
-                SupportsWorkspaceDiagnostics = wd.ValueKind == JsonValueKind.True;
+            SupportsWorkspaceDiagnostics = LspCapabilityParser.SupportsWorkspaceDiagnostics(caps);
             if (caps.TryGetProperty("semanticTokensProvider", out var stp) &&
                 stp.ValueKind == JsonValueKind.Object &&
                 stp.TryGetProperty("legend", out var legend))
@@ -341,46 +338,9 @@ public sealed class LspClient : ILspClient
             if (result is null || result.Value.ValueKind == JsonValueKind.Null)
                 return LspWorkspaceDiagnosticAggregator.CreateResult([]);
 
-            return ParseWorkspaceDiagnosticResult(result.Value);
+            return LspWorkspaceDiagnosticParser.Parse(result.Value);
         }
         catch { return null; }
-    }
-
-    private static LspWorkspaceDiagnosticResult ParseWorkspaceDiagnosticResult(JsonElement result)
-    {
-        if (result.ValueKind != JsonValueKind.Object ||
-            !result.TryGetProperty("items", out var itemsEl) ||
-            itemsEl.ValueKind != JsonValueKind.Array)
-            return LspWorkspaceDiagnosticAggregator.CreateResult([]);
-
-        var documents = new List<LspWorkspaceDiagnosticDocument>();
-        foreach (var item in itemsEl.EnumerateArray())
-        {
-            if (item.ValueKind != JsonValueKind.Object ||
-                !item.TryGetProperty("uri", out var uriEl))
-                continue;
-
-            var uri = uriEl.GetString() ?? "";
-            int? version = item.TryGetProperty("version", out var versionEl) &&
-                versionEl.ValueKind == JsonValueKind.Number
-                    ? versionEl.GetInt32()
-                    : null;
-
-            var diagnostics = new List<LspDiagnostic>();
-            if (item.TryGetProperty("items", out var diagnosticsEl) &&
-                diagnosticsEl.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var diagnosticEl in diagnosticsEl.EnumerateArray())
-                {
-                    if (TryParseDiagnostic(diagnosticEl, out var diagnostic))
-                        diagnostics.Add(diagnostic);
-                }
-            }
-
-            documents.Add(new LspWorkspaceDiagnosticDocument(uri, version, diagnostics));
-        }
-
-        return LspWorkspaceDiagnosticAggregator.CreateResult(documents);
     }
 
     public async Task<IReadOnlyList<DocumentSymbol>> GetDocumentSymbolsAsync(

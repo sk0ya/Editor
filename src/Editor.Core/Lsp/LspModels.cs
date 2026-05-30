@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Editor.Core.Lsp;
 
 public record LspPosition(int Line, int Character);
@@ -34,6 +36,8 @@ public static class LspWorkspaceDiagnosticAggregator
     {
         var ordered = documents
             .Where(d => !string.IsNullOrWhiteSpace(d.Uri))
+            .GroupBy(d => d.Uri, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.Last())
             .OrderBy(d => d.Uri, StringComparer.OrdinalIgnoreCase)
             .Select(d => d with
             {
@@ -59,6 +63,109 @@ public static class LspWorkspaceDiagnosticAggregator
         IReadOnlyList<LspWorkspaceDiagnosticDocument> documents,
         DiagnosticSeverity severity) =>
         documents.Sum(d => d.Diagnostics.Count(x => x.Severity == severity));
+}
+
+public static class LspCapabilityParser
+{
+    public static bool SupportsWorkspaceDiagnostics(JsonElement capabilities)
+    {
+        if (capabilities.ValueKind != JsonValueKind.Object ||
+            !capabilities.TryGetProperty("diagnosticProvider", out var diagnosticProvider))
+            return false;
+
+        return diagnosticProvider.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.Object when diagnosticProvider.TryGetProperty("workspaceDiagnostics", out var workspaceDiagnostics) =>
+                workspaceDiagnostics.ValueKind == JsonValueKind.True,
+            _ => false
+        };
+    }
+}
+
+public static class LspWorkspaceDiagnosticParser
+{
+    public static LspWorkspaceDiagnosticResult Parse(JsonElement result)
+    {
+        if (result.ValueKind != JsonValueKind.Object ||
+            !result.TryGetProperty("items", out var itemsEl) ||
+            itemsEl.ValueKind != JsonValueKind.Array)
+            return LspWorkspaceDiagnosticAggregator.CreateResult([]);
+
+        var documents = new List<LspWorkspaceDiagnosticDocument>();
+        foreach (var item in itemsEl.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object ||
+                !item.TryGetProperty("uri", out var uriEl))
+                continue;
+
+            var uri = uriEl.GetString() ?? "";
+            if (string.IsNullOrWhiteSpace(uri))
+                continue;
+
+            if (item.TryGetProperty("kind", out var kindEl) &&
+                kindEl.ValueKind == JsonValueKind.String &&
+                string.Equals(kindEl.GetString(), "unchanged", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!item.TryGetProperty("items", out var diagnosticsEl) ||
+                diagnosticsEl.ValueKind != JsonValueKind.Array)
+                continue;
+
+            int? version = item.TryGetProperty("version", out var versionEl) &&
+                versionEl.ValueKind == JsonValueKind.Number
+                    ? versionEl.GetInt32()
+                    : null;
+
+            var diagnostics = new List<LspDiagnostic>();
+            foreach (var diagnosticEl in diagnosticsEl.EnumerateArray())
+            {
+                if (TryParseDiagnostic(diagnosticEl, out var diagnostic))
+                    diagnostics.Add(diagnostic);
+            }
+
+            documents.Add(new LspWorkspaceDiagnosticDocument(uri, version, diagnostics));
+        }
+
+        return LspWorkspaceDiagnosticAggregator.CreateResult(documents);
+    }
+
+    private static bool TryParseDiagnostic(JsonElement el, out LspDiagnostic diagnostic)
+    {
+        diagnostic = new LspDiagnostic(
+            new LspRange(new LspPosition(0, 0), new LspPosition(0, 0)),
+            "",
+            DiagnosticSeverity.Error);
+
+        try
+        {
+            if (!el.TryGetProperty("range", out var rangeEl))
+                return false;
+
+            var range = ParseRange(rangeEl);
+            var message = el.TryGetProperty("message", out var messageEl) ? messageEl.GetString() ?? "" : "";
+            var severity = el.TryGetProperty("severity", out var severityEl) &&
+                severityEl.ValueKind == JsonValueKind.Number
+                    ? (DiagnosticSeverity)severityEl.GetInt32()
+                    : DiagnosticSeverity.Error;
+            var source = el.TryGetProperty("source", out var sourceEl) ? sourceEl.GetString() : null;
+            diagnostic = new LspDiagnostic(range, message, severity, source);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static LspRange ParseRange(JsonElement el)
+    {
+        var start = el.GetProperty("start");
+        var end = el.GetProperty("end");
+        return new LspRange(
+            new LspPosition(start.GetProperty("line").GetInt32(), start.GetProperty("character").GetInt32()),
+            new LspPosition(end.GetProperty("line").GetInt32(), end.GetProperty("character").GetInt32()));
+    }
 }
 
 public enum CompletionItemKind
