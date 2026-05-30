@@ -17,8 +17,14 @@ public class UndoManager
 {
     private readonly Stack<UndoState> _undoStack = new();
     private readonly Stack<UndoState> _redoStack = new();
+    private readonly Func<DateTimeOffset> _clock;
     private const int MaxHistory = 1000;
     private int _nextChangeNumber;
+
+    public UndoManager(Func<DateTimeOffset>? clock = null)
+    {
+        _clock = clock ?? (() => DateTimeOffset.Now);
+    }
 
     public bool CanUndo => _undoStack.Count > 0;
     public bool CanRedo => _redoStack.Count > 0;
@@ -39,7 +45,7 @@ public class UndoManager
             for (int i = arr.Length - 1; i > 0; i--)
                 _undoStack.Push(arr[i]);
         }
-        _undoStack.Push(new UndoState([.. lines], cursor, ++_nextChangeNumber, DateTimeOffset.Now));
+        _undoStack.Push(new UndoState([.. lines], cursor, ++_nextChangeNumber, _clock()));
     }
 
     public UndoState? Undo(TextBuffer buffer, CursorPosition currentCursor)
