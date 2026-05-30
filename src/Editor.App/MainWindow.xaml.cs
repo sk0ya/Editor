@@ -19,6 +19,7 @@ using Editor.Core.Lsp;
 using Editor.Core.Models;
 using Editor.Core.Panes;
 using Editor.Core.Syntax;
+using Microsoft.Web.WebView2.Core;
 
 namespace Editor.App;
 
@@ -210,6 +211,9 @@ public partial class MainWindow : Window
     private VimEditorControl? _previewSourceEditor;
     private DispatcherTimer? _previewDebounceTimer;
     private Task? _webView2InitTask;
+    private bool _previewWebViewEventsAttached;
+    private bool _syncingPreviewFromEditor;
+    private bool _syncingEditorFromPreview;
     private TerminalPane? _terminalPane;
 
     private VimEditorControl? CurrentEditor => _focusedEditor;
@@ -1274,6 +1278,7 @@ public partial class MainWindow : Window
 
         _previewVisible = true;
         _previewSourceEditor = CurrentEditor;
+        _previewSourceEditor.ViewportScrolled += PreviewSourceEditor_ViewportScrolled;
         MarkdownPreviewPanel.Visibility = Visibility.Visible;
         PreviewBtn.IsChecked = true;
 
@@ -1361,6 +1366,8 @@ public partial class MainWindow : Window
 
         _previewVisible = false;
         _previewPaneNode = null;
+        if (_previewSourceEditor != null)
+            _previewSourceEditor.ViewportScrolled -= PreviewSourceEditor_ViewportScrolled;
         _previewSourceEditor = null;
         PreviewBtn.IsChecked = false;
         MarkdownPreviewPanel.Visibility = Visibility.Collapsed;
@@ -1408,6 +1415,75 @@ public partial class MainWindow : Window
         _previewDebounceTimer.Start();
     }
 
+    private void AttachPreviewWebViewEvents()
+    {
+        if (_previewWebViewEventsAttached || PreviewBrowser.CoreWebView2 == null) return;
+
+        PreviewBrowser.CoreWebView2.WebMessageReceived += PreviewBrowser_WebMessageReceived;
+        PreviewBrowser.NavigationCompleted += PreviewBrowser_NavigationCompleted;
+        _previewWebViewEventsAttached = true;
+    }
+
+    private async void PreviewSourceEditor_ViewportScrolled(object? sender, EventArgs e)
+    {
+        if (_syncingEditorFromPreview || sender is not VimEditorControl editor) return;
+        await ScrollPreviewToRatioAsync(editor.VerticalScrollRatio);
+    }
+
+    private async void PreviewBrowser_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+    {
+        if (!_previewVisible || _previewSourceEditor == null) return;
+        await ScrollPreviewToRatioAsync(_previewSourceEditor.VerticalScrollRatio);
+    }
+
+    private void PreviewBrowser_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        if (_syncingPreviewFromEditor || !_previewVisible || _previewSourceEditor == null) return;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var type)
+                || type.GetString() != "markdownPreviewScroll"
+                || !root.TryGetProperty("ratio", out var ratioElement)
+                || !ratioElement.TryGetDouble(out double ratio))
+                return;
+
+            _syncingEditorFromPreview = true;
+            _previewSourceEditor.ScrollToVerticalRatio(ratio);
+        }
+        catch
+        {
+            // Ignore malformed messages from preview content.
+        }
+        finally
+        {
+            _syncingEditorFromPreview = false;
+        }
+    }
+
+    private async Task ScrollPreviewToRatioAsync(double ratio)
+    {
+        if (!_previewVisible || PreviewBrowser.CoreWebView2 == null) return;
+
+        _syncingPreviewFromEditor = true;
+        try
+        {
+            var script = FormattableString.Invariant(
+                $"window.setMarkdownPreviewScrollRatio && window.setMarkdownPreviewScrollRatio({Math.Clamp(ratio, 0.0, 1.0):R});");
+            await PreviewBrowser.ExecuteScriptAsync(script);
+        }
+        catch
+        {
+            // Best effort: WebView can be navigating while the editor scrolls.
+        }
+        finally
+        {
+            _syncingPreviewFromEditor = false;
+        }
+    }
+
     private async void UpdateMarkdownPreview()
     {
         var editor = _previewSourceEditor ?? CurrentEditor;
@@ -1435,6 +1511,7 @@ public partial class MainWindow : Window
         editor = _previewSourceEditor ?? CurrentEditor;
         if (!_previewVisible || editor == null) return;
         if (PreviewBrowser.CoreWebView2 == null) return;
+        AttachPreviewWebViewEvents();
 
         var filePath = editor.Engine.CurrentBuffer.FilePath;
         var ext = filePath != null ? Path.GetExtension(filePath).ToLowerInvariant() : string.Empty;

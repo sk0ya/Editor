@@ -262,11 +262,20 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<string>? SourceRequested;
     public event EventHandler<string?>? TerminalRequested;
     public event EventHandler? MarkdownPreviewRequested;
+    public event EventHandler? ViewportScrolled;
 
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
     public string? FilePath => _engine.CurrentBuffer.FilePath;
     public VimEngine Engine => _engine;
+    public double VerticalScrollRatio
+    {
+        get
+        {
+            double maxOffset = Math.Max(0, Canvas.TotalContentHeight - Canvas.ViewportHeight);
+            return maxOffset <= 0 ? 0 : Canvas.VerticalOffset / maxOffset;
+        }
+    }
 
     public VimEditorControl()
         : this(null)
@@ -325,7 +334,11 @@ public partial class VimEditorControl : UserControl
         Canvas.FoldGutterClicked += OnFoldGutterClicked;
 
         // Keep VimEngine informed of viewport state for H/M/L motions
-        Canvas.ScrollChanged += (_, _) => SyncViewportState();
+        Canvas.ScrollChanged += (_, _) =>
+        {
+            SyncViewportState();
+            ViewportScrolled?.Invoke(this, EventArgs.Empty);
+        };
         Canvas.SizeChanged += (_, _) => SyncViewportState();
 
         ApplyTheme();
@@ -3135,6 +3148,12 @@ public partial class VimEditorControl : UserControl
         if (Canvas.LineHeight <= 0) return;
         double newOffset = Canvas.VerticalOffset + lines * Canvas.LineHeight;
         Canvas.ScrollTo(newOffset);
+    }
+
+    public void ScrollToVerticalRatio(double ratio)
+    {
+        double maxOffset = Math.Max(0, Canvas.TotalContentHeight - Canvas.ViewportHeight);
+        Canvas.ScrollTo(maxOffset * Math.Clamp(ratio, 0.0, 1.0), Canvas.HorizontalOffset);
     }
 
     private void AlignViewport(ViewportAlign align)

@@ -307,6 +307,33 @@ internal static class MarkdownRenderer
             img { max-width: 100%; border-radius: 4px; display: block; margin: 8px 0; }
             hr { border: none; border-top: 1px solid #44475A; margin: 20px 0; }
             </style>
+            <script>
+            (() => {
+                let suppressScrollMessage = false;
+
+                function scrollRatio() {
+                    const doc = document.documentElement;
+                    const max = Math.max(0, doc.scrollHeight - window.innerHeight);
+                    return max <= 0 ? 0 : window.scrollY / max;
+                }
+
+                window.setMarkdownPreviewScrollRatio = ratio => {
+                    const doc = document.documentElement;
+                    const max = Math.max(0, doc.scrollHeight - window.innerHeight);
+                    suppressScrollMessage = true;
+                    window.scrollTo(0, max * Math.min(1, Math.max(0, Number(ratio) || 0)));
+                    window.setTimeout(() => suppressScrollMessage = false, 80);
+                };
+
+                window.addEventListener('scroll', () => {
+                    if (suppressScrollMessage || !window.chrome?.webview) return;
+                    window.chrome.webview.postMessage({
+                        type: 'markdownPreviewScroll',
+                        ratio: scrollRatio()
+                    });
+                }, { passive: true });
+            })();
+            </script>
             </head>
             <body>{{body}}</body>
             </html>
