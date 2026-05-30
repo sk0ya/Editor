@@ -18,7 +18,7 @@
 - コメントトグル（`gc` / `gcc`）
 - Git 差分表示・ブレームアノテーション（`:Git blame`）
 - スペルチェック（`set spell`、`]s` / `[s` / `z=`）
-- 統合ターミナル（`:terminal`）
+- 統合ターミナル（`:terminal` / `:term`、複数起動、`:terms` / `:termnext` / `:termprev` / `:termselect N` / `:termclose [N]`）
 - セッション管理（`:mksession` / `:source`）
 - テキスト整形（`gq{motion}` / `gqq`）
 

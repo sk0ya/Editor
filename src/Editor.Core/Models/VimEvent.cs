@@ -47,6 +47,7 @@ public enum VimEventType
     MkSessionRequested,
     SourceRequested,
     TerminalRequested,
+    TerminalCommandRequested,
     ReloadFileRequested,
     SymbolsRequested,
     GitCommitRequested,
@@ -69,6 +70,15 @@ public enum ViewportAlign
 }
 
 public enum WindowNavDir { Next, Prev, Left, Right, Up, Down }
+
+public enum TerminalCommandKind
+{
+    List,
+    Next,
+    Previous,
+    Select,
+    Close
+}
 
 public record VimEvent(VimEventType Type)
 {
@@ -201,6 +211,9 @@ public record VimEvent(VimEventType Type)
     public static VimEvent TerminalRequested(string? shellCmd = null) =>
         new TerminalRequestedEvent(shellCmd);
 
+    public static VimEvent TerminalCommandRequested(TerminalCommandKind kind, int? terminalNumber = null, bool force = false) =>
+        new TerminalCommandRequestedEvent(kind, terminalNumber, force);
+
     public static VimEvent ReloadFileRequested(bool force) =>
         new ReloadFileRequestedEvent(force);
 
@@ -270,6 +283,7 @@ public record OpenUrlRequestedEvent(string Url) : VimEvent(VimEventType.OpenUrlR
 public record MkSessionRequestedEvent(string FilePath) : VimEvent(VimEventType.MkSessionRequested);
 public record SourceRequestedEvent(string FilePath) : VimEvent(VimEventType.SourceRequested);
 public record TerminalRequestedEvent(string? ShellCmd) : VimEvent(VimEventType.TerminalRequested);
+public record TerminalCommandRequestedEvent(TerminalCommandKind Kind, int? TerminalNumber, bool Force) : VimEvent(VimEventType.TerminalCommandRequested);
 public record ReloadFileRequestedEvent(bool Force) : VimEvent(VimEventType.ReloadFileRequested);
 public record HunkNavigateRequestedEvent(bool Forward) : VimEvent(VimEventType.HunkNavigateRequested);
 public record HunkStageRequestedEvent(bool Stage) : VimEvent(VimEventType.HunkStageRequested);

@@ -219,7 +219,19 @@ public partial class MainWindow : Window
     private bool _syncingEditorFromPreview;
     private bool _previewScrollSyncQueued;
     private double _pendingPreviewScrollRatio;
-    private TerminalPane? _terminalPane;
+    private readonly List<TerminalSession> _terminalSessions = [];
+    private int _currentTerminalIndex = -1;
+    private int _nextTerminalId = 1;
+    private bool _suppressTerminalSelectionChanged;
+
+    private sealed class TerminalSession
+    {
+        public required int Id { get; init; }
+        public required string Title { get; init; }
+        public required TerminalPane Pane { get; init; }
+
+        public string DisplayName => $"{Id}: {Title}";
+    }
 
     private VimEditorControl? CurrentEditor => _focusedEditor;
 
@@ -1142,6 +1154,7 @@ public partial class MainWindow : Window
         editor.MkSessionRequested     += Editor_MkSessionRequested;
         editor.SourceRequested        += Editor_SourceRequested;
         editor.TerminalRequested          += Editor_TerminalRequested;
+        editor.TerminalCommandRequested   += Editor_TerminalCommandRequested;
         editor.MarkdownPreviewRequested   += (_, _) => ToggleMarkdownPreview();
         editor.GitOutputRequested         += Editor_GitOutputRequested;
         editor.GitCommitRequested     += Editor_GitCommitRequested;
@@ -1189,6 +1202,28 @@ public partial class MainWindow : Window
         ShowTerminalPanel(shellCmd);
     }
 
+    private void Editor_TerminalCommandRequested(object? sender, TerminalCommandRequestedEvent e)
+    {
+        switch (e.Kind)
+        {
+            case TerminalCommandKind.List:
+                ShowTerminalList(sender as VimEditorControl ?? _focusedEditor);
+                break;
+            case TerminalCommandKind.Next:
+                SelectRelativeTerminal(1);
+                break;
+            case TerminalCommandKind.Previous:
+                SelectRelativeTerminal(-1);
+                break;
+            case TerminalCommandKind.Select:
+                SelectTerminalById(e.TerminalNumber);
+                break;
+            case TerminalCommandKind.Close:
+                CloseTerminalById(e.TerminalNumber);
+                break;
+        }
+    }
+
     private void Editor_GitOutputRequested(object? sender, GitOutputRequestedEventArgs e)
     {
         // Open a new tab with in-memory git output content
@@ -1215,33 +1250,25 @@ public partial class MainWindow : Window
 
     private void ShowTerminalPanel(string? shellCmd)
     {
-        if (TerminalPanel.Visibility == Visibility.Visible)
-        {
-            if (string.IsNullOrWhiteSpace(shellCmd))
-            {
-                _terminalPane?.FocusInput();
-                return;
-            }
-
-            if (_terminalPane != null)
-                _terminalPane.EditorFocusRequested -= Terminal_EditorFocusRequested;
-            TerminalContent.Content = null;
-            _terminalPane = null;
-        }
-
         var workDir = _focusedEditor?.Engine.CurrentBuffer.FilePath is { } fp
             ? Path.GetDirectoryName(fp)
             : null;
         var terminal = new TerminalPane(shellCmd, workDir);
         terminal.EditorFocusRequested += Terminal_EditorFocusRequested;
 
-        _terminalPane = terminal;
-        TerminalContent.Content = terminal;
+        var session = new TerminalSession
+        {
+            Id = _nextTerminalId++,
+            Title = string.IsNullOrWhiteSpace(shellCmd) ? "shell" : shellCmd,
+            Pane = terminal
+        };
+
+        _terminalSessions.Add(session);
         TerminalPanel.Visibility = Visibility.Visible;
         TermSplitter.Visibility  = Visibility.Visible;
         TermSplitterRow.Height   = new GridLength(4);
         TermPanelRow.Height      = new GridLength(200);
-        terminal.FocusInput();
+        SelectTerminal(_terminalSessions.Count - 1);
     }
 
     private void Terminal_EditorFocusRequested(object? sender, EventArgs e)
@@ -1251,15 +1278,140 @@ public partial class MainWindow : Window
 
     private void CloseTermPanel_Click(object sender, RoutedEventArgs e)
     {
-        if (_terminalPane != null)
-            _terminalPane.EditorFocusRequested -= Terminal_EditorFocusRequested;
+        CloseTerminalById(null);
+    }
+
+    private void TerminalSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressTerminalSelectionChanged)
+            return;
+
+        if (TerminalSelector.SelectedIndex >= 0 && TerminalSelector.SelectedIndex < _terminalSessions.Count)
+            SelectTerminal(TerminalSelector.SelectedIndex);
+    }
+
+    private void SelectRelativeTerminal(int offset)
+    {
+        if (_terminalSessions.Count == 0)
+        {
+            _focusedEditor?.ShowStatusMessage("No terminals");
+            return;
+        }
+
+        var current = _currentTerminalIndex >= 0 ? _currentTerminalIndex : 0;
+        var next = (current + offset + _terminalSessions.Count) % _terminalSessions.Count;
+        SelectTerminal(next);
+    }
+
+    private void SelectTerminalById(int? terminalId)
+    {
+        if (terminalId is null)
+        {
+            _focusedEditor?.ShowStatusMessage("Invalid terminal number");
+            return;
+        }
+
+        var index = _terminalSessions.FindIndex(t => t.Id == terminalId.Value);
+        if (index < 0)
+        {
+            _focusedEditor?.ShowStatusMessage($"No terminal #{terminalId.Value}");
+            return;
+        }
+
+        SelectTerminal(index);
+    }
+
+    private void SelectTerminal(int index)
+    {
+        if (index < 0 || index >= _terminalSessions.Count)
+            return;
+
+        _currentTerminalIndex = index;
+        TerminalContent.Content = _terminalSessions[index].Pane;
+        UpdateTerminalSelector();
+        TerminalPanel.Visibility = Visibility.Visible;
+        TermSplitter.Visibility  = Visibility.Visible;
+        TermSplitterRow.Height   = new GridLength(4);
+        TermPanelRow.Height      = new GridLength(200);
+        _terminalSessions[index].Pane.FocusInput();
+    }
+
+    private void UpdateTerminalSelector()
+    {
+        _suppressTerminalSelectionChanged = true;
+        TerminalSelector.Items.Clear();
+        foreach (var session in _terminalSessions)
+            TerminalSelector.Items.Add(session.DisplayName);
+        TerminalSelector.SelectedIndex = _currentTerminalIndex;
+        _suppressTerminalSelectionChanged = false;
+    }
+
+    private void ShowTerminalList(VimEditorControl? editor)
+    {
+        if (_terminalSessions.Count == 0)
+        {
+            editor?.ShowStatusMessage("No terminals");
+            return;
+        }
+
+        var terminals = _terminalSessions
+            .Select((terminal, index) => index == _currentTerminalIndex
+                ? $"[{terminal.DisplayName}]"
+                : terminal.DisplayName);
+        editor?.ShowStatusMessage("Terminals: " + string.Join(" | ", terminals));
+    }
+
+    private async void CloseTerminalById(int? terminalId)
+    {
+        if (_terminalSessions.Count == 0)
+        {
+            _focusedEditor?.ShowStatusMessage("No terminals");
+            return;
+        }
+
+        var index = terminalId is null
+            ? _currentTerminalIndex
+            : _terminalSessions.FindIndex(t => t.Id == terminalId.Value);
+        if (index < 0 || index >= _terminalSessions.Count)
+        {
+            if (terminalId is not null)
+                _focusedEditor?.ShowStatusMessage($"No terminal #{terminalId.Value}");
+            return;
+        }
+
+        var session = _terminalSessions[index];
+        if (ReferenceEquals(TerminalContent.Content, session.Pane))
+            TerminalContent.Content = null;
+        session.Pane.EditorFocusRequested -= Terminal_EditorFocusRequested;
+        _terminalSessions.RemoveAt(index);
+
+        if (_terminalSessions.Count == 0)
+        {
+            _currentTerminalIndex = -1;
+            UpdateTerminalSelector();
+            CollapseTerminalPanel();
+            await session.Pane.CloseAsync();
+            _focusedEditor?.Focus();
+            return;
+        }
+
+        if (_currentTerminalIndex >= _terminalSessions.Count)
+            _currentTerminalIndex = _terminalSessions.Count - 1;
+        else if (index < _currentTerminalIndex)
+            _currentTerminalIndex--;
+
+        UpdateTerminalSelector();
+        SelectTerminal(_currentTerminalIndex);
+        await session.Pane.CloseAsync();
+    }
+
+    private void CollapseTerminalPanel()
+    {
         TerminalPanel.Visibility = Visibility.Collapsed;
         TermSplitter.Visibility  = Visibility.Collapsed;
         TermSplitterRow.Height   = new GridLength(0);
         TermPanelRow.Height      = new GridLength(0);
         TerminalContent.Content  = null;
-        _terminalPane = null;
-        _focusedEditor?.Focus();
     }
 
     // ─────────── Markdown Preview ───────────────────────────────────────
@@ -2299,9 +2451,10 @@ public partial class MainWindow : Window
 
         if (e.Dir == WindowNavDir.Down
             && TerminalPanel.Visibility == Visibility.Visible
-            && _terminalPane != null)
+            && _currentTerminalIndex >= 0
+            && _currentTerminalIndex < _terminalSessions.Count)
         {
-            _terminalPane.FocusInput();
+            _terminalSessions[_currentTerminalIndex].Pane.FocusInput();
         }
     }
 
@@ -3823,6 +3976,13 @@ public partial class MainWindow : Window
         _recentItems.SaveSession(_currentFolderPath, tabFiles, activeFile);
 
         _previewDebounceTimer?.Stop();
+
+        foreach (var session in _terminalSessions)
+        {
+            session.Pane.EditorFocusRequested -= Terminal_EditorFocusRequested;
+            _ = session.Pane.CloseAsync();
+        }
+        _terminalSessions.Clear();
 
         if (_windowSource != null)
         {

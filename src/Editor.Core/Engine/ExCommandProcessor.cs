@@ -151,6 +151,12 @@ public class ExCommandProcessor
         return list[--index];
     }
 
+    private static bool TryParseTerminalNumber(string text, out int terminalNumber)
+    {
+        terminalNumber = 0;
+        return int.TryParse(text, out terminalNumber) && terminalNumber > 0;
+    }
+
     // ── command history ─────────────────────────────────────────────────────
 
     public void AddHistory(string cmd) => AddToHistory(_history, ref _historyIndex, cmd);
@@ -548,6 +554,38 @@ public class ExCommandProcessor
         // :preview  :mdpreview
         if (cmd == "preview" || cmd == "mdpreview")
             return new ExResult(true, null, VimEvent.MarkdownPreviewRequested());
+
+        // :terms  :termnext  :termprev  :termselect N  :termclose[!] [N]
+        if (cmd == "terms")
+            return new ExResult(true, null, VimEvent.TerminalCommandRequested(TerminalCommandKind.List));
+
+        if (cmd == "termnext")
+            return new ExResult(true, null, VimEvent.TerminalCommandRequested(TerminalCommandKind.Next));
+
+        if (cmd == "termprev")
+            return new ExResult(true, null, VimEvent.TerminalCommandRequested(TerminalCommandKind.Previous));
+
+        if (cmd == "termselect" || cmd.StartsWith("termselect "))
+        {
+            var rest = cmd.Length > "termselect".Length
+                ? cmd["termselect".Length..].Trim()
+                : "";
+            if (!TryParseTerminalNumber(rest, out var terminalNumber))
+                return new ExResult(false, "Invalid terminal number");
+            return new ExResult(true, null, VimEvent.TerminalCommandRequested(TerminalCommandKind.Select, terminalNumber));
+        }
+
+        if (cmd == "termclose" || cmd == "termclose!" || cmd.StartsWith("termclose ") || cmd.StartsWith("termclose! "))
+        {
+            var force = cmd.StartsWith("termclose!");
+            var prefixLength = force ? "termclose!".Length : "termclose".Length;
+            var rest = cmd.Length > prefixLength ? cmd[prefixLength..].Trim() : "";
+            if (rest.Length == 0)
+                return new ExResult(true, null, VimEvent.TerminalCommandRequested(TerminalCommandKind.Close, force: force));
+            if (!TryParseTerminalNumber(rest, out var terminalNumber))
+                return new ExResult(false, "Invalid terminal number");
+            return new ExResult(true, null, VimEvent.TerminalCommandRequested(TerminalCommandKind.Close, terminalNumber, force));
+        }
 
         // :terminal [cmd]  :term [cmd]
         if (cmd == "terminal" || cmd == "term" || cmd.StartsWith("terminal ") || cmd.StartsWith("term "))
@@ -1750,6 +1788,7 @@ public class ExCommandProcessor
         "history", "his",
         "preview", "mdpreview",
         "terminal", "term",
+        "terms", "termnext", "termprev", "termselect", "termclose", "termclose!",
         "mksession", "source",
         "scriptnames", "script",
         "retab",

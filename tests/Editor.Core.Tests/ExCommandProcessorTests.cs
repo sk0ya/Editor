@@ -87,6 +87,63 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void TerminalOpenCommands_ProduceTerminalRequestedEvent()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var defaultTerm = processor.Execute("term", CursorPosition.Zero);
+        var customTerm = processor.Execute("terminal pwsh -NoLogo", CursorPosition.Zero);
+
+        Assert.True(defaultTerm.Success);
+        var defaultEvent = Assert.IsType<TerminalRequestedEvent>(defaultTerm.Event);
+        Assert.Null(defaultEvent.ShellCmd);
+
+        Assert.True(customTerm.Success);
+        var customEvent = Assert.IsType<TerminalRequestedEvent>(customTerm.Event);
+        Assert.Equal("pwsh -NoLogo", customEvent.ShellCmd);
+    }
+
+    [Theory]
+    [InlineData("terms", TerminalCommandKind.List, null, false)]
+    [InlineData("termnext", TerminalCommandKind.Next, null, false)]
+    [InlineData("termprev", TerminalCommandKind.Previous, null, false)]
+    [InlineData("termselect 2", TerminalCommandKind.Select, 2, false)]
+    [InlineData("termclose", TerminalCommandKind.Close, null, false)]
+    [InlineData("termclose 3", TerminalCommandKind.Close, 3, false)]
+    [InlineData("termclose! 4", TerminalCommandKind.Close, 4, true)]
+    public void TerminalManagementCommands_ProduceTerminalCommandRequestedEvent(
+        string command,
+        TerminalCommandKind expectedKind,
+        int? expectedTerminalNumber,
+        bool expectedForce)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<TerminalCommandRequestedEvent>(result.Event);
+        Assert.Equal(expectedKind, evt.Kind);
+        Assert.Equal(expectedTerminalNumber, evt.TerminalNumber);
+        Assert.Equal(expectedForce, evt.Force);
+    }
+
+    [Theory]
+    [InlineData("termselect")]
+    [InlineData("termselect 0")]
+    [InlineData("termselect abc")]
+    [InlineData("termclose abc")]
+    public void TerminalManagementCommands_RejectInvalidTerminalNumbers(string command)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Equal("Invalid terminal number", result.Message);
+    }
+
+    [Fact]
     public void Scriptnames_ListsLoadedScriptsInOrder()
     {
         var processor = CreateProcessorWithScriptNames(["C:\\vim\\vimrc", "C:\\vim\\plugin.vim"]);

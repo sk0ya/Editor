@@ -10,6 +10,7 @@ public sealed class TerminalPane : UserControl
 {
     private readonly TerminalTabView _terminal;
     private bool _ctrlWPending;
+    private bool _closed;
 
     public event EventHandler? EditorFocusRequested;
 
@@ -26,14 +27,29 @@ public sealed class TerminalPane : UserControl
         Content = _terminal;
 
         PreviewKeyDown += OnPreviewKeyDown;
-        LostKeyboardFocus += (_, _) => _ctrlWPending = false;
-        Unloaded += OnUnloaded;
+        LostKeyboardFocus += OnLostKeyboardFocus;
     }
 
     public void FocusInput()
     {
         _terminal.FocusTerminal();
         Keyboard.Focus(_terminal);
+    }
+
+    public async Task CloseAsync()
+    {
+        if (_closed)
+            return;
+
+        _closed = true;
+        PreviewKeyDown -= OnPreviewKeyDown;
+        LostKeyboardFocus -= OnLostKeyboardFocus;
+        await _terminal.CloseAsync();
+    }
+
+    private void OnLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _ctrlWPending = false;
     }
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
@@ -65,10 +81,4 @@ public sealed class TerminalPane : UserControl
         }
     }
 
-    private async void OnUnloaded(object sender, System.Windows.RoutedEventArgs e)
-    {
-        PreviewKeyDown -= OnPreviewKeyDown;
-        Unloaded -= OnUnloaded;
-        await _terminal.CloseAsync();
-    }
 }

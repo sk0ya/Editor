@@ -271,6 +271,7 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<string>? MkSessionRequested;
     public event EventHandler<string>? SourceRequested;
     public event EventHandler<string?>? TerminalRequested;
+    public event EventHandler<TerminalCommandRequestedEvent>? TerminalCommandRequested;
     public event EventHandler? MarkdownPreviewRequested;
     public event EventHandler? ViewportScrolled;
 
@@ -365,6 +366,11 @@ public partial class VimEditorControl : UserControl
     private void OnLspStatusMessage(string msg)
     {
         ActiveStatusBar.UpdateStatus(msg);
+    }
+
+    public void ShowStatusMessage(string message)
+    {
+        ActiveStatusBar.UpdateStatus(message);
     }
 
     private void OnLspBreadcrumbChanged(string breadcrumb)
@@ -2985,6 +2991,9 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.TerminalRequested when evt is TerminalRequestedEvent tre:
                     TerminalRequested?.Invoke(this, tre.ShellCmd);
+                    break;
+                case VimEventType.TerminalCommandRequested when evt is TerminalCommandRequestedEvent tce:
+                    TerminalCommandRequested?.Invoke(this, tce);
                     break;
                 case VimEventType.MarkdownPreviewRequested:
                     MarkdownPreviewRequested?.Invoke(this, EventArgs.Empty);

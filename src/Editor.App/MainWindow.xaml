@@ -1335,6 +1335,17 @@
                                         Padding="6,0"
                                         Cursor="Hand"
                                         ToolTip="ターミナルを閉じる"/>
+                                <ComboBox x:Name="TerminalSelector"
+                                          DockPanel.Dock="Right"
+                                          Width="180"
+                                          Margin="0,0,8,0"
+                                          Background="#252526"
+                                          Foreground="#CCCCCC"
+                                          BorderBrush="#3A3D46"
+                                          FontFamily="Cascadia Code, Consolas"
+                                          FontSize="11"
+                                          VerticalContentAlignment="Center"
+                                          SelectionChanged="TerminalSelector_SelectionChanged"/>
                                 <TextBlock Text="TERMINAL"
                                            FontFamily="Cascadia Code, Consolas"
                                            FontSize="11"
