@@ -45,6 +45,7 @@ public class VimEngine
     private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
     private bool _awaitingBlockReplace;   // Visual Block r — waiting for the replacement character
+    private bool _visualBlockToLineEnd;   // Ctrl+V $ — selected lines extend to their own EOL
     private bool _pendingInsertReturn;    // Ctrl+O in Insert mode — return to Insert after one Normal command
     private bool _awaitingInsertRegister; // Ctrl+R in Insert mode — waiting for register name
     private bool _awaitingExprRegister;   // Ctrl+R = in Insert mode — accumulating expression
@@ -78,7 +79,7 @@ public class VimEngine
     private int _autocmdDepth;
 
     private sealed record RepeatChange(ParsedCommand Command, IReadOnlyList<VimKeyStroke> InsertKeys);
-    private sealed record BlockInsertState(int StartLine, int EndLine, int Column);
+    private sealed record BlockInsertState(int StartLine, int EndLine, int Column, IReadOnlyDictionary<int, int> LineColumns);
 
     public VimMode Mode => _mode;
     public CursorPosition Cursor => _cursor;
@@ -1905,6 +1906,8 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
         var motion = new MotionEngine(buf);
         int count = Math.Max(1, cmd.Count);
+        if (_mode == VimMode.VisualBlock && cmd.Motion != "$" && !PreservesVisualBlockLineEnd(cmd.Motion))
+            _visualBlockToLineEnd = false;
 
         switch (cmd.Motion)
         {
@@ -1939,6 +1942,8 @@ public class VimEngine
             case "$":
                 _cursor = _cursor with { Column = Math.Max(0, GetLineLength() - 1) };
                 _preferredColumn = _cursor.Column;
+                if (_mode == VimMode.VisualBlock)
+                    _visualBlockToLineEnd = true;
                 return true;
             case "w":
                 _cursor = motion.WordForward(_cursor, count, false);
@@ -2111,6 +2116,9 @@ public class VimEngine
                 return false;
         }
     }
+
+    private static bool PreservesVisualBlockLineEnd(string motion) =>
+        motion is "Up" or "Down" or "k" or "j" or "gj" or "gk";
 
     // ─────────────── COMMAND LINE MODE ───────────────
     private void HandleCommandLine(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
@@ -2534,6 +2542,7 @@ public class VimEngine
 
     private void EnterVisualMode(VimMode visualMode, List<VimEvent> events)
     {
+        _visualBlockToLineEnd = false;
         _visualStart = _cursor;
         ChangeMode(visualMode, events);
         UpdateSelection(events);
@@ -2597,6 +2606,8 @@ public class VimEngine
     private void ChangeMode(VimMode newMode, List<VimEvent> events)
     {
         _pendingMappedInput.Clear();
+        if (newMode != VimMode.VisualBlock)
+            _visualBlockToLineEnd = false;
         _mode = newMode;
         events.Add(VimEvent.ModeChanged(newMode));
     }
@@ -2624,6 +2635,12 @@ public class VimEngine
         if (_blockInsertState == null) return false;
         var state = _blockInsertState;
         var buf = _bufferManager.Current.Text;
+        int Offset() => Math.Max(0, _cursor.Column - state.Column);
+        int EditColumn(int line)
+        {
+            var baseColumn = state.LineColumns.TryGetValue(line, out var col) ? col : state.Column;
+            return Math.Min(baseColumn + Offset(), buf.GetLineLength(line));
+        }
 
         switch (key)
         {
@@ -2633,8 +2650,9 @@ public class VimEngine
                 for (int line = state.StartLine; line <= state.EndLine; line++)
                 {
                     var lineLen = buf.GetLineLength(line);
-                    var deleteCol = Math.Min(_cursor.Column - 1, lineLen - 1);
-                    if (deleteCol >= state.Column && deleteCol >= 0)
+                    var baseColumn = state.LineColumns.TryGetValue(line, out var col) ? col : state.Column;
+                    var deleteCol = Math.Min(baseColumn + Offset() - 1, lineLen - 1);
+                    if (deleteCol >= baseColumn && deleteCol >= 0)
                         buf.DeleteChar(line, deleteCol);
                 }
                 _cursor = _cursor with { Column = _cursor.Column - 1 };
@@ -2643,8 +2661,9 @@ public class VimEngine
             case "Delete":
                 for (int line = state.StartLine; line <= state.EndLine; line++)
                 {
-                    if (_cursor.Column < buf.GetLineLength(line))
-                        buf.DeleteChar(line, _cursor.Column);
+                    var deleteCol = EditColumn(line);
+                    if (deleteCol < buf.GetLineLength(line))
+                        buf.DeleteChar(line, deleteCol);
                 }
                 EmitText(events);
                 return true;
@@ -2654,8 +2673,7 @@ public class VimEngine
                     : "\t";
                 for (int line = state.StartLine; line <= state.EndLine; line++)
                 {
-                    var col = Math.Min(_cursor.Column, buf.GetLineLength(line));
-                    buf.InsertText(line, col, insert);
+                    buf.InsertText(line, EditColumn(line), insert);
                 }
                 _cursor = _cursor with { Column = _cursor.Column + insert.Length };
                 EmitText(events);
@@ -2665,8 +2683,7 @@ public class VimEngine
                 {
                     for (int line = state.StartLine; line <= state.EndLine; line++)
                     {
-                        var col = Math.Min(_cursor.Column, buf.GetLineLength(line));
-                        buf.InsertChar(line, col, key[0]);
+                        buf.InsertChar(line, EditColumn(line), key[0]);
                     }
                     _cursor = _cursor with { Column = _cursor.Column + 1 };
                     EmitText(events);
@@ -2685,10 +2702,53 @@ public class VimEngine
         return (startLine, endLine, leftColumn, rightColumn);
     }
 
+    private readonly record struct BlockLineRange(int Line, int StartColumn, int EndColumn);
+
+    private int GetBlockLeftColumn(Selection selection)
+    {
+        return _visualBlockToLineEnd
+            ? selection.Start.Column
+            : Math.Min(selection.Start.Column, selection.End.Column);
+    }
+
+    private IEnumerable<BlockLineRange> GetBlockLineRanges(Selection selection)
+    {
+        var buf = _bufferManager.Current.Text;
+        var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(selection);
+        if (_visualBlockToLineEnd)
+            leftColumn = selection.Start.Column;
+
+        for (int line = startLine; line <= endLine; line++)
+        {
+            var lineEnd = buf.GetLineLength(line) - 1;
+            var endColumn = _visualBlockToLineEnd ? lineEnd : rightColumn;
+            yield return new BlockLineRange(line, leftColumn, endColumn);
+        }
+    }
+
+    private Dictionary<int, int> BuildBlockEditColumns(int startLine, int endLine, int column)
+    {
+        var buf = _bufferManager.Current.Text;
+        var columns = new Dictionary<int, int>();
+        for (int line = startLine; line <= endLine; line++)
+            columns[line] = Math.Min(column, buf.GetLineLength(line));
+        return columns;
+    }
+
+    private Dictionary<int, int> BuildBlockAppendToLineEndColumns(int startLine, int endLine)
+    {
+        var buf = _bufferManager.Current.Text;
+        var columns = new Dictionary<int, int>();
+        for (int line = startLine; line <= endLine; line++)
+            columns[line] = buf.GetLineLength(line);
+        return columns;
+    }
+
     private void BeginVisualBlockInsert(List<VimEvent> events)
     {
         if (_selection == null) { ExitVisualMode(events); return; }
-        var (startLine, endLine, leftColumn, _) = GetBlockBounds(_selection.Value);
+        var (startLine, endLine, _, _) = GetBlockBounds(_selection.Value);
+        var leftColumn = GetBlockLeftColumn(_selection.Value);
         BeginVisualBlockEdit(startLine, endLine, leftColumn, events);
     }
 
@@ -2696,6 +2756,12 @@ public class VimEngine
     {
         if (_selection == null) { ExitVisualMode(events); return; }
         var (startLine, endLine, _, rightColumn) = GetBlockBounds(_selection.Value);
+        if (_visualBlockToLineEnd)
+        {
+            BeginVisualBlockEdit(startLine, endLine, BuildBlockAppendToLineEndColumns(startLine, endLine), events);
+            return;
+        }
+
         BeginVisualBlockEdit(startLine, endLine, rightColumn + 1, events);
     }
 
@@ -2703,9 +2769,15 @@ public class VimEngine
     // places cursor at the given column on the first selected line, and enters Insert mode.
     private void BeginVisualBlockEdit(int startLine, int endLine, int column, List<VimEvent> events)
     {
+        BeginVisualBlockEdit(startLine, endLine, BuildBlockEditColumns(startLine, endLine, column), events);
+    }
+
+    private void BeginVisualBlockEdit(int startLine, int endLine, Dictionary<int, int> lineColumns, List<VimEvent> events)
+    {
         _selection = null;
         events.Add(VimEvent.SelectionChanged(null));
-        _blockInsertState = new BlockInsertState(startLine, endLine, column);
+        var column = lineColumns.TryGetValue(startLine, out var startColumn) ? startColumn : 0;
+        _blockInsertState = new BlockInsertState(startLine, endLine, column, lineColumns);
         _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, column), insertMode: true);
         EnterInsertMode(false, events);
         EmitCursor(events);
@@ -2714,37 +2786,44 @@ public class VimEngine
     private void BeginVisualBlockChange(char register, List<VimEvent> events)
     {
         if (_selection == null) { ExitVisualMode(events); return; }
-        var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(_selection.Value);
+        var sel = _selection.Value;
+        var (startLine, endLine, _, _) = GetBlockBounds(sel);
+        var leftColumn = GetBlockLeftColumn(sel);
 
         Snapshot();
-        YankBlock(register, startLine, endLine, leftColumn, rightColumn);
-        DeleteBlock(startLine, endLine, leftColumn, rightColumn);
+        YankBlock(register, sel);
+        DeleteBlock(sel);
         _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn), insertMode: true);
         EmitText(events);
 
         _selection = null;
         events.Add(VimEvent.SelectionChanged(null));
-        _blockInsertState = new BlockInsertState(startLine, endLine, leftColumn);
+        _blockInsertState = new BlockInsertState(
+            startLine,
+            endLine,
+            _cursor.Column,
+            BuildBlockEditColumns(startLine, endLine, leftColumn));
         EnterInsertMode(false, events);
     }
 
     private void ExecuteBlockReplace(char ch, List<VimEvent> events)
     {
         if (_selection == null) { ExitVisualMode(events); return; }
-        var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(_selection.Value);
         var buf = _bufferManager.Current.Text;
         Snapshot();
-        for (int line = startLine; line <= endLine; line++)
+        foreach (var range in GetBlockLineRanges(_selection.Value))
         {
-            int lineLen = buf.GetLineLength(line);
-            if (lineLen <= leftColumn) continue; // line too short, skip
-            int colEnd = Math.Min(rightColumn, lineLen - 1);
-            for (int col = leftColumn; col <= colEnd; col++)
+            int lineLen = buf.GetLineLength(range.Line);
+            if (lineLen <= range.StartColumn) continue; // line too short, skip
+            int colEnd = Math.Min(range.EndColumn, lineLen - 1);
+            for (int col = range.StartColumn; col <= colEnd; col++)
             {
-                buf.DeleteChar(line, col);
-                buf.InsertChar(line, col, ch);
+                buf.DeleteChar(range.Line, col);
+                buf.InsertChar(range.Line, col, ch);
             }
         }
+        var (startLine, _, _, _) = GetBlockBounds(_selection.Value);
+        var leftColumn = GetBlockLeftColumn(_selection.Value);
         _cursor = new CursorPosition(startLine, leftColumn);
         ExitVisualMode(events);
         EmitText(events);
@@ -3917,6 +3996,35 @@ public class VimEngine
 
     private enum CaseConversion { Lower, Upper, Toggle }
 
+    private void ApplyBlockCaseConversion(Selection selection, CaseConversion mode, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        foreach (var range in GetBlockLineRanges(selection))
+        {
+            var line = buf.GetLine(range.Line);
+            if (line.Length <= range.StartColumn) continue;
+
+            var chars = line.ToCharArray();
+            var endColumn = Math.Min(range.EndColumn, chars.Length - 1);
+            bool changed = false;
+            for (int c = range.StartColumn; c <= endColumn; c++)
+            {
+                char converted = mode switch
+                {
+                    CaseConversion.Lower => char.ToLower(chars[c]),
+                    CaseConversion.Upper => char.ToUpper(chars[c]),
+                    _ => char.IsUpper(chars[c]) ? char.ToLower(chars[c]) : char.ToUpper(chars[c])
+                };
+                if (converted != chars[c]) { chars[c] = converted; changed = true; }
+            }
+            if (changed) buf.ReplaceLine(range.Line, new string(chars));
+        }
+
+        var (startLine, _, _, _) = GetBlockBounds(selection);
+        MoveCursor(new CursorPosition(startLine, GetBlockLeftColumn(selection)), events);
+        EmitText(events);
+    }
+
     private void ApplyCaseConversion(CursorPosition from, CursorPosition to, bool linewise, CaseConversion mode, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
@@ -4529,10 +4637,11 @@ public class VimEngine
         var sel = _selection.Value;
         if (_mode == VimMode.VisualBlock)
         {
-            var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(sel);
+            var (startLine, _, _, _) = GetBlockBounds(sel);
+            var leftColumn = GetBlockLeftColumn(sel);
             Snapshot();
-            YankBlock(register, startLine, endLine, leftColumn, rightColumn);
-            DeleteBlock(startLine, endLine, leftColumn, rightColumn);
+            YankBlock(register, sel);
+            DeleteBlock(sel);
             _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn));
             EmitText(events);
             ExitVisualMode(events);
@@ -4563,8 +4672,9 @@ public class VimEngine
         var sel = _selection.Value;
         if (_mode == VimMode.VisualBlock)
         {
-            var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(sel);
-            YankBlock(register, startLine, endLine, leftColumn, rightColumn);
+            var (startLine, _, _, _) = GetBlockBounds(sel);
+            var leftColumn = GetBlockLeftColumn(sel);
+            YankBlock(register, sel);
             MoveCursor(new CursorPosition(startLine, leftColumn), events);
             ExitVisualMode(events);
             return;
@@ -4582,33 +4692,33 @@ public class VimEngine
         ExitVisualMode(events);
     }
 
-    private void DeleteBlock(int startLine, int endLine, int leftColumn, int rightColumn)
+    private void DeleteBlock(Selection selection)
     {
         var buf = _bufferManager.Current.Text;
-        for (int line = startLine; line <= endLine; line++)
+        foreach (var range in GetBlockLineRanges(selection))
         {
-            var length = buf.GetLineLength(line);
-            if (length <= leftColumn) continue;
-            var endExclusive = Math.Min(length, rightColumn + 1);
-            buf.DeleteRange(line, leftColumn, endExclusive);
+            var length = buf.GetLineLength(range.Line);
+            if (length <= range.StartColumn) continue;
+            var endExclusive = Math.Min(length, range.EndColumn + 1);
+            buf.DeleteRange(range.Line, range.StartColumn, endExclusive);
         }
     }
 
-    private void YankBlock(char register, int startLine, int endLine, int leftColumn, int rightColumn)
+    private void YankBlock(char register, Selection selection)
     {
         var buf = _bufferManager.Current.Text;
         var lines = new List<string>();
-        for (int line = startLine; line <= endLine; line++)
+        foreach (var range in GetBlockLineRanges(selection))
         {
-            var text = buf.GetLine(line);
-            if (text.Length <= leftColumn)
+            var text = buf.GetLine(range.Line);
+            if (text.Length <= range.StartColumn)
             {
                 lines.Add("");
                 continue;
             }
 
-            var endExclusive = Math.Min(text.Length, rightColumn + 1);
-            lines.Add(text[leftColumn..endExclusive]);
+            var endExclusive = Math.Min(text.Length, range.EndColumn + 1);
+            lines.Add(text[range.StartColumn..endExclusive]);
         }
 
         _registerManager.SetYank(register, new Register(string.Join("\n", lines), RegisterType.Block));
@@ -4638,6 +4748,13 @@ public class VimEngine
         if (_selection == null) { ExitVisualMode(events); return; }
         Snapshot();
         var sel = _selection.Value;
+        if (_mode == VimMode.VisualBlock)
+        {
+            ApplyBlockCaseConversion(sel, mode, events);
+            ExitVisualMode(events);
+            return;
+        }
+
         bool linewise = _mode == VimMode.VisualLine;
         ApplyCaseConversion(sel.NormalizedStart, sel.NormalizedEnd, linewise, mode, events);
         ExitVisualMode(events);
@@ -4652,16 +4769,15 @@ public class VimEngine
 
         if (_mode == VimMode.VisualBlock)
         {
-            var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(sel);
-            for (int lineNo = startLine; lineNo <= endLine; lineNo++)
+            foreach (var range in GetBlockLineRanges(sel))
             {
-                var line = buf.GetLine(lineNo);
-                if (line.Length <= leftColumn) continue;
-                var endCol = Math.Min(rightColumn, line.Length - 1);
-                for (int col = leftColumn; col <= endCol; col++)
+                var line = buf.GetLine(range.Line);
+                if (line.Length <= range.StartColumn) continue;
+                var endCol = Math.Min(range.EndColumn, line.Length - 1);
+                for (int col = range.StartColumn; col <= endCol; col++)
                 {
-                    buf.DeleteChar(lineNo, col);
-                    buf.InsertChar(lineNo, col, replacement);
+                    buf.DeleteChar(range.Line, col);
+                    buf.InsertChar(range.Line, col, replacement);
                 }
             }
         }

@@ -725,6 +725,57 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void CtrlV_DollarDelete_DeletesToEachSelectedLineEnd()
+    {
+        var engine = CreateEngine("abcd\nabcdef\nab");
+
+        engine.ProcessKey("l");
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("$");
+        engine.ProcessKey("d");
+
+        Assert.Equal("a\na\na", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void CtrlV_DollarAppend_AppendsAtEachSelectedLineEnd()
+    {
+        var engine = CreateEngine("abcd\nabcdef\nab");
+
+        engine.ProcessKey("l");
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("$");
+        engine.ProcessKey("A");
+        engine.ProcessKey("!");
+        engine.ProcessKey("Escape");
+
+        Assert.Equal("abcd!\nabcdef!\nab!", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void CtrlV_DollarReplace_ReplacesThroughEachSelectedLineEnd()
+    {
+        var engine = CreateEngine("abcd\nabcdef\nab");
+
+        engine.ProcessKey("l");
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("$");
+        engine.ProcessKey("r");
+        engine.ProcessKey("Z");
+
+        Assert.Equal("aZZZ\naZZZZZ\naZ", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
     public void ZCommands_EmitViewportAlignEvents()
     {
         var engine = CreateEngine("line1\nline2\nline3");
