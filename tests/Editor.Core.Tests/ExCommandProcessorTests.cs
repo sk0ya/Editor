@@ -673,6 +673,7 @@ public class ExCommandProcessorTests
     [InlineData("cnext", 1)]
     [InlineData("3cnext", 3)]
     [InlineData("cprev", -1)]
+    [InlineData("cprevious", -1)]
     [InlineData("2cprev", -2)]
     public void QuickfixNavigationCommands_ParseCount(string command, int signedCount)
     {

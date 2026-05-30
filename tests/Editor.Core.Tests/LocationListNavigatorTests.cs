@@ -27,6 +27,16 @@ public class LocationListNavigatorTests
     }
 
     [Fact]
+    public void Goto_ClampsOutOfRangeIndex()
+    {
+        var navigator = new LocationListNavigator();
+        navigator.Reset(3);
+
+        Assert.Equal(2, navigator.Goto(99));
+        Assert.Equal(0, navigator.Goto(0));
+    }
+
+    [Fact]
     public void SetCount_PreservesAndClampsCurrentIndex()
     {
         var navigator = new LocationListNavigator();

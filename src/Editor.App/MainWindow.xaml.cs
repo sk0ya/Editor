@@ -1796,6 +1796,7 @@ public partial class MainWindow : Window
         public required int    Line      { get; init; }
         public required int    Col       { get; init; }
         public bool CurrentBufferOnly { get; init; }
+        public string? BufferKey { get; init; }
     }
 
     private sealed class BufferLocationList
@@ -2217,6 +2218,7 @@ public partial class MainWindow : Window
     {
         var filePath = editor.Engine.CurrentBuffer.FilePath ?? "";
         var fileName = string.IsNullOrEmpty(filePath) ? "[No Name]" : Path.GetFileName(filePath);
+        var bufferKey = GetLocationListKey(editor);
 
         return editor.CurrentDiagnostics
             .OrderBy(d => d.Range.Start.Line)
@@ -2230,6 +2232,7 @@ public partial class MainWindow : Window
                 Line = d.Range.Start.Line,
                 Col = d.Range.Start.Character,
                 CurrentBufferOnly = true,
+                BufferKey = bufferKey,
             })
             .ToList();
     }
@@ -2246,6 +2249,7 @@ public partial class MainWindow : Window
         var buffer = editor.Engine.CurrentBuffer.Text;
         var filePath = editor.Engine.CurrentBuffer.FilePath ?? "";
         var fileName = string.IsNullOrEmpty(filePath) ? "[No Name]" : Path.GetFileName(filePath);
+        var bufferKey = GetLocationListKey(editor);
 
         return buffer.FindAll(pattern, ignoreCase)
             .Select(pos => new ReferenceListItem
@@ -2257,6 +2261,7 @@ public partial class MainWindow : Window
                 Line = pos.Line,
                 Col = pos.Column,
                 CurrentBufferOnly = true,
+                BufferKey = bufferKey,
             })
             .ToList();
     }
@@ -2286,9 +2291,19 @@ public partial class MainWindow : Window
         var editor = CurrentEditor;
         if (editor == null) return;
 
-        if (item.CurrentBufferOnly ||
-            string.Equals(item.FilePath, editor.Engine.CurrentBuffer.FilePath,
-                          StringComparison.OrdinalIgnoreCase))
+        if (item.CurrentBufferOnly)
+        {
+            if (!string.Equals(item.BufferKey, GetLocationListKey(editor), StringComparison.OrdinalIgnoreCase))
+            {
+                ShowLocationListPanel();
+                return;
+            }
+
+            editor.NavigateTo(item.Line, item.Col);
+            editor.Focus();
+        }
+        else if (string.Equals(item.FilePath, editor.Engine.CurrentBuffer.FilePath,
+                               StringComparison.OrdinalIgnoreCase))
         {
             editor.NavigateTo(item.Line, item.Col);
             editor.Focus();
@@ -4102,20 +4117,16 @@ public partial class MainWindow : Window
             Col      = i.Col
         }).ToList();
 
-        RefList.SelectionChanged -= RefList_SelectionChanged;
-        RefList.ItemsSource = panelItems;
-        RefList.SelectedIndex = -1;
+        SetQuickfixItems(panelItems);
         _quickfixCurrentIndex = -1;
-        RefList.SelectionChanged += RefList_SelectionChanged;
 
         int fileCount = panelItems.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        RefPanelTitle.Text = string.IsNullOrWhiteSpace(query)
+        _quickfixTitle = string.IsNullOrWhiteSpace(query)
             ? $"SEARCH ({panelItems.Count} results) [{fileCount} file(s)]"
             : $"SEARCH \"{query}\" ({panelItems.Count} results) [{fileCount} file(s)]";
         _lastGrepOptions = null;
-        ReplaceRefResultsBtn.IsEnabled = false;
 
-        ShowReferencesPanel();
+        ShowQuickfixPanel();
     }
 
     // ─────────────────────────────────────────────────────────
