@@ -8,7 +8,7 @@
 - Normal / Insert / Visual / Visual Block / Visual Line モード
 - ドットコマンド (`.`)、レジスタ、マーク、マクロ
 - `:substitute`、`:changes` / `:jumps` / `:undolist` / `:earlier` / `:later`、コマンド履歴、`.vimrc` / `_vimrc` 読み込み
-- Vimscript 設定の基本機能（`:let`、`:echo`、`:execute`、`:if` / `:else` / `:endif`。条件式は数値・既存変数・既存の算術式評価範囲）
+- Vimscript 設定の基本機能（`:let`、`:echo`、`:execute`、`:if` / `:else` / `:endif`、`:for` / `:endfor`。`:for` は `.vimrc` / `:source` 内の数値・文字列リストリテラルに対応し、対話的な複数行入力は未対応エラーを返す）
 - シンタックスハイライト（複数言語対応）
 - LSP 連携（補完、ホバー、診断、定義ジャンプ、参照検索、シグネチャヘルプ、フォーマット、リネーム、コードアクション、スマート選択範囲）
 - マルチバッファ、タブ、ウィンドウ分割（`:split` / `:vsplit` / `Ctrl+W` プレフィックス）

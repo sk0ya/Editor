@@ -1010,6 +1010,28 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void For_InteractiveCommandReturnsMissingEndforError()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("for item in [1, 2, 3]", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Equal("E170: Missing :endfor", result.Message);
+    }
+
+    [Fact]
+    public void Endfor_InteractiveCommandReturnsWithoutForError()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("endfor", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Equal("E588: :endfor without :for", result.Message);
+    }
+
+    [Fact]
     public void RangeYank_YanksLinesToRegister()
     {
         var (processor, buffers, registers) = CreateProcessorWithRegisters();

@@ -16,7 +16,6 @@
 
 | 機能 | 説明 | 優先度 |
 |------|------|-------|
-| `:for` / `:endfor` | ループ | 低 |
 | `:function` / `:endfunction` | 関数定義 | 低 |
 
 ---
@@ -74,7 +73,7 @@
 - 複数ターミナル管理
 
 ### 低 (将来)
-- Vimscript (`:function`, `:for`)
+- Vimscript (`:function`)
 - DAP デバッガ統合
 - リモート編集
 - ブランチングアンドゥ
@@ -88,6 +87,7 @@
 
 | 機能 | 日付 |
 |------|------|
+| **`:for` / `:endfor`** `.vimrc` / `:source` の Vimscript 読み込みで数値・文字列リストリテラルのループを評価。各 iteration でループ変数を設定し、ネストした `for` と `if` との組み合わせに対応。対話的な単発 `:for` は未対応エラーを返す | ✅ 2026-05-31 |
 | **`:if` / `:else` / `:endif`** `.vimrc` / `:source` の Vimscript 読み込みで条件分岐とネストを評価。条件式は数値・既存変数・既存の算術式評価範囲に限定し、対話的な単発 `:if` は未対応エラーを返す | ✅ 2026-05-31 |
 | **ワークスペース診断 (`workspace/diagnostic`)** `:diagnostics` / `:diag` で対応 LSP サーバーからワークスペース診断を取得し、References パネルに診断一覧と件数を表示 | ✅ 2026-05-31 |
 | **`textDocument/selectionRange`** Shift+Alt+Right で LSP の親 selection range へ段階的に Visual 選択を拡張し、Shift+Alt+Left で直前段階へ縮小 | ✅ 2026-05-31 |

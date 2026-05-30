@@ -1241,6 +1241,108 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VimConfig_ParseFor_IteratesNumberList()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "for item in [1, 2, 3]",
+            "  let g:last = item",
+            "endfor",
+        ]);
+
+        Assert.Equal("3", cfg.Variables["item"]);
+        Assert.Equal("3", cfg.Variables["g:last"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_IteratesStringList()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "for name in ['a', 'b']",
+            "  let g:last_name = name",
+            "endfor",
+        ]);
+
+        Assert.Equal("b", cfg.Variables["name"]);
+        Assert.Equal("b", cfg.Variables["g:last_name"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_SupportsNestedLoops()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "for outer in [1, 2]",
+            "  for inner in ['x', 'y']",
+            "    let g:last_outer = outer",
+            "    let g:last_inner = inner",
+            "  endfor",
+            "endfor",
+        ]);
+
+        Assert.Equal("2", cfg.Variables["g:last_outer"]);
+        Assert.Equal("y", cfg.Variables["g:last_inner"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_SupportsIfInsideLoop()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "for item in [0, 1]",
+            "  if item",
+            "    let g:truthy = item",
+            "  else",
+            "    let g:falsy = item",
+            "  endif",
+            "endfor",
+        ]);
+
+        Assert.Equal("0", cfg.Variables["g:falsy"]);
+        Assert.Equal("1", cfg.Variables["g:truthy"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_SupportsLoopInsideIf()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "let g:enabled = 1",
+            "if g:enabled",
+            "  for item in [1, 2]",
+            "    let g:last = item",
+            "  endfor",
+            "endif",
+        ]);
+
+        Assert.Equal("2", cfg.Variables["g:last"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_SkipsLoopInsideInactiveIf()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "if 0",
+            "  for item in [1, 2]",
+            "    let g:skipped = item",
+            "  endfor",
+            "endif",
+            "let g:after = 1",
+        ]);
+
+        Assert.False(cfg.Variables.ContainsKey("g:skipped"));
+        Assert.Equal("1", cfg.Variables["g:after"]);
+    }
+
+    [Fact]
     public void VimConfig_LoadFromFile_TracksSourceScripts()
     {
         var dir = Path.Combine(Path.GetTempPath(), "editor-vimconfig-" + Guid.NewGuid().ToString("N"));
@@ -1257,6 +1359,29 @@ public class VimEngineTests
             Assert.Equal([Path.GetFullPath(main), Path.GetFullPath(plugin)], cfg.ScriptNames);
             Assert.Equal("1", cfg.Variables["g:plugin_loaded"]);
             Assert.True(cfg.Options.Number);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void VimConfig_LoadFromFile_SourceHonorsForBlocks()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "editor-vimconfig-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var main = Path.Combine(dir, "main.vim");
+            var plugin = Path.Combine(dir, "plugin.vim");
+            File.WriteAllText(main, "source plugin.vim\n");
+            File.WriteAllText(plugin, "for item in [1, 2, 3]\nlet g:plugin_last = item\nendfor\n");
+
+            var cfg = VimConfig.LoadFromFile(main);
+
+            Assert.Equal("3", cfg.Variables["g:plugin_last"]);
+            Assert.Equal([Path.GetFullPath(main), Path.GetFullPath(plugin)], cfg.ScriptNames);
         }
         finally
         {

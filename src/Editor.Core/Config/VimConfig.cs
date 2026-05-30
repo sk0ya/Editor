@@ -7,6 +7,8 @@ namespace Editor.Core.Config;
 public class VimConfig
 {
     private const int ModelineScanLineCount = 5;
+    private const int MaxForListItems = 1000;
+    private const int MaxForIterations = 10000;
 
     public VimOptions Options { get; } = new();
     public Dictionary<string, string> NormalMaps { get; } = [];
@@ -24,16 +26,6 @@ public class VimConfig
     private readonly List<string> _scriptNames = [];
     private readonly HashSet<string> _activeScriptPaths = new(StringComparer.OrdinalIgnoreCase);
     private string? _currentScriptDirectory;
-
-    private sealed class ConditionalBlock(bool parentActive, bool conditionTrue)
-    {
-        public bool ParentActive { get; } = parentActive;
-        public bool ConditionTrue { get; } = conditionTrue;
-        public bool InElse { get; set; }
-        public bool ElseSeen { get; set; }
-        public bool Invalid { get; set; }
-        public bool Active => !Invalid && ParentActive && (InElse ? !ConditionTrue : ConditionTrue);
-    }
 
     public static VimConfig LoadFromFile(string path)
     {
@@ -70,51 +62,9 @@ public class VimConfig
 
     public void ParseLines(IEnumerable<string> lines)
     {
-        var conditionals = new Stack<ConditionalBlock>();
-
-        foreach (var rawLine in lines)
-        {
-            var line = NormalizeConfigLine(rawLine);
-            if (line.Length == 0) continue;
-
-            if (TryParseIfCommand(line, out var ifExpression))
-            {
-                var parentActive = IsConditionalStackActive(conditionals);
-                var conditionTrue = parentActive && EvaluateCondition(ifExpression);
-                conditionals.Push(new ConditionalBlock(parentActive, conditionTrue));
-                continue;
-            }
-
-            if (line.Equals("else", StringComparison.OrdinalIgnoreCase))
-            {
-                if (conditionals.Count > 0)
-                {
-                    var current = conditionals.Peek();
-                    if (current.ElseSeen)
-                    {
-                        current.Invalid = true;
-                    }
-                    else
-                    {
-                        current.ElseSeen = true;
-                        current.InElse = true;
-                    }
-                }
-                continue;
-            }
-
-            if (line.Equals("endif", StringComparison.OrdinalIgnoreCase))
-            {
-                if (conditionals.Count > 0)
-                    conditionals.Pop();
-                continue;
-            }
-
-            if (!IsConditionalStackActive(conditionals))
-                continue;
-
-            ParseCommand(line);
-        }
+        var normalizedLines = lines.Select(NormalizeConfigLine).ToArray();
+        var iterationBudget = MaxForIterations;
+        ProcessBlock(normalizedLines, 0, normalizedLines.Length, ref iterationBudget);
     }
 
     public string? ParseCommand(string cmd)
@@ -297,8 +247,247 @@ public class VimConfig
         return true;
     }
 
-    private static bool IsConditionalStackActive(Stack<ConditionalBlock> conditionals) =>
-        conditionals.Count == 0 || conditionals.Peek().Active;
+    private int ProcessBlock(IReadOnlyList<string> lines, int start, int end, ref int iterationBudget)
+    {
+        var index = start;
+        while (index < end)
+        {
+            var line = lines[index];
+            if (line.Length == 0)
+            {
+                index++;
+                continue;
+            }
+
+            if (IsBlockTerminator(line))
+                return index;
+
+            if (TryParseIfCommand(line, out var ifExpression))
+            {
+                index = ExecuteIfBlock(lines, index, end, ifExpression, ref iterationBudget);
+                continue;
+            }
+
+            if (TryParseForCommand(line, out var loopVariable, out var listExpression))
+            {
+                index = ExecuteForBlock(lines, index, end, loopVariable, listExpression, ref iterationBudget);
+                continue;
+            }
+
+            ParseCommand(line);
+            index++;
+        }
+
+        return index;
+    }
+
+    private int ExecuteIfBlock(
+        IReadOnlyList<string> lines,
+        int ifIndex,
+        int end,
+        string expression,
+        ref int iterationBudget)
+    {
+        var (elseIndex, endifIndex) = FindIfBlock(lines, ifIndex, end);
+        var blockEnd = endifIndex >= 0 ? endifIndex : end;
+
+        if (EvaluateCondition(expression))
+        {
+            var trueEnd = elseIndex >= 0 ? elseIndex : blockEnd;
+            ProcessBlock(lines, ifIndex + 1, trueEnd, ref iterationBudget);
+        }
+        else if (elseIndex >= 0)
+        {
+            ProcessBlock(lines, elseIndex + 1, blockEnd, ref iterationBudget);
+        }
+
+        return endifIndex >= 0 ? endifIndex + 1 : end;
+    }
+
+    private int ExecuteForBlock(
+        IReadOnlyList<string> lines,
+        int forIndex,
+        int end,
+        string variableName,
+        string listExpression,
+        ref int iterationBudget)
+    {
+        var endforIndex = FindForBlockEnd(lines, forIndex, end);
+        if (endforIndex < 0)
+            return end;
+
+        if (!IsValidVariableName(variableName) ||
+            !TryParseListLiteral(listExpression, out var items))
+            return endforIndex + 1;
+
+        foreach (var item in items.Take(MaxForListItems))
+        {
+            if (iterationBudget <= 0)
+                break;
+
+            iterationBudget--;
+            Variables[variableName] = item;
+            ProcessBlock(lines, forIndex + 1, endforIndex, ref iterationBudget);
+        }
+
+        return endforIndex + 1;
+    }
+
+    private static (int ElseIndex, int EndifIndex) FindIfBlock(IReadOnlyList<string> lines, int ifIndex, int end)
+    {
+        var depth = 0;
+        var elseIndex = -1;
+
+        for (var index = ifIndex + 1; index < end; index++)
+        {
+            var line = lines[index];
+            if (line.Length == 0)
+                continue;
+
+            if (TryParseIfCommand(line, out _))
+            {
+                depth++;
+                continue;
+            }
+
+            if (line.Equals("endif", StringComparison.OrdinalIgnoreCase))
+            {
+                if (depth == 0)
+                    return (elseIndex, index);
+
+                depth--;
+                continue;
+            }
+
+            if (depth == 0 &&
+                elseIndex < 0 &&
+                line.Equals("else", StringComparison.OrdinalIgnoreCase))
+            {
+                elseIndex = index;
+            }
+        }
+
+        return (elseIndex, -1);
+    }
+
+    private static int FindForBlockEnd(IReadOnlyList<string> lines, int forIndex, int end)
+    {
+        var depth = 0;
+
+        for (var index = forIndex + 1; index < end; index++)
+        {
+            var line = lines[index];
+            if (line.Length == 0)
+                continue;
+
+            if (TryParseForCommand(line, out _, out _))
+            {
+                depth++;
+                continue;
+            }
+
+            if (line.Equals("endfor", StringComparison.OrdinalIgnoreCase))
+            {
+                if (depth == 0)
+                    return index;
+
+                depth--;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsBlockTerminator(string line) =>
+        line.Equals("else", StringComparison.OrdinalIgnoreCase) ||
+        line.Equals("endif", StringComparison.OrdinalIgnoreCase) ||
+        line.Equals("endfor", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryParseForCommand(string line, out string variableName, out string listExpression)
+    {
+        variableName = "";
+        listExpression = "";
+
+        if (line.Length < 3 ||
+            !line[..3].Equals("for", StringComparison.OrdinalIgnoreCase) ||
+            (line.Length > 3 && !char.IsWhiteSpace(line[3])))
+            return false;
+
+        var rest = line.Length > 3 ? line[3..].Trim() : "";
+        var parts = rest.Split([" in "], 2, StringSplitOptions.None);
+        if (parts.Length != 2)
+            return false;
+
+        variableName = parts[0].Trim();
+        listExpression = parts[1].Trim();
+        return true;
+    }
+
+    private static bool TryParseListLiteral(string expression, out List<string> items)
+    {
+        items = [];
+        expression = expression.Trim();
+        if (expression.Length < 2 || expression[0] != '[' || expression[^1] != ']')
+            return false;
+
+        var content = expression[1..^1].Trim();
+        if (content.Length == 0)
+            return true;
+
+        foreach (var rawItem in SplitListItems(content))
+        {
+            var item = rawItem.Trim();
+            if (item.Length == 0)
+                return false;
+
+            if (item.Length >= 2 &&
+                ((item[0] == '"' && item[^1] == '"') ||
+                 (item[0] == '\'' && item[^1] == '\'')))
+            {
+                items.Add(StripQuotes(item));
+                continue;
+            }
+
+            var evaluated = ExpressionEvaluator.Evaluate(item);
+            if (evaluated == null)
+                return false;
+
+            items.Add(evaluated);
+        }
+
+        return true;
+    }
+
+    private static IEnumerable<string> SplitListItems(string content)
+    {
+        var start = 0;
+        char quote = '\0';
+
+        for (var index = 0; index < content.Length; index++)
+        {
+            var ch = content[index];
+            if (quote != '\0')
+            {
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == ',')
+            {
+                yield return content[start..index];
+                start = index + 1;
+            }
+        }
+
+        yield return content[start..];
+    }
 
     private static IEnumerable<string> GetModelineCandidateLines(TextBuffer text)
     {
@@ -584,7 +773,7 @@ public class VimConfig
         };
     }
 
-    private static bool TryParseLetAssignment(string cmd, out string? name, out string? value, out string? error)
+    private bool TryParseLetAssignment(string cmd, out string? name, out string? value, out string? error)
     {
         name = null;
         value = null;
@@ -643,7 +832,7 @@ public class VimConfig
             ? s[1..^1]
             : s;
 
-    private static string EvalLetExpression(string expr)
+    private string EvalLetExpression(string expr)
     {
         expr = expr.Trim();
 
@@ -651,6 +840,9 @@ public class VimConfig
             ((expr[0] == '"' && expr[^1] == '"') ||
              (expr[0] == '\'' && expr[^1] == '\'')))
             return StripQuotes(expr);
+
+        if (TryGetVariable(expr, out var variableValue))
+            return variableValue;
 
         return ExpressionEvaluator.Evaluate(expr) ?? expr;
     }

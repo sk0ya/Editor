@@ -650,6 +650,13 @@ public class ExCommandProcessor
         if (cmd == "endif")
             return new ExResult(false, "E580: :endif without :if");
 
+        // Multi-line Vimscript loops are evaluated by VimConfig when sourcing
+        // vimrc files. Interactive one-line input is not stateful.
+        if (cmd == "for" || cmd.StartsWith("for "))
+            return new ExResult(false, "E170: Missing :endfor");
+        if (cmd == "endfor")
+            return new ExResult(false, "E588: :endfor without :for");
+
         // :changes
         if (cmd == "changes")
             return new ExResult(true, _markManager.FormatChangeList());
@@ -1910,7 +1917,7 @@ public class ExCommandProcessor
         "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",
         "map",
         "unmap", "nunmap", "iunmap", "vunmap",
-        "let",
+        "let", "for", "endfor",
         "history", "his",
         "preview", "mdpreview",
         "terminal", "term",
