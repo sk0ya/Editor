@@ -147,7 +147,6 @@ public static class ProjectFindReplaceService
             yield break;
 
         var excluded = options.ExcludedDirectoryNames ?? DefaultExcludedDirectoryNames;
-        var extensions = GetExtensionsFromGlob(options.FileGlob);
         var dirs = new Stack<string>();
         dirs.Push(root);
 
@@ -160,8 +159,7 @@ public static class ProjectFindReplaceService
 
             foreach (var file in files)
             {
-                if (extensions != null &&
-                    !extensions.Any(ext => file.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
+                if (!MatchesFileGlob(root, file, options.FileGlob))
                     continue;
 
                 yield return file;
@@ -173,33 +171,102 @@ public static class ProjectFindReplaceService
 
             foreach (var subDir in subDirs)
             {
-                if (!excluded.Contains(Path.GetFileName(subDir)))
+                if (!ShouldSkipDirectory(subDir, excluded))
                     dirs.Push(subDir);
             }
         }
     }
 
-    private static string[]? GetExtensionsFromGlob(string? glob)
+    private static bool ShouldSkipDirectory(string directoryPath, IReadOnlySet<string> excluded)
+    {
+        try
+        {
+            if (excluded.Contains(Path.GetFileName(directoryPath)))
+                return true;
+
+            return (File.GetAttributes(directoryPath) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static bool MatchesFileGlob(string root, string filePath, string? glob)
     {
         if (string.IsNullOrWhiteSpace(glob))
-            return null;
+            return true;
 
-        var lastSlash = glob.LastIndexOfAny(['/', '\\']);
-        var pattern = lastSlash >= 0 ? glob[(lastSlash + 1)..] : glob;
+        var normalizedGlob = NormalizeGlobPath(glob.Trim());
+        var target = normalizedGlob.Contains('/')
+            ? NormalizeGlobPath(Path.GetRelativePath(root, filePath))
+            : Path.GetFileName(filePath);
 
-        if (pattern.StartsWith("*.{", StringComparison.Ordinal) && pattern.EndsWith('}'))
+        return Regex.IsMatch(
+            target,
+            "^" + GlobToRegex(normalizedGlob) + "$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string NormalizeGlobPath(string path) =>
+        path.Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
+
+    private static string GlobToRegex(string glob)
+    {
+        var regex = new StringBuilder();
+
+        for (var i = 0; i < glob.Length; i++)
         {
-            return pattern[3..^1]
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(ext => ext.StartsWith('.') ? ext : "." + ext)
-                .ToArray();
+            var ch = glob[i];
+            if (ch == '*')
+            {
+                if (i + 1 < glob.Length && glob[i + 1] == '*')
+                {
+                    if (i + 2 < glob.Length && glob[i + 2] == '/')
+                    {
+                        regex.Append("(?:.*/)?");
+                        i += 2;
+                    }
+                    else
+                    {
+                        regex.Append(".*");
+                        i++;
+                    }
+                }
+                else
+                {
+                    regex.Append("[^/]*");
+                }
+                continue;
+            }
+
+            if (ch == '?')
+            {
+                regex.Append("[^/]");
+                continue;
+            }
+
+            if (ch == '{')
+            {
+                var close = glob.IndexOf('}', i + 1);
+                if (close > i)
+                {
+                    var alternatives = glob[(i + 1)..close]
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Select(Regex.Escape);
+                    regex.Append("(?:");
+                    regex.Append(string.Join('|', alternatives));
+                    regex.Append(')');
+                    i = close;
+                    continue;
+                }
+            }
+
+            regex.Append(Regex.Escape(ch.ToString()));
         }
 
-        var dotIndex = pattern.IndexOf('.');
-        if (dotIndex >= 0 && dotIndex < pattern.Length - 1)
-            return ["." + pattern[(dotIndex + 1)..].TrimStart('.')];
-
-        return null;
+        return regex.ToString();
     }
 
     private static bool CanReadAsText(string filePath, long maxFileBytes)

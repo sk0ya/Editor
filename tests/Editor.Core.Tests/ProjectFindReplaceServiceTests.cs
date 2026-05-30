@@ -65,6 +65,49 @@ public class ProjectFindReplaceServiceTests : IDisposable
     }
 
     [Fact]
+    public void Find_RespectsPathGlob()
+    {
+        Write("src/app.cs", "needle\n");
+        Write("src/nested/app.cs", "needle\n");
+        Write("other/app.cs", "needle\n");
+
+        var matches = ProjectFindReplaceService.Find(
+            new ProjectSearchOptions(_root, "needle", FileGlob: "src/**/*.cs"));
+
+        Assert.Equal(2, matches.Count);
+        Assert.All(matches, match => Assert.Contains($"{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}", match.FilePath));
+    }
+
+    [Fact]
+    public void Find_RespectsFilenameGlobBeyondExtension()
+    {
+        Write("src/TestOne.cs", "needle\n");
+        Write("src/App.cs", "needle\n");
+        Write("other/TestTwo.cs", "needle\n");
+
+        var matches = ProjectFindReplaceService.Find(
+            new ProjectSearchOptions(_root, "needle", FileGlob: "Test*.cs"));
+
+        Assert.Equal(2, matches.Count);
+        Assert.All(matches, match => Assert.StartsWith("Test", Path.GetFileName(match.FilePath)));
+    }
+
+    [Fact]
+    public void Replace_RespectsPathGlob()
+    {
+        Write("src/app.cs", "beta\n");
+        Write("other/app.cs", "beta\n");
+
+        var result = ProjectFindReplaceService.Replace(
+            new ProjectSearchOptions(_root, "beta", FileGlob: "src/**/*.cs"),
+            "gamma");
+
+        Assert.Equal(1, result.MatchCount);
+        Assert.Equal("gamma\n", Read("src/app.cs"));
+        Assert.Equal("beta\n", Read("other/app.cs"));
+    }
+
+    [Fact]
     public void Replace_UsesRegexReplacementGroups()
     {
         Write("src/a.txt", "name: alpha\n");

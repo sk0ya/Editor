@@ -537,6 +537,49 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void GrepReplace_ParsesGlobWithoutFlagsAndEmptyReplacement()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("grepreplace /foo// **/*.cs", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<ProjectReplaceRequestedEvent>(result.Event);
+        Assert.Equal("foo", evt.Pattern);
+        Assert.Equal("", evt.Replacement);
+        Assert.Equal("**/*.cs", evt.FileGlob);
+        Assert.False(evt.IgnoreCase);
+    }
+
+    [Fact]
+    public void Grep_ParsesDelimitedGlobWithoutFlags()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("grep /foo/ **/*.cs", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<GrepRequestedEvent>(result.Event);
+        Assert.Equal("foo", evt.Pattern);
+        Assert.Equal("**/*.cs", evt.FileGlob);
+        Assert.False(evt.IgnoreCase);
+    }
+
+    [Fact]
+    public void Vimgrep_ParsesDelimitedGlobWithoutFlags()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("vimgrep /foo/ **/*.cs", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<GrepRequestedEvent>(result.Event);
+        Assert.Equal("foo", evt.Pattern);
+        Assert.Equal("**/*.cs", evt.FileGlob);
+        Assert.False(evt.IgnoreCase);
+    }
+
+    [Fact]
     public void CReplace_ParsesQuickfixReplaceEvent()
     {
         var (processor, _) = CreateProcessor();
@@ -546,6 +589,18 @@ public class ExCommandProcessorTests
         Assert.True(result.Success);
         var evt = Assert.IsType<QuickfixReplaceRequestedEvent>(result.Event);
         Assert.Equal("replacement text", evt.Replacement);
+    }
+
+    [Fact]
+    public void CReplace_AllowsEmptyReplacement()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("creplace", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<QuickfixReplaceRequestedEvent>(result.Event);
+        Assert.Equal("", evt.Replacement);
     }
 
     [Fact]

@@ -493,7 +493,6 @@ public class ExCommandProcessor
         if (cmd.StartsWith("creplace") && (cmd.Length == 8 || cmd[8] is ' ' or '!'))
         {
             var rest = cmd.Length > 8 ? cmd[8..].TrimStart('!').Trim() : "";
-            if (string.IsNullOrEmpty(rest)) return new ExResult(false, "E471: Argument required");
             return new ExResult(true, null, VimEvent.QuickfixReplaceRequested(rest));
         }
 
@@ -1145,10 +1144,7 @@ public class ExCommandProcessor
             if (closeSlash > 0)
             {
                 pattern = rest[1..closeSlash];
-                var after = rest[(closeSlash + 1)..].Trim();
-                var spaceIdx = after.IndexOf(' ');
-                var flags = spaceIdx >= 0 ? after[..spaceIdx] : after;
-                var globPart = spaceIdx >= 0 ? after[(spaceIdx + 1)..].Trim() : "";
+                ParseFlagsAndGlob(rest[(closeSlash + 1)..], out var flags, out var globPart);
                 ignoreCase = flags.Contains('i');
                 fileGlob = string.IsNullOrEmpty(globPart) ? null : globPart;
                 return;
@@ -1183,10 +1179,7 @@ public class ExCommandProcessor
             if (closeSlash > 0)
             {
                 pattern = rest[1..closeSlash];
-                var after = rest[(closeSlash + 1)..].Trim();
-                var spaceIdx = after.IndexOf(' ');
-                var flags = spaceIdx >= 0 ? after[..spaceIdx] : after;
-                var globPart = spaceIdx >= 0 ? after[(spaceIdx + 1)..].Trim() : "";
+                ParseFlagsAndGlob(rest[(closeSlash + 1)..], out var flags, out var globPart);
                 ignoreCase = flags.Contains('i');
                 fileGlob = string.IsNullOrEmpty(globPart) ? null : globPart;
                 return;
@@ -1241,16 +1234,39 @@ public class ExCommandProcessor
         pattern = UnescapeDelimiter(rest[1..patternEnd], delimiter);
         replacement = UnescapeDelimiter(rest[(patternEnd + 1)..replacementEnd], delimiter);
 
-        var after = rest[(replacementEnd + 1)..].Trim();
-        if (after.Length == 0)
+        var after = rest[(replacementEnd + 1)..];
+        if (after.Trim().Length == 0)
             return true;
 
-        var spaceIndex = after.IndexOf(' ');
-        var flags = spaceIndex >= 0 ? after[..spaceIndex] : after;
-        var globPart = spaceIndex >= 0 ? after[(spaceIndex + 1)..].Trim() : "";
+        ParseFlagsAndGlob(after, out var flags, out var globPart);
         ignoreCase = flags.Contains('i');
         fileGlob = string.IsNullOrEmpty(globPart) ? null : globPart;
         return true;
+    }
+
+    private static void ParseFlagsAndGlob(string text, out string flags, out string glob)
+    {
+        flags = "";
+        glob = "";
+
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        if (char.IsWhiteSpace(text[0]))
+        {
+            glob = text.Trim();
+            return;
+        }
+
+        var splitIndex = text.IndexOfAny([' ', '\t']);
+        if (splitIndex < 0)
+        {
+            flags = text;
+            return;
+        }
+
+        flags = text[..splitIndex];
+        glob = text[(splitIndex + 1)..].Trim();
     }
 
     private static int FindUnescaped(string text, char value, int startIndex)
