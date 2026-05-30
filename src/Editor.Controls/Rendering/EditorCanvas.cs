@@ -30,8 +30,8 @@ public class EditorCanvas : FrameworkElement
     private CursorPosition _cursor;
     private Selection? _selection;
     private VimMode _mode = VimMode.Normal;
-    private LineTokens[] _tokens = [];
-    private List<CursorPosition> _searchMatches = [];
+    private Dictionary<int, SyntaxToken[]> _tokensByLine = [];
+    private Dictionary<int, List<CursorPosition>> _searchMatchesByLine = [];
     private string _searchPattern = "";
     private IReadOnlyDictionary<int, string> _substitutePreviewLines = new Dictionary<int, string>();
     private bool _showLineNumbers = true;
@@ -171,6 +171,9 @@ public class EditorCanvas : FrameworkElement
 
     public void SetLines(string[] lines)
     {
+        if (ReferenceEquals(_lines, lines))
+            return;
+
         _lines = lines.Length > 0 ? lines : [""];
         _lineNumberWidth = Math.Max(3, _lines.Length.ToString().Length);
         RebuildVisualLayout();
@@ -265,8 +268,29 @@ public class EditorCanvas : FrameworkElement
         _                                    => null
     };
 
-    public void SetTokens(LineTokens[] tokens) { _tokens = tokens; InvalidateVisual(); }
-    public void SetSearchMatches(List<CursorPosition> matches, string pattern) { _searchMatches = matches; _searchPattern = pattern; InvalidateVisual(); }
+    public void SetTokens(LineTokens[] tokens)
+    {
+        _tokensByLine = new Dictionary<int, SyntaxToken[]>(tokens.Length);
+        foreach (var lineTokens in tokens)
+        {
+            _tokensByLine[lineTokens.Line] = lineTokens.Tokens.Length > 1
+                ? lineTokens.Tokens.OrderBy(t => t.StartColumn).ToArray()
+                : lineTokens.Tokens;
+        }
+        InvalidateVisual();
+    }
+    public void SetSearchMatches(List<CursorPosition> matches, string pattern)
+    {
+        _searchPattern = pattern;
+        _searchMatchesByLine = [];
+        foreach (var match in matches)
+        {
+            if (!_searchMatchesByLine.TryGetValue(match.Line, out var lineMatches))
+                _searchMatchesByLine[match.Line] = lineMatches = [];
+            lineMatches.Add(match);
+        }
+        InvalidateVisual();
+    }
     public void SetSubstitutePreview(IReadOnlyDictionary<int, string>? previewLines)
     {
         _substitutePreviewLines = previewLines ?? new Dictionary<int, string>();
@@ -413,6 +437,24 @@ public class EditorCanvas : FrameworkElement
     public int VisibleLines => Math.Max(1, _visibleLines);
     public int FirstVisibleLine => _lineHeight <= 0 ? 0 : (int)(_scrollOffsetY / _lineHeight);
     public int LastVisibleLine => Math.Min(TotalVisualLines - 1, FirstVisibleLine + _visibleLines);
+    public (int FirstLine, int LastLine) GetVisibleBufferLineRange()
+    {
+        int firstVisualLine = FirstVisibleLine;
+        int lastVisualLine = LastVisibleLine;
+        int firstBufferLine = int.MaxValue;
+        int lastBufferLine = 0;
+
+        for (int i = firstVisualLine; i <= lastVisualLine; i++)
+        {
+            var segment = GetVisualSegment(i);
+            firstBufferLine = Math.Min(firstBufferLine, segment.BufferLine);
+            lastBufferLine = Math.Max(lastBufferLine, segment.BufferLine);
+        }
+
+        return firstBufferLine == int.MaxValue
+            ? (0, 0)
+            : (firstBufferLine, lastBufferLine);
+    }
 
     public void ScrollTo(double offsetY, double offsetX = 0)
     {
@@ -1565,9 +1607,9 @@ public class EditorCanvas : FrameworkElement
     private void DrawSearchHighlights(DrawingContext dc, int line, double y, double textLeft, string lineText)
     {
         if (string.IsNullOrEmpty(_searchPattern)) return;
-        foreach (var match in _searchMatches)
+        if (!_searchMatchesByLine.TryGetValue(line, out var lineMatches)) return;
+        foreach (var match in lineMatches)
         {
-            if (match.Line != line) continue;
             double hLeft = textLeft + GetVisualX(lineText, match.Column) - _scrollOffsetX;
             int matchEnd = Math.Min(match.Column + _searchPattern.Length, lineText.Length);
             double hWidth = GetVisualX(lineText, matchEnd) - GetVisualX(lineText, match.Column);
@@ -1623,7 +1665,7 @@ public class EditorCanvas : FrameworkElement
             return;
         }
 
-        var tokens = _tokens.FirstOrDefault(t => t.Line == lineIndex).Tokens;
+        _tokensByLine.TryGetValue(lineIndex, out var tokens);
 
         if (tokens == null || tokens.Length == 0)
         {
@@ -1635,8 +1677,7 @@ public class EditorCanvas : FrameworkElement
 
         // Draw segments with colors
         DrawLineTextWithSegments(dc, lineText, y, textLeft,
-            tokens.OrderBy(t => t.StartColumn)
-                  .Select(t => (t.StartColumn, t.Length, (Brush?)Theme.GetTokenBrush(t.Kind))));
+            tokens.Select(t => (t.StartColumn, t.Length, (Brush?)Theme.GetTokenBrush(t.Kind))));
     }
 
     /// <summary>

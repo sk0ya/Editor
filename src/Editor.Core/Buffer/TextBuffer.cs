@@ -13,6 +13,7 @@ public class TextBuffer
 
     public int LineCount => _lines.Count;
     public bool IsModified => _modified;
+    public long Version { get; private set; }
 
     public string GetLine(int index)
     {
@@ -28,6 +29,7 @@ public class TextBuffer
     {
         _lines = SplitLines(text);
         _modified = false;
+        Version++;
     }
 
     // Insert a character at position
@@ -37,7 +39,7 @@ public class TextBuffer
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
         _lines[line] = s[..col] + ch + s[col..];
-        _modified = true;
+        MarkModified();
     }
 
     // Insert text at position
@@ -47,7 +49,7 @@ public class TextBuffer
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
         _lines[line] = s[..col] + text + s[col..];
-        _modified = true;
+        MarkModified();
     }
 
     // Break line at position (Enter key)
@@ -62,7 +64,7 @@ public class TextBuffer
         // Carry over leading whitespace for auto-indent
         _lines[line] = before;
         _lines.Insert(line + 1, after);
-        _modified = true;
+        MarkModified();
     }
 
     // Delete character at position
@@ -72,7 +74,7 @@ public class TextBuffer
         var s = _lines[line];
         if (col < 0 || col >= s.Length) return;
         _lines[line] = s.Remove(col, 1);
-        _modified = true;
+        MarkModified();
     }
 
     // Delete from col to end of line range [col, endCol)
@@ -83,7 +85,7 @@ public class TextBuffer
         startCol = Math.Clamp(startCol, 0, s.Length);
         endCol = Math.Clamp(endCol, startCol, s.Length);
         _lines[line] = s[..startCol] + s[endCol..];
-        _modified = true;
+        MarkModified();
     }
 
     // Join line with next line
@@ -92,7 +94,7 @@ public class TextBuffer
         if (line >= _lines.Count - 1) return;
         _lines[line] = _lines[line] + _lines[line + 1];
         _lines.RemoveAt(line + 1);
-        _modified = true;
+        MarkModified();
     }
 
     // Delete entire line(s)
@@ -102,7 +104,7 @@ public class TextBuffer
         endLine = Math.Clamp(endLine, startLine, _lines.Count - 1);
         _lines.RemoveRange(startLine, endLine - startLine + 1);
         if (_lines.Count == 0) _lines.Add("");
-        _modified = true;
+        MarkModified();
     }
 
     // Insert lines at position
@@ -110,14 +112,14 @@ public class TextBuffer
     {
         afterLine = Math.Clamp(afterLine + 1, 0, _lines.Count);
         _lines.InsertRange(afterLine, lines);
-        _modified = true;
+        MarkModified();
     }
 
     public void InsertLineAbove(int line, string text = "")
     {
         line = Math.Clamp(line, 0, _lines.Count);
         _lines.Insert(line, text);
-        _modified = true;
+        MarkModified();
     }
 
     // Replace line content
@@ -125,7 +127,7 @@ public class TextBuffer
     {
         EnsureLine(line);
         _lines[line] = text;
-        _modified = true;
+        MarkModified();
     }
 
     // Get lines as array (for yank/delete)
@@ -219,7 +221,7 @@ public class TextBuffer
     public void RestoreSnapshot(string[] snapshot)
     {
         _lines = [.. snapshot];
-        _modified = true;
+        MarkModified();
     }
 
     public void MarkSaved() => _modified = false;
@@ -228,6 +230,12 @@ public class TextBuffer
     {
         while (_lines.Count <= line)
             _lines.Add("");
+    }
+
+    private void MarkModified()
+    {
+        _modified = true;
+        Version++;
     }
 
     private static List<string> SplitLines(string text)

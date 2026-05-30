@@ -81,4 +81,18 @@ public class TextBufferTests
         var pos = buf.ClampCursor(new CursorPosition(0, 10), insertMode: true);
         Assert.Equal(3, pos.Column); // insert mode can go to end
     }
+
+    [Fact]
+    public void Version_ChangesOnlyWhenBufferContentChanges()
+    {
+        var buf = new TextBuffer("abc");
+        var initialVersion = buf.Version;
+
+        buf.InsertChar(0, 3, '!');
+        Assert.True(buf.Version > initialVersion);
+        var editedVersion = buf.Version;
+
+        buf.MarkSaved();
+        Assert.Equal(editedVersion, buf.Version);
+    }
 }

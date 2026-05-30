@@ -9,6 +9,7 @@ using System.IO;
 using Editor.Controls.Git;
 using Editor.Controls.Lsp;
 using Editor.Controls.Themes;
+using Editor.Core.Buffer;
 using Editor.Core.Config;
 using Editor.Core.Engine;
 using Editor.Core.Folds;
@@ -212,6 +213,9 @@ public partial class VimEditorControl : UserControl
     private VimStatusBar? _sharedStatusBar;
     private VimStatusBar ActiveStatusBar => _sharedStatusBar ?? StatusBar;
     private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
+    private VimBuffer? _cachedLinesBuffer;
+    private long _cachedLinesVersion = -1;
+    private string[] _cachedLines = [];
 
     // ─── Multi-cursor ───
     private readonly List<(int Line, int Col)> _extraCursors = [];
@@ -348,6 +352,7 @@ public partial class VimEditorControl : UserControl
         Canvas.ScrollChanged += (_, _) =>
         {
             SyncViewportState();
+            UpdateViewportDecorations();
             ViewportScrolled?.Invoke(this, EventArgs.Empty);
         };
         Canvas.SizeChanged += (_, _) => SyncViewportState();
@@ -3135,8 +3140,7 @@ public partial class VimEditorControl : UserControl
     private void UpdateAll()
     {
         var buf = _engine.CurrentBuffer;
-        var lines = Enumerable.Range(0, buf.Text.LineCount)
-            .Select(i => buf.Text.GetLine(i)).ToArray();
+        var lines = GetCachedLines(buf);
 
         Canvas.SetLines(lines);
 
@@ -3159,10 +3163,36 @@ public partial class VimEditorControl : UserControl
         Canvas.SetMinimap(_engine.Options.Minimap);
         Canvas.SetColorPreview(_engine.Options.ColorPreview);
 
-        // Syntax tokens
+        UpdateViewportDecorations();
+
+        SyncStatusBar();
+    }
+
+    private string[] GetCachedLines(VimBuffer buffer)
+    {
+        long version = buffer.Text.Version;
+        if (ReferenceEquals(_cachedLinesBuffer, buffer) &&
+            _cachedLinesVersion == version &&
+            _cachedLines.Length > 0)
+            return _cachedLines;
+
+        _cachedLinesBuffer = buffer;
+        _cachedLinesVersion = version;
+        _cachedLines = buffer.Text.Snapshot();
+        return _cachedLines;
+    }
+
+    private void UpdateViewportDecorations()
+    {
+        var buf = _engine.CurrentBuffer;
+        var lines = GetCachedLines(buf);
+        var (firstLine, lastLine) = Canvas.GetVisibleBufferLineRange();
+        firstLine = Math.Clamp(firstLine, 0, Math.Max(0, lines.Length - 1));
+        lastLine = Math.Clamp(lastLine, firstLine, Math.Max(0, lines.Length - 1));
+
         if (_engine.Options.Syntax)
         {
-            var tokens = _engine.Syntax.Tokenize(lines);
+            var tokens = _engine.Syntax.TokenizeVisible(lines, firstLine, lastLine);
             Canvas.SetTokens(tokens);
         }
         else
@@ -3170,11 +3200,10 @@ public partial class VimEditorControl : UserControl
             Canvas.SetTokens([]);
         }
 
-        // Spell errors
         if (_engine.Options.Spell && _engine.SpellChecker.IsLoaded)
         {
             var spellErrors = new Dictionary<int, IReadOnlyList<(int Start, int End)>>();
-            for (int i = 0; i < lines.Length; i++)
+            for (int i = firstLine; i <= lastLine; i++)
             {
                 var errs = _engine.GetSpellErrors(i);
                 if (errs.Count > 0) spellErrors[i] = errs;
@@ -3185,8 +3214,6 @@ public partial class VimEditorControl : UserControl
         {
             Canvas.SetSpellErrors([]);
         }
-
-        SyncStatusBar();
     }
 
     private void UpdateSearchHighlights(string pattern)
