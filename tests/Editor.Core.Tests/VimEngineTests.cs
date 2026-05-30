@@ -1272,6 +1272,62 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void LoadFile_Modeline_StopsAtTerminatingColonBeforeTrailingComment()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "editor-modeline-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(path, "# vim: set tabstop=2: trailing comment: shiftwidth=9:\nbody");
+
+        try
+        {
+            var cfg = new VimConfig();
+            cfg.ParseLines(["set modeline"]);
+            var engine = new VimEngine(cfg);
+
+            engine.LoadFile(path);
+
+            Assert.Equal(2, engine.Options.TabStop);
+            Assert.Equal(4, engine.Options.ShiftWidth);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadFile_Modeline_AllowsColonInsideOptionValue()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "editor-modeline-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(path, "# vim: set listchars=tab:>-,trail:-:\nbody");
+
+        try
+        {
+            var cfg = new VimConfig();
+            cfg.ParseLines(["set modeline"]);
+            var engine = new VimEngine(cfg);
+
+            engine.LoadFile(path);
+
+            Assert.Equal("tab:>-,trail:-", engine.Options.ListChars);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void VimOptions_ValueOptions_DoNotTreatNoPrefixAsNegation()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["set notabstop=2 nofileformat=dos shiftwidth=3"]);
+
+        Assert.Equal(4, cfg.Options.TabStop);
+        Assert.Equal("unix", cfg.Options.FileFormat);
+        Assert.Equal(3, cfg.Options.ShiftWidth);
+    }
+
+    [Fact]
     public void VimOptions_NoopOptions_ParsedSilently()
     {
         var cfg = new VimConfig();

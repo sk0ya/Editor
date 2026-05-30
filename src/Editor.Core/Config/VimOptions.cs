@@ -91,21 +91,27 @@ public class VimOptions
         if (setting.EndsWith('&'))
             return null;
 
-        bool negate = setting.StartsWith("no", StringComparison.OrdinalIgnoreCase) && setting.Length > 2;
-        string name = negate ? setting[2..] : setting;
-
-        // Handle key=value (also key+=val, key^=val, key-=val — treat all as assignment)
-        var eqIdx = name.IndexOfAny(['+', '^', '-', '=']);
-        if (eqIdx >= 0 && name[eqIdx] == '=' || (eqIdx >= 0 && eqIdx + 1 < name.Length && name[eqIdx + 1] == '='))
-        {
-            int valStart = name.IndexOf('=') + 1;
-            var key = name[..name.IndexOf('=')].TrimEnd('+', '^', '-').ToLower();
-            var val = name[valStart..];
+        if (TrySplitAssignment(setting, out var key, out var val))
             return ApplyKeyValue(key, val);
-        }
 
         // Boolean toggle/set/unset
+        bool negate = setting.StartsWith("no", StringComparison.OrdinalIgnoreCase) && setting.Length > 2;
+        string name = negate ? setting[2..] : setting;
         return ApplyBool(name.ToLower(), !negate);
+    }
+
+    private static bool TrySplitAssignment(string setting, out string key, out string value)
+    {
+        key = "";
+        value = "";
+
+        var eqIdx = setting.IndexOf('=');
+        if (eqIdx < 0)
+            return false;
+
+        key = setting[..eqIdx].TrimEnd('+', '^', '-').ToLowerInvariant();
+        value = setting[(eqIdx + 1)..];
+        return key.Length > 0;
     }
 
     private string? ApplyBool(string name, bool value)

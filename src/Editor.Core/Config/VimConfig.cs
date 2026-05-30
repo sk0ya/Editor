@@ -256,13 +256,30 @@ public class VimConfig
         if (!rest.StartsWith("set ", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        rest = rest[4..].TrimStart();
-        var endIndex = rest.LastIndexOf(':');
-        if (endIndex < 0)
-            return false;
+        var optionParts = new List<string>();
+        foreach (var rawPart in rest[4..].Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (rawPart == ":")
+            {
+                settings = string.Join(' ', optionParts);
+                return settings.Length > 0;
+            }
 
-        settings = rest[..endIndex].Trim();
-        return settings.Length > 0;
+            if (rawPart.EndsWith(':'))
+            {
+                var optionPart = rawPart[..^1];
+                if (optionPart.Length > 0)
+                    optionParts.Add(optionPart);
+
+                settings = string.Join(' ', optionParts);
+                return settings.Length > 0;
+            }
+
+            optionParts.Add(rawPart);
+        }
+
+        settings = "";
+        return false;
     }
 
     private string ResolveScriptPath(string path)
