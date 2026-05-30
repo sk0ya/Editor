@@ -44,6 +44,7 @@ public class VimEngine
     private bool _ctrlWPending;
     private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
     private int _awaitingVisualTextObjCount = 1;
+    private bool _discardingUnsupportedVisualTextObj;
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
     private bool _awaitingBlockReplace;   // Visual Block r — waiting for the replacement character
     private bool _visualBlockToLineEnd;   // Ctrl+V $ — selected lines extend to their own EOL
@@ -1674,7 +1675,14 @@ public class VimEngine
         if (key == "Escape")
         {
             _commandParser.Reset();
+            _discardingUnsupportedVisualTextObj = false;
             ExitVisualMode(events);
+            return;
+        }
+
+        if (_discardingUnsupportedVisualTextObj && !ctrl)
+        {
+            _discardingUnsupportedVisualTextObj = false;
             return;
         }
 
@@ -1750,8 +1758,15 @@ public class VimEngine
             TryParseVisualCount(_commandParser.Buffer, out var visualTextObjectCount))
         {
             _commandParser.Reset();
-            _awaitingVisualTextObj = key[0];
-            _awaitingVisualTextObjCount = visualTextObjectCount;
+            if (_mode == VimMode.Visual)
+            {
+                _awaitingVisualTextObj = key[0];
+                _awaitingVisualTextObjCount = visualTextObjectCount;
+            }
+            else
+            {
+                _discardingUnsupportedVisualTextObj = true;
+            }
             return;
         }
 
@@ -1809,8 +1824,15 @@ public class VimEngine
                 }
                 if (key == "i")
                 {
-                    _awaitingVisualTextObj = 'i';
-                    _awaitingVisualTextObjCount = 1;
+                    if (_mode == VimMode.Visual)
+                    {
+                        _awaitingVisualTextObj = 'i';
+                        _awaitingVisualTextObjCount = 1;
+                    }
+                    else
+                    {
+                        _discardingUnsupportedVisualTextObj = true;
+                    }
                     return;
                 }
                 break;
@@ -1823,8 +1845,15 @@ public class VimEngine
                 }
                 break;
             case "a":
-                _awaitingVisualTextObj = 'a';
-                _awaitingVisualTextObjCount = 1;
+                if (_mode == VimMode.Visual)
+                {
+                    _awaitingVisualTextObj = 'a';
+                    _awaitingVisualTextObjCount = 1;
+                }
+                else
+                {
+                    _discardingUnsupportedVisualTextObj = true;
+                }
                 return;
             // Operators on selection
             case "d":
@@ -2592,6 +2621,7 @@ public class VimEngine
     {
         _awaitingVisualTextObj = '\0';
         _awaitingVisualTextObjCount = 1;
+        _discardingUnsupportedVisualTextObj = false;
         _lastVisualStart = _visualStart;
         _lastVisualEnd = _cursor;
         _lastVisualMode = _mode;
@@ -2629,6 +2659,7 @@ public class VimEngine
         int end = Math.Max(_visualStart.Line, _cursor.Line) + 1;
         _awaitingVisualTextObj = '\0';
         _awaitingVisualTextObjCount = 1;
+        _discardingUnsupportedVisualTextObj = false;
         _selection = null;
         events.Add(VimEvent.SelectionChanged(null));
         _cmdLine = $"{start},{end}";
@@ -3043,55 +3074,88 @@ public class VimEngine
     {
         var buf = _bufferManager.Current.Text;
         var lineNo = _cursor.Line;
-        var line = buf.GetLine(lineNo);
-        if (line.Length == 0) return null;
 
         bool IsWordChar(char ch) => bigWord ? !char.IsWhiteSpace(ch) : MotionEngine.IsWordChar(ch);
 
-        int col = Math.Clamp(_cursor.Column, 0, Math.Max(0, line.Length - 1));
-
-        if (!IsWordChar(line[col]))
+        (int Line, int Start, int End)? FindWordAtOrAfter(int startLine, int startCol)
         {
-            int right = col;
-            while (right < line.Length && !IsWordChar(line[right])) right++;
-            if (right < line.Length) col = right;
-            else
+            for (int line = startLine; line < buf.LineCount; line++)
             {
-                int left = col;
-                while (left >= 0 && !IsWordChar(line[left])) left--;
-                if (left < 0) return null;
-                col = left;
+                var text = buf.GetLine(line);
+                int col = line == startLine ? Math.Clamp(startCol, 0, text.Length) : 0;
+                while (col < text.Length && !IsWordChar(text[col])) col++;
+                if (col >= text.Length) continue;
+
+                int end = col;
+                while (end + 1 < text.Length && IsWordChar(text[end + 1])) end++;
+                return (line, col, end);
             }
+
+            return null;
         }
 
-        int start = col;
-        while (start > 0 && IsWordChar(line[start - 1])) start--;
+        (int Line, int Start, int End)? FindWordAtOrBefore(int startLine, int startCol)
+        {
+            for (int line = startLine; line >= 0; line--)
+            {
+                var text = buf.GetLine(line);
+                if (text.Length == 0) continue;
 
-        int end = col;
-        while (end + 1 < line.Length && IsWordChar(line[end + 1])) end++;
+                int col = line == startLine ? Math.Clamp(startCol, 0, text.Length - 1) : text.Length - 1;
+                while (col >= 0 && !IsWordChar(text[col])) col--;
+                if (col < 0) continue;
+
+                int start = col;
+                while (start > 0 && IsWordChar(text[start - 1])) start--;
+                int end = col;
+                while (end + 1 < text.Length && IsWordChar(text[end + 1])) end++;
+                return (line, start, end);
+            }
+
+            return null;
+        }
+
+        var currentLine = buf.GetLine(lineNo);
+        if (currentLine.Length == 0)
+            return null;
+
+        int cursorCol = Math.Clamp(_cursor.Column, 0, Math.Max(0, currentLine.Length - 1));
+        var firstWord = IsWordChar(currentLine[cursorCol])
+            ? FindWordAtOrBefore(lineNo, cursorCol)
+            : FindWordAtOrAfter(lineNo, cursorCol) ?? FindWordAtOrBefore(lineNo, cursorCol);
+        if (firstWord == null)
+            return null;
+
+        int startLine = firstWord.Value.Line;
+        int start = firstWord.Value.Start;
+        int endLine = firstWord.Value.Line;
+        int end = firstWord.Value.End;
 
         for (int i = 1; i < count; i++)
         {
-            int next = end + 1;
-            while (next < line.Length && !IsWordChar(line[next])) next++;
-            if (next >= line.Length)
+            var nextWord = FindWordAtOrAfter(endLine, end + 1);
+            if (nextWord == null)
                 break;
 
-            end = next;
-            while (end + 1 < line.Length && IsWordChar(line[end + 1])) end++;
+            endLine = nextWord.Value.Line;
+            end = nextWord.Value.End;
         }
 
         if (around)
         {
+            var line = buf.GetLine(endLine);
             int trailingEnd = end;
             while (trailingEnd + 1 < line.Length && char.IsWhiteSpace(line[trailingEnd + 1])) trailingEnd++;
             if (trailingEnd > end)
                 end = trailingEnd;
-            else
+            else if (startLine == endLine)
+            {
+                line = buf.GetLine(startLine);
                 while (start > 0 && char.IsWhiteSpace(line[start - 1])) start--;
+            }
         }
 
-        return (new CursorPosition(lineNo, start), new CursorPosition(lineNo, end));
+        return (new CursorPosition(startLine, start), new CursorPosition(endLine, end));
     }
 
     // Shared helper: trim inner content to exclude delimiter characters at (openLine,openCol) and (closeLine,closeCol)
