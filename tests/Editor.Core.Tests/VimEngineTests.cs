@@ -776,6 +776,42 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void CtrlV_DollarDelete_AfterSwappingAnchor_StillDeletesToEachSelectedLineEnd()
+    {
+        var engine = CreateEngine("ab\nabcdef\nabcd");
+
+        engine.ProcessKey("l");
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("$");
+        engine.ProcessKey("o");
+        engine.ProcessKey("d");
+
+        Assert.Equal("a\na\na", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void CtrlV_DollarChange_AfterSwappingAnchor_ChangesFromOriginalColumnToEachSelectedLineEnd()
+    {
+        var engine = CreateEngine("ab\nabcdef\nabcd");
+
+        engine.ProcessKey("l");
+        engine.ProcessKey("v", ctrl: true);
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("$");
+        engine.ProcessKey("o");
+        engine.ProcessKey("c");
+        engine.ProcessKey("X");
+        engine.ProcessKey("Escape");
+
+        Assert.Equal("aX\naX\naX", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
     public void ZCommands_EmitViewportAlignEvents()
     {
         var engine = CreateEngine("line1\nline2\nline3");

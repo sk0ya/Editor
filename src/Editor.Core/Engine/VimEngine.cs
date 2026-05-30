@@ -46,6 +46,7 @@ public class VimEngine
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
     private bool _awaitingBlockReplace;   // Visual Block r — waiting for the replacement character
     private bool _visualBlockToLineEnd;   // Ctrl+V $ — selected lines extend to their own EOL
+    private int _visualBlockLineEndStartColumn;
     private bool _pendingInsertReturn;    // Ctrl+O in Insert mode — return to Insert after one Normal command
     private bool _awaitingInsertRegister; // Ctrl+R in Insert mode — waiting for register name
     private bool _awaitingExprRegister;   // Ctrl+R = in Insert mode — accumulating expression
@@ -1943,7 +1944,10 @@ public class VimEngine
                 _cursor = _cursor with { Column = Math.Max(0, GetLineLength() - 1) };
                 _preferredColumn = _cursor.Column;
                 if (_mode == VimMode.VisualBlock)
+                {
                     _visualBlockToLineEnd = true;
+                    _visualBlockLineEndStartColumn = _visualStart.Column;
+                }
                 return true;
             case "w":
                 _cursor = motion.WordForward(_cursor, count, false);
@@ -2543,6 +2547,7 @@ public class VimEngine
     private void EnterVisualMode(VimMode visualMode, List<VimEvent> events)
     {
         _visualBlockToLineEnd = false;
+        _visualBlockLineEndStartColumn = 0;
         _visualStart = _cursor;
         ChangeMode(visualMode, events);
         UpdateSelection(events);
@@ -2607,7 +2612,10 @@ public class VimEngine
     {
         _pendingMappedInput.Clear();
         if (newMode != VimMode.VisualBlock)
+        {
             _visualBlockToLineEnd = false;
+            _visualBlockLineEndStartColumn = 0;
+        }
         _mode = newMode;
         events.Add(VimEvent.ModeChanged(newMode));
     }
@@ -2707,7 +2715,7 @@ public class VimEngine
     private int GetBlockLeftColumn(Selection selection)
     {
         return _visualBlockToLineEnd
-            ? selection.Start.Column
+            ? _visualBlockLineEndStartColumn
             : Math.Min(selection.Start.Column, selection.End.Column);
     }
 
@@ -2716,7 +2724,7 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
         var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(selection);
         if (_visualBlockToLineEnd)
-            leftColumn = selection.Start.Column;
+            leftColumn = _visualBlockLineEndStartColumn;
 
         for (int line = startLine; line <= endLine; line++)
         {
