@@ -902,6 +902,41 @@ public class ExCommandProcessorTests
         Assert.Contains("inserted", text);
     }
 
+    // ── :undolist tests ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Undolist_WithNoHistory_ReturnsEmptyMessage()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("undolist", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("undo list is empty", result.Message);
+    }
+
+    [Fact]
+    public void Undolist_DisplaysLinearUndoAndRedoHistory()
+    {
+        var (processor, buffers) = CreateProcessor();
+        var buffer = buffers.Current.Text;
+        buffer.SetText("one");
+
+        buffers.Current.Undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        buffers.Current.Undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+        buffers.Current.Undo.Undo(buffer, new CursorPosition(0, 13));
+
+        var result = processor.Execute("undolist", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("number  state    time", result.Message);
+        Assert.Matches(@"(?m)^>\s+1\s+current\s+\d{2}:\d{2}:\d{2}\r?$", result.Message);
+        Assert.Matches(@"(?m)^\s+2\s+redo\s+\d{2}:\d{2}:\d{2}\r?$", result.Message);
+    }
+
     // ── :registers tests ────────────────────────────────────────────────────
 
     [Fact]

@@ -7,7 +7,7 @@
 
 - Normal / Insert / Visual / Visual Block / Visual Line モード
 - ドットコマンド (`.`)、レジスタ、マーク、マクロ
-- `:substitute`、コマンド履歴、`.vimrc` / `_vimrc` 読み込み
+- `:substitute`、`:changes` / `:jumps` / `:undolist`、コマンド履歴、`.vimrc` / `_vimrc` 読み込み
 - シンタックスハイライト（複数言語対応）
 - LSP 連携（補完、ホバー、診断、定義ジャンプ、参照検索、シグネチャヘルプ、フォーマット、リネーム、コードアクション）
 - マルチバッファ、タブ、ウィンドウ分割（`:split` / `:vsplit` / `Ctrl+W` プレフィックス）

@@ -621,6 +621,10 @@ public class ExCommandProcessor
         if (cmd == "changes")
             return new ExResult(true, _markManager.FormatChangeList());
 
+        // :undolist — display the current linear undo/redo history
+        if (cmd == "undolist")
+            return new ExResult(true, _bufferManager.Current.Undo.FormatUndoList());
+
         // :jumps
         if (cmd == "jumps")
             return new ExResult(true, _markManager.FormatJumpList());
@@ -1794,6 +1798,7 @@ public class ExCommandProcessor
         "terms", "termnext", "termprev", "termselect", "termclose", "termclose!",
         "mksession", "source",
         "scriptnames", "script",
+        "undolist",
         "retab",
     ];
 
