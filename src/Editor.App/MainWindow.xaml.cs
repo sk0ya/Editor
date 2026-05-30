@@ -214,6 +214,8 @@ public partial class MainWindow : Window
     private bool _previewWebViewEventsAttached;
     private bool _syncingPreviewFromEditor;
     private bool _syncingEditorFromPreview;
+    private bool _previewScrollSyncQueued;
+    private double _pendingPreviewScrollRatio;
     private TerminalPane? _terminalPane;
 
     private VimEditorControl? CurrentEditor => _focusedEditor;
@@ -1427,13 +1429,13 @@ public partial class MainWindow : Window
     private async void PreviewSourceEditor_ViewportScrolled(object? sender, EventArgs e)
     {
         if (_syncingEditorFromPreview || sender is not VimEditorControl editor) return;
-        await ScrollPreviewToRatioAsync(editor.VerticalScrollRatio);
+        await QueuePreviewScrollSyncAsync(editor.VerticalScrollRatio);
     }
 
     private async void PreviewBrowser_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
         if (!_previewVisible || _previewSourceEditor == null) return;
-        await ScrollPreviewToRatioAsync(_previewSourceEditor.VerticalScrollRatio);
+        await QueuePreviewScrollSyncAsync(_previewSourceEditor.VerticalScrollRatio);
     }
 
     private void PreviewBrowser_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -1460,6 +1462,29 @@ public partial class MainWindow : Window
         finally
         {
             _syncingEditorFromPreview = false;
+        }
+    }
+
+    private async Task QueuePreviewScrollSyncAsync(double ratio)
+    {
+        _pendingPreviewScrollRatio = Math.Clamp(ratio, 0.0, 1.0);
+        if (_previewScrollSyncQueued) return;
+
+        _previewScrollSyncQueued = true;
+        try
+        {
+            while (_previewVisible)
+            {
+                var nextRatio = _pendingPreviewScrollRatio;
+                await ScrollPreviewToRatioAsync(nextRatio);
+
+                if (Math.Abs(nextRatio - _pendingPreviewScrollRatio) < 0.0001)
+                    break;
+            }
+        }
+        finally
+        {
+            _previewScrollSyncQueued = false;
         }
     }
 
