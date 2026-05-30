@@ -197,6 +197,7 @@ public partial class MainWindow : Window
     private string _baseThemeName = "Dracula";
     private string? _customBackground;
     private string? _customAccent;
+    private string _markdownPreviewStyle = "Dracula";
     private bool _sidebarVisible;
     private double _sidebarWidth = 220;
     private string? _currentFolderPath;
@@ -278,6 +279,7 @@ public partial class MainWindow : Window
         RefreshJumpList();
         ApplyTabPlacement(_recentItems.TabPlacement);
         ApplyColorTheme(_recentItems.ThemeName, _recentItems.CustomBackground, _recentItems.CustomAccent);
+        ApplyMarkdownPreviewStyle(_recentItems.MarkdownPreviewStyle);
         InitColorPalettes();
 
         // Restore command/search history from viminfo
@@ -1552,7 +1554,7 @@ public partial class MainWindow : Window
 
         var text = editor.Engine.CurrentBuffer.Text.GetText();
         var title = filePath != null ? Path.GetFileName(filePath) : "Preview";
-        var html = MarkdownRenderer.RenderToHtml(text, title);
+        var html = MarkdownRenderer.RenderToHtml(text, title, _markdownPreviewStyle);
         PreviewBrowser.CoreWebView2.NavigateToString(html);
     }
 
@@ -2605,6 +2607,30 @@ public partial class MainWindow : Window
         if (!IsLoaded) return;
         if (sender is not System.Windows.Controls.RadioButton rb || rb.Tag is not string name) return;
         ApplyColorTheme(name, _customBackground, _customAccent);
+    }
+
+    private void MarkdownPreviewStyle_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (sender is not System.Windows.Controls.RadioButton rb || rb.Tag is not string name) return;
+        ApplyMarkdownPreviewStyle(name);
+    }
+
+    private void ApplyMarkdownPreviewStyle(string styleName)
+    {
+        _markdownPreviewStyle = MarkdownRenderer.NormalizeStyle(styleName);
+
+        if (IsLoaded)
+        {
+            MdPreviewDraculaRb.IsChecked = _markdownPreviewStyle == "Dracula";
+            MdPreviewDarkRb.IsChecked = _markdownPreviewStyle == "Dark";
+            MdPreviewLightRb.IsChecked = _markdownPreviewStyle == "Light";
+            MdPreviewGitHubRb.IsChecked = _markdownPreviewStyle == "GitHub";
+        }
+
+        _recentItems.SaveMarkdownPreviewStyle(_markdownPreviewStyle);
+        if (_previewVisible)
+            UpdateMarkdownPreview();
     }
 
     private static readonly string[] BgPaletteColors =

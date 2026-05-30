@@ -933,6 +933,40 @@
                         </StackPanel>
                         <WrapPanel x:Name="AccentColorPalette"/>
 
+                        <!-- Separator -->
+                        <Border Height="1" Background="#3A3D46" Margin="0,14,0,14"/>
+
+                        <!-- Markdown preview style -->
+                        <TextBlock Text="Markdownプレビュー"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="#888888"
+                                   FontFamily="Cascadia Code, Consolas"
+                                   Margin="0,0,0,6"/>
+                        <RadioButton x:Name="MdPreviewDraculaRb"
+                                     Content="Dracula"
+                                     Tag="Dracula"
+                                     GroupName="MarkdownPreviewStyle"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="MarkdownPreviewStyle_Checked"/>
+                        <RadioButton x:Name="MdPreviewDarkRb"
+                                     Content="Dark"
+                                     Tag="Dark"
+                                     GroupName="MarkdownPreviewStyle"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="MarkdownPreviewStyle_Checked"/>
+                        <RadioButton x:Name="MdPreviewLightRb"
+                                     Content="Light"
+                                     Tag="Light"
+                                     GroupName="MarkdownPreviewStyle"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="MarkdownPreviewStyle_Checked"/>
+                        <RadioButton x:Name="MdPreviewGitHubRb"
+                                     Content="GitHub"
+                                     Tag="GitHub"
+                                     GroupName="MarkdownPreviewStyle"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="MarkdownPreviewStyle_Checked"/>
+
                     </StackPanel>
                 </ScrollViewer>
             </Grid>

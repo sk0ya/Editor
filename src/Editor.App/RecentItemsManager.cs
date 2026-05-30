@@ -27,6 +27,7 @@ internal sealed class RecentItemsManager
         public string ThemeName { get; set; } = "Dracula";
         public string? CustomBackground { get; set; }
         public string? CustomAccent { get; set; }
+        public string MarkdownPreviewStyle { get; set; } = "Dracula";
     }
 
     private RecentData _data;
@@ -43,6 +44,7 @@ internal sealed class RecentItemsManager
     public string ThemeName => _data.ThemeName;
     public string? CustomBackground => _data.CustomBackground;
     public string? CustomAccent => _data.CustomAccent;
+    public string MarkdownPreviewStyle => _data.MarkdownPreviewStyle;
 
     public void AddFolder(string path)
     {
@@ -67,6 +69,12 @@ internal sealed class RecentItemsManager
         _data.ThemeName = themeName;
         _data.CustomBackground = customBackground;
         _data.CustomAccent = customAccent;
+        Save();
+    }
+
+    public void SaveMarkdownPreviewStyle(string style)
+    {
+        _data.MarkdownPreviewStyle = style;
         Save();
     }
 

@@ -5,11 +5,11 @@ namespace Editor.App;
 
 internal static class MarkdownRenderer
 {
-    public static string RenderToHtml(string markdown, string? title = null)
+    public static string RenderToHtml(string markdown, string? title = null, string styleName = "Dracula")
     {
         var body = new StringBuilder();
         ProcessBlocks(markdown.Replace("\r\n", "\n").Replace("\r", "\n"), body);
-        return BuildPage(body.ToString(), title);
+        return BuildPage(body.ToString(), title, styleName);
     }
 
     private static void ProcessBlocks(string text, StringBuilder html)
@@ -212,9 +212,10 @@ internal static class MarkdownRenderer
     private static readonly Regex ItalicUnderRe = new(@"_([^\s_].*?[^\s_]?)_(?!_)",      RegexOptions.Compiled);
     private static readonly Regex StrikeRe    = new(@"~~(.+?)~~",                RegexOptions.Compiled);
 
-    private static string BuildPage(string body, string? title)
+    private static string BuildPage(string body, string? title, string styleName)
     {
         var t = title != null ? Encode(title) : "Preview";
+        var css = PreviewCss(styleName);
         return $$"""
             <!DOCTYPE html>
             <html>
@@ -222,90 +223,7 @@ internal static class MarkdownRenderer
             <meta charset="utf-8">
             <title>{{t}}</title>
             <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; }
-            ::-webkit-scrollbar { width: 10px; height: 10px; }
-            ::-webkit-scrollbar-track { background: #1E1F29; }
-            ::-webkit-scrollbar-thumb { background: #555766; border-radius: 2px; }
-            ::-webkit-scrollbar-thumb:hover { background: #7C7F8E; }
-            ::-webkit-scrollbar-corner { background: #1E1F29; }
-            pre::-webkit-scrollbar { height: 8px; }
-            pre::-webkit-scrollbar-track { background: #1E1F29; }
-            pre::-webkit-scrollbar-thumb { background: #555766; border-radius: 2px; }
-            pre::-webkit-scrollbar-thumb:hover { background: #7C7F8E; }
-            body {
-                background: #282A36;
-                color: #F8F8F2;
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 14px;
-                line-height: 1.7;
-                padding: 20px 24px 40px;
-            }
-            h1, h2, h3, h4, h5, h6 {
-                color: #BD93F9;
-                font-weight: 600;
-                margin-top: 20px;
-                margin-bottom: 8px;
-                padding-bottom: 5px;
-                border-bottom: 1px solid #44475A;
-            }
-            h1 { font-size: 1.8em; }
-            h2 { font-size: 1.4em; }
-            h3 { font-size: 1.15em; border-bottom: none; }
-            h4, h5, h6 { font-size: 1em; border-bottom: none; color: #F8F8F2; }
-            p { margin: 10px 0; }
-            a { color: #8BE9FD; text-decoration: none; }
-            a:hover { text-decoration: underline; }
-            strong { color: #FFB86C; font-weight: 600; }
-            em { color: #F1FA8C; font-style: italic; }
-            del { color: #6272A4; text-decoration: line-through; }
-            code {
-                background: #44475A;
-                color: #50FA7B;
-                padding: 1px 5px;
-                border-radius: 3px;
-                font-family: 'Cascadia Code', Consolas, monospace;
-                font-size: 0.88em;
-            }
-            pre {
-                background: #1E1F29;
-                border: 1px solid #44475A;
-                border-radius: 6px;
-                padding: 14px 16px;
-                overflow-x: auto;
-                margin: 14px 0;
-            }
-            pre code {
-                background: none;
-                padding: 0;
-                color: #F8F8F2;
-                font-size: 0.87em;
-                line-height: 1.5;
-            }
-            blockquote {
-                border-left: 4px solid #6272A4;
-                margin: 14px 0;
-                padding: 8px 16px;
-                color: #6272A4;
-                background: #1E1F29;
-                border-radius: 0 4px 4px 0;
-            }
-            blockquote p { margin: 4px 0; }
-            ul, ol { padding-left: 24px; margin: 8px 0; }
-            li { margin-bottom: 4px; }
-            table {
-                border-collapse: collapse;
-                width: 100%;
-                margin: 14px 0;
-            }
-            th, td {
-                border: 1px solid #44475A;
-                padding: 7px 12px;
-                text-align: left;
-            }
-            th { background: #44475A; color: #F8F8F2; font-weight: 600; }
-            tr:nth-child(even) { background: rgba(68,71,90,0.3); }
-            img { max-width: 100%; border-radius: 4px; display: block; margin: 8px 0; }
-            hr { border: none; border-top: 1px solid #44475A; margin: 20px 0; }
+            {{css}}
             </style>
             <script>
             (() => {
@@ -337,6 +255,122 @@ internal static class MarkdownRenderer
             </head>
             <body>{{body}}</body>
             </html>
+            """;
+    }
+
+    private static string PreviewCss(string styleName) => NormalizeStyle(styleName) switch
+    {
+        "Light" => BaseCss("#FFFFFF", "#24292F", "#F6F8FA", "#D0D7DE", "#0969DA", "#8250DF", "#953800", "#57606A", "#116329"),
+        "GitHub" => BaseCss("#FFFFFF", "#24292F", "#F6F8FA", "#D0D7DE", "#0969DA", "#24292F", "#CF222E", "#57606A", "#0550AE"),
+        "Dark" => BaseCss("#1E1E1E", "#D4D4D4", "#252526", "#3C3C3C", "#4FC1FF", "#DCDCAA", "#CE9178", "#9CDCFE", "#B5CEA8"),
+        _ => BaseCss("#282A36", "#F8F8F2", "#1E1F29", "#44475A", "#8BE9FD", "#BD93F9", "#FFB86C", "#6272A4", "#50FA7B"),
+    };
+
+    public static string NormalizeStyle(string? styleName) =>
+        styleName?.Trim().ToLowerInvariant() switch
+        {
+            "dark" => "Dark",
+            "light" => "Light",
+            "github" => "GitHub",
+            _ => "Dracula",
+        };
+
+    private static string BaseCss(
+        string bg,
+        string fg,
+        string panel,
+        string border,
+        string link,
+        string heading,
+        string strong,
+        string muted,
+        string code)
+    {
+        return $$"""
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            ::-webkit-scrollbar { width: 10px; height: 10px; }
+            ::-webkit-scrollbar-track { background: {{panel}}; }
+            ::-webkit-scrollbar-thumb { background: {{border}}; border-radius: 2px; }
+            ::-webkit-scrollbar-thumb:hover { background: {{muted}}; }
+            ::-webkit-scrollbar-corner { background: {{panel}}; }
+            pre::-webkit-scrollbar { height: 8px; }
+            pre::-webkit-scrollbar-track { background: {{panel}}; }
+            pre::-webkit-scrollbar-thumb { background: {{border}}; border-radius: 2px; }
+            pre::-webkit-scrollbar-thumb:hover { background: {{muted}}; }
+            body {
+                background: {{bg}};
+                color: {{fg}};
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 14px;
+                line-height: 1.7;
+                padding: 20px 24px 40px;
+            }
+            h1, h2, h3, h4, h5, h6 {
+                color: {{heading}};
+                font-weight: 600;
+                margin-top: 20px;
+                margin-bottom: 8px;
+                padding-bottom: 5px;
+                border-bottom: 1px solid {{border}};
+            }
+            h1 { font-size: 1.8em; }
+            h2 { font-size: 1.4em; }
+            h3 { font-size: 1.15em; border-bottom: none; }
+            h4, h5, h6 { font-size: 1em; border-bottom: none; color: {{fg}}; }
+            p { margin: 10px 0; }
+            a { color: {{link}}; text-decoration: none; }
+            a:hover { text-decoration: underline; }
+            strong { color: {{strong}}; font-weight: 600; }
+            em { color: {{heading}}; font-style: italic; }
+            del { color: {{muted}}; text-decoration: line-through; }
+            code {
+                background: {{panel}};
+                color: {{code}};
+                padding: 1px 5px;
+                border-radius: 3px;
+                font-family: 'Cascadia Code', Consolas, monospace;
+                font-size: 0.88em;
+            }
+            pre {
+                background: {{panel}};
+                border: 1px solid {{border}};
+                border-radius: 6px;
+                padding: 14px 16px;
+                overflow-x: auto;
+                margin: 14px 0;
+            }
+            pre code {
+                background: none;
+                padding: 0;
+                color: {{fg}};
+                font-size: 0.87em;
+                line-height: 1.5;
+            }
+            blockquote {
+                border-left: 4px solid {{muted}};
+                margin: 14px 0;
+                padding: 8px 16px;
+                color: {{muted}};
+                background: {{panel}};
+                border-radius: 0 4px 4px 0;
+            }
+            blockquote p { margin: 4px 0; }
+            ul, ol { padding-left: 24px; margin: 8px 0; }
+            li { margin-bottom: 4px; }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                margin: 14px 0;
+            }
+            th, td {
+                border: 1px solid {{border}};
+                padding: 7px 12px;
+                text-align: left;
+            }
+            th { background: {{panel}}; color: {{fg}}; font-weight: 600; }
+            tr:nth-child(even) { background: color-mix(in srgb, {{panel}} 55%, transparent); }
+            img { max-width: 100%; border-radius: 4px; display: block; margin: 8px 0; }
+            hr { border: none; border-top: 1px solid {{border}}; margin: 20px 0; }
             """;
     }
 }
