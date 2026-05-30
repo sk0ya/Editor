@@ -1186,6 +1186,7 @@ public partial class VimEditorControl : UserControl
             if (targetIndex < 0) targetIndex = hunkStarts.Count - 1; // wrap around
         }
 
+        ClearSelectionRangeState();
         var events = _engine.SetCursorPosition(new CursorPosition(hunkStarts[targetIndex], 0));
         ProcessVimEvents(events);
         ActiveStatusBar.UpdateStatus($"Hunk {targetIndex + 1}/{hunkStarts.Count}");
@@ -1355,6 +1356,7 @@ public partial class VimEditorControl : UserControl
     private void OnCanvasMouseClicked(int line, int col)
     {
         Focus();
+        ClearSelectionRangeState();
         // Exit visual mode if active, then move cursor
         if (_engine.Mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock)
         {
@@ -1368,6 +1370,7 @@ public partial class VimEditorControl : UserControl
 
     private void OnCanvasMouseDragging(int line, int col)
     {
+        ClearSelectionRangeState();
         if (!_isDragSelecting)
         {
             _isDragSelecting = true;
@@ -1397,6 +1400,7 @@ public partial class VimEditorControl : UserControl
     private void OnCanvasMouseRightClicked(int line, int col)
     {
         Focus();
+        ClearSelectionRangeState();
         // In Normal/Insert mode: move cursor to the click position
         if (_engine.Mode is not (VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock))
         {
@@ -2209,6 +2213,13 @@ public partial class VimEditorControl : UserControl
                 text.LineCount,
                 line => text.GetLineLength(line));
             _lspSelectionRangeIndex = -1;
+
+            if (_lspSelectionRangeSelections.Count == 0)
+            {
+                ClearSelectionRangeState();
+                ActiveStatusBar.UpdateStatus("Selection range: not available");
+                return;
+            }
         }
 
         int? nextIndex = expand
@@ -2349,6 +2360,7 @@ public partial class VimEditorControl : UserControl
             _snippetTabStops = null;
             _snippetTabStopIndex = -1;
             var stop = expansion.TabStops[0];
+            ClearSelectionRangeState();
             var events = _engine.SetCursorPosition(new Editor.Core.Models.CursorPosition(stop.Line, stop.Column));
             ProcessVimEvents(events);
         }
@@ -2365,6 +2377,7 @@ public partial class VimEditorControl : UserControl
         // If this is the last tab stop ($0), clear snippet state after jump
         bool isLast = _snippetTabStopIndex == _snippetTabStops.Length - 1;
 
+        ClearSelectionRangeState();
         var events = _engine.SetCursorPosition(new Editor.Core.Models.CursorPosition(stop.Line, stop.Column));
         ProcessVimEvents(events);
         UpdateAll();
@@ -2396,6 +2409,7 @@ public partial class VimEditorControl : UserControl
         // Same file: just move the cursor without reopening
         if (string.Equals(filePath, _engine.CurrentBuffer.FilePath, StringComparison.OrdinalIgnoreCase))
         {
+            ClearSelectionRangeState();
             var events = _engine.SetCursorPosition(new CursorPosition(line, col));
             ProcessVimEvents(events);
             return;
@@ -2638,6 +2652,7 @@ public partial class VimEditorControl : UserControl
         var totalLines = _engine.CurrentBuffer.Text.LineCount;
         line = Math.Max(0, Math.Min(line, totalLines - 1));
         col  = Math.Max(0, col);
+        ClearSelectionRangeState();
         _engine.SetCursorPosition(new Editor.Core.Models.CursorPosition(line, col));
         Canvas.SetCursor(_engine.Cursor);
         AlignViewport(Editor.Core.Models.ViewportAlign.Center);

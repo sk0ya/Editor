@@ -22,6 +22,9 @@ public static class SelectionRangeNavigator
 
         foreach (var range in Flatten(selectionRange))
         {
+            if (IsEmpty(range))
+                continue;
+
             var selection = ToSelection(range, lineCount, getLineLength);
             if (previous is null || !SameRange(previous.Value, selection))
             {
@@ -58,18 +61,20 @@ public static class SelectionRangeNavigator
         if (selections.Count == 0)
             return null;
 
-        if (currentIndex >= 0 && currentIndex + 1 < selections.Count)
-            return currentIndex + 1;
+        if (IsCurrentIndexValid(selections, currentSelection, currentIndex))
+            return currentIndex + 1 < selections.Count ? currentIndex + 1 : null;
 
         if (currentSelection is null)
             return 0;
 
+        var current = currentSelection.Value;
+
         for (int i = 0; i < selections.Count; i++)
         {
-            if (SameRange(selections[i], currentSelection.Value))
+            if (SameRange(selections[i], current))
                 return i + 1 < selections.Count ? i + 1 : null;
 
-            if (Contains(selections[i], currentSelection.Value))
+            if (Contains(selections[i], current))
                 return i;
         }
 
@@ -84,15 +89,17 @@ public static class SelectionRangeNavigator
         if (selections.Count == 0)
             return null;
 
-        if (currentIndex > 0)
-            return currentIndex - 1;
+        if (IsCurrentIndexValid(selections, currentSelection, currentIndex))
+            return currentIndex > 0 ? currentIndex - 1 : null;
 
         if (currentSelection is null)
             return null;
 
+        var current = currentSelection.Value;
+
         for (int i = 0; i < selections.Count; i++)
         {
-            if (SameRange(selections[i], currentSelection.Value))
+            if (SameRange(selections[i], current))
                 return i > 0 ? i - 1 : null;
         }
 
@@ -137,6 +144,19 @@ public static class SelectionRangeNavigator
         Compare(outer.NormalizedStart, inner.NormalizedStart) <= 0 &&
         Compare(outer.NormalizedEnd, inner.NormalizedEnd) >= 0 &&
         !SameRange(outer, inner);
+
+    private static bool IsCurrentIndexValid(
+        IReadOnlyList<Selection> selections,
+        Selection? currentSelection,
+        int currentIndex) =>
+        currentSelection is Selection current &&
+        currentIndex >= 0 &&
+        currentIndex < selections.Count &&
+        SameRange(selections[currentIndex], current);
+
+    private static bool IsEmpty(LspRange range) =>
+        range.Start.Line == range.End.Line &&
+        range.Start.Character == range.End.Character;
 
     private static bool SameRange(Selection left, Selection right) =>
         left.Type == right.Type &&

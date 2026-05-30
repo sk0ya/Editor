@@ -41,6 +41,24 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void SetSelection_EntersVisualModeAndSetsCursorAndSelection()
+    {
+        var engine = CreateEngine("abcdef");
+        var selection = new Selection(
+            new CursorPosition(0, 1),
+            new CursorPosition(0, 3),
+            SelectionType.Character);
+
+        var events = engine.SetSelection(selection);
+
+        Assert.Equal(VimMode.Visual, engine.Mode);
+        Assert.Equal(new CursorPosition(0, 3), engine.Cursor);
+        Assert.Equal(selection, engine.Selection);
+        Assert.Contains(events, e => e.Type == VimEventType.ModeChanged);
+        Assert.Contains(events, e => e is SelectionChangedEvent { Selection: not null });
+    }
+
+    [Fact]
     public void TypeInInsert_AddsText()
     {
         var engine = CreateEngine();
