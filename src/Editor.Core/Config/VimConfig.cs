@@ -457,7 +457,9 @@ public class VimConfig
         if (_functionCallDepth >= MaxFunctionCallDepth)
             return "E132: Function call depth is higher than 'maxfuncdepth'";
 
-        if (argumentExpressions.Count != function.Parameters.Count)
+        if (argumentExpressions.Count < function.Parameters.Count)
+            return "E119: Not enough arguments for function: " + functionName;
+        if (argumentExpressions.Count > function.Parameters.Count)
             return "E118: Too many arguments for function: " + functionName;
 
         var boundVariables = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)

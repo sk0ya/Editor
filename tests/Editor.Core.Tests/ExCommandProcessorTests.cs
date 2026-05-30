@@ -176,6 +176,50 @@ public class ExCommandProcessorTests
         Assert.Equal("(no scripts sourced)", result.Message);
     }
 
+    [Fact]
+    public void Call_WithTooFewArguments_ReturnsNotEnoughArguments()
+    {
+        var functions = new Dictionary<string, VimFunctionDefinition>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["NeedsArg"] = new("NeedsArg", ["name"], ["echo a:name"])
+        };
+        var processor = new ExCommandProcessor(
+            new BufferManager(),
+            new VimOptions(),
+            new MarkManager(),
+            functions: functions);
+
+        var result = processor.Execute("call NeedsArg()", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Equal("E119: Not enough arguments for function: NeedsArg", result.Message);
+        Assert.Equal("call NeedsArg()", processor.LastCommand);
+    }
+
+    [Fact]
+    public void Call_FunctionExecute_DoesNotLeakInternalCommandsIntoHistory()
+    {
+        var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var functions = new Dictionary<string, VimFunctionDefinition>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Run"] = new("Run", [], ["execute 'let g:from_execute = 1'"])
+        };
+        var processor = new ExCommandProcessor(
+            new BufferManager(),
+            new VimOptions(),
+            new MarkManager(),
+            variables: variables,
+            functions: functions);
+
+        var result = processor.Execute("call Run()", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("1", variables["g:from_execute"]);
+        Assert.Equal("call Run()", processor.LastCommand);
+        Assert.DoesNotContain("execute 'let g:from_execute = 1'", processor.CommandHistory);
+        Assert.DoesNotContain("let g:from_execute = 1", processor.CommandHistory);
+    }
+
     [Theory]
     [InlineData("Git stage", true)]
     [InlineData("Gstage", true)]

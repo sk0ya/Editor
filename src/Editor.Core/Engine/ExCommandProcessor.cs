@@ -39,6 +39,7 @@ public class ExCommandProcessor
     private int _historyIndex = -1;
     private readonly List<string> _searchHistory = [];
     private int _searchHistoryIndex = -1;
+    private int _suppressHistory;
     private int _executeDepth;
     private int _functionCallDepth;
 
@@ -190,7 +191,8 @@ public class ExCommandProcessor
 
     public ExResult Execute(string cmdLine, CursorPosition cursor)
     {
-        AddHistory(cmdLine);
+        if (_suppressHistory == 0)
+            AddHistory(cmdLine);
         var cmd = cmdLine.Trim();
         if (string.IsNullOrEmpty(cmd)) return new ExResult(true);
 
@@ -1681,12 +1683,9 @@ public class ExCommandProcessor
     // Execute a command without recording it in the command history (used for internal iteration).
     private ExResult ExecuteNoHistory(string cmdLine, CursorPosition cursor)
     {
-        string? prevTop = _history.Count > 0 ? _history[0] : null;
-        var result = Execute(cmdLine, cursor);
-        // Undo the history entry that Execute added so the sub-command doesn't pollute history.
-        if (_history.Count > 0 && _history[0] == cmdLine && _history[0] != prevTop)
-            _history.RemoveAt(0);
-        return result;
+        _suppressHistory++;
+        try { return Execute(cmdLine, cursor); }
+        finally { _suppressHistory--; }
     }
 
     private ExResult ExecuteFunctionCall(string cmd, CursorPosition cursor)
@@ -1700,7 +1699,9 @@ public class ExCommandProcessor
         if (_functionCallDepth >= MaxFunctionCallDepth)
             return new ExResult(false, "E132: Function call depth is higher than 'maxfuncdepth'");
 
-        if (argumentExpressions.Count != function.Parameters.Count)
+        if (argumentExpressions.Count < function.Parameters.Count)
+            return new ExResult(false, "E119: Not enough arguments for function: " + functionName);
+        if (argumentExpressions.Count > function.Parameters.Count)
             return new ExResult(false, "E118: Too many arguments for function: " + functionName);
 
         var boundVariables = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)

@@ -1495,6 +1495,22 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VimConfig_ParseCommand_CallWithTooFewArgumentsReturnsError()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines([
+            "function NeedsArg(name)",
+            "  let g:name = a:name",
+            "endfunction",
+        ]);
+
+        var error = cfg.ParseCommand("call NeedsArg()");
+
+        Assert.Equal("E119: Not enough arguments for function: NeedsArg", error);
+        Assert.False(cfg.Variables.ContainsKey("a:name"));
+    }
+
+    [Fact]
     public void ExCall_ExecutesDefinedFunctionWithArgument()
     {
         var cfg = new VimConfig();
