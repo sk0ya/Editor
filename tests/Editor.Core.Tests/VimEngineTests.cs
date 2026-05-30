@@ -1200,6 +1200,47 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VimConfig_ParseIf_SkipsNestedBranchesWhenParentIsFalse()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "let g:outer = 0",
+            "if g:outer",
+            "  if 1",
+            "    let g:branch = 'inner_if'",
+            "  else",
+            "    let g:branch = 'inner_else'",
+            "  endif",
+            "else",
+            "  let g:branch = 'outer_else'",
+            "endif",
+        ]);
+
+        Assert.Equal("outer_else", cfg.Variables["g:branch"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseIf_DoesNotExecuteDuplicateElseBranch()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "if 0",
+            "  let g:branch = 'if'",
+            "else",
+            "  let g:branch = 'first_else'",
+            "else",
+            "  let g:branch = 'second_else'",
+            "endif",
+            "let g:after = 1",
+        ]);
+
+        Assert.Equal("first_else", cfg.Variables["g:branch"]);
+        Assert.Equal("1", cfg.Variables["g:after"]);
+    }
+
+    [Fact]
     public void VimConfig_LoadFromFile_TracksSourceScripts()
     {
         var dir = Path.Combine(Path.GetTempPath(), "editor-vimconfig-" + Guid.NewGuid().ToString("N"));

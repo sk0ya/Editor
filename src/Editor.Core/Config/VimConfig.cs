@@ -30,7 +30,9 @@ public class VimConfig
         public bool ParentActive { get; } = parentActive;
         public bool ConditionTrue { get; } = conditionTrue;
         public bool InElse { get; set; }
-        public bool Active => ParentActive && (InElse ? !ConditionTrue : ConditionTrue);
+        public bool ElseSeen { get; set; }
+        public bool Invalid { get; set; }
+        public bool Active => !Invalid && ParentActive && (InElse ? !ConditionTrue : ConditionTrue);
     }
 
     public static VimConfig LoadFromFile(string path)
@@ -86,7 +88,18 @@ public class VimConfig
             if (line.Equals("else", StringComparison.OrdinalIgnoreCase))
             {
                 if (conditionals.Count > 0)
-                    conditionals.Peek().InElse = true;
+                {
+                    var current = conditionals.Peek();
+                    if (current.ElseSeen)
+                    {
+                        current.Invalid = true;
+                    }
+                    else
+                    {
+                        current.ElseSeen = true;
+                        current.InElse = true;
+                    }
+                }
                 continue;
             }
 

@@ -997,6 +997,19 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void If_InteractiveErrorDoesNotAffectNextCommand()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var ifResult = processor.Execute("if 1", CursorPosition.Zero);
+        var echoResult = processor.Execute("echo after", CursorPosition.Zero);
+
+        Assert.False(ifResult.Success);
+        Assert.True(echoResult.Success);
+        Assert.Equal("after", echoResult.Message);
+    }
+
+    [Fact]
     public void RangeYank_YanksLinesToRegister()
     {
         var (processor, buffers, registers) = CreateProcessorWithRegisters();
