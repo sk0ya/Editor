@@ -57,6 +57,8 @@ public enum VimEventType
     ScrollLinesRequested,
     MarkdownPreviewRequested,
     SubstitutePreviewChanged,
+    ProjectReplaceRequested,
+    QuickfixReplaceRequested,
 }
 
 public enum ViewportAlign
@@ -233,6 +235,12 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent SubstitutePreviewChanged(IReadOnlyDictionary<int, string> previewLines) =>
         new SubstitutePreviewChangedEvent(previewLines);
+
+    public static VimEvent ProjectReplaceRequested(string pattern, string replacement, string? fileGlob, bool ignoreCase) =>
+        new ProjectReplaceRequestedEvent(pattern, replacement, fileGlob, ignoreCase);
+
+    public static VimEvent QuickfixReplaceRequested(string replacement) =>
+        new QuickfixReplaceRequestedEvent(replacement);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);
@@ -268,3 +276,5 @@ public record HunkStageRequestedEvent(bool Stage) : VimEvent(VimEventType.HunkSt
 public record SymbolsRequestedEvent(string Query) : VimEvent(VimEventType.SymbolsRequested);
 public record ScrollLinesRequestedEvent(int Lines) : VimEvent(VimEventType.ScrollLinesRequested);
 public record SubstitutePreviewChangedEvent(IReadOnlyDictionary<int, string> PreviewLines) : VimEvent(VimEventType.SubstitutePreviewChanged);
+public record ProjectReplaceRequestedEvent(string Pattern, string Replacement, string? FileGlob, bool IgnoreCase) : VimEvent(VimEventType.ProjectReplaceRequested);
+public record QuickfixReplaceRequestedEvent(string Replacement) : VimEvent(VimEventType.QuickfixReplaceRequested);

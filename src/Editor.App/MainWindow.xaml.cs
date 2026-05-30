@@ -18,6 +18,7 @@ using Editor.Core.Config;
 using Editor.Core.Lsp;
 using Editor.Core.Models;
 using Editor.Core.Panes;
+using Editor.Core.Search;
 using Editor.Core.Syntax;
 using Microsoft.Web.WebView2.Core;
 
@@ -202,6 +203,7 @@ public partial class MainWindow : Window
     private double _sidebarWidth = 220;
     private string? _currentFolderPath;
     private int _quickfixCurrentIndex = -1;
+    private ProjectSearchOptions? _lastGrepOptions;
     private SidebarPanel _activeSidebarPanel = SidebarPanel.None;
     private System.Windows.Point _shellMenuScreenPos;
     private bool _suppressFileOpen;
@@ -1134,6 +1136,8 @@ public partial class MainWindow : Window
         editor.QuickfixPrevRequested  += (_, count) => QuickfixNavigate(-count);
         editor.QuickfixGotoRequested  += (_, index) => QuickfixNavigateTo(index);
         editor.GrepRequested          += Editor_GrepRequested;
+        editor.ProjectReplaceRequested += Editor_ProjectReplaceRequested;
+        editor.QuickfixReplaceRequested += Editor_QuickfixReplaceRequested;
         editor.GotKeyboardFocus       += Editor_GotKeyboardFocus;
         editor.MkSessionRequested     += Editor_MkSessionRequested;
         editor.SourceRequested        += Editor_SourceRequested;
@@ -1643,6 +1647,8 @@ public partial class MainWindow : Window
 
         int fileCount = items.Select(i => i.FilePath).Distinct().Count();
         RefPanelTitle.Text = $"REFERENCES ({items.Count}) — {e.SymbolName}  [{fileCount} file(s)]";
+        _lastGrepOptions = null;
+        ReplaceRefResultsBtn.IsEnabled = false;
 
         ShowReferencesPanel();
     }
@@ -1679,13 +1685,17 @@ public partial class MainWindow : Window
         RefList.ItemsSource = null;
         _quickfixCurrentIndex = -1;
         RefPanelTitle.Text = $"GREP \"{pattern}\" — Searching…";
+        ReplaceRefResultsBtn.IsEnabled = false;
         ShowReferencesPanel();
         RefList.SelectionChanged += RefList_SelectionChanged;
 
         List<ReferenceListItem> results;
+        var grepOptions = CreateProjectSearchOptions(pattern, fileGlob, ignoreCase, currentFilePath);
         try
         {
-            results = await Task.Run(() => ExecuteGrep(pattern, fileGlob, ignoreCase, currentFilePath));
+            results = grepOptions == null
+                ? []
+                : await Task.Run(() => ExecuteGrep(grepOptions));
         }
         catch { results = []; }
 
@@ -1699,88 +1709,210 @@ public partial class MainWindow : Window
         RefPanelTitle.Text = results.Count > 0
             ? $"GREP \"{pattern}\" — {results.Count} matches [{fileCount} file(s)]"
             : $"GREP \"{pattern}\" — no matches";
+        _lastGrepOptions = grepOptions;
+        ReplaceRefResultsBtn.IsEnabled = results.Count > 0 && grepOptions != null;
 
     }
 
-    private List<ReferenceListItem> ExecuteGrep(string pattern, string? fileGlob, bool ignoreCase, string? currentFilePath)
+    private ProjectSearchOptions? CreateProjectSearchOptions(string pattern, string? fileGlob, bool ignoreCase, string? currentFilePath)
     {
-        var results = new List<ReferenceListItem>();
-
-        Regex regex;
-        try
-        {
-            var opts = ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
-            regex = new Regex(pattern, opts);
-        }
-        catch { return results; }
-
-        IEnumerable<string> files;
+        string? root;
         if (fileGlob == "%")
         {
-            files = currentFilePath != null ? [currentFilePath] : [];
+            if (currentFilePath == null) return null;
+            root = Path.GetDirectoryName(currentFilePath);
         }
         else
         {
-            var root = _currentFolderPath
-                       ?? (currentFilePath != null ? Path.GetDirectoryName(currentFilePath) : null);
-            if (root == null) return results;
-            files = EnumerateSourceFiles(root);
-
-            if (!string.IsNullOrEmpty(fileGlob))
-            {
-                var exts = GetExtensionsFromGlob(fileGlob);
-                if (exts != null)
-                    files = files.Where(f => exts.Any(e =>
-                        f.EndsWith(e, StringComparison.OrdinalIgnoreCase)));
-            }
+            root = _currentFolderPath
+                   ?? (currentFilePath != null ? Path.GetDirectoryName(currentFilePath) : null);
         }
 
-        foreach (var f in files)
-        {
-            if (new FileInfo(f).Length > 5_000_000) continue;
-            try
-            {
-                var lineIdx = 0;
-                foreach (var line in File.ReadLines(f))
-                {
-                    var m = regex.Match(line);
-                    if (m.Success)
-                        results.Add(new ReferenceListItem
-                        {
-                            FilePath = f,
-                            FileName = Path.GetFileName(f),
-                            LineCol  = $":{lineIdx + 1}:{m.Index + 1}",
-                            Preview  = line.Trim(),
-                            Line     = lineIdx,
-                            Col      = m.Index,
-                        });
-                    lineIdx++;
-                }
-            }
-            catch { /* skip unreadable */ }
-        }
-
-        return results;
+        return root == null
+            ? null
+            : new ProjectSearchOptions(root, pattern, fileGlob, ignoreCase, currentFilePath);
     }
 
-    private static string[]? GetExtensionsFromGlob(string glob)
+    private static List<ReferenceListItem> ExecuteGrep(ProjectSearchOptions options)
     {
-        // e.g. "**/*.cs" → ".cs",  "*.{cs,ts}" → [".cs", ".ts"],  "**" → null
-        var lastSlash = glob.LastIndexOfAny(['/', '\\']);
-        var pat = lastSlash >= 0 ? glob[(lastSlash + 1)..] : glob;
-
-        if (pat.StartsWith("*.{") && pat.EndsWith('}'))
+        try
         {
-            return pat[3..^1].Split(',')
-                .Select(e => "." + e.Trim())
-                .ToArray();
+            return ProjectFindReplaceService.Find(options)
+                .Select(match => new ReferenceListItem
+                {
+                    FilePath = match.FilePath,
+                    FileName = Path.GetFileName(match.FilePath),
+                    LineCol  = $":{match.Line + 1}:{match.Column + 1}",
+                    Preview  = match.LineText.Trim(),
+                    Line     = match.Line,
+                    Col      = match.Column,
+                })
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private async void ReplaceRefResults_Click(object sender, RoutedEventArgs e)
+    {
+        var replacement = ShowInputDialog("Project Replace", "Replacement:", "");
+        if (replacement == null)
+            return;
+
+        await ReplaceLastGrepAsync(replacement);
+    }
+
+    private void Editor_QuickfixReplaceRequested(object? sender, string replacement)
+    {
+        _ = ReplaceLastGrepAsync(replacement);
+    }
+
+    private void Editor_ProjectReplaceRequested(object? sender, ProjectReplaceRequestedEventArgs e)
+    {
+        _ = ReplaceProjectAsync(e.Pattern, e.Replacement, e.FileGlob, e.IgnoreCase);
+    }
+
+    private async Task ReplaceProjectAsync(string pattern, string replacement, string? fileGlob, bool ignoreCase)
+    {
+        var currentFilePath = _focusedEditor?.Engine.CurrentBuffer.FilePath;
+        var options = CreateProjectSearchOptions(pattern, fileGlob, ignoreCase, currentFilePath);
+        if (options == null)
+        {
+            MessageBox.Show("No project folder or current file is available.", "Project Replace",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
         }
 
-        var dotIdx = pat.IndexOf('.');
-        if (dotIdx >= 0 && dotIdx < pat.Length - 1)
-            return ["." + pat[(dotIdx + 1)..]];
+        RefList.SelectionChanged -= RefList_SelectionChanged;
+        RefList.ItemsSource = null;
+        _quickfixCurrentIndex = -1;
+        RefPanelTitle.Text = $"REPLACE \"{pattern}\" — Searching…";
+        ReplaceRefResultsBtn.IsEnabled = false;
+        ShowReferencesPanel();
+        RefList.SelectionChanged += RefList_SelectionChanged;
 
-        return null;
+        var results = await Task.Run(() => ExecuteGrep(options));
+        RefList.SelectionChanged -= RefList_SelectionChanged;
+        RefList.ItemsSource = results;
+        RefList.SelectedIndex = -1;
+        _quickfixCurrentIndex = -1;
+        RefList.SelectionChanged += RefList_SelectionChanged;
+        _lastGrepOptions = options;
+        ReplaceRefResultsBtn.IsEnabled = results.Count > 0;
+
+        var fileCount = results.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        RefPanelTitle.Text = results.Count > 0
+            ? $"REPLACE \"{pattern}\" — {results.Count} matches [{fileCount} file(s)]"
+            : $"REPLACE \"{pattern}\" — no matches";
+
+        if (results.Count > 0)
+            await ConfirmAndApplyReplaceAsync(options, replacement, results);
+    }
+
+    private async Task ReplaceLastGrepAsync(string replacement)
+    {
+        if (_lastGrepOptions == null)
+        {
+            MessageBox.Show("Run :grep first, or use :grepreplace /pattern/replacement/.", "Project Replace",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var sourceItems = RefList.ItemsSource as IEnumerable<ReferenceListItem>;
+        var results = sourceItems?.ToList() ?? [];
+        if (results.Count == 0)
+            results = await Task.Run(() => ExecuteGrep(_lastGrepOptions));
+
+        if (results.Count == 0)
+        {
+            MessageBox.Show("No grep results to replace.", "Project Replace",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        await ConfirmAndApplyReplaceAsync(_lastGrepOptions, replacement, results);
+    }
+
+    private async Task ConfirmAndApplyReplaceAsync(
+        ProjectSearchOptions options,
+        string replacement,
+        IReadOnlyList<ReferenceListItem> results)
+    {
+        var files = results
+            .Select(i => i.FilePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var modifiedOpenFiles = AllEditors()
+            .Where(editor => editor.Engine.CurrentBuffer.Text.IsModified &&
+                             editor.Engine.CurrentBuffer.FilePath != null &&
+                             files.Contains(editor.Engine.CurrentBuffer.FilePath, StringComparer.OrdinalIgnoreCase))
+            .Select(editor => editor.Engine.CurrentBuffer.FilePath!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (modifiedOpenFiles.Count > 0)
+        {
+            MessageBox.Show(
+                "Save or discard changes in these open files before replacing:\n\n" +
+                string.Join("\n", modifiedOpenFiles.Select(Path.GetFileName)),
+                "Project Replace",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            $"Replace {results.Count} match(es) in {files.Count} file(s)?\n\nPattern: {options.Pattern}\nReplacement: {replacement}",
+            "Project Replace",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.Yes)
+            return;
+
+        ProjectReplaceResult replaceResult;
+        try
+        {
+            replaceResult = await Task.Run(() => ProjectFindReplaceService.Replace(options, replacement));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Project Replace Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        ReloadOpenEditors(files);
+        await RunGrepAsync(options.Pattern, options.FileGlob, options.IgnoreCase, options.CurrentFilePath);
+
+        var errorText = replaceResult.Errors.Count > 0
+            ? $"\n\nErrors:\n{string.Join("\n", replaceResult.Errors.Take(5))}"
+            : "";
+        MessageBox.Show(
+            $"Replaced {replaceResult.MatchCount} match(es) in {replaceResult.FileCount} file(s).{errorText}",
+            "Project Replace",
+            MessageBoxButton.OK,
+            replaceResult.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+    }
+
+    private void ReloadOpenEditors(IReadOnlyCollection<string> filePaths)
+    {
+        foreach (var editor in AllEditors())
+        {
+            var path = editor.Engine.CurrentBuffer.FilePath;
+            if (path == null || !filePaths.Contains(path, StringComparer.OrdinalIgnoreCase) || !File.Exists(path))
+                continue;
+
+            try
+            {
+                editor.LoadFile(path);
+            }
+            catch
+            {
+                // File watcher or a later explicit open can recover if a reload fails.
+            }
+        }
     }
 
     private void QuickfixNavigate(int delta)
@@ -3649,6 +3781,8 @@ public partial class MainWindow : Window
         RefPanelTitle.Text = string.IsNullOrWhiteSpace(query)
             ? $"SEARCH ({panelItems.Count} results) [{fileCount} file(s)]"
             : $"SEARCH \"{query}\" ({panelItems.Count} results) [{fileCount} file(s)]";
+        _lastGrepOptions = null;
+        ReplaceRefResultsBtn.IsEnabled = false;
 
         ShowReferencesPanel();
     }

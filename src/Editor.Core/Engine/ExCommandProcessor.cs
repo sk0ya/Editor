@@ -478,6 +478,25 @@ public class ExCommandProcessor
             return new ExResult(true, null, VimEvent.GrepRequested(vpat, vglob, vic));
         }
 
+        // :grepreplace /{pattern}/{replacement}/[flags] [{glob}]
+        // :creplace {replacement} replaces the current grep quickfix results in the host UI.
+        if (cmd.StartsWith("grepreplace") && (cmd.Length == 11 || cmd[11] is ' ' or '!') ||
+            cmd.StartsWith("greplace") && (cmd.Length == 8 || cmd[8] is ' ' or '!'))
+        {
+            var verbLength = cmd.StartsWith("grepreplace", StringComparison.Ordinal) ? 11 : 8;
+            var rest = cmd.Length > verbLength ? cmd[verbLength..].TrimStart('!').Trim() : "";
+            if (string.IsNullOrEmpty(rest)) return new ExResult(false, "E471: Argument required");
+            if (!TryParseProjectReplace(rest, out var pattern, out var replacement, out var glob, out var ignoreCase, out var parseError))
+                return new ExResult(false, parseError);
+            return new ExResult(true, null, VimEvent.ProjectReplaceRequested(pattern, replacement, glob, ignoreCase));
+        }
+        if (cmd.StartsWith("creplace") && (cmd.Length == 8 || cmd[8] is ' ' or '!'))
+        {
+            var rest = cmd.Length > 8 ? cmd[8..].TrimStart('!').Trim() : "";
+            if (string.IsNullOrEmpty(rest)) return new ExResult(false, "E471: Argument required");
+            return new ExResult(true, null, VimEvent.QuickfixReplaceRequested(rest));
+        }
+
         // :s/pattern/replace/flags (substitute)
         if (cmd.StartsWith("s/") || cmd.StartsWith("s!"))
         {
@@ -1178,6 +1197,91 @@ public class ExCommandProcessor
         pattern = rest;
     }
 
+    private static bool TryParseProjectReplace(
+        string rest,
+        out string pattern,
+        out string replacement,
+        out string? fileGlob,
+        out bool ignoreCase,
+        out string? error)
+    {
+        pattern = "";
+        replacement = "";
+        fileGlob = null;
+        ignoreCase = false;
+        error = null;
+
+        if (string.IsNullOrEmpty(rest))
+        {
+            error = "E471: Argument required";
+            return false;
+        }
+
+        var delimiter = rest[0];
+        if (char.IsWhiteSpace(delimiter))
+        {
+            error = "E476: Invalid command";
+            return false;
+        }
+
+        var patternEnd = FindUnescaped(rest, delimiter, 1);
+        if (patternEnd < 0)
+        {
+            error = "E476: Invalid command";
+            return false;
+        }
+
+        var replacementEnd = FindUnescaped(rest, delimiter, patternEnd + 1);
+        if (replacementEnd < 0)
+        {
+            error = "E476: Invalid command";
+            return false;
+        }
+
+        pattern = UnescapeDelimiter(rest[1..patternEnd], delimiter);
+        replacement = UnescapeDelimiter(rest[(patternEnd + 1)..replacementEnd], delimiter);
+
+        var after = rest[(replacementEnd + 1)..].Trim();
+        if (after.Length == 0)
+            return true;
+
+        var spaceIndex = after.IndexOf(' ');
+        var flags = spaceIndex >= 0 ? after[..spaceIndex] : after;
+        var globPart = spaceIndex >= 0 ? after[(spaceIndex + 1)..].Trim() : "";
+        ignoreCase = flags.Contains('i');
+        fileGlob = string.IsNullOrEmpty(globPart) ? null : globPart;
+        return true;
+    }
+
+    private static int FindUnescaped(string text, char value, int startIndex)
+    {
+        var escaped = false;
+        for (var i = startIndex; i < text.Length; i++)
+        {
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (text[i] == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (text[i] == value)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static string UnescapeDelimiter(string text, char delimiter)
+    {
+        return text.Replace("\\" + delimiter, delimiter.ToString(), StringComparison.Ordinal);
+    }
+
     private ExResult ExecuteHistory(string type)
     {
         bool showCmd    = type is "" or ":" or "cmd" or "command" or "all";
@@ -1622,7 +1726,7 @@ public class ExCommandProcessor
         "center", "right", "left",
         "normal", "norm", "normal!", "norm!",
         "g", "global", "v", "vglobal",
-        "grep", "vimgrep",
+        "grep", "vimgrep", "grepreplace", "greplace", "creplace",
         "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",
         "map",
         "unmap", "nunmap", "iunmap", "vunmap",

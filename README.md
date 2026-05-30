@@ -12,6 +12,7 @@
 - LSP 連携（補完、ホバー、診断、定義ジャンプ、参照検索、シグネチャヘルプ、フォーマット、リネーム、コードアクション）
 - マルチバッファ、タブ、ウィンドウ分割（`:split` / `:vsplit` / `Ctrl+W` プレフィックス）
 - Quickfix（`:copen` / `:cclose` / `:cn` / `:cp` / `:cc N` / `:cl`）
+- プロジェクト横断検索・置換（`:grep` / `:vimgrep` / `:grepreplace` / `:creplace`、Quickfix 結果から確認付き一括置換）
 - コードフォールド（`za` / `zc` / `zo` / `zR` / `zM` / `zf`）
 - サラウンド操作（`ys` / `cs` / `ds`）
 - コメントトグル（`gc` / `gcc`）

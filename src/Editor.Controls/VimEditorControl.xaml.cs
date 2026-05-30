@@ -74,6 +74,14 @@ public class GrepRequestedEventArgs(string pattern, string? fileGlob, bool ignor
     public string? FileGlob { get; } = fileGlob;
     public bool IgnoreCase { get; } = ignoreCase;
 }
+
+public class ProjectReplaceRequestedEventArgs(string pattern, string replacement, string? fileGlob, bool ignoreCase) : EventArgs
+{
+    public string Pattern { get; } = pattern;
+    public string Replacement { get; } = replacement;
+    public string? FileGlob { get; } = fileGlob;
+    public bool IgnoreCase { get; } = ignoreCase;
+}
 public class DocumentSymbolItem(string name, SymbolKind kind, int line, int col, int depth)
 {
     public string Name { get; } = name;
@@ -254,6 +262,8 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<int>? QuickfixPrevRequested;
     public event EventHandler<int>? QuickfixGotoRequested;
     public event EventHandler<GrepRequestedEventArgs>? GrepRequested;
+    public event EventHandler<ProjectReplaceRequestedEventArgs>? ProjectReplaceRequested;
+    public event EventHandler<string>? QuickfixReplaceRequested;
     public event EventHandler<GitOutputRequestedEventArgs>? GitOutputRequested;
     public event EventHandler<GitCommitRequestedEventArgs>? GitCommitRequested;
     public event EventHandler<WindowNavRequestedEventArgs>? WindowNavRequested;
@@ -3053,6 +3063,13 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.GrepRequested when evt is GrepRequestedEvent gre:
                     GrepRequested?.Invoke(this, new GrepRequestedEventArgs(gre.Pattern, gre.FileGlob, gre.IgnoreCase));
+                    break;
+                case VimEventType.ProjectReplaceRequested when evt is ProjectReplaceRequestedEvent pre:
+                    ProjectReplaceRequested?.Invoke(this,
+                        new ProjectReplaceRequestedEventArgs(pre.Pattern, pre.Replacement, pre.FileGlob, pre.IgnoreCase));
+                    break;
+                case VimEventType.QuickfixReplaceRequested when evt is QuickfixReplaceRequestedEvent qre:
+                    QuickfixReplaceRequested?.Invoke(this, qre.Replacement);
                     break;
                 case VimEventType.GitBlameRequested:
                     ToggleBlame();

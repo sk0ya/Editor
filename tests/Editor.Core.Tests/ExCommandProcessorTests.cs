@@ -522,6 +522,33 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void GrepReplace_ParsesProjectReplaceEvent()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("grepreplace /foo/bar/i **/*.cs", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<ProjectReplaceRequestedEvent>(result.Event);
+        Assert.Equal("foo", evt.Pattern);
+        Assert.Equal("bar", evt.Replacement);
+        Assert.Equal("**/*.cs", evt.FileGlob);
+        Assert.True(evt.IgnoreCase);
+    }
+
+    [Fact]
+    public void CReplace_ParsesQuickfixReplaceEvent()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("creplace replacement text", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<QuickfixReplaceRequestedEvent>(result.Event);
+        Assert.Equal("replacement text", evt.Replacement);
+    }
+
+    [Fact]
     public void Echo_PrintsMessage()
     {
         var (processor, _) = CreateProcessor();
