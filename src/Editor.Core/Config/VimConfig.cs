@@ -1,10 +1,13 @@
 using Editor.Core.Engine;
+using Editor.Core.Buffer;
 using Editor.Core.Snippets;
 
 namespace Editor.Core.Config;
 
 public class VimConfig
 {
+    private const int ModelineScanLineCount = 5;
+
     public VimOptions Options { get; } = new();
     public Dictionary<string, string> NormalMaps { get; } = [];
     public Dictionary<string, string> InsertMaps { get; } = [];
@@ -185,6 +188,24 @@ public class VimConfig
         return null;
     }
 
+    public void ApplyModelines(VimBuffer buffer)
+    {
+        if (!Options.Modeline)
+            return;
+
+        foreach (var line in GetModelineCandidateLines(buffer.Text))
+        {
+            if (!TryExtractModelineOptions(line, out var settings))
+                continue;
+
+            foreach (var setting in settings.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                Options.Apply(setting);
+        }
+
+        buffer.FileFormat = Options.FileFormat;
+        buffer.FileEncoding = Options.FileEncoding;
+    }
+
     private void ParseFile(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
@@ -206,6 +227,42 @@ public class VimConfig
             _currentScriptDirectory = previousDirectory;
             _activeScriptPaths.Remove(fullPath);
         }
+    }
+
+    private static IEnumerable<string> GetModelineCandidateLines(TextBuffer text)
+    {
+        var count = Math.Min(ModelineScanLineCount, text.LineCount);
+        var indexes = new SortedSet<int>();
+
+        for (int i = 0; i < count; i++)
+            indexes.Add(i);
+
+        for (int i = Math.Max(0, text.LineCount - count); i < text.LineCount; i++)
+            indexes.Add(i);
+
+        foreach (var index in indexes)
+            yield return text.GetLine(index);
+    }
+
+    private static bool TryExtractModelineOptions(string line, out string settings)
+    {
+        settings = "";
+
+        var markerIndex = line.IndexOf("vim:", StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0)
+            return false;
+
+        var rest = line[(markerIndex + "vim:".Length)..].TrimStart();
+        if (!rest.StartsWith("set ", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        rest = rest[4..].TrimStart();
+        var endIndex = rest.LastIndexOf(':');
+        if (endIndex < 0)
+            return false;
+
+        settings = rest[..endIndex].Trim();
+        return settings.Length > 0;
     }
 
     private string ResolveScriptPath(string path)

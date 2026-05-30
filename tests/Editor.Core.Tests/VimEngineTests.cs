@@ -1157,6 +1157,121 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VimOptions_Modeline_ParsedFromVimrc()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["set modeline"]);
+        Assert.True(cfg.Options.Modeline);
+
+        cfg.ParseLines(["set nomodeline"]);
+        Assert.False(cfg.Options.Modeline);
+    }
+
+    [Fact]
+    public void LoadFile_ModelineEnabled_AppliesSetOptionsFromFileEnd()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "editor-modeline-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(path, string.Join('\n', [
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "# vim: set tabstop=2 shiftwidth=2 noexpandtab fileformat=dos:"
+        ]));
+
+        try
+        {
+            var cfg = new VimConfig();
+            cfg.ParseLines(["set modeline"]);
+            var engine = new VimEngine(cfg);
+
+            engine.LoadFile(path);
+
+            Assert.Equal(2, engine.Options.TabStop);
+            Assert.Equal(2, engine.Options.ShiftWidth);
+            Assert.False(engine.Options.ExpandTab);
+            Assert.Equal("dos", engine.Options.FileFormat);
+            Assert.Equal("dos", engine.CurrentBuffer.FileFormat);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadFile_ModelineEnabled_AppliesSetOptionsFromFileStart()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "editor-modeline-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(path, "// vim: set number norelativenumber textwidth=100:\nbody");
+
+        try
+        {
+            var cfg = new VimConfig();
+            cfg.ParseLines(["set modeline", "set relativenumber"]);
+            var engine = new VimEngine(cfg);
+
+            engine.LoadFile(path);
+
+            Assert.True(engine.Options.Number);
+            Assert.False(engine.Options.RelativeNumber);
+            Assert.Equal(100, engine.Options.TextWidth);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadFile_ModelineDisabled_DoesNotApplySetOptions()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "editor-modeline-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(path, "# vim: set tabstop=2 noexpandtab:\nbody");
+
+        try
+        {
+            var engine = new VimEngine(new VimConfig());
+
+            engine.LoadFile(path);
+
+            Assert.Equal(4, engine.Options.TabStop);
+            Assert.True(engine.Options.ExpandTab);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadFile_Modeline_IgnoresNonSetCommands()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "editor-modeline-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(path, "vim: let g:modeline_ran = 1:\nbody");
+
+        try
+        {
+            var cfg = new VimConfig();
+            cfg.ParseLines(["set modeline"]);
+            var engine = new VimEngine(cfg);
+
+            engine.LoadFile(path);
+
+            Assert.False(engine.Config.Variables.ContainsKey("g:modeline_ran"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void VimOptions_NoopOptions_ParsedSilently()
     {
         var cfg = new VimConfig();

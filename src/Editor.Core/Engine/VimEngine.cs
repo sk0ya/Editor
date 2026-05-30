@@ -145,6 +145,7 @@ public class VimEngine
         _config.Options.FileFormat   = _bufferManager.Current.FileFormat;
         _config.Options.FileEncoding = _bufferManager.Current.FileEncoding;
         editorConfig.ApplyTo(_config.Options, _bufferManager.Current);
+        _config.ApplyModelines(_bufferManager.Current);
         RunAutocmds("BufRead", path);
         RunAutocmds("BufReadPost", path);
         RunAutocmds("BufEnter", path);

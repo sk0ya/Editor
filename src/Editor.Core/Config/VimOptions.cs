@@ -80,6 +80,7 @@ public class VimOptions
     public bool Ruler { get; set; } = true;
     public string BackSpace { get; set; } = "indent,eol,start";
     public string Clipboard { get; set; } = ""; // "unnamed" or "unnamedplus"
+    public bool Modeline { get; set; } = false;
 
     // Apply a setting string like "number", "nonu", "tabstop=4"
     public string? Apply(string setting)
@@ -156,7 +157,7 @@ public class VimOptions
             "semantictokens" or "st"           => Set(() => SemanticTokens = value),
             "breadcrumb" or "bc"               => Set(() => Breadcrumb = value),
             "compatible" or "cp"               => null,
-            "modeline" or "ml"                 => null,
+            "modeline" or "ml"                 => Set(() => Modeline = value),
             "startofline" or "sol"             => null,
             "ttyfast" or "tf"                  => null,
             _                                  => null  // silently ignore unknown bool options

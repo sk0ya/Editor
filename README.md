@@ -213,6 +213,12 @@ nnoremap <Leader>w :w<CR>
 nnoremap <Leader>q :q<CR>
 ```
 
+modeline は安全側の既定として無効です。`.vimrc` で `set modeline` を指定すると、ファイル読み込み時に先頭または末尾 5 行から `vim: set option=value option ...:` 形式だけを解釈し、既存の `set` オプションに反映します。任意の Ex コマンドは実行しません。
+
+```vim
+set modeline
+```
+
 ## 参考
 
 - 今後の実装計画と実装済み機能: `ROADMAP.md`
