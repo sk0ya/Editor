@@ -388,6 +388,10 @@ public class ExCommandProcessor
         if (cmd is "Git blame" or "git blame" or "Gblame" or "gblame")
             return new ExResult(true, null, VimEvent.GitBlameRequested());
 
+        // :Git status / :Gstatus / :gs — show repository status in a new buffer
+        if (cmd is "Git status" or "git status" or "Gstatus" or "gstatus" or "gs")
+            return new ExResult(true, null, VimEvent.GitStatusRequested());
+
         // :Git commit / :Gcommit — open commit message editor
         if (cmd is "Git commit" or "git commit" or "Gcommit" or "gcommit")
             return new ExResult(true, null, VimEvent.GitCommitRequested());
@@ -1594,6 +1598,7 @@ public class ExCommandProcessor
         "Format", "Rename", "Symbols", "sym", "outline", "digraphs",
         "read", "r",
         "Git blame", "Gblame",
+        "Git status", "Gstatus", "gs",
         "Git commit", "Gcommit",
         "Git stage", "Gstage",
         "Git unstage", "Gunstage",

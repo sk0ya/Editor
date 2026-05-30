@@ -1067,6 +1067,13 @@ public partial class VimEditorControl : UserControl
         await ShowGitOutputAsync("[Git Diff]", () => _gitProvider.GetDiffOutput(filePath));
     }
 
+    private async Task ShowGitStatusAsync()
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        var repoPath = string.IsNullOrEmpty(filePath) ? Environment.CurrentDirectory : filePath;
+        await ShowGitOutputAsync("[Git Status]", () => _gitProvider.GetStatusOutput(repoPath));
+    }
+
     private async Task ShowGitLogAsync()
     {
         var filePath = _engine.CurrentBuffer.FilePath;
@@ -3025,6 +3032,9 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.GitBlameRequested:
                     ToggleBlame();
+                    break;
+                case VimEventType.GitStatusRequested:
+                    _ = ShowGitStatusAsync();
                     break;
                 case VimEventType.GitDiffRequested:
                     _ = ShowGitDiffAsync();

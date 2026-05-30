@@ -12,6 +12,8 @@ internal sealed class NullEditorGitService : IEditorGitService
 
     public string? GetBranchName(string repoPath) => null;
 
+    public string GetStatusOutput(string repoPath) => "(git integration is not configured)";
+
     public string GetDiffOutput(string filePath) => "(git integration is not configured)";
 
     public string GetLogOutput(string repoPath, int count = 30) => "(git integration is not configured)";

@@ -31,6 +31,7 @@ public enum VimEventType
     OptionsChanged,
     GrepRequested,
     GitBlameRequested,
+    GitStatusRequested,
     GitDiffRequested,
     GitLogRequested,
     WindowNavRequested,
@@ -153,6 +154,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent GitBlameRequested() =>
         new(VimEventType.GitBlameRequested);
+
+    public static VimEvent GitStatusRequested() =>
+        new(VimEventType.GitStatusRequested);
 
     public static VimEvent GitDiffRequested() =>
         new(VimEventType.GitDiffRequested);

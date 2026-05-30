@@ -58,7 +58,6 @@
 
 | 機能 | 説明 | 優先度 |
 |------|------|-------|
-| `:Git status` (`gs`) | Fugitive の `gs` 相当のステージ/アンステージ UI | 中 |
 | `:Git push` / `:Git pull` | エディタから push/pull を実行 | 低 |
 
 ### UI / UX
@@ -92,7 +91,6 @@
 ## 優先度サマリー
 
 ### 中 (次のフェーズ)
-- `:Git status` UI
 - プロジェクト横断 Find & Replace
 - `.editorconfig` サポート
 - 複数ターミナル管理
@@ -112,6 +110,7 @@
 
 | 機能 | 日付 |
 |------|------|
+| **`:Git status` / `:Gstatus` / `:gs`** リポジトリの short status を新規バッファに表示 | ✅ 2026-05-30 |
 | **`:scriptnames`** 読み込んだ vimrc / `:source` ファイルを読み込み順に番号付きで表示 | ✅ 2026-05-30 |
 | **`autocmd` / `augroup` 基本対応** `.vimrc` / `:autocmd` で `BufRead` / `BufReadPost` / `BufEnter` / `FileType` に応じた設定コマンドを登録・実行 | ✅ 2026-05-29 |
 | **`:let {var} = {expr}`** Vimscript 変数への代入、`:let` 一覧、`:echo` / `:execute` からの参照に対応 | ✅ 2026-05-30 |

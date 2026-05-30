@@ -38,6 +38,18 @@ public partial class GitDiffProvider : IEditorGitService
         return string.IsNullOrEmpty(head) ? null : $"HEAD {head}";
     }
 
+    public string GetStatusOutput(string repoPath)
+    {
+        string? workDir = ResolveWorkDir(repoPath);
+        if (string.IsNullOrEmpty(workDir)) return "(no path)";
+        var root = FindGitRoot(workDir);
+        if (root == null) return "(not a git repository)";
+
+        var output = RunGit(root, ["status", "--short", "--branch", "--untracked-files=all"], captureStderr: true);
+        if (string.IsNullOrWhiteSpace(output)) return "## clean";
+        return output;
+    }
+
     public string GetDiffOutput(string filePath)
     {
         if (!TryGetFileWorkDir(filePath, out var workDir)) return "(no file or not a git repository)";

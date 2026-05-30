@@ -126,6 +126,21 @@ public class ExCommandProcessorTests
         Assert.Equal(stage, evt.Stage);
     }
 
+    [Theory]
+    [InlineData("Git status")]
+    [InlineData("Gstatus")]
+    [InlineData("gs")]
+    public void GitStatusCommands_ProduceGitStatusRequestedEvent(string command)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Event);
+        Assert.Equal(VimEventType.GitStatusRequested, result.Event.Type);
+    }
+
     [Fact]
     public void NewAndVnew_ProduceSplitEvents()
     {
