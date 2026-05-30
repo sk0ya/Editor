@@ -67,6 +67,28 @@ public partial class GitDiffProvider : IEditorGitService
         return string.IsNullOrEmpty(output) ? "(no commits)" : output;
     }
 
+    public (bool Success, string Output) RunPush(string repoPath)
+    {
+        var root = ResolveGitRoot(repoPath);
+        if (root == null)
+            return (false, "Not a git repository");
+
+        var output = RunGit(root, ["push"], captureStderr: true);
+        var success = !string.IsNullOrEmpty(output) && !output.StartsWith("ERROR:", StringComparison.Ordinal);
+        return (success, string.IsNullOrWhiteSpace(output) ? "Already up to date" : output);
+    }
+
+    public (bool Success, string Output) RunPull(string repoPath)
+    {
+        var root = ResolveGitRoot(repoPath);
+        if (root == null)
+            return (false, "Not a git repository");
+
+        var output = RunGit(root, ["pull", "--ff-only"], captureStderr: true);
+        var success = !string.IsNullOrEmpty(output) && !output.StartsWith("ERROR:", StringComparison.Ordinal);
+        return (success, string.IsNullOrWhiteSpace(output) ? "Already up to date" : output);
+    }
+
     public (bool Success, string Output) RunCommit(string filePath, string message)
     {
         string? workDir = null;
@@ -160,6 +182,12 @@ public partial class GitDiffProvider : IEditorGitService
     {
         if (string.IsNullOrEmpty(repoPath)) return null;
         return File.Exists(repoPath) ? Path.GetDirectoryName(repoPath) : repoPath;
+    }
+
+    private static string? ResolveGitRoot(string repoPath)
+    {
+        var workDir = ResolveWorkDir(repoPath);
+        return string.IsNullOrEmpty(workDir) ? null : FindGitRoot(workDir);
     }
 
     private static string? FindGitRoot(string dir)

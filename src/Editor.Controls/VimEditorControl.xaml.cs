@@ -1081,6 +1081,20 @@ public partial class VimEditorControl : UserControl
         await ShowGitOutputAsync("[Git Log]", () => _gitProvider.GetLogOutput(repoPath));
     }
 
+    private Task RunGitPushAsync()
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        var repoPath = string.IsNullOrEmpty(filePath) ? Environment.CurrentDirectory : filePath;
+        return RunGitCommandAsync("[Git Push]", () => _gitProvider.RunPush(repoPath));
+    }
+
+    private Task RunGitPullAsync()
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        var repoPath = string.IsNullOrEmpty(filePath) ? Environment.CurrentDirectory : filePath;
+        return RunGitCommandAsync("[Git Pull]", () => _gitProvider.RunPull(repoPath));
+    }
+
     private void ShowGitCommit()
     {
         if (GitCommitRequested != null)
@@ -1167,6 +1181,16 @@ public partial class VimEditorControl : UserControl
         var output = await Task.Run(fetch);
         GitOutputRequested?.Invoke(this, new GitOutputRequestedEventArgs(title, output));
         ActiveStatusBar.UpdateStatus($"{title}: done");
+    }
+
+    private async Task RunGitCommandAsync(string title, Func<(bool Success, string Output)> run)
+    {
+        ActiveStatusBar.UpdateStatus($"{title}: running...");
+        var result = await Task.Run(run);
+        GitOutputRequested?.Invoke(this, new GitOutputRequestedEventArgs(title, result.Output));
+        ActiveStatusBar.UpdateStatus(result.Success ? $"{title}: done" : $"{title}: failed");
+        if (result.Success)
+            _ = RefreshGitDiffAsync();
     }
 
     public void NavigateTo(int line, int column)
@@ -3041,6 +3065,12 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.GitLogRequested:
                     _ = ShowGitLogAsync();
+                    break;
+                case VimEventType.GitPushRequested:
+                    _ = RunGitPushAsync();
+                    break;
+                case VimEventType.GitPullRequested:
+                    _ = RunGitPullAsync();
                     break;
                 case VimEventType.GitCommitRequested:
                     ShowGitCommit();

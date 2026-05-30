@@ -54,12 +54,6 @@
 | ワークスペース診断 (`workspace/diagnostic`) | ファイルを開かずにエラー数を表示 | 低 |
 | DAP (Debug Adapter Protocol) | ブレークポイント・ステップ実行・変数ウォッチ | 低 |
 
-### Git 拡張
-
-| 機能 | 説明 | 優先度 |
-|------|------|-------|
-| `:Git push` / `:Git pull` | エディタから push/pull を実行 | 低 |
-
 ### UI / UX
 
 | 機能 | 説明 | 優先度 |
@@ -110,6 +104,7 @@
 
 | 機能 | 日付 |
 |------|------|
+| **`:Git push` / `:Gpush` / `:Git pull` / `:Gpull`** エディタから現在のリポジトリで push/pull を実行し、結果を出力バッファに表示 | ✅ 2026-05-30 |
 | **`:Git status` / `:Gstatus` / `:gs`** リポジトリの short status を新規バッファに表示 | ✅ 2026-05-30 |
 | **`:scriptnames`** 読み込んだ vimrc / `:source` ファイルを読み込み順に番号付きで表示 | ✅ 2026-05-30 |
 | **`autocmd` / `augroup` 基本対応** `.vimrc` / `:autocmd` で `BufRead` / `BufReadPost` / `BufEnter` / `FileType` に応じた設定コマンドを登録・実行 | ✅ 2026-05-29 |

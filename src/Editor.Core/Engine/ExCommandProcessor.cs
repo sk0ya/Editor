@@ -412,6 +412,14 @@ public class ExCommandProcessor
         if (cmd is "Git log" or "git log" or "Glog" or "glog")
             return new ExResult(true, null, VimEvent.GitLogRequested());
 
+        // :Git push / :Gpush — push the current branch
+        if (cmd is "Git push" or "git push" or "Gpush" or "gpush")
+            return new ExResult(true, null, VimEvent.GitPushRequested());
+
+        // :Git pull / :Gpull — pull into the current branch
+        if (cmd is "Git pull" or "git pull" or "Gpull" or "gpull")
+            return new ExResult(true, null, VimEvent.GitPullRequested());
+
         // Quickfix commands
         if (cmd is "copen" or "cope" or "clist" or "cl")
             return new ExResult(true, null, VimEvent.QuickfixOpen());
@@ -1604,6 +1612,8 @@ public class ExCommandProcessor
         "Git unstage", "Gunstage",
         "Git diff", "Gdiff",
         "Git log", "Glog",
+        "Git push", "Gpush",
+        "Git pull", "Gpull",
         "copen", "cope", "clist", "cl",
         "cclose", "ccl",
         "cn", "cnext", "cp", "cprev",

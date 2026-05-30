@@ -34,6 +34,8 @@ public enum VimEventType
     GitStatusRequested,
     GitDiffRequested,
     GitLogRequested,
+    GitPushRequested,
+    GitPullRequested,
     WindowNavRequested,
     WindowCloseRequested,
     LspHoverRequested,
@@ -163,6 +165,12 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent GitLogRequested() =>
         new(VimEventType.GitLogRequested);
+
+    public static VimEvent GitPushRequested() =>
+        new(VimEventType.GitPushRequested);
+
+    public static VimEvent GitPullRequested() =>
+        new(VimEventType.GitPullRequested);
 
     public static VimEvent LspHoverRequested() =>
         new(VimEventType.LspHoverRequested);

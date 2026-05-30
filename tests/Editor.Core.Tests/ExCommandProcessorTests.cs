@@ -141,6 +141,22 @@ public class ExCommandProcessorTests
         Assert.Equal(VimEventType.GitStatusRequested, result.Event.Type);
     }
 
+    [Theory]
+    [InlineData("Git push", VimEventType.GitPushRequested)]
+    [InlineData("Gpush", VimEventType.GitPushRequested)]
+    [InlineData("Git pull", VimEventType.GitPullRequested)]
+    [InlineData("Gpull", VimEventType.GitPullRequested)]
+    public void GitRemoteCommands_ProduceExpectedEvents(string command, VimEventType eventType)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Event);
+        Assert.Equal(eventType, result.Event.Type);
+    }
+
     [Fact]
     public void NewAndVnew_ProduceSplitEvents()
     {
