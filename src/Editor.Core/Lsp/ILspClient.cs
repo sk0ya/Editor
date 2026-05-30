@@ -17,6 +17,8 @@ public interface ILspClient : IDisposable
     bool SupportsSemanticTokens { get; }
     /// <summary>サーバーが textDocument/selectionRange をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsSelectionRange { get; }
+    /// <summary>サーバーが workspace/diagnostic をサポートしているか。InitializeAsync 後に確定する。</summary>
+    bool SupportsWorkspaceDiagnostics { get; }
     /// <summary>セマンティックトークンの凡例（トークン種別・修飾子）。InitializeAsync 後に確定する。</summary>
     SemanticTokensLegend? SemanticTokensLegend { get; }
     event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
@@ -38,6 +40,7 @@ public interface ILspClient : IDisposable
     Task<IReadOnlyList<LspCodeAction>> GetCodeActionsAsync(string uri, LspRange range, CancellationToken ct = default);
     Task<IReadOnlyList<InlayHint>> GetInlayHintsAsync(string uri, LspRange range, CancellationToken ct = default);
     Task<SemanticToken[]?> GetSemanticTokensAsync(string uri, CancellationToken ct = default);
+    Task<LspWorkspaceDiagnosticResult?> GetWorkspaceDiagnosticsAsync(CancellationToken ct = default);
 
     // Call hierarchy
     Task<CallHierarchyItem?> PrepareCallHierarchyAsync(string uri, LspPosition pos, CancellationToken ct = default);

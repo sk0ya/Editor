@@ -80,6 +80,9 @@ public sealed class LspManager : IEditorLspManager
     /// <summary>現在のサーバーが textDocument/foldingRange をサポートしているか。</summary>
     public bool ServerSupportsFoldingRange => _currentClient?.SupportsFoldingRange == true;
 
+    /// <summary>現在のサーバーが workspace/diagnostic をサポートしているか。</summary>
+    public bool ServerSupportsWorkspaceDiagnostics => _currentClient?.SupportsWorkspaceDiagnostics == true;
+
     /// <summary>Fired on the dispatcher thread for status bar messages.</summary>
     public event Action<string>? StatusMessage;
 
@@ -511,6 +514,36 @@ public sealed class LspManager : IEditorLspManager
         if (client?.IsRunning != true) return [];
         var symbols = await client.GetWorkspaceSymbolsAsync(query, ct);
         return SymbolSearchFilter.FilterByKind(symbols, isClass);
+    }
+
+    /// <summary>Request workspace diagnostics without opening additional documents.</summary>
+    public async Task<LspWorkspaceDiagnosticResult?> RequestWorkspaceDiagnosticsAsync(CancellationToken ct = default)
+    {
+        var client = _currentClient;
+        if (client?.IsRunning != true)
+        {
+            StatusMessage?.Invoke("Workspace diagnostics: LSP not connected");
+            return null;
+        }
+
+        if (!client.SupportsWorkspaceDiagnostics)
+        {
+            StatusMessage?.Invoke("Workspace diagnostics: server does not support workspace/diagnostic");
+            return null;
+        }
+
+        StatusMessage?.Invoke("Workspace diagnostics: running...");
+        var result = await client.GetWorkspaceDiagnosticsAsync(ct);
+        if (result == null)
+        {
+            StatusMessage?.Invoke("Workspace diagnostics: unavailable");
+            return null;
+        }
+
+        var summary = result.Summary;
+        StatusMessage?.Invoke(
+            $"Workspace diagnostics: {summary.DiagnosticCount} item(s), {summary.ErrorCount} error(s), {summary.WarningCount} warning(s)");
+        return result;
     }
 
     /// <summary>Prepare call hierarchy item at the given position.</summary>

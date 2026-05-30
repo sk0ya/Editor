@@ -58,16 +58,21 @@ public class ModeChangedEventArgs(VimMode mode) : EventArgs
 {
     public VimMode Mode { get; } = mode;
 }
-public class FindReferenceItem(string filePath, int line, int col)
+public class FindReferenceItem(string filePath, int line, int col, string? preview = null)
 {
     public string FilePath { get; } = filePath;
     public int Line { get; } = line;
     public int Col { get; } = col;
+    public string? Preview { get; } = preview;
 }
-public class FindReferencesResultEventArgs(IReadOnlyList<FindReferenceItem> items, string symbolName) : EventArgs
+public class FindReferencesResultEventArgs(
+    IReadOnlyList<FindReferenceItem> items,
+    string symbolName,
+    string titlePrefix = "REFERENCES") : EventArgs
 {
     public IReadOnlyList<FindReferenceItem> Items { get; } = items;
     public string SymbolName { get; } = symbolName;
+    public string TitlePrefix { get; } = titlePrefix;
 }
 public class GrepRequestedEventArgs(string pattern, string? fileGlob, bool ignoreCase) : EventArgs
 {
@@ -2481,6 +2486,41 @@ public partial class VimEditorControl : UserControl
         FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(items, symbol));
     }
 
+    private async Task HandleWorkspaceDiagnosticsAsync()
+    {
+        var result = await _lspManager.RequestWorkspaceDiagnosticsAsync();
+        if (result == null)
+            return;
+
+        var items = result.Documents
+            .SelectMany(document => document.Diagnostics.Select(diagnostic =>
+                new FindReferenceItem(
+                    UriToLocalPath(document.Uri),
+                    diagnostic.Range.Start.Line,
+                    diagnostic.Range.Start.Character,
+                    FormatDiagnosticPreview(diagnostic))))
+            .OrderBy(i => i.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(i => i.Line)
+            .ThenBy(i => i.Col)
+            .ToList();
+
+        var summary = result.Summary;
+        var fileCount = items.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        ActiveStatusBar.UpdateStatus(
+            $"Workspace diagnostics: {summary.DiagnosticCount} item(s) in {fileCount} file(s)");
+
+        var label = $"workspace: {summary.ErrorCount} error(s), {summary.WarningCount} warning(s)";
+        FindReferencesResult?.Invoke(
+            this,
+            new FindReferencesResultEventArgs(items, label, "DIAGNOSTICS"));
+    }
+
+    private static string FormatDiagnosticPreview(LspDiagnostic diagnostic)
+    {
+        var source = string.IsNullOrWhiteSpace(diagnostic.Source) ? "" : $"{diagnostic.Source}: ";
+        return $"{diagnostic.Severity}: {source}{diagnostic.Message}";
+    }
+
     private async Task HandleCallHierarchyAsync()
     {
         if (!_lspManager.IsConnected) { ActiveStatusBar.UpdateStatus("Call hierarchy: LSP not connected"); return; }
@@ -3142,6 +3182,9 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.FindReferencesRequested:
                     _ = HandleFindReferencesAsync();
+                    break;
+                case VimEventType.WorkspaceDiagnosticsRequested:
+                    _ = HandleWorkspaceDiagnosticsAsync();
                     break;
                 case VimEventType.CallHierarchyRequested:
                     _ = HandleCallHierarchyAsync();

@@ -448,6 +448,11 @@ public class ExCommandProcessor
         if (TryParseQuickfixGoto(cmd, out var ccIndex))
             return new ExResult(true, null, VimEvent.QuickfixGoto(ccIndex));
 
+        // :diagnostics — request workspace diagnostics via LSP
+        if (cmd.Equals("diagnostics", StringComparison.OrdinalIgnoreCase) ||
+            cmd.Equals("diag", StringComparison.OrdinalIgnoreCase))
+            return new ExResult(true, null, VimEvent.WorkspaceDiagnosticsRequested());
+
         // Location list commands
         if (cmd is "lopen" or "lope" or "llist" or "lli")
             return new ExResult(true, null, VimEvent.LocationListOpen());
@@ -1883,6 +1888,7 @@ public class ExCommandProcessor
         "copen", "cope", "clist", "cl",
         "cclose", "ccl",
         "cn", "cnext", "cp", "cprev",
+        "diagnostics", "diag",
         "lopen", "lope", "llist", "lli",
         "lclose", "lcl",
         "ln", "lnext", "lp", "lprev", "lprevious", "ll",

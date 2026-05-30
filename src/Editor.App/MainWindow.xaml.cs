@@ -1814,7 +1814,7 @@ public partial class MainWindow : Window
         {
             string fileName = Path.GetFileName(r.FilePath);
             string lineCol  = $":{r.Line + 1}:{r.Col + 1}";
-            string preview  = ReadSourceLine(r.FilePath, r.Line);
+            string preview  = r.Preview ?? ReadSourceLine(r.FilePath, r.Line);
             return new ReferenceListItem
             {
                 FilePath = r.FilePath,
@@ -1829,8 +1829,8 @@ public partial class MainWindow : Window
         SetQuickfixItems(items);
         _quickfixCurrentIndex = -1;
 
-        int fileCount = items.Select(i => i.FilePath).Distinct().Count();
-        _quickfixTitle = $"REFERENCES ({items.Count}) — {e.SymbolName}  [{fileCount} file(s)]";
+        int fileCount = items.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        _quickfixTitle = $"{e.TitlePrefix} ({items.Count}) — {e.SymbolName}  [{fileCount} file(s)]";
         _lastGrepOptions = null;
 
         ShowQuickfixPanel();

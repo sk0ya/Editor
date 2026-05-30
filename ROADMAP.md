@@ -41,7 +41,6 @@
 
 | 機能 | 説明 | 優先度 |
 |------|------|-------|
-| ワークスペース診断 (`workspace/diagnostic`) | ファイルを開かずにエラー数を表示 | 低 |
 | DAP (Debug Adapter Protocol) | ブレークポイント・ステップ実行・変数ウォッチ | 低 |
 
 ### UI / UX
@@ -90,6 +89,7 @@
 
 | 機能 | 日付 |
 |------|------|
+| **ワークスペース診断 (`workspace/diagnostic`)** `:diagnostics` / `:diag` で対応 LSP サーバーからワークスペース診断を取得し、References パネルに診断一覧と件数を表示 | ✅ 2026-05-31 |
 | **`textDocument/selectionRange`** Shift+Alt+Right で LSP の親 selection range へ段階的に Visual 選択を拡張し、Shift+Alt+Left で直前段階へ縮小 | ✅ 2026-05-31 |
 | **カウント付き Visual text object** Visual character mode で `3iw` / `2aw` などカウント付き word text object 選択に対応。operator + text object の `d3iw` も同じ count 範囲を使用 | ✅ 2026-05-30 |
 | **`:earlier {N}` / `:later {N}`** 線形 undo/redo 履歴を変更回数で移動。Vim 風の時間 suffix `s` / `m` / `h` も現在の履歴時刻基準で対応 | ✅ 2026-05-30 |

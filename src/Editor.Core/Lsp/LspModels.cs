@@ -11,6 +11,56 @@ public record LspDiagnostic(
     DiagnosticSeverity Severity,
     string? Source = null);
 
+public record LspWorkspaceDiagnosticDocument(
+    string Uri,
+    int? Version,
+    IReadOnlyList<LspDiagnostic> Diagnostics);
+
+public record LspWorkspaceDiagnosticSummary(
+    int DocumentCount,
+    int DiagnosticCount,
+    int ErrorCount,
+    int WarningCount,
+    int InformationCount,
+    int HintCount);
+
+public record LspWorkspaceDiagnosticResult(
+    IReadOnlyList<LspWorkspaceDiagnosticDocument> Documents,
+    LspWorkspaceDiagnosticSummary Summary);
+
+public static class LspWorkspaceDiagnosticAggregator
+{
+    public static LspWorkspaceDiagnosticResult CreateResult(IEnumerable<LspWorkspaceDiagnosticDocument> documents)
+    {
+        var ordered = documents
+            .Where(d => !string.IsNullOrWhiteSpace(d.Uri))
+            .OrderBy(d => d.Uri, StringComparer.OrdinalIgnoreCase)
+            .Select(d => d with
+            {
+                Diagnostics = d.Diagnostics
+                    .OrderBy(x => x.Range.Start.Line)
+                    .ThenBy(x => x.Range.Start.Character)
+                    .ToArray()
+            })
+            .ToArray();
+
+        var summary = new LspWorkspaceDiagnosticSummary(
+            ordered.Length,
+            ordered.Sum(d => d.Diagnostics.Count),
+            CountSeverity(ordered, DiagnosticSeverity.Error),
+            CountSeverity(ordered, DiagnosticSeverity.Warning),
+            CountSeverity(ordered, DiagnosticSeverity.Information),
+            CountSeverity(ordered, DiagnosticSeverity.Hint));
+
+        return new LspWorkspaceDiagnosticResult(ordered, summary);
+    }
+
+    private static int CountSeverity(
+        IReadOnlyList<LspWorkspaceDiagnosticDocument> documents,
+        DiagnosticSeverity severity) =>
+        documents.Sum(d => d.Diagnostics.Count(x => x.Severity == severity));
+}
+
 public enum CompletionItemKind
 {
     Text = 1, Method = 2, Function = 3, Constructor = 4, Field = 5,

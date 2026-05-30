@@ -65,6 +65,7 @@ public enum VimEventType
     SubstitutePreviewChanged,
     ProjectReplaceRequested,
     QuickfixReplaceRequested,
+    WorkspaceDiagnosticsRequested,
 }
 
 public enum ViewportAlign
@@ -274,6 +275,9 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent QuickfixReplaceRequested(string replacement) =>
         new QuickfixReplaceRequestedEvent(replacement);
+
+    public static VimEvent WorkspaceDiagnosticsRequested() =>
+        new(VimEventType.WorkspaceDiagnosticsRequested);
 }
 
 public record ModeChangedEvent(VimMode Mode) : VimEvent(VimEventType.ModeChanged);

@@ -19,6 +19,7 @@ public interface IEditorLspManager : IDisposable
     bool IsConnected { get; }
     bool IsDocumentReady { get; }
     bool ServerSupportsFoldingRange { get; }
+    bool ServerSupportsWorkspaceDiagnostics { get; }
     string? CurrentUri { get; }
 
     event Action<string>? StatusMessage;
@@ -67,4 +68,5 @@ public interface IEditorLspManager : IDisposable
     void RequestInlayHints(int startLine, int endLine);
     void SetSemanticTokensEnabled(bool enabled);
     void RequestSemanticTokens();
+    Task<LspWorkspaceDiagnosticResult?> RequestWorkspaceDiagnosticsAsync(CancellationToken ct = default);
 }

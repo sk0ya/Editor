@@ -18,6 +18,7 @@ internal sealed class NullLspManager : IEditorLspManager
     public bool IsConnected => false;
     public bool IsDocumentReady => false;
     public bool ServerSupportsFoldingRange => false;
+    public bool ServerSupportsWorkspaceDiagnostics => false;
     public string? CurrentUri => null;
 
     public event Action<string>? StatusMessage { add { } remove { } }
@@ -153,6 +154,9 @@ internal sealed class NullLspManager : IEditorLspManager
     public void RequestSemanticTokens()
     {
     }
+
+    public Task<LspWorkspaceDiagnosticResult?> RequestWorkspaceDiagnosticsAsync(CancellationToken ct = default) =>
+        Task.FromResult<LspWorkspaceDiagnosticResult?>(null);
 
     public void Dispose()
     {

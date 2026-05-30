@@ -711,6 +711,20 @@ public class ExCommandProcessorTests
     }
 
     [Theory]
+    [InlineData("diagnostics")]
+    [InlineData("diag")]
+    public void DiagnosticsCommands_ProduceWorkspaceDiagnosticsEvent(string command)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Event);
+        Assert.Equal(VimEventType.WorkspaceDiagnosticsRequested, result.Event.Type);
+    }
+
+    [Theory]
     [InlineData("lclose")]
     [InlineData("lcl")]
     public void LocationListCloseCommands_ProduceCloseEvent(string command)
