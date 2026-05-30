@@ -669,6 +669,105 @@ public class ExCommandProcessorTests
         Assert.Equal("", evt.Replacement);
     }
 
+    [Theory]
+    [InlineData("cnext", 1)]
+    [InlineData("3cnext", 3)]
+    [InlineData("cprev", -1)]
+    [InlineData("2cprev", -2)]
+    public void QuickfixNavigationCommands_ParseCount(string command, int signedCount)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        if (signedCount > 0)
+        {
+            var evt = Assert.IsType<QuickfixNextEvent>(result.Event);
+            Assert.Equal(signedCount, evt.Count);
+        }
+        else
+        {
+            var evt = Assert.IsType<QuickfixPrevEvent>(result.Event);
+            Assert.Equal(-signedCount, evt.Count);
+        }
+    }
+
+    [Theory]
+    [InlineData("lopen")]
+    [InlineData("lope")]
+    [InlineData("llist")]
+    [InlineData("lli")]
+    public void LocationListOpenCommands_ProduceOpenEvent(string command)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Event);
+        Assert.Equal(VimEventType.LocationListOpenRequested, result.Event.Type);
+    }
+
+    [Theory]
+    [InlineData("lclose")]
+    [InlineData("lcl")]
+    public void LocationListCloseCommands_ProduceCloseEvent(string command)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Event);
+        Assert.Equal(VimEventType.LocationListCloseRequested, result.Event.Type);
+    }
+
+    [Theory]
+    [InlineData("lnext", 1)]
+    [InlineData("ln", 1)]
+    [InlineData("3lnext", 3)]
+    public void LocationListNextCommands_ParseCount(string command, int count)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<LocationListNextEvent>(result.Event);
+        Assert.Equal(count, evt.Count);
+    }
+
+    [Theory]
+    [InlineData("lprev", 1)]
+    [InlineData("lprevious", 1)]
+    [InlineData("lp", 1)]
+    [InlineData("2lprev", 2)]
+    public void LocationListPrevCommands_ParseCount(string command, int count)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<LocationListPrevEvent>(result.Event);
+        Assert.Equal(count, evt.Count);
+    }
+
+    [Theory]
+    [InlineData("ll", -1)]
+    [InlineData("ll 4", 3)]
+    public void LocationListGotoCommands_ParseIndex(string command, int index)
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<LocationListGotoEvent>(result.Event);
+        Assert.Equal(index, evt.Index);
+    }
+
     [Fact]
     public void Echo_PrintsMessage()
     {

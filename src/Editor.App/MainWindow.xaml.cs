@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
@@ -203,6 +204,9 @@ public partial class MainWindow : Window
     private double _sidebarWidth = 220;
     private string? _currentFolderPath;
     private int _quickfixCurrentIndex = -1;
+    private List<ReferenceListItem> _quickfixItems = [];
+    private string _quickfixTitle = "REFERENCES";
+    private readonly Dictionary<string, BufferLocationList> _locationLists = new(StringComparer.OrdinalIgnoreCase);
     private ProjectSearchOptions? _lastGrepOptions;
     private SidebarPanel _activeSidebarPanel = SidebarPanel.None;
     private System.Windows.Point _shellMenuScreenPos;
@@ -1142,11 +1146,16 @@ public partial class MainWindow : Window
         editor.WindowCloseRequested += Editor_WindowCloseRequested;
         editor.BufferChanged        += Editor_BufferChanged;
         editor.FindReferencesResult += Editor_FindReferencesResult;
-        editor.QuickfixOpenRequested  += (_, _) => ShowReferencesPanel();
+        editor.QuickfixOpenRequested  += (_, _) => ShowQuickfixPanel();
         editor.QuickfixCloseRequested += (_, _) => CloseRefPanel_Click(editor, new RoutedEventArgs());
         editor.QuickfixNextRequested  += (_, count) => QuickfixNavigate(count);
         editor.QuickfixPrevRequested  += (_, count) => QuickfixNavigate(-count);
         editor.QuickfixGotoRequested  += (_, index) => QuickfixNavigateTo(index);
+        editor.LocationListOpenRequested  += (_, _) => ShowLocationListPanel();
+        editor.LocationListCloseRequested += (_, _) => CloseRefPanel_Click(editor, new RoutedEventArgs());
+        editor.LocationListNextRequested  += (_, count) => LocationListNavigate(count);
+        editor.LocationListPrevRequested  += (_, count) => LocationListNavigate(-count);
+        editor.LocationListGotoRequested  += (_, index) => LocationListNavigateTo(index);
         editor.GrepRequested          += Editor_GrepRequested;
         editor.ProjectReplaceRequested += Editor_ProjectReplaceRequested;
         editor.QuickfixReplaceRequested += Editor_QuickfixReplaceRequested;
@@ -1776,6 +1785,8 @@ public partial class MainWindow : Window
 
     // ─────────────── References panel ───────────────
 
+    private enum LocationListSource { Empty, Diagnostics, Search }
+
     private sealed class ReferenceListItem
     {
         public required string FilePath  { get; init; }
@@ -1784,6 +1795,16 @@ public partial class MainWindow : Window
         public required string Preview   { get; init; }
         public required int    Line      { get; init; }
         public required int    Col       { get; init; }
+        public bool CurrentBufferOnly { get; init; }
+    }
+
+    private sealed class BufferLocationList
+    {
+        public List<ReferenceListItem> Items { get; set; } = [];
+        public string Title { get; set; } = "LOCATION LIST";
+        public LocationListSource Source { get; set; } = LocationListSource.Empty;
+        public string SourceKey { get; set; } = "";
+        public LocationListNavigator Navigator { get; } = new();
     }
 
     private void Editor_FindReferencesResult(object? sender, FindReferencesResultEventArgs e)
@@ -1804,18 +1825,14 @@ public partial class MainWindow : Window
             };
         }).ToList();
 
-        RefList.SelectionChanged -= RefList_SelectionChanged;
-        RefList.ItemsSource = items;
-        RefList.SelectedIndex = -1;
+        SetQuickfixItems(items);
         _quickfixCurrentIndex = -1;
-        RefList.SelectionChanged += RefList_SelectionChanged;
 
         int fileCount = items.Select(i => i.FilePath).Distinct().Count();
-        RefPanelTitle.Text = $"REFERENCES ({items.Count}) — {e.SymbolName}  [{fileCount} file(s)]";
+        _quickfixTitle = $"REFERENCES ({items.Count}) — {e.SymbolName}  [{fileCount} file(s)]";
         _lastGrepOptions = null;
-        ReplaceRefResultsBtn.IsEnabled = false;
 
-        ShowReferencesPanel();
+        ShowQuickfixPanel();
     }
 
     private static string ReadSourceLine(string filePath, int line)
@@ -1846,13 +1863,10 @@ public partial class MainWindow : Window
 
     private async Task RunGrepAsync(string pattern, string? fileGlob, bool ignoreCase, string? currentFilePath)
     {
-        RefList.SelectionChanged -= RefList_SelectionChanged;
-        RefList.ItemsSource = null;
+        SetQuickfixItems([]);
         _quickfixCurrentIndex = -1;
-        RefPanelTitle.Text = $"GREP \"{pattern}\" — Searching…";
-        ReplaceRefResultsBtn.IsEnabled = false;
-        ShowReferencesPanel();
-        RefList.SelectionChanged += RefList_SelectionChanged;
+        _quickfixTitle = $"GREP \"{pattern}\" — Searching…";
+        ShowQuickfixPanel();
 
         List<ReferenceListItem> results;
         var grepOptions = CreateProjectSearchOptions(pattern, fileGlob, ignoreCase, currentFilePath);
@@ -1864,18 +1878,15 @@ public partial class MainWindow : Window
         }
         catch { results = []; }
 
-        RefList.SelectionChanged -= RefList_SelectionChanged;
-        RefList.ItemsSource = results;
-        RefList.SelectedIndex = -1;
+        SetQuickfixItems(results);
         _quickfixCurrentIndex = -1;
-        RefList.SelectionChanged += RefList_SelectionChanged;
 
         int fileCount = results.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        RefPanelTitle.Text = results.Count > 0
+        _quickfixTitle = results.Count > 0
             ? $"GREP \"{pattern}\" — {results.Count} matches [{fileCount} file(s)]"
             : $"GREP \"{pattern}\" — no matches";
         _lastGrepOptions = grepOptions;
-        ReplaceRefResultsBtn.IsEnabled = results.Count > 0 && grepOptions != null;
+        ShowQuickfixPanel();
 
     }
 
@@ -1950,27 +1961,21 @@ public partial class MainWindow : Window
             return;
         }
 
-        RefList.SelectionChanged -= RefList_SelectionChanged;
-        RefList.ItemsSource = null;
+        SetQuickfixItems([]);
         _quickfixCurrentIndex = -1;
-        RefPanelTitle.Text = $"REPLACE \"{pattern}\" — Searching…";
-        ReplaceRefResultsBtn.IsEnabled = false;
-        ShowReferencesPanel();
-        RefList.SelectionChanged += RefList_SelectionChanged;
+        _quickfixTitle = $"REPLACE \"{pattern}\" — Searching…";
+        ShowQuickfixPanel();
 
         var results = await Task.Run(() => ExecuteGrep(options));
-        RefList.SelectionChanged -= RefList_SelectionChanged;
-        RefList.ItemsSource = results;
-        RefList.SelectedIndex = -1;
+        SetQuickfixItems(results);
         _quickfixCurrentIndex = -1;
-        RefList.SelectionChanged += RefList_SelectionChanged;
         _lastGrepOptions = options;
-        ReplaceRefResultsBtn.IsEnabled = results.Count > 0;
 
         var fileCount = results.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        RefPanelTitle.Text = results.Count > 0
+        _quickfixTitle = results.Count > 0
             ? $"REPLACE \"{pattern}\" — {results.Count} matches [{fileCount} file(s)]"
             : $"REPLACE \"{pattern}\" — no matches";
+        ShowQuickfixPanel();
 
         if (results.Count > 0)
             await ConfirmAndApplyReplaceAsync(options, replacement, results);
@@ -1985,8 +1990,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var sourceItems = RefList.ItemsSource as IEnumerable<ReferenceListItem>;
-        var results = sourceItems?.ToList() ?? [];
+        var results = _quickfixItems.ToList();
         if (results.Count == 0)
             results = await Task.Run(() => ExecuteGrep(_lastGrepOptions));
 
@@ -2080,11 +2084,38 @@ public partial class MainWindow : Window
         }
     }
 
+    private void SetQuickfixItems(List<ReferenceListItem> items)
+    {
+        _quickfixItems = items;
+    }
+
+    private void ShowQuickfixPanel()
+    {
+        DisplayReferenceItems(_quickfixItems, _quickfixTitle, _quickfixCurrentIndex,
+            _lastGrepOptions != null && _quickfixItems.Count > 0);
+    }
+
+    private void DisplayReferenceItems(
+        IReadOnlyList<ReferenceListItem> items,
+        string title,
+        int selectedIndex,
+        bool replaceEnabled)
+    {
+        RefList.SelectionChanged -= RefList_SelectionChanged;
+        RefList.ItemsSource = items;
+        RefList.SelectedIndex = selectedIndex >= 0 && selectedIndex < items.Count ? selectedIndex : -1;
+        RefList.SelectionChanged += RefList_SelectionChanged;
+
+        RefPanelTitle.Text = title;
+        ReplaceRefResultsBtn.IsEnabled = replaceEnabled;
+        ShowReferencesPanel();
+    }
+
     private void QuickfixNavigate(int delta)
     {
-        var count = RefList.Items.Count;
+        var count = _quickfixItems.Count;
         if (count == 0) return;
-        ShowReferencesPanel();
+        ShowQuickfixPanel();
         _quickfixCurrentIndex = Math.Clamp(_quickfixCurrentIndex + delta, 0, count - 1);
         RefList.SelectedIndex = _quickfixCurrentIndex;
         RefList.ScrollIntoView(RefList.SelectedItem);
@@ -2093,9 +2124,9 @@ public partial class MainWindow : Window
 
     private void QuickfixNavigateTo(int index)
     {
-        var count = RefList.Items.Count;
+        var count = _quickfixItems.Count;
         if (count == 0) return;
-        ShowReferencesPanel();
+        ShowQuickfixPanel();
         // index == -1 means :cc with no arg — go to current item (or first)
         _quickfixCurrentIndex = index < 0
             ? Math.Max(0, _quickfixCurrentIndex)
@@ -2103,6 +2134,139 @@ public partial class MainWindow : Window
         RefList.SelectedIndex = _quickfixCurrentIndex;
         RefList.ScrollIntoView(RefList.SelectedItem);
         CurrentEditor?.Focus();
+    }
+
+    private void ShowLocationListPanel()
+    {
+        var state = RefreshCurrentLocationList();
+        DisplayReferenceItems(state.Items, state.Title, state.Navigator.CurrentIndex, false);
+    }
+
+    private void LocationListNavigate(int delta)
+    {
+        var state = RefreshCurrentLocationList();
+        var target = state.Navigator.Move(delta);
+        if (target == null) return;
+
+        ShowLocationListPanel();
+        RefList.SelectedIndex = target.Value;
+        RefList.ScrollIntoView(RefList.SelectedItem);
+        CurrentEditor?.Focus();
+    }
+
+    private void LocationListNavigateTo(int index)
+    {
+        var state = RefreshCurrentLocationList();
+        var target = state.Navigator.Goto(index);
+        if (target == null) return;
+
+        ShowLocationListPanel();
+        RefList.SelectedIndex = target.Value;
+        RefList.ScrollIntoView(RefList.SelectedItem);
+        CurrentEditor?.Focus();
+    }
+
+    private BufferLocationList RefreshCurrentLocationList()
+    {
+        var editor = CurrentEditor;
+        if (editor == null)
+            return new BufferLocationList();
+
+        var key = GetLocationListKey(editor);
+        if (!_locationLists.TryGetValue(key, out var state))
+        {
+            state = new BufferLocationList();
+            _locationLists[key] = state;
+        }
+
+        var (items, title, source, sourceKey) = BuildLocationList(editor);
+        bool replaced = state.Source != source || state.SourceKey != sourceKey;
+        state.Items = items;
+        state.Title = title;
+        state.Source = source;
+        state.SourceKey = sourceKey;
+        if (replaced)
+            state.Navigator.Reset(items.Count);
+        else
+            state.Navigator.SetCount(items.Count);
+
+        return state;
+    }
+
+    private (List<ReferenceListItem> Items, string Title, LocationListSource Source, string SourceKey)
+        BuildLocationList(VimEditorControl editor)
+    {
+        var diagnostics = BuildDiagnosticLocationItems(editor);
+        if (diagnostics.Count > 0)
+        {
+            string title = $"LOCATION LIST — diagnostics ({diagnostics.Count})";
+            return (diagnostics, title, LocationListSource.Diagnostics, "diagnostics");
+        }
+
+        var searchItems = BuildSearchLocationItems(editor, out var pattern);
+        if (searchItems.Count > 0)
+        {
+            string title = $"LOCATION LIST — /{pattern}/ ({searchItems.Count})";
+            return (searchItems, title, LocationListSource.Search, $"search:{pattern}");
+        }
+
+        return ([], "LOCATION LIST — no diagnostics or search matches", LocationListSource.Empty, "");
+    }
+
+    private static List<ReferenceListItem> BuildDiagnosticLocationItems(VimEditorControl editor)
+    {
+        var filePath = editor.Engine.CurrentBuffer.FilePath ?? "";
+        var fileName = string.IsNullOrEmpty(filePath) ? "[No Name]" : Path.GetFileName(filePath);
+
+        return editor.CurrentDiagnostics
+            .OrderBy(d => d.Range.Start.Line)
+            .ThenBy(d => d.Range.Start.Character)
+            .Select(d => new ReferenceListItem
+            {
+                FilePath = filePath,
+                FileName = fileName,
+                LineCol = $":{d.Range.Start.Line + 1}:{d.Range.Start.Character + 1}",
+                Preview = $"{d.Severity}: {d.Message}",
+                Line = d.Range.Start.Line,
+                Col = d.Range.Start.Character,
+                CurrentBufferOnly = true,
+            })
+            .ToList();
+    }
+
+    private static List<ReferenceListItem> BuildSearchLocationItems(VimEditorControl editor, out string pattern)
+    {
+        pattern = editor.Engine.SearchPattern;
+        if (string.IsNullOrEmpty(pattern))
+            return [];
+
+        var ignoreCase = editor.Engine.Options.SmartCase
+            ? !pattern.Any(char.IsUpper)
+            : editor.Engine.Options.IgnoreCase;
+        var buffer = editor.Engine.CurrentBuffer.Text;
+        var filePath = editor.Engine.CurrentBuffer.FilePath ?? "";
+        var fileName = string.IsNullOrEmpty(filePath) ? "[No Name]" : Path.GetFileName(filePath);
+
+        return buffer.FindAll(pattern, ignoreCase)
+            .Select(pos => new ReferenceListItem
+            {
+                FilePath = filePath,
+                FileName = fileName,
+                LineCol = $":{pos.Line + 1}:{pos.Column + 1}",
+                Preview = buffer.GetLine(pos.Line).Trim(),
+                Line = pos.Line,
+                Col = pos.Column,
+                CurrentBufferOnly = true,
+            })
+            .ToList();
+    }
+
+    private static string GetLocationListKey(VimEditorControl editor)
+    {
+        var filePath = editor.Engine.CurrentBuffer.FilePath;
+        return string.IsNullOrEmpty(filePath)
+            ? $"editor:{RuntimeHelpers.GetHashCode(editor)}"
+            : Path.GetFullPath(filePath);
     }
 
     private void CloseRefPanel_Click(object sender, RoutedEventArgs e)
@@ -2122,7 +2286,8 @@ public partial class MainWindow : Window
         var editor = CurrentEditor;
         if (editor == null) return;
 
-        if (string.Equals(item.FilePath, editor.Engine.CurrentBuffer.FilePath,
+        if (item.CurrentBufferOnly ||
+            string.Equals(item.FilePath, editor.Engine.CurrentBuffer.FilePath,
                           StringComparison.OrdinalIgnoreCase))
         {
             editor.NavigateTo(item.Line, item.Col);

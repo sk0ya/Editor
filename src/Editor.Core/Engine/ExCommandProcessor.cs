@@ -441,12 +441,25 @@ public class ExCommandProcessor
         if (cmd is "cclose" or "ccl")
             return new ExResult(true, null, VimEvent.QuickfixClose());
         if (TryParseQuickfixNav(cmd, "cn", "cnext", out var cnCount))
-            return new ExResult(true, null, VimEvent.QuickfixNext(cnCount));
+            return new ExResult(true, null, VimEvent.QuickfixNext(ApplyRangeCount(range, cnCount)));
         if (TryParseQuickfixNav(cmd, "cp", "cprev", out var cpCount) ||
             TryParseQuickfixNav(cmd, "cp", "cprevious", out cpCount))
-            return new ExResult(true, null, VimEvent.QuickfixPrev(cpCount));
+            return new ExResult(true, null, VimEvent.QuickfixPrev(ApplyRangeCount(range, cpCount)));
         if (TryParseQuickfixGoto(cmd, out var ccIndex))
             return new ExResult(true, null, VimEvent.QuickfixGoto(ccIndex));
+
+        // Location list commands
+        if (cmd is "lopen" or "lope" or "llist" or "lli")
+            return new ExResult(true, null, VimEvent.LocationListOpen());
+        if (cmd is "lclose" or "lcl")
+            return new ExResult(true, null, VimEvent.LocationListClose());
+        if (TryParseQuickfixNav(cmd, "ln", "lnext", out var lnCount))
+            return new ExResult(true, null, VimEvent.LocationListNext(ApplyRangeCount(range, lnCount)));
+        if (TryParseQuickfixNav(cmd, "lp", "lprev", out var lpCount) ||
+            TryParseQuickfixNav(cmd, "lp", "lprevious", out lpCount))
+            return new ExResult(true, null, VimEvent.LocationListPrev(ApplyRangeCount(range, lpCount)));
+        if (TryParseLocationListGoto(cmd, out var llIndex))
+            return new ExResult(true, null, VimEvent.LocationListGoto(llIndex));
 
         // :split [file] :vsplit [file]
         if (cmd == "split" || cmd == "sp" || cmd == "new" ||
@@ -1236,12 +1249,28 @@ public class ExCommandProcessor
         return false;
     }
 
+    private static int ApplyRangeCount(string range, int count) =>
+        int.TryParse(range, out var rangeCount) && rangeCount > 0 ? rangeCount : count;
+
     private static bool TryParseQuickfixGoto(string cmd, out int index)
     {
         index = 0;
         // :cc or :cc N
         if (cmd == "cc") { index = -1; return true; }
         if (cmd.StartsWith("cc ") || cmd.StartsWith("cc\t"))
+        {
+            var rest = cmd[2..].Trim();
+            if (int.TryParse(rest, out var n) && n >= 1) { index = n - 1; return true; }
+        }
+        return false;
+    }
+
+    private static bool TryParseLocationListGoto(string cmd, out int index)
+    {
+        index = 0;
+        // :ll or :ll N
+        if (cmd == "ll") { index = -1; return true; }
+        if (cmd.StartsWith("ll ") || cmd.StartsWith("ll\t"))
         {
             var rest = cmd[2..].Trim();
             if (int.TryParse(rest, out var n) && n >= 1) { index = n - 1; return true; }
@@ -1854,6 +1883,9 @@ public class ExCommandProcessor
         "copen", "cope", "clist", "cl",
         "cclose", "ccl",
         "cn", "cnext", "cp", "cprev",
+        "lopen", "lope", "llist", "lli",
+        "lclose", "lcl",
+        "ln", "lnext", "lp", "lprev", "lprevious", "ll",
         "sort",
         "move", "m", "copy", "co", "t",
         "center", "right", "left",

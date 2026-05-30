@@ -11,7 +11,7 @@
 - シンタックスハイライト（複数言語対応）
 - LSP 連携（補完、ホバー、診断、定義ジャンプ、参照検索、シグネチャヘルプ、フォーマット、リネーム、コードアクション）
 - マルチバッファ、タブ、ウィンドウ分割（`:split` / `:vsplit` / `Ctrl+W` プレフィックス）
-- Quickfix（`:copen` / `:cclose` / `:cn` / `:cp` / `:cc N` / `:cl`）
+- Quickfix（`:copen` / `:cclose` / `:cn` / `:cp` / `:cc N` / `:cl`）と Location list（`:lopen` / `:lclose` / `:lnext` / `:lprev` / `:ll [N]` / `:llist`）
 - プロジェクト横断検索・置換（`:grep` / `:vimgrep` / `:grepreplace` / `:creplace`、Quickfix 結果から確認付き一括置換）
 - コードフォールド（`za` / `zc` / `zo` / `zR` / `zM` / `zf`）
 - テキストオブジェクト（`iw` / `aw` など、Visual character mode の `3iw` / `2aw` カウント付き選択に対応）
@@ -143,6 +143,8 @@ GitHub 公式ドキュメント:
 | `Tab`/`Enter` | Insert+補完 | 選択候補を挿入 |
 | `:Format` | コマンド | LSP でドキュメントをフォーマット |
 | `:Rename [name]` | コマンド | LSP リネーム（名前省略時はダイアログ） |
+| `:lopen` / `:llist` | コマンド | 現在バッファの診断、または検索結果を Location list として表示 |
+| `:lnext` / `:lprev` / `:ll [N]` | コマンド | 現在バッファの Location list 内を移動 |
 
 ## LSP 対応サーバー
 

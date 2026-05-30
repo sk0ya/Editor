@@ -27,6 +27,11 @@ public enum VimEventType
     QuickfixNextRequested,
     QuickfixPrevRequested,
     QuickfixGotoRequested,
+    LocationListOpenRequested,
+    LocationListCloseRequested,
+    LocationListNextRequested,
+    LocationListPrevRequested,
+    LocationListGotoRequested,
     FoldsChanged,
     OptionsChanged,
     GrepRequested,
@@ -157,6 +162,21 @@ public record VimEvent(VimEventType Type)
     public static VimEvent QuickfixGoto(int index) =>
         new QuickfixGotoEvent(index);
 
+    public static VimEvent LocationListOpen() =>
+        new(VimEventType.LocationListOpenRequested);
+
+    public static VimEvent LocationListClose() =>
+        new(VimEventType.LocationListCloseRequested);
+
+    public static VimEvent LocationListNext(int count = 1) =>
+        new LocationListNextEvent(count);
+
+    public static VimEvent LocationListPrev(int count = 1) =>
+        new LocationListPrevEvent(count);
+
+    public static VimEvent LocationListGoto(int index) =>
+        new LocationListGotoEvent(index);
+
     public static VimEvent FoldsChanged() =>
         new(VimEventType.FoldsChanged);
 
@@ -276,6 +296,9 @@ public record ViewportAlignRequestedEvent(ViewportAlign Align) : VimEvent(VimEve
 public record QuickfixNextEvent(int Count) : VimEvent(VimEventType.QuickfixNextRequested);
 public record QuickfixPrevEvent(int Count) : VimEvent(VimEventType.QuickfixPrevRequested);
 public record QuickfixGotoEvent(int Index) : VimEvent(VimEventType.QuickfixGotoRequested);
+public record LocationListNextEvent(int Count) : VimEvent(VimEventType.LocationListNextRequested);
+public record LocationListPrevEvent(int Count) : VimEvent(VimEventType.LocationListPrevRequested);
+public record LocationListGotoEvent(int Index) : VimEvent(VimEventType.LocationListGotoRequested);
 public record GrepRequestedEvent(string Pattern, string? FileGlob, bool IgnoreCase) : VimEvent(VimEventType.GrepRequested);
 public record LspRenameRequestedEvent(string? NewName) : VimEvent(VimEventType.LspRenameRequested);
 public record CommandCompletionChangedEvent(string[] Items, int SelectedIndex) : VimEvent(VimEventType.CommandCompletionChanged);

@@ -265,6 +265,11 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<int>? QuickfixNextRequested;
     public event EventHandler<int>? QuickfixPrevRequested;
     public event EventHandler<int>? QuickfixGotoRequested;
+    public event EventHandler? LocationListOpenRequested;
+    public event EventHandler? LocationListCloseRequested;
+    public event EventHandler<int>? LocationListNextRequested;
+    public event EventHandler<int>? LocationListPrevRequested;
+    public event EventHandler<int>? LocationListGotoRequested;
     public event EventHandler<GrepRequestedEventArgs>? GrepRequested;
     public event EventHandler<ProjectReplaceRequestedEventArgs>? ProjectReplaceRequested;
     public event EventHandler<string>? QuickfixReplaceRequested;
@@ -283,6 +288,7 @@ public partial class VimEditorControl : UserControl
     public string Text => _engine.CurrentBuffer.Text.GetText();
     public string? FilePath => _engine.CurrentBuffer.FilePath;
     public VimEngine Engine => _engine;
+    public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => _lspManager.CurrentDiagnostics;
     public double VerticalScrollRatio
     {
         get
@@ -3079,6 +3085,21 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.QuickfixGotoRequested when evt is QuickfixGotoEvent qge:
                     QuickfixGotoRequested?.Invoke(this, qge.Index);
+                    break;
+                case VimEventType.LocationListOpenRequested:
+                    LocationListOpenRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case VimEventType.LocationListCloseRequested:
+                    LocationListCloseRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case VimEventType.LocationListNextRequested when evt is LocationListNextEvent lne:
+                    LocationListNextRequested?.Invoke(this, lne.Count);
+                    break;
+                case VimEventType.LocationListPrevRequested when evt is LocationListPrevEvent lpe:
+                    LocationListPrevRequested?.Invoke(this, lpe.Count);
+                    break;
+                case VimEventType.LocationListGotoRequested when evt is LocationListGotoEvent lge:
+                    LocationListGotoRequested?.Invoke(this, lge.Index);
                     break;
                 case VimEventType.GrepRequested when evt is GrepRequestedEvent gre:
                     GrepRequested?.Invoke(this, new GrepRequestedEventArgs(gre.Pattern, gre.FileGlob, gre.IgnoreCase));
