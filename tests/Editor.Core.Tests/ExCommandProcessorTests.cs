@@ -93,6 +93,7 @@ public class ExCommandProcessorTests
 
         var defaultTerm = processor.Execute("term", CursorPosition.Zero);
         var customTerm = processor.Execute("terminal pwsh -NoLogo", CursorPosition.Zero);
+        var customTermAlias = processor.Execute("term pwsh -NoLogo", CursorPosition.Zero);
 
         Assert.True(defaultTerm.Success);
         var defaultEvent = Assert.IsType<TerminalRequestedEvent>(defaultTerm.Event);
@@ -101,6 +102,10 @@ public class ExCommandProcessorTests
         Assert.True(customTerm.Success);
         var customEvent = Assert.IsType<TerminalRequestedEvent>(customTerm.Event);
         Assert.Equal("pwsh -NoLogo", customEvent.ShellCmd);
+
+        Assert.True(customTermAlias.Success);
+        var customAliasEvent = Assert.IsType<TerminalRequestedEvent>(customTermAlias.Event);
+        Assert.Equal("pwsh -NoLogo", customAliasEvent.ShellCmd);
     }
 
     [Theory]
@@ -109,6 +114,7 @@ public class ExCommandProcessorTests
     [InlineData("termprev", TerminalCommandKind.Previous, null, false)]
     [InlineData("termselect 2", TerminalCommandKind.Select, 2, false)]
     [InlineData("termclose", TerminalCommandKind.Close, null, false)]
+    [InlineData("termclose!", TerminalCommandKind.Close, null, true)]
     [InlineData("termclose 3", TerminalCommandKind.Close, 3, false)]
     [InlineData("termclose! 4", TerminalCommandKind.Close, 4, true)]
     public void TerminalManagementCommands_ProduceTerminalCommandRequestedEvent(
@@ -131,8 +137,11 @@ public class ExCommandProcessorTests
     [Theory]
     [InlineData("termselect")]
     [InlineData("termselect 0")]
+    [InlineData("termselect +1")]
+    [InlineData("termselect 1.5")]
     [InlineData("termselect abc")]
     [InlineData("termclose abc")]
+    [InlineData("termclose! +1")]
     public void TerminalManagementCommands_RejectInvalidTerminalNumbers(string command)
     {
         var (processor, _) = CreateProcessor();

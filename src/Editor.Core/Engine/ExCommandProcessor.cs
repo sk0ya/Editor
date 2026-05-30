@@ -154,6 +154,9 @@ public class ExCommandProcessor
     private static bool TryParseTerminalNumber(string text, out int terminalNumber)
     {
         terminalNumber = 0;
+        if (string.IsNullOrEmpty(text) || text.Any(ch => ch < '0' || ch > '9'))
+            return false;
+
         return int.TryParse(text, out terminalNumber) && terminalNumber > 0;
     }
 

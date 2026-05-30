@@ -1390,7 +1390,7 @@ public partial class MainWindow : Window
             _currentTerminalIndex = -1;
             UpdateTerminalSelector();
             CollapseTerminalPanel();
-            await session.Pane.CloseAsync();
+            await CloseTerminalPaneAsync(session);
             _focusedEditor?.Focus();
             return;
         }
@@ -1402,7 +1402,20 @@ public partial class MainWindow : Window
 
         UpdateTerminalSelector();
         SelectTerminal(_currentTerminalIndex);
-        await session.Pane.CloseAsync();
+        await CloseTerminalPaneAsync(session);
+    }
+
+    private async Task CloseTerminalPaneAsync(TerminalSession session, bool showErrors = true)
+    {
+        try
+        {
+            await session.Pane.CloseAsync();
+        }
+        catch (Exception ex)
+        {
+            if (showErrors)
+                _focusedEditor?.ShowStatusMessage($"Failed to close terminal #{session.Id}: {ex.Message}");
+        }
     }
 
     private void CollapseTerminalPanel()
@@ -3980,7 +3993,7 @@ public partial class MainWindow : Window
         foreach (var session in _terminalSessions)
         {
             session.Pane.EditorFocusRequested -= Terminal_EditorFocusRequested;
-            _ = session.Pane.CloseAsync();
+            _ = CloseTerminalPaneAsync(session, showErrors: false);
         }
         _terminalSessions.Clear();
 
