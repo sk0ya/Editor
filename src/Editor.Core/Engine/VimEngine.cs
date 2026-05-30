@@ -112,7 +112,7 @@ public class VimEngine
         _syntaxEngine = new SyntaxEngine();
         _commandParser = new CommandParser();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
-            _config.NormalMaps, _config.InsertMaps, _config.VisualMaps);
+            _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -2307,11 +2307,26 @@ public class VimEngine
         return cmd.StartsWith("set ", StringComparison.OrdinalIgnoreCase) ||
             cmd.StartsWith("colorscheme ", StringComparison.OrdinalIgnoreCase) ||
             cmd.StartsWith("syntax ", StringComparison.OrdinalIgnoreCase) ||
+            IsMapLeaderLetCommand(cmd) ||
             cmd.StartsWith("augroup", StringComparison.OrdinalIgnoreCase) ||
             cmd.StartsWith("autocmd", StringComparison.OrdinalIgnoreCase) ||
             cmd.Equals("au", StringComparison.OrdinalIgnoreCase) ||
             cmd.StartsWith("au ", StringComparison.OrdinalIgnoreCase) ||
             IsMapCommand(cmd);
+    }
+
+    private static bool IsMapLeaderLetCommand(string cmd)
+    {
+        if (!cmd.StartsWith("let ", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var rest = cmd[3..].Trim();
+        var eqIdx = rest.IndexOf('=');
+        if (eqIdx < 0)
+            return rest.Equals("mapleader", StringComparison.OrdinalIgnoreCase);
+
+        var name = rest[..eqIdx].Trim();
+        return name.Equals("mapleader", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsMapCommand(string cmd) =>

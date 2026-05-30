@@ -1,3 +1,4 @@
+using Editor.Core.Engine;
 using Editor.Core.Snippets;
 
 namespace Editor.Core.Config;
@@ -9,6 +10,7 @@ public class VimConfig
     public Dictionary<string, string> InsertMaps { get; } = [];
     public Dictionary<string, string> VisualMaps { get; } = [];
     public Dictionary<string, string> Abbreviations { get; } = [];
+    public Dictionary<string, string> Variables { get; } = new(StringComparer.OrdinalIgnoreCase);
     public SnippetManager Snippets { get; } = new();
     public VimAutocmdRegistry Autocmds { get; } = new();
 
@@ -79,9 +81,18 @@ public class VimConfig
         }
 
         // let mapleader = "..." or let mapleader = '\<Space>'
-        if (cmd.StartsWith("let mapleader", StringComparison.OrdinalIgnoreCase))
+        if (IsMapLeaderLetCommand(cmd))
         {
             Leader = ParseLeader(cmd);
+            Variables["mapleader"] = Leader;
+            return null;
+        }
+
+        if (TryParseLetAssignment(cmd, out var varName, out var varValue, out var letError))
+        {
+            if (letError != null) return letError;
+            if (varName != null && varValue != null)
+                Variables[varName] = varValue;
             return null;
         }
 
@@ -371,6 +382,77 @@ public class VimConfig
             _ when val.Length == 1   => val,
             _ => "\\"
         };
+    }
+
+    private static bool TryParseLetAssignment(string cmd, out string? name, out string? value, out string? error)
+    {
+        name = null;
+        value = null;
+        error = null;
+
+        if (!cmd.StartsWith("let ", StringComparison.OrdinalIgnoreCase) && cmd != "let")
+            return false;
+
+        var rest = cmd.Length > 3 ? cmd[3..].Trim() : "";
+        if (rest.Length == 0)
+            return true;
+
+        var eqIdx = rest.IndexOf('=');
+        if (eqIdx < 0)
+        {
+            error = "E121: Undefined variable: " + rest;
+            return true;
+        }
+
+        name = rest[..eqIdx].Trim();
+        var expr = rest[(eqIdx + 1)..].Trim();
+        if (!IsValidVariableName(name))
+        {
+            error = "E461: Illegal variable name: " + name;
+            return true;
+        }
+
+        value = EvalLetExpression(expr);
+        return true;
+    }
+
+    private static bool IsMapLeaderLetCommand(string cmd)
+    {
+        if (!cmd.StartsWith("let ", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var rest = cmd[3..].Trim();
+        var eqIdx = rest.IndexOf('=');
+        if (eqIdx < 0)
+            return rest.Equals("mapleader", StringComparison.OrdinalIgnoreCase);
+
+        var name = rest[..eqIdx].Trim();
+        return name.Equals("mapleader", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsValidVariableName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        var bare = name.Length > 2 && name[1] == ':' ? name[2..] : name;
+        if (bare.Length == 0 || !(char.IsLetter(bare[0]) || bare[0] == '_')) return false;
+        return bare.All(ch => char.IsLetterOrDigit(ch) || ch == '_');
+    }
+
+    private static string StripQuotes(string s) =>
+        s.Length >= 2 && ((s[0] == '"' && s[^1] == '"') || (s[0] == '\'' && s[^1] == '\''))
+            ? s[1..^1]
+            : s;
+
+    private static string EvalLetExpression(string expr)
+    {
+        expr = expr.Trim();
+
+        if (expr.Length >= 2 &&
+            ((expr[0] == '"' && expr[^1] == '"') ||
+             (expr[0] == '\'' && expr[^1] == '\'')))
+            return StripQuotes(expr);
+
+        return ExpressionEvaluator.Evaluate(expr) ?? expr;
     }
 
     private static readonly string[] AbbrevPrefixes =

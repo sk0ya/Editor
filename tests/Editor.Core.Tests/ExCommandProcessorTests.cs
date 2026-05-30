@@ -555,6 +555,44 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void Let_AssignsVariableForEcho()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var set = processor.Execute("let greeting = \"hello world\"", CursorPosition.Zero);
+        var echo = processor.Execute("echo greeting", CursorPosition.Zero);
+
+        Assert.True(set.Success);
+        Assert.True(echo.Success);
+        Assert.Equal("hello world", echo.Message);
+    }
+
+    [Fact]
+    public void Let_EvaluatesArithmeticExpression()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var set = processor.Execute("let answer = 40 + 2", CursorPosition.Zero);
+        var echo = processor.Execute("echo answer", CursorPosition.Zero);
+
+        Assert.True(set.Success);
+        Assert.True(echo.Success);
+        Assert.Equal("42", echo.Message);
+    }
+
+    [Fact]
+    public void Let_ListShowsAssignedVariables()
+    {
+        var (processor, _) = CreateProcessor();
+        processor.Execute("let g:name = 'editor'", CursorPosition.Zero);
+
+        var result = processor.Execute("let", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Contains("g:name = \"editor\"", result.Message);
+    }
+
+    [Fact]
     public void Echo_ExpandPercent_ReturnsFilePath()
     {
         var (processor, buffers) = CreateProcessor();

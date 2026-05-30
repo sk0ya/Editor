@@ -899,6 +899,58 @@ public class VimEngineTests
         var cfg = new VimConfig();
         cfg.ParseLines(["let mapleader=\"\\<Space>\""]);
         Assert.Equal(" ", cfg.Leader);
+        Assert.Equal(" ", cfg.Variables["mapleader"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseLet_AssignsVariable()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["let g:theme_name = 'dracula'"]);
+
+        Assert.Equal("dracula", cfg.Variables["g:theme_name"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseLet_EvaluatesArithmeticExpression()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["let answer = 40 + 2"]);
+
+        Assert.Equal("42", cfg.Variables["answer"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseLet_MapleaderPrefixVariable_DoesNotChangeLeader()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines(["let mapleader_backup = ','"]);
+
+        Assert.Equal(",", cfg.Variables["mapleader_backup"]);
+        Assert.Equal("\\", cfg.Leader);
+    }
+
+    [Fact]
+    public void ExLet_AssignsVariableThroughEngine()
+    {
+        var engine = CreateEngine();
+
+        ExCommand(engine, "let answer = 40 + 2");
+        ExCommand(engine, "echo answer");
+
+        Assert.Equal("42", engine.StatusMessage);
+    }
+
+    [Fact]
+    public void ExLet_MapleaderPrefixVariable_DoesNotChangeLeader()
+    {
+        var engine = CreateEngine();
+
+        ExCommand(engine, "let mapleader_backup = ','");
+        ExCommand(engine, "echo mapleader_backup");
+
+        Assert.Equal(",", engine.StatusMessage);
+        Assert.Equal("\\", engine.Config.Leader);
     }
 
     [Fact]

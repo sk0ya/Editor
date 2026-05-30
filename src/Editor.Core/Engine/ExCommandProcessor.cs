@@ -22,6 +22,7 @@ public class ExCommandProcessor
     private readonly Dictionary<string, string> _normalMaps;
     private readonly Dictionary<string, string> _insertMaps;
     private readonly Dictionary<string, string> _visualMaps;
+    private readonly Dictionary<string, string> _variables;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
     private readonly List<string> _searchHistory = [];
@@ -31,7 +32,7 @@ public class ExCommandProcessor
     public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager,
         Dictionary<string, string>? abbreviations = null, RegisterManager? registerManager = null,
         Dictionary<string, string>? normalMaps = null, Dictionary<string, string>? insertMaps = null,
-        Dictionary<string, string>? visualMaps = null)
+        Dictionary<string, string>? visualMaps = null, Dictionary<string, string>? variables = null)
     {
         _bufferManager = bufferManager;
         _options = options;
@@ -41,6 +42,7 @@ public class ExCommandProcessor
         _normalMaps = normalMaps ?? [];
         _insertMaps = insertMaps ?? [];
         _visualMaps = visualMaps ?? [];
+        _variables = variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     }
 
     public string? LastCommand => _history.Count > 0 ? _history[0] : null;
@@ -654,6 +656,11 @@ public class ExCommandProcessor
                 return new ExResult(false, ex.Message);
             }
         }
+
+        // :let {var} = {expr} — assign a simple Vimscript variable.
+        // :let with no argument lists currently stored variables.
+        if (cmd == "let" || cmd.StartsWith("let "))
+            return ExecuteLet(cmd);
 
         // :echo {expr} / :echomsg {expr} — print message
         if (cmd.StartsWith("echo ") || cmd == "echo" ||
@@ -1357,6 +1364,49 @@ public class ExCommandProcessor
         return result;
     }
 
+    private ExResult ExecuteLet(string cmd)
+    {
+        var rest = cmd.Length > 3 ? cmd[3..].Trim() : "";
+        if (rest.Length == 0)
+        {
+            if (_variables.Count == 0)
+                return new ExResult(true, "(no variables)");
+
+            var lines = _variables
+                .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kv => $"{kv.Key} = {FormatVariableValue(kv.Value)}");
+            return new ExResult(true, string.Join('\n', lines));
+        }
+
+        var eqIdx = rest.IndexOf('=');
+        if (eqIdx < 0)
+        {
+            var name = rest.Trim();
+            return _variables.TryGetValue(name, out var value)
+                ? new ExResult(true, $"{name} = {FormatVariableValue(value)}")
+                : new ExResult(false, $"E121: Undefined variable: {name}");
+        }
+
+        var varName = rest[..eqIdx].Trim();
+        var expr = rest[(eqIdx + 1)..].Trim();
+        if (!IsValidVariableName(varName))
+            return new ExResult(false, $"E461: Illegal variable name: {varName}");
+
+        _variables[varName] = EvalExpr(expr);
+        return new ExResult(true);
+    }
+
+    private static bool IsValidVariableName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        var bare = name.Length > 2 && name[1] == ':' ? name[2..] : name;
+        if (bare.Length == 0 || !(char.IsLetter(bare[0]) || bare[0] == '_')) return false;
+        return bare.All(ch => char.IsLetterOrDigit(ch) || ch == '_');
+    }
+
+    private static string FormatVariableValue(string value) =>
+        int.TryParse(value, out _) ? value : $"\"{value}\"";
+
     private static readonly Regex NumericSortRegex = new(@"-?\d+", RegexOptions.Compiled);
 
     private ExResult ExecuteSort(string cmd, string range, CursorPosition cursor)
@@ -1554,6 +1604,7 @@ public class ExCommandProcessor
         "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",
         "map",
         "unmap", "nunmap", "iunmap", "vunmap",
+        "let",
         "history", "his",
         "preview", "mdpreview",
         "terminal", "term",
@@ -1737,11 +1788,29 @@ public class ExCommandProcessor
         if (expr.StartsWith("strftime(", StringComparison.Ordinal))
             return EvalStrftime(expr);
 
+        if (TryGetVariable(expr, out var variableValue))
+            return variableValue;
+
+        if (ExpressionEvaluator.Evaluate(expr) is { } arithmeticValue)
+            return arithmeticValue;
+
         // Numeric literal
         if (int.TryParse(expr, out var n)) return n.ToString();
 
         // Bare word / unrecognised — return as-is
         return expr;
+    }
+
+    private bool TryGetVariable(string expr, out string value)
+    {
+        if (_variables.TryGetValue(expr, out value!))
+            return true;
+
+        if (!expr.Contains(':') && _variables.TryGetValue("g:" + expr, out value!))
+            return true;
+
+        value = "";
+        return false;
     }
 
     private string EvalExpand(string expr)
