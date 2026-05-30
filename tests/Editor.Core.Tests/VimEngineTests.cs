@@ -1271,6 +1271,98 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VimConfig_ParseFor_AcceptsFlexibleWhitespaceAroundIn()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "for\titem\tIN\t[1, 2]",
+            "  let g:last = item",
+            "endfor",
+        ]);
+
+        Assert.Equal("2", cfg.Variables["g:last"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_HandlesListStringPunctuation()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "for item in ['a \" b,c[0]']",
+            "  let g:last = item",
+            "endfor",
+        ]);
+
+        Assert.Equal("a \" b,c[0]", cfg.Variables["g:last"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_HandlesEscapedDoubleQuoteInListString()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "for item in [\"a \\\" b,c[0]\"]",
+            "  let g:last = item",
+            "endfor",
+        ]);
+
+        Assert.Equal("a \\\" b,c[0]", cfg.Variables["g:last"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_SkipsMalformedListString()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "for item in [\"a\"b\"]",
+            "  let g:bad = item",
+            "endfor",
+            "let g:after = 1",
+        ]);
+
+        Assert.False(cfg.Variables.ContainsKey("g:bad"));
+        Assert.Equal("1", cfg.Variables["g:after"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_LimitsListItems()
+    {
+        var cfg = new VimConfig();
+        var list = string.Join(", ", Enumerable.Range(1, 1001));
+
+        cfg.ParseLines([
+            $"for item in [{list}]",
+            "  let g:last = item",
+            "endfor",
+        ]);
+
+        Assert.Equal("1000", cfg.Variables["g:last"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFor_LimitsNestedIterations()
+    {
+        var cfg = new VimConfig();
+        var list = string.Join(", ", Enumerable.Range(1, 101));
+
+        cfg.ParseLines([
+            $"for outer in [{list}]",
+            $"  for inner in [{list}]",
+            "    let g:last_outer = outer",
+            "    let g:last_inner = inner",
+            "  endfor",
+            "endfor",
+        ]);
+
+        Assert.Equal("99", cfg.Variables["g:last_outer"]);
+        Assert.Equal("3", cfg.Variables["g:last_inner"]);
+    }
+
+    [Fact]
     public void VimConfig_ParseFor_SupportsNestedLoops()
     {
         var cfg = new VimConfig();

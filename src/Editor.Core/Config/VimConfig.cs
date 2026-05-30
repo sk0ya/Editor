@@ -222,17 +222,69 @@ public class VimConfig
 
         // Remove inline comments: only strip " when preceded by whitespace
         // (avoids cutting strings like let mapleader="\<Space>")
-        var commentIdx = -1;
-        for (int i = 1; i < line.Length; i++)
+        char quote = '\0';
+        var escaped = false;
+        for (var i = 0; i < line.Length; i++)
         {
-            if (line[i] == '"' && char.IsWhiteSpace(line[i - 1]))
+            var ch = line[i];
+
+            if (quote != '\0')
             {
-                commentIdx = i;
-                break;
+                if (quote == '"' && escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (quote == '"' && ch == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (quote == '\'' && ch == '\'' && i + 1 < line.Length && line[i + 1] == '\'')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                if (IsInlineCommentQuote(line, i))
+                    return line[..i].Trim();
+
+                quote = ch;
             }
         }
 
-        return commentIdx > 0 ? line[..commentIdx].Trim() : line;
+        return line;
+    }
+
+    private static bool IsInlineCommentQuote(string line, int quoteIndex)
+    {
+        if (quoteIndex == 0 || !char.IsWhiteSpace(line[quoteIndex - 1]))
+            return false;
+
+        var previous = quoteIndex - 1;
+        while (previous >= 0 && char.IsWhiteSpace(line[previous]))
+            previous--;
+
+        if (previous < 0)
+            return true;
+
+        return line[previous] is not ('=' or '[' or '(' or ',');
     }
 
     private static bool TryParseIfCommand(string line, out string expression)
@@ -413,13 +465,34 @@ public class VimConfig
             (line.Length > 3 && !char.IsWhiteSpace(line[3])))
             return false;
 
-        var rest = line.Length > 3 ? line[3..].Trim() : "";
-        var parts = rest.Split([" in "], 2, StringSplitOptions.None);
-        if (parts.Length != 2)
+        var rest = line.Length > 3 ? line[3..].TrimStart() : "";
+        var variableEnd = 0;
+        while (variableEnd < rest.Length && !char.IsWhiteSpace(rest[variableEnd]))
+            variableEnd++;
+
+        if (variableEnd == 0)
             return false;
 
-        variableName = parts[0].Trim();
-        listExpression = parts[1].Trim();
+        var inStart = variableEnd;
+        while (inStart < rest.Length && char.IsWhiteSpace(rest[inStart]))
+            inStart++;
+
+        if (inStart + 2 > rest.Length ||
+            !rest.AsSpan(inStart, 2).Equals("in", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var expressionStart = inStart + 2;
+        if (expressionStart < rest.Length && !char.IsWhiteSpace(rest[expressionStart]))
+            return false;
+
+        while (expressionStart < rest.Length && char.IsWhiteSpace(rest[expressionStart]))
+            expressionStart++;
+
+        if (expressionStart >= rest.Length)
+            return false;
+
+        variableName = rest[..variableEnd].Trim();
+        listExpression = rest[expressionStart..].Trim();
         return true;
     }
 
@@ -434,7 +507,10 @@ public class VimConfig
         if (content.Length == 0)
             return true;
 
-        foreach (var rawItem in SplitListItems(content))
+        if (!TrySplitListItems(content, out var rawItems))
+            return false;
+
+        foreach (var rawItem in rawItems)
         {
             var item = rawItem.Trim();
             if (item.Length == 0)
@@ -444,7 +520,8 @@ public class VimConfig
                 ((item[0] == '"' && item[^1] == '"') ||
                  (item[0] == '\'' && item[^1] == '\'')))
             {
-                items.Add(StripQuotes(item));
+                if (items.Count < MaxForListItems)
+                    items.Add(StripQuotes(item));
                 continue;
             }
 
@@ -452,22 +529,43 @@ public class VimConfig
             if (evaluated == null)
                 return false;
 
-            items.Add(evaluated);
+            if (items.Count < MaxForListItems)
+                items.Add(evaluated);
         }
 
         return true;
     }
 
-    private static IEnumerable<string> SplitListItems(string content)
+    private static bool TrySplitListItems(string content, out List<string> items)
     {
+        items = [];
         var start = 0;
         char quote = '\0';
+        var escaped = false;
 
         for (var index = 0; index < content.Length; index++)
         {
             var ch = content[index];
             if (quote != '\0')
             {
+                if (quote == '"' && escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (quote == '"' && ch == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (quote == '\'' && ch == '\'' && index + 1 < content.Length && content[index + 1] == '\'')
+                {
+                    index++;
+                    continue;
+                }
+
                 if (ch == quote)
                     quote = '\0';
                 continue;
@@ -479,14 +577,21 @@ public class VimConfig
                 continue;
             }
 
+            if (ch is '[' or ']')
+                return false;
+
             if (ch == ',')
             {
-                yield return content[start..index];
+                items.Add(content[start..index]);
                 start = index + 1;
             }
         }
 
-        yield return content[start..];
+        if (quote != '\0' || escaped)
+            return false;
+
+        items.Add(content[start..]);
+        return true;
     }
 
     private static IEnumerable<string> GetModelineCandidateLines(TextBuffer text)

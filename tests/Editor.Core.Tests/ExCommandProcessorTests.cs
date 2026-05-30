@@ -1021,6 +1021,19 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void For_InteractiveErrorDoesNotAffectNextCommand()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var forResult = processor.Execute("for item in [1, 2, 3]", CursorPosition.Zero);
+        var echoResult = processor.Execute("echo after", CursorPosition.Zero);
+
+        Assert.False(forResult.Success);
+        Assert.True(echoResult.Success);
+        Assert.Equal("after", echoResult.Message);
+    }
+
+    [Fact]
     public void Endfor_InteractiveCommandReturnsWithoutForError()
     {
         var (processor, _) = CreateProcessor();
