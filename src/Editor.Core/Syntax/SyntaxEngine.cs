@@ -74,6 +74,7 @@ public class SyntaxEngine
     {
         if (_currentLanguage == null || lines.Length == 0) return [];
         if (lines.Length <= LargeFileLineThreshold) return Tokenize(lines);
+        if (RequiresFullDocumentContext(_currentLanguage)) return Tokenize(lines);
 
         firstLine = Math.Clamp(firstLine, 0, lines.Length - 1);
         lastLine = Math.Clamp(lastLine, firstLine, lines.Length - 1);
@@ -111,6 +112,22 @@ public class SyntaxEngine
     }
 
     public string? GetCommentPrefix() => _currentLanguage?.LineCommentPrefix;
+
+    private static bool RequiresFullDocumentContext(ISyntaxLanguage language) =>
+        language.Name is "C#"
+            or "Python"
+            or "XML"
+            or "Markdown"
+            or "JavaScript"
+            or "TypeScript"
+            or "Rust"
+            or "CSS"
+            or "SQL"
+            or "C++"
+            or "Go"
+            or "PowerShell"
+            or "Shell"
+            or "TOML";
 
     public void Invalidate()
     {

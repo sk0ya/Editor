@@ -45,6 +45,7 @@ public class TextBuffer
     // Insert text at position
     public void InsertText(int line, int col, string text)
     {
+        if (string.IsNullOrEmpty(text)) return;
         EnsureLine(line);
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
@@ -70,7 +71,7 @@ public class TextBuffer
     // Delete character at position
     public void DeleteChar(int line, int col)
     {
-        EnsureLine(line);
+        if (line < 0 || line >= _lines.Count) return;
         var s = _lines[line];
         if (col < 0 || col >= s.Length) return;
         _lines[line] = s.Remove(col, 1);
@@ -80,10 +81,11 @@ public class TextBuffer
     // Delete from col to end of line range [col, endCol)
     public void DeleteRange(int line, int startCol, int endCol)
     {
-        EnsureLine(line);
+        if (line < 0 || line >= _lines.Count) return;
         var s = _lines[line];
         startCol = Math.Clamp(startCol, 0, s.Length);
         endCol = Math.Clamp(endCol, startCol, s.Length);
+        if (startCol == endCol) return;
         _lines[line] = s[..startCol] + s[endCol..];
         MarkModified();
     }
@@ -91,7 +93,7 @@ public class TextBuffer
     // Join line with next line
     public void JoinLines(int line)
     {
-        if (line >= _lines.Count - 1) return;
+        if (line < 0 || line >= _lines.Count - 1) return;
         _lines[line] = _lines[line] + _lines[line + 1];
         _lines.RemoveAt(line + 1);
         MarkModified();
@@ -110,8 +112,10 @@ public class TextBuffer
     // Insert lines at position
     public void InsertLines(int afterLine, IEnumerable<string> lines)
     {
+        var newLines = lines.ToArray();
+        if (newLines.Length == 0) return;
         afterLine = Math.Clamp(afterLine + 1, 0, _lines.Count);
-        _lines.InsertRange(afterLine, lines);
+        _lines.InsertRange(afterLine, newLines);
         MarkModified();
     }
 
@@ -125,7 +129,8 @@ public class TextBuffer
     // Replace line content
     public void ReplaceLine(int line, string text)
     {
-        EnsureLine(line);
+        var expanded = EnsureLine(line);
+        if (!expanded && _lines[line] == text) return;
         _lines[line] = text;
         MarkModified();
     }
@@ -226,10 +231,12 @@ public class TextBuffer
 
     public void MarkSaved() => _modified = false;
 
-    private void EnsureLine(int line)
+    private bool EnsureLine(int line)
     {
+        var originalCount = _lines.Count;
         while (_lines.Count <= line)
             _lines.Add("");
+        return _lines.Count != originalCount;
     }
 
     private void MarkModified()

@@ -94,5 +94,27 @@ public class TextBufferTests
 
         buf.MarkSaved();
         Assert.Equal(editedVersion, buf.Version);
+
+        buf.InsertText(0, 0, "");
+        buf.DeleteChar(99, 0);
+        buf.DeleteRange(0, 1, 1);
+        buf.ReplaceLine(0, "abc!");
+        Assert.Equal(editedVersion, buf.Version);
+    }
+
+    [Fact]
+    public void Version_ChangesForLoadAndSnapshotRestore()
+    {
+        var buf = new TextBuffer("abc");
+        var initialVersion = buf.Version;
+
+        buf.SetText("abc");
+        Assert.True(buf.Version > initialVersion);
+
+        var loadedVersion = buf.Version;
+        buf.RestoreSnapshot(["xyz"]);
+
+        Assert.True(buf.Version > loadedVersion);
+        Assert.Equal("xyz", buf.GetLine(0));
     }
 }

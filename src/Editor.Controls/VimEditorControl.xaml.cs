@@ -355,7 +355,11 @@ public partial class VimEditorControl : UserControl
             UpdateViewportDecorations();
             ViewportScrolled?.Invoke(this, EventArgs.Empty);
         };
-        Canvas.SizeChanged += (_, _) => SyncViewportState();
+        Canvas.SizeChanged += (_, _) =>
+        {
+            SyncViewportState();
+            UpdateViewportDecorations();
+        };
 
         ApplyTheme();
     }
@@ -1259,6 +1263,7 @@ public partial class VimEditorControl : UserControl
         StatusBar.Theme = _theme;
         if (_sharedStatusBar != null) _sharedStatusBar.Theme = _theme;
         Background = _theme.Background;
+        Canvas.InvalidateVisual();
     }
 
     // ─────────────── Shared status bar ───────────────
@@ -3164,6 +3169,7 @@ public partial class VimEditorControl : UserControl
         Canvas.SetColorPreview(_engine.Options.ColorPreview);
 
         UpdateViewportDecorations();
+        UpdateSearchHighlights(_engine.SearchPattern);
 
         SyncStatusBar();
     }
