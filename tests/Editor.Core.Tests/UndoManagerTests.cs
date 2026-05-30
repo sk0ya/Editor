@@ -109,6 +109,36 @@ public class UndoManagerTests
     }
 
     [Fact]
+    public void EarlierAndLater_ByCount_StopAtBoundaries()
+    {
+        var undo = new UndoManager();
+        var buffer = new TextBuffer("one");
+
+        undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+
+        var earlier = undo.Earlier(buffer, new CursorPosition(0, 13), 99);
+
+        Assert.Equal(2, earlier.Count);
+        Assert.Equal("one", buffer.GetText());
+
+        var tooEarly = undo.Earlier(buffer, CursorPosition.Zero, 1);
+        Assert.Equal(0, tooEarly.Count);
+        Assert.Equal("one", buffer.GetText());
+
+        var later = undo.Later(buffer, CursorPosition.Zero, 99);
+
+        Assert.Equal(2, later.Count);
+        Assert.Equal("one two three", buffer.GetText());
+
+        var tooLate = undo.Later(buffer, new CursorPosition(0, 13), 1);
+        Assert.Equal(0, tooLate.Count);
+        Assert.Equal("one two three", buffer.GetText());
+    }
+
+    [Fact]
     public void EarlierAndLater_ByTime_UseSnapshotTimestamps()
     {
         var timestamps = new Queue<DateTimeOffset>(
@@ -139,6 +169,29 @@ public class UndoManagerTests
         var later = undo.Later(buffer, new CursorPosition(0, 13), TimeSpan.FromMinutes(2));
         Assert.Equal(1, later.Count);
         Assert.Equal("one two three four", buffer.GetText());
+    }
+
+    [Fact]
+    public void SnapshotAfterEarlier_ClearsRedoAndKeepsChangeNumbersMonotonic()
+    {
+        var nextSecond = 0;
+        var undo = new UndoManager(() => new DateTimeOffset(2026, 5, 30, 12, 0, ++nextSecond, TimeSpan.Zero));
+        var buffer = new TextBuffer("one");
+
+        undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+
+        undo.Earlier(buffer, new CursorPosition(0, 13), 1);
+        undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " changed");
+
+        Assert.False(undo.CanRedo);
+        AssertHistory(
+            undo.GetHistory(),
+            (1, "done"),
+            (3, "current"));
     }
 
     private static void AssertHistory(IReadOnlyList<UndoHistoryEntry> actual, params (int Number, string State)[] expected)

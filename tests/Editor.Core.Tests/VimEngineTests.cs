@@ -1253,6 +1253,52 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void EarlierExCommand_NewEditClearsRedoHistory()
+    {
+        var engine = CreateEngine("one");
+        var buffer = engine.CurrentBuffer.Text;
+
+        engine.CurrentBuffer.Undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        engine.CurrentBuffer.Undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+        engine.SetCursorPosition(new CursorPosition(0, 13));
+
+        ExCmd(engine, "earlier 1");
+        engine.ProcessKey("A");
+        foreach (var ch in " changed")
+            engine.ProcessKey(ch.ToString());
+        engine.ProcessKey("Escape");
+
+        Assert.Equal("one two changed", buffer.GetText());
+
+        engine.ProcessKey("r", ctrl: true);
+        Assert.Equal("one two changed", buffer.GetText());
+
+        var events = ExCmd(engine, "undolist");
+        Assert.Contains(events, e => e is StatusMessageEvent { Message: var message } &&
+            message.Contains("current") && !message.Contains("redo"));
+    }
+
+    [Fact]
+    public void EarlierExCommand_ClearsFoldsAndEmitsFoldChange()
+    {
+        var engine = CreateEngine("one\ntwo\nthree");
+        var buffer = engine.CurrentBuffer.Text;
+
+        engine.CurrentBuffer.Undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertLines(2, ["four"]);
+        engine.CurrentBuffer.Folds.CreateFold(0, 2);
+        Assert.NotEmpty(engine.CurrentBuffer.Folds.Folds);
+
+        var events = ExCmd(engine, "earlier 1");
+
+        Assert.Equal("one\ntwo\nthree", buffer.GetText());
+        Assert.Empty(engine.CurrentBuffer.Folds.Folds);
+        Assert.Contains(events, e => e.Type == VimEventType.FoldsChanged);
+    }
+
+    [Fact]
     public void SetRelativeNumber_SetsFlag()
     {
         var engine = CreateEngine("a\nb\nc");
