@@ -17,6 +17,11 @@ public class ExCommandProcessorTests
         return (new ExCommandProcessor(buffers, new VimOptions(), new MarkManager()), buffers);
     }
 
+    private static ExCommandProcessor CreateProcessorWithScriptNames(IReadOnlyList<string> scriptNames)
+    {
+        return new ExCommandProcessor(new BufferManager(), new VimOptions(), new MarkManager(), scriptNames: scriptNames);
+    }
+
     private static (ExCommandProcessor Processor, BufferManager Buffers, RegisterManager Registers) CreateProcessorWithRegisters()
     {
         var buffers = new BufferManager();
@@ -79,6 +84,30 @@ public class ExCommandProcessorTests
         Assert.True(result.Success);
         var evt = Assert.IsType<NewTabRequestedEvent>(result.Event);
         Assert.Equal("notes.txt", evt.FilePath);
+    }
+
+    [Fact]
+    public void Scriptnames_ListsLoadedScriptsInOrder()
+    {
+        var processor = CreateProcessorWithScriptNames(["C:\\vim\\vimrc", "C:\\vim\\plugin.vim"]);
+
+        var result = processor.Execute("scriptnames", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("1: C:\\vim\\vimrc", result.Message);
+        Assert.Contains("2: C:\\vim\\plugin.vim", result.Message);
+    }
+
+    [Fact]
+    public void Scriptnames_WithNoScripts_ReturnsEmptyMessage()
+    {
+        var processor = CreateProcessorWithScriptNames([]);
+
+        var result = processor.Execute("scriptnames", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("(no scripts sourced)", result.Message);
     }
 
     [Theory]

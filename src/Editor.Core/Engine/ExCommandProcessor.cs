@@ -23,6 +23,7 @@ public class ExCommandProcessor
     private readonly Dictionary<string, string> _insertMaps;
     private readonly Dictionary<string, string> _visualMaps;
     private readonly Dictionary<string, string> _variables;
+    private readonly IReadOnlyList<string> _scriptNames;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
     private readonly List<string> _searchHistory = [];
@@ -32,7 +33,8 @@ public class ExCommandProcessor
     public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager,
         Dictionary<string, string>? abbreviations = null, RegisterManager? registerManager = null,
         Dictionary<string, string>? normalMaps = null, Dictionary<string, string>? insertMaps = null,
-        Dictionary<string, string>? visualMaps = null, Dictionary<string, string>? variables = null)
+        Dictionary<string, string>? visualMaps = null, Dictionary<string, string>? variables = null,
+        IReadOnlyList<string>? scriptNames = null)
     {
         _bufferManager = bufferManager;
         _options = options;
@@ -43,6 +45,7 @@ public class ExCommandProcessor
         _insertMaps = insertMaps ?? [];
         _visualMaps = visualMaps ?? [];
         _variables = variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _scriptNames = scriptNames ?? [];
     }
 
     public string? LastCommand => _history.Count > 0 ? _history[0] : null;
@@ -538,6 +541,10 @@ public class ExCommandProcessor
             if (rest.Length == 0) return new ExResult(false, "E476: Invalid command");
             return new ExResult(true, null, VimEvent.SourceRequested(rest));
         }
+
+        // :scriptnames — list sourced vim scripts in load order
+        if (cmd == "scriptnames" || cmd == "script")
+            return new ExResult(true, FormatScriptNames());
 
         // :changes
         if (cmd == "changes")
@@ -1609,6 +1616,7 @@ public class ExCommandProcessor
         "preview", "mdpreview",
         "terminal", "term",
         "mksession", "source",
+        "scriptnames", "script",
         "retab",
     ];
 
@@ -1760,6 +1768,14 @@ public class ExCommandProcessor
         {
             return [];
         }
+    }
+
+    private string FormatScriptNames()
+    {
+        if (_scriptNames.Count == 0)
+            return "(no scripts sourced)";
+
+        return string.Join('\n', _scriptNames.Select((path, index) => $"{index + 1,3}: {path}"));
     }
 
     private static string MakeRelative(string basePath, string fullPath)

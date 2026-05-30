@@ -19,7 +19,6 @@
 |------|------|-------|
 | `:earlier {N}` / `:later {N}` | 時間・変更回数ベースのアンドゥ | 低 |
 | `:undolist` | アンドゥツリーの表示 | 低 |
-| `:scriptnames` | 読み込まれたスクリプトの一覧 | 低 |
 
 ### Vimscript / 設定
 
@@ -113,6 +112,7 @@
 
 | 機能 | 日付 |
 |------|------|
+| **`:scriptnames`** 読み込んだ vimrc / `:source` ファイルを読み込み順に番号付きで表示 | ✅ 2026-05-30 |
 | **`autocmd` / `augroup` 基本対応** `.vimrc` / `:autocmd` で `BufRead` / `BufReadPost` / `BufEnter` / `FileType` に応じた設定コマンドを登録・実行 | ✅ 2026-05-29 |
 | **`:let {var} = {expr}`** Vimscript 変数への代入、`:let` 一覧、`:echo` / `:execute` からの参照に対応 | ✅ 2026-05-30 |
 | **正規表現の `\v` / `\V` magic モード** `:s` / `:global` / `:sort /pat/` など Ex の正規表現で very magic / very nomagic を解釈 | ✅ 2026-05-29 |

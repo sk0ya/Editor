@@ -13,16 +13,19 @@ public class VimConfig
     public Dictionary<string, string> Variables { get; } = new(StringComparer.OrdinalIgnoreCase);
     public SnippetManager Snippets { get; } = new();
     public VimAutocmdRegistry Autocmds { get; } = new();
+    public IReadOnlyList<string> ScriptNames => _scriptNames.AsReadOnly();
 
     // The mapleader character (default backslash, set by `let mapleader=...`)
     public string Leader { get; private set; } = "\\";
     private string? _currentAugroup;
+    private readonly List<string> _scriptNames = [];
+    private readonly HashSet<string> _activeScriptPaths = new(StringComparer.OrdinalIgnoreCase);
+    private string? _currentScriptDirectory;
 
     public static VimConfig LoadFromFile(string path)
     {
         var cfg = new VimConfig();
-        if (!File.Exists(path)) return cfg;
-        cfg.ParseLines(File.ReadAllLines(path));
+        cfg.ParseFile(path);
         return cfg;
     }
 
@@ -35,14 +38,21 @@ public class VimConfig
         if (!File.Exists(vimrcPath))
             vimrcPath = Path.Combine(home, "init.vim");
 
-        var cfg = LoadFromFile(vimrcPath);
+        var cfg = new VimConfig();
+        cfg.ParseFile(vimrcPath);
 
         // Allow project-local overrides when running from a workspace.
         var localVimrcPath = Path.Combine(Environment.CurrentDirectory, ".vimrc");
         if (File.Exists(localVimrcPath))
-            cfg.ParseLines(File.ReadAllLines(localVimrcPath));
+            cfg.ParseFile(localVimrcPath);
 
         return cfg;
+    }
+
+    public void RecordScript(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        _scriptNames.Add(fullPath);
     }
 
     public void ParseLines(IEnumerable<string> lines)
@@ -158,9 +168,54 @@ public class VimConfig
             Options.Syntax = cmd[7..].Trim().Equals("on", StringComparison.OrdinalIgnoreCase);
             return null;
         }
-        // Silently ignore: source, augroup, autocmd, filetype, scriptencoding, tnoremap, onoremap,
+        if (cmd.StartsWith("source ", StringComparison.OrdinalIgnoreCase) ||
+            cmd.StartsWith("so ", StringComparison.OrdinalIgnoreCase))
+        {
+            var sourcePath = cmd[(cmd.IndexOf(' ') + 1)..].Trim();
+            if (sourcePath.Length > 0)
+            {
+                var resolved = ResolveScriptPath(sourcePath);
+                ParseFile(resolved);
+            }
+            return null;
+        }
+
+        // Silently ignore: augroup, autocmd, filetype, scriptencoding, tnoremap, onoremap,
         // cnoremap, cmap, function, endfunction, if, endif, etc.
         return null;
+    }
+
+    private void ParseFile(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath) || !_activeScriptPaths.Add(fullPath))
+            return;
+
+        RecordScript(fullPath);
+
+        var previousDirectory = _currentScriptDirectory;
+        _currentScriptDirectory = Path.GetDirectoryName(fullPath);
+        try
+        {
+            ParseLines(File.ReadAllLines(fullPath));
+        }
+        finally
+        {
+            _currentScriptDirectory = previousDirectory;
+            _activeScriptPaths.Remove(fullPath);
+        }
+    }
+
+    private string ResolveScriptPath(string path)
+    {
+        path = path.Trim('"', '\'');
+        if (Path.IsPathRooted(path))
+            return path;
+
+        var baseDir = _currentScriptDirectory ?? Environment.CurrentDirectory;
+        return Path.Combine(baseDir, path);
     }
 
     private bool TryParseAugroupCommand(string cmd)

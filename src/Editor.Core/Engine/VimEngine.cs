@@ -112,7 +112,7 @@ public class VimEngine
         _syntaxEngine = new SyntaxEngine();
         _commandParser = new CommandParser();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
-            _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables);
+            _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)

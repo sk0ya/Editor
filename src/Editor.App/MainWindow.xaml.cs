@@ -1571,6 +1571,9 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (sender is VimEditorControl editor)
+            editor.Engine.Config.RecordScript(resolved);
+
         var commands = SessionManager.Load(resolved);
         if (commands == null) return;
 

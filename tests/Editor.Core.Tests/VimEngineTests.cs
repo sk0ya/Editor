@@ -931,6 +931,76 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VimConfig_LoadFromFile_TracksSourceScripts()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "editor-vimconfig-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var main = Path.Combine(dir, "main.vim");
+            var plugin = Path.Combine(dir, "plugin.vim");
+            File.WriteAllText(main, "source plugin.vim\nset number\n");
+            File.WriteAllText(plugin, "let g:plugin_loaded = 1\n");
+
+            var cfg = VimConfig.LoadFromFile(main);
+
+            Assert.Equal([Path.GetFullPath(main), Path.GetFullPath(plugin)], cfg.ScriptNames);
+            Assert.Equal("1", cfg.Variables["g:plugin_loaded"]);
+            Assert.True(cfg.Options.Number);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void VimConfig_LoadFromFile_ReappliesRepeatedSource()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "editor-vimconfig-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var main = Path.Combine(dir, "main.vim");
+            var plugin = Path.Combine(dir, "plugin.vim");
+            File.WriteAllText(main, "source plugin.vim\nlet g:value = 2\nsource plugin.vim\n");
+            File.WriteAllText(plugin, "let g:value = 1\n");
+
+            var cfg = VimConfig.LoadFromFile(main);
+
+            Assert.Equal("1", cfg.Variables["g:value"]);
+            Assert.Equal(
+                [Path.GetFullPath(main), Path.GetFullPath(plugin), Path.GetFullPath(plugin)],
+                cfg.ScriptNames);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void VimConfig_LoadFromFile_SkipsRecursiveSourceCycle()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "editor-vimconfig-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var main = Path.Combine(dir, "main.vim");
+            File.WriteAllText(main, "let g:value = 1\nsource main.vim\nlet g:value = 2\n");
+
+            var cfg = VimConfig.LoadFromFile(main);
+
+            Assert.Equal("2", cfg.Variables["g:value"]);
+            Assert.Equal([Path.GetFullPath(main)], cfg.ScriptNames);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ExLet_AssignsVariableThroughEngine()
     {
         var engine = CreateEngine();
