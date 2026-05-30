@@ -1213,6 +1213,46 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void EarlierExCommand_RestoresTextAndCursor()
+    {
+        var engine = CreateEngine("one");
+        var buffer = engine.CurrentBuffer.Text;
+
+        engine.CurrentBuffer.Undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        engine.CurrentBuffer.Undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+        engine.SetCursorPosition(new CursorPosition(0, 13));
+
+        var events = ExCmd(engine, "earlier 2");
+
+        Assert.Equal("one", buffer.GetText());
+        Assert.Equal(CursorPosition.Zero, engine.Cursor);
+        Assert.Contains(events, e => e.Type == VimEventType.TextChanged);
+        Assert.Contains(events, e => e.Type == VimEventType.CursorMoved);
+    }
+
+    [Fact]
+    public void EarlierExCommand_DoesNotBreakNormalUndoRedo()
+    {
+        var engine = CreateEngine("one");
+        var buffer = engine.CurrentBuffer.Text;
+
+        engine.CurrentBuffer.Undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        engine.CurrentBuffer.Undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+        engine.SetCursorPosition(new CursorPosition(0, 13));
+
+        ExCmd(engine, "earlier 1");
+        engine.ProcessKey("u");
+        Assert.Equal("one", buffer.GetText());
+
+        engine.ProcessKey("r", ctrl: true);
+        Assert.Equal("one two", buffer.GetText());
+    }
+
+    [Fact]
     public void SetRelativeNumber_SetsFlag()
     {
         var engine = CreateEngine("a\nb\nc");

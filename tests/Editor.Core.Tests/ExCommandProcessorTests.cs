@@ -937,6 +937,65 @@ public class ExCommandProcessorTests
         Assert.Matches(@"(?m)^\s+2\s+redo\s+\d{2}:\d{2}:\d{2}\r?$", result.Message);
     }
 
+    [Fact]
+    public void EarlierAndLater_ByCount_RestoreBufferAndReturnCursor()
+    {
+        var (processor, buffers) = CreateProcessor();
+        var buffer = buffers.Current.Text;
+        buffer.SetText("one");
+
+        buffers.Current.Undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        buffers.Current.Undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+
+        var earlier = processor.Execute("earlier 2", new CursorPosition(0, 13));
+
+        Assert.True(earlier.Success);
+        Assert.True(earlier.BufferRestored);
+        Assert.Equal("2 changes undone", earlier.Message);
+        Assert.Equal(CursorPosition.Zero, earlier.RestoredCursor);
+        Assert.Equal("one", buffer.GetText());
+
+        var later = processor.Execute("later 1", CursorPosition.Zero);
+
+        Assert.True(later.Success);
+        Assert.True(later.BufferRestored);
+        Assert.Equal("1 change redone", later.Message);
+        Assert.Equal(new CursorPosition(0, 6), later.RestoredCursor);
+        Assert.Equal("one two", buffer.GetText());
+    }
+
+    [Fact]
+    public void Earlier_WithTimeSuffix_IsAccepted()
+    {
+        var (processor, buffers) = CreateProcessor();
+        var buffer = buffers.Current.Text;
+        buffer.SetText("one");
+
+        buffers.Current.Undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        buffers.Current.Undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+
+        var result = processor.Execute("earlier 1h", new CursorPosition(0, 13));
+
+        Assert.True(result.Success);
+        Assert.True(result.BufferRestored);
+        Assert.Equal("one", buffer.GetText());
+    }
+
+    [Fact]
+    public void Earlier_RequiresPositiveNumber()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("earlier 0", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Equal("Invalid argument", result.Message);
+    }
+
     // ── :registers tests ────────────────────────────────────────────────────
 
     [Fact]

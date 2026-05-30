@@ -4605,7 +4605,14 @@ public class VimEngine
         var result = _exProcessor.Execute(cmdLine, _cursor);
         if (!result.Success) EmitStatus(events, "E: " + result.Message);
         else if (result.Message != null) EmitStatus(events, result.Message);
-        if (result.TextModified) { CurrentBuffer.Undo.Snapshot(preLines, preCursor); EmitText(events); }
+        if (result.BufferRestored)
+        {
+            _cursor = CurrentBuffer.Text.ClampCursor(result.RestoredCursor ?? _cursor);
+            CurrentBuffer.Folds.Clear();
+            EmitText(events);
+            events.Add(VimEvent.FoldsChanged());
+        }
+        else if (result.TextModified) { CurrentBuffer.Undo.Snapshot(preLines, preCursor); EmitText(events); }
         if (result.Event != null) events.Add(result.Event);
     }
 

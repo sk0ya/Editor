@@ -10,7 +10,13 @@ using Editor.Core.Registers;
 
 namespace Editor.Core.Engine;
 
-public record ExResult(bool Success, string? Message = null, VimEvent? Event = null, bool TextModified = false);
+public record ExResult(
+    bool Success,
+    string? Message = null,
+    VimEvent? Event = null,
+    bool TextModified = false,
+    CursorPosition? RestoredCursor = null,
+    bool BufferRestored = false);
 
 public class ExCommandProcessor
 {
@@ -625,6 +631,16 @@ public class ExCommandProcessor
         if (cmd == "undolist")
             return new ExResult(true, _bufferManager.Current.Undo.FormatUndoList());
 
+        // :earlier {N}[s|m|h] / :later {N}[s|m|h]
+        if (cmd == "earlier" || cmd.StartsWith("earlier ") ||
+            cmd == "later"   || cmd.StartsWith("later "))
+        {
+            var space = cmd.IndexOf(' ');
+            var verb = space >= 0 ? cmd[..space] : cmd;
+            var argument = space >= 0 ? cmd[(space + 1)..].Trim() : "";
+            return ExecuteUndoTraversal(verb, argument, cursor);
+        }
+
         // :jumps
         if (cmd == "jumps")
             return new ExResult(true, _markManager.FormatJumpList());
@@ -932,6 +948,62 @@ public class ExCommandProcessor
         }
 
         return new ExResult(false, $"Not supported in :global: {subCmd}");
+    }
+
+    private ExResult ExecuteUndoTraversal(string verb, string argument, CursorPosition cursor)
+    {
+        if (!TryParseUndoTraversalArgument(argument, out var amount, out var unit))
+            return new ExResult(false, string.IsNullOrWhiteSpace(argument) ? "Argument required" : "Invalid argument");
+
+        var vbuf = _bufferManager.Current;
+        UndoTraversalResult result;
+        if (unit == '\0')
+        {
+            result = verb == "earlier"
+                ? vbuf.Undo.Earlier(vbuf.Text, cursor, amount)
+                : vbuf.Undo.Later(vbuf.Text, cursor, amount);
+        }
+        else
+        {
+            var span = unit switch
+            {
+                's' => TimeSpan.FromSeconds(amount),
+                'm' => TimeSpan.FromMinutes(amount),
+                'h' => TimeSpan.FromHours(amount),
+                _ => TimeSpan.Zero
+            };
+            result = verb == "earlier"
+                ? vbuf.Undo.Earlier(vbuf.Text, cursor, span)
+                : vbuf.Undo.Later(vbuf.Text, cursor, span);
+        }
+
+        if (result.Count == 0)
+        {
+            var edge = verb == "earlier" ? "oldest" : "newest";
+            return new ExResult(true, $"Already at {edge} change");
+        }
+
+        var action = verb == "earlier" ? "undone" : "redone";
+        var noun = result.Count == 1 ? "change" : "changes";
+        return new ExResult(
+            true,
+            $"{result.Count} {noun} {action}",
+            RestoredCursor: result.State?.Cursor,
+            BufferRestored: true);
+    }
+
+    private static bool TryParseUndoTraversalArgument(string argument, out int amount, out char unit)
+    {
+        amount = 0;
+        unit = '\0';
+
+        var match = Regex.Match(argument.Trim(), @"^(\d+)([smh]?)$");
+        if (!match.Success) return false;
+        if (!int.TryParse(match.Groups[1].Value, out amount) || amount <= 0) return false;
+
+        var unitText = match.Groups[2].Value;
+        unit = unitText.Length == 0 ? '\0' : unitText[0];
+        return true;
     }
 
     private static Regex? TryBuildRegex(string pattern, bool ignoreCase, out string? error)
@@ -1798,7 +1870,7 @@ public class ExCommandProcessor
         "terms", "termnext", "termprev", "termselect", "termclose", "termclose!",
         "mksession", "source",
         "scriptnames", "script",
-        "undolist",
+        "undolist", "earlier", "later",
         "retab",
     ];
 

@@ -84,6 +84,63 @@ public class UndoManagerTests
             (3, "current"));
     }
 
+    [Fact]
+    public void EarlierAndLater_ByCount_RestoresTextAndCursor()
+    {
+        var undo = new UndoManager();
+        var buffer = new TextBuffer("one");
+
+        undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+
+        var earlier = undo.Earlier(buffer, new CursorPosition(0, 13), 2);
+
+        Assert.Equal(2, earlier.Count);
+        Assert.Equal("one", buffer.GetText());
+        Assert.Equal(CursorPosition.Zero, earlier.State?.Cursor);
+
+        var later = undo.Later(buffer, CursorPosition.Zero, 1);
+
+        Assert.Equal(1, later.Count);
+        Assert.Equal("one two", buffer.GetText());
+        Assert.Equal(new CursorPosition(0, 6), later.State?.Cursor);
+    }
+
+    [Fact]
+    public void EarlierAndLater_ByTime_UseSnapshotTimestamps()
+    {
+        var timestamps = new Queue<DateTimeOffset>(
+        [
+            new DateTimeOffset(2026, 5, 30, 12, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 5, 30, 12, 1, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 5, 30, 12, 3, 0, TimeSpan.Zero),
+        ]);
+        var undo = new UndoManager(() => timestamps.Dequeue());
+        var buffer = new TextBuffer("one");
+
+        undo.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 3, " two");
+        undo.Snapshot(buffer, new CursorPosition(0, 7));
+        buffer.InsertText(0, 7, " three");
+        undo.Snapshot(buffer, new CursorPosition(0, 13));
+        buffer.InsertText(0, 13, " four");
+
+        var earlier = undo.Earlier(buffer, new CursorPosition(0, 18), TimeSpan.FromSeconds(90));
+
+        Assert.Equal(1, earlier.Count);
+        Assert.Equal("one two three", buffer.GetText());
+
+        var shortLater = undo.Later(buffer, new CursorPosition(0, 13), TimeSpan.FromMinutes(1));
+        Assert.Equal(0, shortLater.Count);
+        Assert.Equal("one two three", buffer.GetText());
+
+        var later = undo.Later(buffer, new CursorPosition(0, 13), TimeSpan.FromMinutes(2));
+        Assert.Equal(1, later.Count);
+        Assert.Equal("one two three four", buffer.GetText());
+    }
+
     private static void AssertHistory(IReadOnlyList<UndoHistoryEntry> actual, params (int Number, string State)[] expected)
     {
         Assert.Equal(expected.Length, actual.Count);

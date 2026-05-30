@@ -12,6 +12,7 @@ public record UndoState(string[] Lines, CursorPosition Cursor, int ChangeNumber,
 }
 
 public record UndoHistoryEntry(int Number, string State, DateTimeOffset Timestamp);
+public record UndoTraversalResult(int Count, UndoState? State);
 
 public class UndoManager
 {
@@ -64,6 +65,67 @@ public class UndoManager
         _undoStack.Push(new UndoState(buffer.Snapshot(), currentCursor, state.ChangeNumber, state.Timestamp));
         buffer.RestoreSnapshot(state.Lines);
         return state;
+    }
+
+    public UndoTraversalResult Earlier(TextBuffer buffer, CursorPosition currentCursor, int count)
+    {
+        return MoveEarlier(buffer, currentCursor, () => count-- > 0);
+    }
+
+    public UndoTraversalResult Later(TextBuffer buffer, CursorPosition currentCursor, int count)
+    {
+        return MoveLater(buffer, currentCursor, () => count-- > 0);
+    }
+
+    public UndoTraversalResult Earlier(TextBuffer buffer, CursorPosition currentCursor, TimeSpan age)
+    {
+        if (_undoStack.Count == 0) return new UndoTraversalResult(0, null);
+        var target = _undoStack.Peek().Timestamp - age;
+        return MoveEarlier(buffer, currentCursor, () => _undoStack.Count > 0 && _undoStack.Peek().Timestamp > target);
+    }
+
+    public UndoTraversalResult Later(TextBuffer buffer, CursorPosition currentCursor, TimeSpan age)
+    {
+        if (_redoStack.Count == 0) return new UndoTraversalResult(0, null);
+        var currentTimestamp = _undoStack.Count > 0
+            ? _undoStack.Peek().Timestamp
+            : _redoStack.Peek().Timestamp - TimeSpan.FromTicks(1);
+        var target = currentTimestamp + age;
+        return MoveLater(buffer, currentCursor, () => _redoStack.Count > 0 && _redoStack.Peek().Timestamp <= target);
+    }
+
+    private UndoTraversalResult MoveEarlier(TextBuffer buffer, CursorPosition currentCursor, Func<bool> shouldContinue)
+    {
+        var count = 0;
+        UndoState? last = null;
+        var cursor = currentCursor;
+
+        while (CanUndo && shouldContinue())
+        {
+            last = Undo(buffer, cursor);
+            if (last == null) break;
+            cursor = buffer.ClampCursor(last.Cursor);
+            count++;
+        }
+
+        return new UndoTraversalResult(count, last);
+    }
+
+    private UndoTraversalResult MoveLater(TextBuffer buffer, CursorPosition currentCursor, Func<bool> shouldContinue)
+    {
+        var count = 0;
+        UndoState? last = null;
+        var cursor = currentCursor;
+
+        while (CanRedo && shouldContinue())
+        {
+            last = Redo(buffer, cursor);
+            if (last == null) break;
+            cursor = buffer.ClampCursor(last.Cursor);
+            count++;
+        }
+
+        return new UndoTraversalResult(count, last);
     }
 
     public IReadOnlyList<UndoHistoryEntry> GetHistory()
