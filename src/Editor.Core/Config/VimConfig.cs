@@ -9,6 +9,8 @@ public class VimConfig
     private const int ModelineScanLineCount = 5;
     private const int MaxForListItems = 1000;
     private const int MaxForIterations = 10000;
+    private const int MaxFunctionCallDepth = 20;
+    private const int MaxExecuteDepth = 20;
 
     public VimOptions Options { get; } = new();
     public Dictionary<string, string> NormalMaps { get; } = [];
@@ -16,6 +18,7 @@ public class VimConfig
     public Dictionary<string, string> VisualMaps { get; } = [];
     public Dictionary<string, string> Abbreviations { get; } = [];
     public Dictionary<string, string> Variables { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, VimFunctionDefinition> Functions { get; } = new(StringComparer.OrdinalIgnoreCase);
     public SnippetManager Snippets { get; } = new();
     public VimAutocmdRegistry Autocmds { get; } = new();
     public IReadOnlyList<string> ScriptNames => _scriptNames.AsReadOnly();
@@ -26,6 +29,8 @@ public class VimConfig
     private readonly List<string> _scriptNames = [];
     private readonly HashSet<string> _activeScriptPaths = new(StringComparer.OrdinalIgnoreCase);
     private string? _currentScriptDirectory;
+    private int _functionCallDepth;
+    private int _executeDepth;
 
     public static VimConfig LoadFromFile(string path)
     {
@@ -146,6 +151,39 @@ public class VimConfig
         if (TryParseAutocmdCommand(cmd, out var autocmdError))
             return autocmdError;
 
+        if (TryParseCallCommand(cmd, out var callName, out var callArgs))
+        {
+            var iterationBudget = MaxForIterations;
+            return ExecuteFunctionCall(callName, callArgs, ref iterationBudget);
+        }
+
+        if (TryParseExecuteCommand(cmd, out var executeExpression))
+        {
+            if (_executeDepth >= MaxExecuteDepth)
+                return "E169: Command too recursive";
+
+            var resolved = EvalLetExpression(executeExpression);
+            if (string.IsNullOrWhiteSpace(resolved))
+                return "E471: Argument required";
+
+            _executeDepth++;
+            try { return ParseCommand(resolved); }
+            finally { _executeDepth--; }
+        }
+
+        if (cmd.StartsWith("echo ", StringComparison.OrdinalIgnoreCase) ||
+            cmd.StartsWith("echomsg ", StringComparison.OrdinalIgnoreCase) ||
+            cmd.Equals("echo", StringComparison.OrdinalIgnoreCase) ||
+            cmd.Equals("echomsg", StringComparison.OrdinalIgnoreCase))
+        {
+            // Source-time messages are currently not surfaced by VimConfig, but
+            // evaluating the expression keeps :echo valid inside functions.
+            var space = cmd.IndexOf(' ');
+            if (space >= 0)
+                _ = EvalLetExpression(cmd[(space + 1)..].Trim());
+            return null;
+        }
+
         if (cmd.StartsWith("colorscheme ", StringComparison.OrdinalIgnoreCase))
         {
             Options.ColorScheme = cmd[12..].Trim();
@@ -169,7 +207,7 @@ public class VimConfig
         }
 
         // Silently ignore unsupported Vimscript commands such as filetype,
-        // scriptencoding, tnoremap, onoremap, cnoremap, cmap, function, endfunction.
+        // scriptencoding, tnoremap, onoremap, cnoremap, cmap.
         return null;
     }
 
@@ -326,6 +364,12 @@ public class VimConfig
                 continue;
             }
 
+            if (TryParseFunctionCommand(line, out var functionName, out var parameters))
+            {
+                index = DefineFunctionBlock(lines, index, end, functionName, parameters);
+                continue;
+            }
+
             ParseCommand(line);
             index++;
         }
@@ -383,6 +427,70 @@ public class VimConfig
         }
 
         return endforIndex + 1;
+    }
+
+    private int DefineFunctionBlock(
+        IReadOnlyList<string> lines,
+        int functionIndex,
+        int end,
+        string functionName,
+        IReadOnlyList<string> parameters)
+    {
+        var endfunctionIndex = FindFunctionBlockEnd(lines, functionIndex, end);
+        if (endfunctionIndex < 0)
+            return end;
+
+        if (IsValidFunctionName(functionName) && parameters.All(IsValidArgumentName))
+            Functions[functionName] = new VimFunctionDefinition(
+                functionName,
+                parameters.ToArray(),
+                lines.Skip(functionIndex + 1).Take(endfunctionIndex - functionIndex - 1).ToArray());
+
+        return endfunctionIndex + 1;
+    }
+
+    private string? ExecuteFunctionCall(string functionName, IReadOnlyList<string> argumentExpressions, ref int iterationBudget)
+    {
+        if (!Functions.TryGetValue(functionName, out var function))
+            return "E117: Unknown function: " + functionName;
+
+        if (_functionCallDepth >= MaxFunctionCallDepth)
+            return "E132: Function call depth is higher than 'maxfuncdepth'";
+
+        if (argumentExpressions.Count != function.Parameters.Count)
+            return "E118: Too many arguments for function: " + functionName;
+
+        var boundVariables = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["a:0"] = Variables.TryGetValue("a:0", out var previousCount) ? previousCount : null
+        };
+
+        var evaluatedArgs = argumentExpressions.Select(EvalLetExpression).ToArray();
+        for (var i = 0; i < function.Parameters.Count; i++)
+        {
+            var scopedName = "a:" + function.Parameters[i];
+            boundVariables[scopedName] = Variables.TryGetValue(scopedName, out var previous) ? previous : null;
+            Variables[scopedName] = evaluatedArgs[i];
+        }
+        Variables["a:0"] = evaluatedArgs.Length.ToString();
+
+        _functionCallDepth++;
+        try
+        {
+            ProcessBlock(function.Body, 0, function.Body.Count, ref iterationBudget);
+            return null;
+        }
+        finally
+        {
+            _functionCallDepth--;
+            foreach (var (name, previousValue) in boundVariables)
+            {
+                if (previousValue == null)
+                    Variables.Remove(name);
+                else
+                    Variables[name] = previousValue;
+            }
+        }
     }
 
     private static (int ElseIndex, int EndifIndex) FindIfBlock(IReadOnlyList<string> lines, int ifIndex, int end)
@@ -450,10 +558,107 @@ public class VimConfig
         return -1;
     }
 
+    private static int FindFunctionBlockEnd(IReadOnlyList<string> lines, int functionIndex, int end)
+    {
+        var depth = 0;
+
+        for (var index = functionIndex + 1; index < end; index++)
+        {
+            var line = lines[index];
+            if (line.Length == 0)
+                continue;
+
+            if (TryParseFunctionCommand(line, out _, out _))
+            {
+                depth++;
+                continue;
+            }
+
+            if (line.Equals("endfunction", StringComparison.OrdinalIgnoreCase))
+            {
+                if (depth == 0)
+                    return index;
+
+                depth--;
+            }
+        }
+
+        return -1;
+    }
+
     private static bool IsBlockTerminator(string line) =>
         line.Equals("else", StringComparison.OrdinalIgnoreCase) ||
         line.Equals("endif", StringComparison.OrdinalIgnoreCase) ||
-        line.Equals("endfor", StringComparison.OrdinalIgnoreCase);
+        line.Equals("endfor", StringComparison.OrdinalIgnoreCase) ||
+        line.Equals("endfunction", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryParseFunctionCommand(string line, out string name, out IReadOnlyList<string> parameters)
+    {
+        name = "";
+        parameters = [];
+
+        if (!line.StartsWith("function", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var restStart = "function".Length;
+        if (line.Length > restStart && line[restStart] == '!')
+            restStart++;
+        else if (line.Length > restStart && !char.IsWhiteSpace(line[restStart]))
+            return false;
+
+        var rest = line.Length > restStart ? line[restStart..].Trim() : "";
+        var openParen = rest.IndexOf('(');
+        if (openParen <= 0 || !rest.EndsWith(')'))
+            return false;
+
+        name = rest[..openParen].Trim();
+        var rawParameters = rest[(openParen + 1)..^1].Trim();
+        if (rawParameters.Length == 0)
+            return true;
+
+        if (!TrySplitCommaSeparated(rawParameters, out var parts))
+            return false;
+
+        parameters = parts.Select(p => p.Trim()).Where(p => p.Length > 0).ToArray();
+        return parameters.Count == parts.Count;
+    }
+
+    private static bool TryParseCallCommand(string cmd, out string name, out IReadOnlyList<string> arguments)
+    {
+        name = "";
+        arguments = [];
+
+        if (!cmd.StartsWith("call", StringComparison.OrdinalIgnoreCase) ||
+            (cmd.Length > 4 && !char.IsWhiteSpace(cmd[4])))
+            return false;
+
+        var rest = cmd.Length > 4 ? cmd[4..].Trim() : "";
+        var openParen = rest.IndexOf('(');
+        if (openParen <= 0 || !rest.EndsWith(')'))
+            return false;
+
+        name = rest[..openParen].Trim();
+        var rawArguments = rest[(openParen + 1)..^1].Trim();
+        if (rawArguments.Length == 0)
+            return true;
+
+        if (!TrySplitCommaSeparated(rawArguments, out var parts))
+            return false;
+
+        arguments = parts.Select(p => p.Trim()).ToArray();
+        return arguments.All(arg => arg.Length > 0);
+    }
+
+    private static bool TryParseExecuteCommand(string cmd, out string expression)
+    {
+        expression = "";
+        if (!cmd.StartsWith("execute", StringComparison.OrdinalIgnoreCase) ||
+            (cmd.Length > 7 && !char.IsWhiteSpace(cmd[7])))
+            return false;
+
+        expression = cmd.Length > 7 ? cmd[7..].Trim() : "";
+        return true;
+    }
 
     private static bool TryParseForCommand(string line, out string variableName, out string listExpression)
     {
@@ -538,6 +743,17 @@ public class VimConfig
 
     private static bool TrySplitListItems(string content, out List<string> items)
     {
+        if (!TrySplitCommaSeparated(content, out items, rejectNestedListBrackets: true))
+            return false;
+
+        return true;
+    }
+
+    private static bool TrySplitCommaSeparated(
+        string content,
+        out List<string> items,
+        bool rejectNestedListBrackets = false)
+    {
         items = [];
         var start = 0;
         char quote = '\0';
@@ -577,7 +793,7 @@ public class VimConfig
                 continue;
             }
 
-            if (ch is '[' or ']')
+            if (rejectNestedListBrackets && ch is '[' or ']')
                 return false;
 
             if (ch == ',')
@@ -932,6 +1148,19 @@ public class VimConfig
         return bare.All(ch => char.IsLetterOrDigit(ch) || ch == '_');
     }
 
+    private static bool IsValidFunctionName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        var bare = name.Length > 2 && name[1] == ':' ? name[2..] : name;
+        if (bare.Length == 0 || !(char.IsLetter(bare[0]) || bare[0] == '_')) return false;
+        return bare.All(ch => char.IsLetterOrDigit(ch) || ch is '_' or '#');
+    }
+
+    private static bool IsValidArgumentName(string name) =>
+        name.Length > 0 &&
+        (char.IsLetter(name[0]) || name[0] == '_') &&
+        name.All(ch => char.IsLetterOrDigit(ch) || ch == '_');
+
     private static string StripQuotes(string s) =>
         s.Length >= 2 && ((s[0] == '"' && s[^1] == '"') || (s[0] == '\'' && s[^1] == '\''))
             ? s[1..^1]
@@ -1042,3 +1271,8 @@ public class VimConfig
         return true;
     }
 }
+
+public sealed record VimFunctionDefinition(
+    string Name,
+    IReadOnlyList<string> Parameters,
+    IReadOnlyList<string> Body);

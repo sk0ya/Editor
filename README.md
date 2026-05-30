@@ -8,7 +8,7 @@
 - Normal / Insert / Visual / Visual Block / Visual Line モード
 - ドットコマンド (`.`)、レジスタ、マーク、マクロ
 - `:substitute`、`:changes` / `:jumps` / `:undolist` / `:earlier` / `:later`、コマンド履歴、`.vimrc` / `_vimrc` 読み込み
-- Vimscript 設定の基本機能（`:let`、`:echo`、`:execute`、`:if` / `:else` / `:endif`、`:for` / `:endfor`。`:for` は `.vimrc` / `:source` 内の数値・文字列リストリテラルに対応し、対話的な複数行入力は未対応エラーを返す）
+- Vimscript 設定の基本機能（`:let`、`:echo`、`:execute`、`:if` / `:else` / `:endif`、`:for` / `:endfor`、`:function` / `:endfunction`、`:call`。関数は `.vimrc` / `:source` 内で定義でき、`a:arg` 形式の引数と再帰深さ制限に対応）
 - シンタックスハイライト（複数言語対応）
 - LSP 連携（補完、ホバー、診断、定義ジャンプ、参照検索、シグネチャヘルプ、フォーマット、リネーム、コードアクション、スマート選択範囲）
 - マルチバッファ、タブ、ウィンドウ分割（`:split` / `:vsplit` / `Ctrl+W` プレフィックス）
@@ -219,6 +219,16 @@ set textwidth=80
 let mapleader = " "
 nnoremap <Leader>w :w<CR>
 nnoremap <Leader>q :q<CR>
+
+function ApplyProjectDefaults(name)
+  let g:project_name = a:name
+  if 1
+    for item in [1, 2]
+      let g:last_project_item = item
+    endfor
+  endif
+endfunction
+call ApplyProjectDefaults('editor')
 ```
 
 modeline は安全側の既定として無効です。`.vimrc` で `set modeline` を指定すると、ファイル読み込み時に先頭または末尾 5 行から `vim: set option=value option ...:` 形式だけを解釈し、既存の `set` オプションに反映します。任意の Ex コマンドは実行しません。

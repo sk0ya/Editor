@@ -20,6 +20,10 @@ public record ExResult(
 
 public class ExCommandProcessor
 {
+    private const int MaxFunctionCallDepth = 20;
+    private const int MaxForListItems = 1000;
+    private const int MaxForIterations = 10000;
+
     private readonly BufferManager _bufferManager;
     private readonly VimOptions _options;
     private readonly MarkManager _markManager;
@@ -29,18 +33,21 @@ public class ExCommandProcessor
     private readonly Dictionary<string, string> _insertMaps;
     private readonly Dictionary<string, string> _visualMaps;
     private readonly Dictionary<string, string> _variables;
+    private readonly Dictionary<string, VimFunctionDefinition> _functions;
     private readonly IReadOnlyList<string> _scriptNames;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
     private readonly List<string> _searchHistory = [];
     private int _searchHistoryIndex = -1;
     private int _executeDepth;
+    private int _functionCallDepth;
 
     public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager,
         Dictionary<string, string>? abbreviations = null, RegisterManager? registerManager = null,
         Dictionary<string, string>? normalMaps = null, Dictionary<string, string>? insertMaps = null,
         Dictionary<string, string>? visualMaps = null, Dictionary<string, string>? variables = null,
-        IReadOnlyList<string>? scriptNames = null)
+        IReadOnlyList<string>? scriptNames = null,
+        Dictionary<string, VimFunctionDefinition>? functions = null)
     {
         _bufferManager = bufferManager;
         _options = options;
@@ -51,6 +58,7 @@ public class ExCommandProcessor
         _insertMaps = insertMaps ?? [];
         _visualMaps = visualMaps ?? [];
         _variables = variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _functions = functions ?? new Dictionary<string, VimFunctionDefinition>(StringComparer.OrdinalIgnoreCase);
         _scriptNames = scriptNames ?? [];
     }
 
@@ -640,6 +648,17 @@ public class ExCommandProcessor
         // :scriptnames — list sourced vim scripts in load order
         if (cmd == "scriptnames" || cmd == "script")
             return new ExResult(true, FormatScriptNames());
+
+        // :call Name(...) — execute a function defined while sourcing Vimscript.
+        if (cmd == "call" || cmd.StartsWith("call "))
+            return ExecuteFunctionCall(cmd, cursor);
+
+        // Multi-line Vimscript functions are evaluated by VimConfig when
+        // sourcing vimrc files. Interactive definition is intentionally minimal.
+        if (cmd == "function" || cmd.StartsWith("function "))
+            return new ExResult(false, "E126: Missing :endfunction");
+        if (cmd == "endfunction")
+            return new ExResult(false, "E193: :endfunction not inside a function");
 
         // Multi-line Vimscript conditionals are evaluated by VimConfig when
         // sourcing vimrc files. Interactive one-line input is not stateful.
@@ -1670,6 +1689,163 @@ public class ExCommandProcessor
         return result;
     }
 
+    private ExResult ExecuteFunctionCall(string cmd, CursorPosition cursor)
+    {
+        if (!TryParseCallCommand(cmd, out var functionName, out var argumentExpressions))
+            return new ExResult(false, "E476: Invalid command");
+
+        if (!_functions.TryGetValue(functionName, out var function))
+            return new ExResult(false, "E117: Unknown function: " + functionName);
+
+        if (_functionCallDepth >= MaxFunctionCallDepth)
+            return new ExResult(false, "E132: Function call depth is higher than 'maxfuncdepth'");
+
+        if (argumentExpressions.Count != function.Parameters.Count)
+            return new ExResult(false, "E118: Too many arguments for function: " + functionName);
+
+        var boundVariables = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["a:0"] = _variables.TryGetValue("a:0", out var previousCount) ? previousCount : null
+        };
+
+        var evaluatedArgs = argumentExpressions.Select(EvalExpr).ToArray();
+        for (var i = 0; i < function.Parameters.Count; i++)
+        {
+            var scopedName = "a:" + function.Parameters[i];
+            boundVariables[scopedName] = _variables.TryGetValue(scopedName, out var previous) ? previous : null;
+            _variables[scopedName] = evaluatedArgs[i];
+        }
+        _variables["a:0"] = evaluatedArgs.Length.ToString();
+
+        _functionCallDepth++;
+        try
+        {
+            var iterationBudget = MaxForIterations;
+            return ExecuteFunctionBlock(function.Body, 0, function.Body.Count, cursor, ref iterationBudget).Result;
+        }
+        finally
+        {
+            _functionCallDepth--;
+            foreach (var (name, previousValue) in boundVariables)
+            {
+                if (previousValue == null)
+                    _variables.Remove(name);
+                else
+                    _variables[name] = previousValue;
+            }
+        }
+    }
+
+    private (int NextIndex, ExResult Result) ExecuteFunctionBlock(
+        IReadOnlyList<string> lines,
+        int start,
+        int end,
+        CursorPosition cursor,
+        ref int iterationBudget)
+    {
+        var index = start;
+        ExResult lastResult = new(true);
+
+        while (index < end)
+        {
+            var line = lines[index];
+            if (line.Length == 0)
+            {
+                index++;
+                continue;
+            }
+
+            if (IsFunctionBlockTerminator(line))
+                return (index, lastResult);
+
+            if (TryParseIfCommand(line, out var ifExpression))
+            {
+                var branch = ExecuteFunctionIfBlock(lines, index, end, ifExpression, cursor, ref iterationBudget);
+                if (!branch.Result.Success)
+                    return branch;
+                lastResult = branch.Result;
+                index = branch.NextIndex;
+                continue;
+            }
+
+            if (TryParseForCommand(line, out var loopVariable, out var listExpression))
+            {
+                var loop = ExecuteFunctionForBlock(lines, index, end, loopVariable, listExpression, cursor, ref iterationBudget);
+                if (!loop.Result.Success)
+                    return loop;
+                lastResult = loop.Result;
+                index = loop.NextIndex;
+                continue;
+            }
+
+            lastResult = ExecuteNoHistory(line, cursor);
+            if (!lastResult.Success)
+                return (index + 1, lastResult);
+
+            index++;
+        }
+
+        return (index, lastResult);
+    }
+
+    private (int NextIndex, ExResult Result) ExecuteFunctionIfBlock(
+        IReadOnlyList<string> lines,
+        int ifIndex,
+        int end,
+        string expression,
+        CursorPosition cursor,
+        ref int iterationBudget)
+    {
+        var (elseIndex, endifIndex) = FindIfBlock(lines, ifIndex, end);
+        var blockEnd = endifIndex >= 0 ? endifIndex : end;
+        var result = new ExResult(true);
+
+        if (EvaluateCondition(expression))
+        {
+            var trueEnd = elseIndex >= 0 ? elseIndex : blockEnd;
+            result = ExecuteFunctionBlock(lines, ifIndex + 1, trueEnd, cursor, ref iterationBudget).Result;
+        }
+        else if (elseIndex >= 0)
+        {
+            result = ExecuteFunctionBlock(lines, elseIndex + 1, blockEnd, cursor, ref iterationBudget).Result;
+        }
+
+        return (endifIndex >= 0 ? endifIndex + 1 : end, result);
+    }
+
+    private (int NextIndex, ExResult Result) ExecuteFunctionForBlock(
+        IReadOnlyList<string> lines,
+        int forIndex,
+        int end,
+        string variableName,
+        string listExpression,
+        CursorPosition cursor,
+        ref int iterationBudget)
+    {
+        var endforIndex = FindForBlockEnd(lines, forIndex, end);
+        if (endforIndex < 0)
+            return (end, new ExResult(false, "E170: Missing :endfor"));
+
+        if (!IsValidVariableName(variableName) ||
+            !TryParseListLiteral(listExpression, out var items))
+            return (endforIndex + 1, new ExResult(true));
+
+        ExResult lastResult = new(true);
+        foreach (var item in items.Take(MaxForListItems))
+        {
+            if (iterationBudget <= 0)
+                break;
+
+            iterationBudget--;
+            _variables[variableName] = item;
+            lastResult = ExecuteFunctionBlock(lines, forIndex + 1, endforIndex, cursor, ref iterationBudget).Result;
+            if (!lastResult.Success)
+                return (endforIndex + 1, lastResult);
+        }
+
+        return (endforIndex + 1, lastResult);
+    }
+
     private ExResult ExecuteLet(string cmd)
     {
         var rest = cmd.Length > 3 ? cmd[3..].Trim() : "";
@@ -1712,6 +1888,297 @@ public class ExCommandProcessor
 
     private static string FormatVariableValue(string value) =>
         int.TryParse(value, out _) ? value : $"\"{value}\"";
+
+    private static bool TryParseCallCommand(string cmd, out string name, out IReadOnlyList<string> arguments)
+    {
+        name = "";
+        arguments = [];
+
+        if (!cmd.StartsWith("call", StringComparison.OrdinalIgnoreCase) ||
+            (cmd.Length > 4 && !char.IsWhiteSpace(cmd[4])))
+            return false;
+
+        var rest = cmd.Length > 4 ? cmd[4..].Trim() : "";
+        var openParen = rest.IndexOf('(');
+        if (openParen <= 0 || !rest.EndsWith(')'))
+            return false;
+
+        name = rest[..openParen].Trim();
+        var rawArguments = rest[(openParen + 1)..^1].Trim();
+        if (rawArguments.Length == 0)
+            return true;
+
+        if (!TrySplitCommaSeparated(rawArguments, out var parts))
+            return false;
+
+        arguments = parts.Select(p => p.Trim()).ToArray();
+        return arguments.All(arg => arg.Length > 0);
+    }
+
+    private static bool TryParseIfCommand(string line, out string expression)
+    {
+        expression = "";
+        if (line.Length < 2 ||
+            !line[..2].Equals("if", StringComparison.OrdinalIgnoreCase) ||
+            (line.Length > 2 && !char.IsWhiteSpace(line[2])))
+            return false;
+
+        expression = line.Length > 2 ? line[2..].Trim() : "";
+        return true;
+    }
+
+    private static bool TryParseForCommand(string line, out string variableName, out string listExpression)
+    {
+        variableName = "";
+        listExpression = "";
+
+        if (line.Length < 3 ||
+            !line[..3].Equals("for", StringComparison.OrdinalIgnoreCase) ||
+            (line.Length > 3 && !char.IsWhiteSpace(line[3])))
+            return false;
+
+        var rest = line.Length > 3 ? line[3..].TrimStart() : "";
+        var variableEnd = 0;
+        while (variableEnd < rest.Length && !char.IsWhiteSpace(rest[variableEnd]))
+            variableEnd++;
+
+        if (variableEnd == 0)
+            return false;
+
+        var inStart = variableEnd;
+        while (inStart < rest.Length && char.IsWhiteSpace(rest[inStart]))
+            inStart++;
+
+        if (inStart + 2 > rest.Length ||
+            !rest.AsSpan(inStart, 2).Equals("in", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var expressionStart = inStart + 2;
+        if (expressionStart < rest.Length && !char.IsWhiteSpace(rest[expressionStart]))
+            return false;
+
+        while (expressionStart < rest.Length && char.IsWhiteSpace(rest[expressionStart]))
+            expressionStart++;
+
+        if (expressionStart >= rest.Length)
+            return false;
+
+        variableName = rest[..variableEnd].Trim();
+        listExpression = rest[expressionStart..].Trim();
+        return true;
+    }
+
+    private static (int ElseIndex, int EndifIndex) FindIfBlock(IReadOnlyList<string> lines, int ifIndex, int end)
+    {
+        var depth = 0;
+        var elseIndex = -1;
+
+        for (var index = ifIndex + 1; index < end; index++)
+        {
+            var line = lines[index];
+            if (line.Length == 0)
+                continue;
+
+            if (TryParseIfCommand(line, out _))
+            {
+                depth++;
+                continue;
+            }
+
+            if (line.Equals("endif", StringComparison.OrdinalIgnoreCase))
+            {
+                if (depth == 0)
+                    return (elseIndex, index);
+
+                depth--;
+                continue;
+            }
+
+            if (depth == 0 &&
+                elseIndex < 0 &&
+                line.Equals("else", StringComparison.OrdinalIgnoreCase))
+            {
+                elseIndex = index;
+            }
+        }
+
+        return (elseIndex, -1);
+    }
+
+    private static int FindForBlockEnd(IReadOnlyList<string> lines, int forIndex, int end)
+    {
+        var depth = 0;
+
+        for (var index = forIndex + 1; index < end; index++)
+        {
+            var line = lines[index];
+            if (line.Length == 0)
+                continue;
+
+            if (TryParseForCommand(line, out _, out _))
+            {
+                depth++;
+                continue;
+            }
+
+            if (line.Equals("endfor", StringComparison.OrdinalIgnoreCase))
+            {
+                if (depth == 0)
+                    return index;
+
+                depth--;
+            }
+        }
+
+        return -1;
+    }
+
+    private bool EvaluateCondition(string expr)
+    {
+        expr = expr.Trim();
+        if (expr.Length == 0)
+            return false;
+
+        if (expr[0] == '!')
+            return !EvaluateCondition(expr[1..]);
+
+        if (expr.Length >= 2 &&
+            ((expr[0] == '"' && expr[^1] == '"') ||
+             (expr[0] == '\'' && expr[^1] == '\'')))
+            return IsTruthy(StripQuotes(expr));
+
+        if (TryGetVariable(expr, out var variableValue))
+            return IsTruthy(variableValue);
+
+        if (ExpressionEvaluator.Evaluate(expr) is { } arithmeticValue)
+            return IsTruthy(arithmeticValue);
+
+        if (int.TryParse(expr, out var n))
+            return n != 0;
+
+        return false;
+    }
+
+    private static bool TryParseListLiteral(string expression, out List<string> items)
+    {
+        items = [];
+        expression = expression.Trim();
+        if (expression.Length < 2 || expression[0] != '[' || expression[^1] != ']')
+            return false;
+
+        var content = expression[1..^1].Trim();
+        if (content.Length == 0)
+            return true;
+
+        if (!TrySplitCommaSeparated(content, out var rawItems, rejectNestedListBrackets: true))
+            return false;
+
+        foreach (var rawItem in rawItems)
+        {
+            var item = rawItem.Trim();
+            if (item.Length == 0)
+                return false;
+
+            if (item.Length >= 2 &&
+                ((item[0] == '"' && item[^1] == '"') ||
+                 (item[0] == '\'' && item[^1] == '\'')))
+            {
+                if (items.Count < MaxForListItems)
+                    items.Add(StripQuotes(item));
+                continue;
+            }
+
+            var evaluated = ExpressionEvaluator.Evaluate(item);
+            if (evaluated == null)
+                return false;
+
+            if (items.Count < MaxForListItems)
+                items.Add(evaluated);
+        }
+
+        return true;
+    }
+
+    private static bool TrySplitCommaSeparated(
+        string content,
+        out List<string> items,
+        bool rejectNestedListBrackets = false)
+    {
+        items = [];
+        var start = 0;
+        char quote = '\0';
+        var escaped = false;
+
+        for (var index = 0; index < content.Length; index++)
+        {
+            var ch = content[index];
+            if (quote != '\0')
+            {
+                if (quote == '"' && escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (quote == '"' && ch == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (quote == '\'' && ch == '\'' && index + 1 < content.Length && content[index + 1] == '\'')
+                {
+                    index++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (rejectNestedListBrackets && ch is '[' or ']')
+                return false;
+
+            if (ch == ',')
+            {
+                items.Add(content[start..index]);
+                start = index + 1;
+            }
+        }
+
+        if (quote != '\0' || escaped)
+            return false;
+
+        items.Add(content[start..]);
+        return true;
+    }
+
+    private static bool IsFunctionBlockTerminator(string line) =>
+        line.Equals("else", StringComparison.OrdinalIgnoreCase) ||
+        line.Equals("endif", StringComparison.OrdinalIgnoreCase) ||
+        line.Equals("endfor", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTruthy(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return false;
+
+        if (double.TryParse(value, out var number))
+            return number != 0;
+
+        if (bool.TryParse(value, out var boolean))
+            return boolean;
+
+        return false;
+    }
 
     private static readonly Regex NumericSortRegex = new(@"-?\d+", RegexOptions.Compiled);
 
@@ -1917,7 +2384,7 @@ public class ExCommandProcessor
         "nmap", "nnoremap", "imap", "inoremap", "vmap", "vnoremap",
         "map",
         "unmap", "nunmap", "iunmap", "vunmap",
-        "let", "for", "endfor",
+        "let", "for", "endfor", "function", "endfunction", "call",
         "history", "his",
         "preview", "mdpreview",
         "terminal", "term",

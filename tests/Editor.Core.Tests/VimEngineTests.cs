@@ -1435,6 +1435,105 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VimConfig_ParseFunction_DefinesAndCallsNoArgFunction()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "function ApplyConfig()",
+            "  let g:inside_function = 1",
+            "endfunction",
+            "let g:before_call = 1",
+            "call ApplyConfig()",
+        ]);
+
+        Assert.Equal("1", cfg.Variables["g:before_call"]);
+        Assert.Equal("1", cfg.Variables["g:inside_function"]);
+        Assert.Contains("ApplyConfig", cfg.Functions.Keys);
+    }
+
+    [Fact]
+    public void VimConfig_ParseFunction_BindsArgumentsAndRunsExistingBlocks()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "function Configure(name)",
+            "  let g:function_arg = a:name",
+            "  if 1",
+            "    for item in [1, 2]",
+            "      let g:last_item = item",
+            "    endfor",
+            "  endif",
+            "  execute 'let g:executed = 1'",
+            "endfunction",
+            "call Configure('dark')",
+        ]);
+
+        Assert.Equal("dark", cfg.Variables["g:function_arg"]);
+        Assert.Equal("2", cfg.Variables["g:last_item"]);
+        Assert.Equal("1", cfg.Variables["g:executed"]);
+        Assert.False(cfg.Variables.ContainsKey("a:name"));
+    }
+
+    [Fact]
+    public void VimConfig_ParseFunction_LimitsRecursiveCalls()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "function Recurse()",
+            "  let g:entered = 1",
+            "  call Recurse()",
+            "endfunction",
+            "call Recurse()",
+            "let g:after_recursion = 1",
+        ]);
+
+        Assert.Equal("1", cfg.Variables["g:entered"]);
+        Assert.Equal("1", cfg.Variables["g:after_recursion"]);
+    }
+
+    [Fact]
+    public void ExCall_ExecutesDefinedFunctionWithArgument()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines([
+            "function Say(name)",
+            "  echo a:name",
+            "endfunction",
+        ]);
+        var engine = CreateEngine(config: cfg);
+
+        ExCommand(engine, "call Say('hello')");
+
+        Assert.Equal("hello", engine.StatusMessage);
+        Assert.False(engine.Config.Variables.ContainsKey("a:name"));
+    }
+
+    [Fact]
+    public void ExCall_FunctionBodySupportsIfForLetAndEcho()
+    {
+        var cfg = new VimConfig();
+        cfg.ParseLines([
+            "function PickLast()",
+            "  for item in [0, 2]",
+            "    if item",
+            "      let g:last_pick = item",
+            "    endif",
+            "  endfor",
+            "  echo g:last_pick",
+            "endfunction",
+        ]);
+        var engine = CreateEngine(config: cfg);
+
+        ExCommand(engine, "call PickLast()");
+
+        Assert.Equal("2", engine.StatusMessage);
+        Assert.Equal("2", engine.Config.Variables["g:last_pick"]);
+    }
+
+    [Fact]
     public void VimConfig_LoadFromFile_TracksSourceScripts()
     {
         var dir = Path.Combine(Path.GetTempPath(), "editor-vimconfig-" + Guid.NewGuid().ToString("N"));
