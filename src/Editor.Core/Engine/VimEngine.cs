@@ -43,6 +43,7 @@ public class VimEngine
     private bool _awaitingMarkJumpLine;
     private bool _ctrlWPending;
     private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
+    private int _awaitingVisualTextObjCount = 1;
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
     private bool _awaitingBlockReplace;   // Visual Block r — waiting for the replacement character
     private bool _visualBlockToLineEnd;   // Ctrl+V $ — selected lines extend to their own EOL
@@ -1243,10 +1244,10 @@ public class VimEngine
         var motion = new MotionEngine(buf);
 
         // Text objects
-        if (cmd.Motion?.Length == 2 && cmd.Motion[0] is 'i' or 'a')
+        if (cmd.Motion?.Length == 2 && (cmd.Motion[0] is 'i' or 'a'))
         {
             if (cmd.Operator == null) return;
-            var range = GetTextObjectRange(cmd.Motion);
+            var range = GetTextObjectRange(cmd.Motion, Math.Max(1, cmd.Count));
             if (range == null) return;
 
             if (cmd.Operator == "c") BeginInsertRepeat(cmd);
@@ -1287,7 +1288,7 @@ public class VimEngine
         }
 
         // Calculate motion target
-        var mot = motion.Calculate(cmd.Motion, _cursor, cmd.Count);
+        var mot = motion.Calculate(cmd.Motion ?? "", _cursor, cmd.Count);
         if (mot == null) return;
 
         bool linewise = mot.Value.Type == MotionType.Linewise || cmd.LinewiseForced;
@@ -1682,8 +1683,10 @@ public class VimEngine
         {
             char prefix = _awaitingVisualTextObj;
             _awaitingVisualTextObj = '\0';
+            int count = Math.Max(1, _awaitingVisualTextObjCount);
+            _awaitingVisualTextObjCount = 1;
             string textObj = prefix.ToString() + key;
-            var range = GetTextObjectRange(textObj);
+            var range = GetTextObjectRange(textObj, count);
             if (range != null)
             {
                 _visualStart = range.Value.Start;
@@ -1742,6 +1745,16 @@ public class VimEngine
             return;
         }
 
+        if (_mode == VimMode.Visual &&
+            (key is "i" or "a") &&
+            TryParseVisualCount(_commandParser.Buffer, out var visualTextObjectCount))
+        {
+            _commandParser.Reset();
+            _awaitingVisualTextObj = key[0];
+            _awaitingVisualTextObjCount = visualTextObjectCount;
+            return;
+        }
+
         if (TryHandlePendingVisualMotion(key, events))
             return;
 
@@ -1794,7 +1807,12 @@ public class VimEngine
                     BeginVisualBlockInsert(events);
                     return;
                 }
-                if (key == "i") { _awaitingVisualTextObj = 'i'; return; }
+                if (key == "i")
+                {
+                    _awaitingVisualTextObj = 'i';
+                    _awaitingVisualTextObjCount = 1;
+                    return;
+                }
                 break;
             case "A":
                 if (_mode == VimMode.VisualBlock)
@@ -1806,6 +1824,7 @@ public class VimEngine
                 break;
             case "a":
                 _awaitingVisualTextObj = 'a';
+                _awaitingVisualTextObjCount = 1;
                 return;
             // Operators on selection
             case "d":
@@ -1899,6 +1918,21 @@ public class VimEngine
 
         UpdateSelection(events);
         return true;
+    }
+
+    private static bool TryParseVisualCount(string buffer, out int count)
+    {
+        count = 1;
+        if (string.IsNullOrEmpty(buffer))
+            return false;
+
+        for (int i = 0; i < buffer.Length; i++)
+        {
+            if (!char.IsDigit(buffer[i]) || (i == 0 && buffer[i] == '0'))
+                return false;
+        }
+
+        return int.TryParse(buffer, out count) && count > 0;
     }
 
     private bool ApplyVisualMotion(ParsedCommand cmd, List<VimEvent> events)
@@ -2557,6 +2591,7 @@ public class VimEngine
     private void ExitVisualMode(List<VimEvent> events)
     {
         _awaitingVisualTextObj = '\0';
+        _awaitingVisualTextObjCount = 1;
         _lastVisualStart = _visualStart;
         _lastVisualEnd = _cursor;
         _lastVisualMode = _mode;
@@ -2593,6 +2628,7 @@ public class VimEngine
         int start = Math.Min(_visualStart.Line, _cursor.Line) + 1;
         int end = Math.Max(_visualStart.Line, _cursor.Line) + 1;
         _awaitingVisualTextObj = '\0';
+        _awaitingVisualTextObjCount = 1;
         _selection = null;
         events.Add(VimEvent.SelectionChanged(null));
         _cmdLine = $"{start},{end}";
@@ -2978,16 +3014,17 @@ public class VimEngine
     }
 
 
-    private (CursorPosition Start, CursorPosition End)? GetTextObjectRange(string textObject)
+    private (CursorPosition Start, CursorPosition End)? GetTextObjectRange(string textObject, int count = 1)
     {
         if (textObject.Length != 2) return null;
 
         bool around = textObject[0] == 'a';
         char kind = textObject[1];
+        count = Math.Max(1, count);
 
         return kind switch
         {
-            'w' or 'W' => GetWordRange(kind == 'W', around),
+            'w' or 'W' => GetWordRange(kind == 'W', around, count),
             '(' or ')' or 'b' => FindEnclosingPair('(', ')', around),
             '{' or '}' or 'B' => FindEnclosingPair('{', '}', around),
             '[' or ']' => FindEnclosingPair('[', ']', around),
@@ -3002,7 +3039,7 @@ public class VimEngine
         };
     }
 
-    private (CursorPosition Start, CursorPosition End)? GetWordRange(bool bigWord, bool around)
+    private (CursorPosition Start, CursorPosition End)? GetWordRange(bool bigWord, bool around, int count)
     {
         var buf = _bufferManager.Current.Text;
         var lineNo = _cursor.Line;
@@ -3032,6 +3069,17 @@ public class VimEngine
 
         int end = col;
         while (end + 1 < line.Length && IsWordChar(line[end + 1])) end++;
+
+        for (int i = 1; i < count; i++)
+        {
+            int next = end + 1;
+            while (next < line.Length && !IsWordChar(line[next])) next++;
+            if (next >= line.Length)
+                break;
+
+            end = next;
+            while (end + 1 < line.Length && IsWordChar(line[end + 1])) end++;
+        }
 
         if (around)
         {

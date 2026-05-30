@@ -529,6 +529,51 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void Visual_CountIW_SelectsMultipleInnerWords()
+    {
+        var engine = CreateEngine("foo bar baz qux");
+
+        engine.ProcessKey("v");
+        engine.ProcessKey("3");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+
+        Assert.Equal(VimMode.Visual, engine.Mode);
+        Assert.True(engine.Selection.HasValue);
+        Assert.Equal(new CursorPosition(0, 0), engine.Selection.Value.NormalizedStart);
+        Assert.Equal(new CursorPosition(0, 10), engine.Selection.Value.NormalizedEnd);
+    }
+
+    [Fact]
+    public void Visual_CountAW_SelectsMultipleAroundWordsWithTrailingSpace()
+    {
+        var engine = CreateEngine("foo bar baz");
+
+        engine.ProcessKey("v");
+        engine.ProcessKey("2");
+        engine.ProcessKey("a");
+        engine.ProcessKey("w");
+
+        Assert.Equal(VimMode.Visual, engine.Mode);
+        Assert.True(engine.Selection.HasValue);
+        Assert.Equal(new CursorPosition(0, 0), engine.Selection.Value.NormalizedStart);
+        Assert.Equal(new CursorPosition(0, 7), engine.Selection.Value.NormalizedEnd);
+    }
+
+    [Fact]
+    public void D3iw_DeletesMultipleInnerWords()
+    {
+        var engine = CreateEngine("foo bar baz qux");
+
+        engine.ProcessKey("d");
+        engine.ProcessKey("3");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+
+        Assert.Equal(" qux", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
     public void FindMotions_FFTT_WorkAsStandaloneMotions()
     {
         var engine = CreateEngine("abcabc");

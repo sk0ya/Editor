@@ -217,6 +217,28 @@ public class CommandParser
                 return (CommandState.Incomplete, null);
             }
 
+            int motionCount = 1;
+            int motionCountEnd = 0;
+            while (motionCountEnd < afterOp.Length &&
+                   char.IsDigit(afterOp[motionCountEnd]) &&
+                   !(motionCountEnd == 0 && afterOp[motionCountEnd] == '0'))
+            {
+                motionCountEnd++;
+            }
+
+            if (motionCountEnd > 0)
+            {
+                motionCount = int.TryParse(afterOp[..motionCountEnd], out var parsedMotionCount) ? parsedMotionCount : 1;
+                afterOp = afterOp[motionCountEnd..];
+                count *= motionCount;
+
+                if (afterOp.Length == 0)
+                    return (CommandState.Incomplete, null);
+
+                if (afterOp.Length > 0 && afterOp[0].ToString() == op)
+                    return Finalize(count, op, op, linewise: true);
+            }
+
             // g-prefix motions
             if (op == "g")
             {

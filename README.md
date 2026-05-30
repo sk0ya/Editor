@@ -14,6 +14,7 @@
 - Quickfix（`:copen` / `:cclose` / `:cn` / `:cp` / `:cc N` / `:cl`）
 - プロジェクト横断検索・置換（`:grep` / `:vimgrep` / `:grepreplace` / `:creplace`、Quickfix 結果から確認付き一括置換）
 - コードフォールド（`za` / `zc` / `zo` / `zR` / `zM` / `zf`）
+- テキストオブジェクト（`iw` / `aw` など、Visual character mode の `3iw` / `2aw` カウント付き選択に対応）
 - サラウンド操作（`ys` / `cs` / `ds`）
 - コメントトグル（`gc` / `gcc`）
 - Git 差分表示・ブレームアノテーション（`:Git blame`）
