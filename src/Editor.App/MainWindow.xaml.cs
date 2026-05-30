@@ -1750,7 +1750,7 @@ public partial class MainWindow : Window
         }
 
         if (sender is VimEditorControl editor)
-            editor.Engine.Config.RecordScript(resolved);
+            editor.Engine.Config.SourceFile(resolved);
 
         var commands = SessionManager.Load(resolved);
         if (commands == null) return;

@@ -641,6 +641,15 @@ public class ExCommandProcessor
         if (cmd == "scriptnames" || cmd == "script")
             return new ExResult(true, FormatScriptNames());
 
+        // Multi-line Vimscript conditionals are evaluated by VimConfig when
+        // sourcing vimrc files. Interactive one-line input is not stateful.
+        if (cmd == "if" || cmd.StartsWith("if "))
+            return new ExResult(false, "E580: :endif missing");
+        if (cmd == "else")
+            return new ExResult(false, "E581: :else without :if");
+        if (cmd == "endif")
+            return new ExResult(false, "E580: :endif without :if");
+
         // :changes
         if (cmd == "changes")
             return new ExResult(true, _markManager.FormatChangeList());

@@ -25,10 +25,18 @@ public class VimConfig
     private readonly HashSet<string> _activeScriptPaths = new(StringComparer.OrdinalIgnoreCase);
     private string? _currentScriptDirectory;
 
+    private sealed class ConditionalBlock(bool parentActive, bool conditionTrue)
+    {
+        public bool ParentActive { get; } = parentActive;
+        public bool ConditionTrue { get; } = conditionTrue;
+        public bool InElse { get; set; }
+        public bool Active => ParentActive && (InElse ? !ConditionTrue : ConditionTrue);
+    }
+
     public static VimConfig LoadFromFile(string path)
     {
         var cfg = new VimConfig();
-        cfg.ParseFile(path);
+        cfg.SourceFile(path);
         return cfg;
     }
 
@@ -42,12 +50,12 @@ public class VimConfig
             vimrcPath = Path.Combine(home, "init.vim");
 
         var cfg = new VimConfig();
-        cfg.ParseFile(vimrcPath);
+        cfg.SourceFile(vimrcPath);
 
         // Allow project-local overrides when running from a workspace.
         var localVimrcPath = Path.Combine(Environment.CurrentDirectory, ".vimrc");
         if (File.Exists(localVimrcPath))
-            cfg.ParseFile(localVimrcPath);
+            cfg.SourceFile(localVimrcPath);
 
         return cfg;
     }
@@ -60,23 +68,37 @@ public class VimConfig
 
     public void ParseLines(IEnumerable<string> lines)
     {
+        var conditionals = new Stack<ConditionalBlock>();
+
         foreach (var rawLine in lines)
         {
-            var line = rawLine.Trim();
-            if (string.IsNullOrEmpty(line) || line.StartsWith('"')) continue;
+            var line = NormalizeConfigLine(rawLine);
+            if (line.Length == 0) continue;
 
-            // Remove inline comments: only strip " when preceded by whitespace
-            // (avoids cutting strings like let mapleader="\<Space>")
-            var commentIdx = -1;
-            for (int i = 1; i < line.Length; i++)
+            if (TryParseIfCommand(line, out var ifExpression))
             {
-                if (line[i] == '"' && char.IsWhiteSpace(line[i - 1]))
-                {
-                    commentIdx = i;
-                    break;
-                }
+                var parentActive = IsConditionalStackActive(conditionals);
+                var conditionTrue = parentActive && EvaluateCondition(ifExpression);
+                conditionals.Push(new ConditionalBlock(parentActive, conditionTrue));
+                continue;
             }
-            if (commentIdx > 0) line = line[..commentIdx].Trim();
+
+            if (line.Equals("else", StringComparison.OrdinalIgnoreCase))
+            {
+                if (conditionals.Count > 0)
+                    conditionals.Peek().InElse = true;
+                continue;
+            }
+
+            if (line.Equals("endif", StringComparison.OrdinalIgnoreCase))
+            {
+                if (conditionals.Count > 0)
+                    conditionals.Pop();
+                continue;
+            }
+
+            if (!IsConditionalStackActive(conditionals))
+                continue;
 
             ParseCommand(line);
         }
@@ -178,13 +200,13 @@ public class VimConfig
             if (sourcePath.Length > 0)
             {
                 var resolved = ResolveScriptPath(sourcePath);
-                ParseFile(resolved);
+                SourceFile(resolved);
             }
             return null;
         }
 
-        // Silently ignore: augroup, autocmd, filetype, scriptencoding, tnoremap, onoremap,
-        // cnoremap, cmap, function, endfunction, if, endif, etc.
+        // Silently ignore unsupported Vimscript commands such as filetype,
+        // scriptencoding, tnoremap, onoremap, cnoremap, cmap, function, endfunction.
         return null;
     }
 
@@ -206,7 +228,7 @@ public class VimConfig
         buffer.FileEncoding = Options.FileEncoding;
     }
 
-    private void ParseFile(string path)
+    public void SourceFile(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
 
@@ -228,6 +250,42 @@ public class VimConfig
             _activeScriptPaths.Remove(fullPath);
         }
     }
+
+    private static string NormalizeConfigLine(string rawLine)
+    {
+        var line = rawLine.Trim();
+        if (string.IsNullOrEmpty(line) || line.StartsWith('"'))
+            return "";
+
+        // Remove inline comments: only strip " when preceded by whitespace
+        // (avoids cutting strings like let mapleader="\<Space>")
+        var commentIdx = -1;
+        for (int i = 1; i < line.Length; i++)
+        {
+            if (line[i] == '"' && char.IsWhiteSpace(line[i - 1]))
+            {
+                commentIdx = i;
+                break;
+            }
+        }
+
+        return commentIdx > 0 ? line[..commentIdx].Trim() : line;
+    }
+
+    private static bool TryParseIfCommand(string line, out string expression)
+    {
+        expression = "";
+        if (line.Length < 2 ||
+            !line[..2].Equals("if", StringComparison.OrdinalIgnoreCase) ||
+            (line.Length > 2 && !char.IsWhiteSpace(line[2])))
+            return false;
+
+        expression = line.Length > 2 ? line[2..].Trim() : "";
+        return true;
+    }
+
+    private static bool IsConditionalStackActive(Stack<ConditionalBlock> conditionals) =>
+        conditionals.Count == 0 || conditionals.Peek().Active;
 
     private static IEnumerable<string> GetModelineCandidateLines(TextBuffer text)
     {
@@ -582,6 +640,59 @@ public class VimConfig
             return StripQuotes(expr);
 
         return ExpressionEvaluator.Evaluate(expr) ?? expr;
+    }
+
+    private bool EvaluateCondition(string expr)
+    {
+        expr = expr.Trim();
+        if (expr.Length == 0)
+            return false;
+
+        if (expr[0] == '!')
+            return !EvaluateCondition(expr[1..]);
+
+        if (expr.Length >= 2 &&
+            ((expr[0] == '"' && expr[^1] == '"') ||
+             (expr[0] == '\'' && expr[^1] == '\'')))
+            return IsTruthy(StripQuotes(expr));
+
+        if (TryGetVariable(expr, out var variableValue))
+            return IsTruthy(variableValue);
+
+        if (ExpressionEvaluator.Evaluate(expr) is { } arithmeticValue)
+            return IsTruthy(arithmeticValue);
+
+        if (int.TryParse(expr, out var n))
+            return n != 0;
+
+        return false;
+    }
+
+    private bool TryGetVariable(string name, out string value)
+    {
+        if (Variables.TryGetValue(name, out value!))
+            return true;
+
+        if (!name.Contains(':') && Variables.TryGetValue("g:" + name, out value!))
+            return true;
+
+        value = "";
+        return false;
+    }
+
+    private static bool IsTruthy(string value)
+    {
+        value = value.Trim();
+        if (value.Length == 0)
+            return false;
+
+        if (double.TryParse(value, out var number))
+            return number != 0;
+
+        if (bool.TryParse(value, out var boolean))
+            return boolean;
+
+        return false;
     }
 
     private static readonly string[] AbbrevPrefixes =

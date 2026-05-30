@@ -1,6 +1,6 @@
 # Editor 機能ロードマップ
 
-> 作成日: 2026-03-02 / 更新日: 2026-05-30 (git log 全調査 → 実装済みを整理)
+> 作成日: 2026-03-02 / 更新日: 2026-05-31 (git log 全調査 → 実装済みを整理)
 
 ---
 
@@ -16,7 +16,6 @@
 
 | 機能 | 説明 | 優先度 |
 |------|------|-------|
-| `:if` / `:else` / `:endif` | 条件分岐 | 低 |
 | `:for` / `:endfor` | ループ | 低 |
 | `:function` / `:endfunction` | 関数定義 | 低 |
 
@@ -75,7 +74,7 @@
 - 複数ターミナル管理
 
 ### 低 (将来)
-- Vimscript (`:function`, `:if`, `:for`)
+- Vimscript (`:function`, `:for`)
 - DAP デバッガ統合
 - リモート編集
 - ブランチングアンドゥ
@@ -89,6 +88,7 @@
 
 | 機能 | 日付 |
 |------|------|
+| **`:if` / `:else` / `:endif`** `.vimrc` / `:source` の Vimscript 読み込みで条件分岐とネストを評価。条件式は数値・既存変数・既存の算術式評価範囲に限定し、対話的な単発 `:if` は未対応エラーを返す | ✅ 2026-05-31 |
 | **ワークスペース診断 (`workspace/diagnostic`)** `:diagnostics` / `:diag` で対応 LSP サーバーからワークスペース診断を取得し、References パネルに診断一覧と件数を表示 | ✅ 2026-05-31 |
 | **`textDocument/selectionRange`** Shift+Alt+Right で LSP の親 selection range へ段階的に Visual 選択を拡張し、Shift+Alt+Left で直前段階へ縮小 | ✅ 2026-05-31 |
 | **カウント付き Visual text object** Visual character mode で `3iw` / `2aw` などカウント付き word text object 選択に対応。operator + text object の `d3iw` も同じ count 範囲を使用 | ✅ 2026-05-30 |

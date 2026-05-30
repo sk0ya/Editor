@@ -1138,6 +1138,68 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VimConfig_ParseIf_ExecutesTruthyBranch()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "let g:enabled = 1",
+            "if g:enabled",
+            "  set number",
+            "  let g:branch = 'if'",
+            "else",
+            "  set nonumber",
+            "  let g:branch = 'else'",
+            "endif",
+        ]);
+
+        Assert.True(cfg.Options.Number);
+        Assert.Equal("if", cfg.Variables["g:branch"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseIf_ExecutesElseForFalsyBranch()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "let g:enabled = 0",
+            "if g:enabled",
+            "  set number",
+            "  let g:branch = 'if'",
+            "else",
+            "  set nonumber",
+            "  let g:branch = 'else'",
+            "endif",
+        ]);
+
+        Assert.False(cfg.Options.Number);
+        Assert.Equal("else", cfg.Variables["g:branch"]);
+    }
+
+    [Fact]
+    public void VimConfig_ParseIf_SupportsNestedBlocks()
+    {
+        var cfg = new VimConfig();
+
+        cfg.ParseLines([
+            "let g:outer = 1",
+            "let g:inner = 0",
+            "if g:outer",
+            "  if g:inner",
+            "    let g:branch = 'inner'",
+            "  else",
+            "    let g:branch = 'nested_else'",
+            "  endif",
+            "else",
+            "  let g:branch = 'outer_else'",
+            "endif",
+        ]);
+
+        Assert.Equal("nested_else", cfg.Variables["g:branch"]);
+    }
+
+    [Fact]
     public void VimConfig_LoadFromFile_TracksSourceScripts()
     {
         var dir = Path.Combine(Path.GetTempPath(), "editor-vimconfig-" + Guid.NewGuid().ToString("N"));
@@ -1154,6 +1216,30 @@ public class VimEngineTests
             Assert.Equal([Path.GetFullPath(main), Path.GetFullPath(plugin)], cfg.ScriptNames);
             Assert.Equal("1", cfg.Variables["g:plugin_loaded"]);
             Assert.True(cfg.Options.Number);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void VimConfig_LoadFromFile_SourceHonorsIfBlocks()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "editor-vimconfig-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var main = Path.Combine(dir, "main.vim");
+            var plugin = Path.Combine(dir, "plugin.vim");
+            File.WriteAllText(main, "let g:enabled = 0\nsource plugin.vim\n");
+            File.WriteAllText(plugin,
+                "if g:enabled\nlet g:plugin_branch = 'if'\nelse\nlet g:plugin_branch = 'else'\nendif\n");
+
+            var cfg = VimConfig.LoadFromFile(main);
+
+            Assert.Equal("else", cfg.Variables["g:plugin_branch"]);
+            Assert.Equal([Path.GetFullPath(main), Path.GetFullPath(plugin)], cfg.ScriptNames);
         }
         finally
         {

@@ -986,6 +986,17 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void If_InteractiveCommandReturnsMissingEndifError()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("if 1", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Equal("E580: :endif missing", result.Message);
+    }
+
+    [Fact]
     public void RangeYank_YanksLinesToRegister()
     {
         var (processor, buffers, registers) = CreateProcessorWithRegisters();
