@@ -1,0 +1,108 @@
+# ホスト統合のための API 追加要望（from Loomo）
+
+このドキュメントは、`sk0ya.Editor.Controls`（`VimEditorControl`）を**ホストアプリに埋め込んで**使う側
+（具体的には Loomo: C#/WPF の AI エージェントアプリ）からの API 追加要望をまとめたものです。
+
+対象バージョン: `sk0ya.Editor.Controls` 1.0.0 / `Editor.Core` 1.0.0
+作成日: 2026-05-31
+
+---
+
+## 背景：ホストでやりたいこと
+
+Loomo では、設定の**長文項目**（システムプロンプト、危険コマンドのブロックリスト＝正規表現の一覧）を、
+狭いサイドバーの `TextBox` ではなく**中央のエディタペインで編集**させたい。理想的には：
+
+1. 任意のテキスト（ファイルに紐づかない「仮想ドキュメント」）をエディタで開く。
+2. ユーザーが `:w` で保存したら、その**内容をホストのコールバック**へ渡す（永続先はホストが決める＝
+   Loomo では `settings.json`。エディタにファイルを書かせたいわけではない）。
+3. 保存後、エディタの **modified フラグが解除**され、`:q` で「未保存」警告が出ないこと。
+
+---
+
+## 現状の API でできること / 困っていること
+
+現行 1.0.0 でも**一応実装は可能**で、Loomo は次のように実装している（ワークアラウンド）：
+
+- `LoadFile(tempPath)` … 一時ファイル（`%TEMP%/Loomo/...`）に内容を書いてから開く（仮想バッファが無いため）。
+- `SaveRequested` イベント購読 … `:w` の検知。エディタは自前で書き込まず、ホストに保存を委譲する契約。
+- 保存ハンドラ内で `editor.OnSaveStarted()` → **`editor.Engine.CurrentBuffer.Save(path)`** → `editor.OnSaveFinished()`
+  を呼んで実書き込み＋modified 解除。
+- `editor.Text` で最新内容を取得し、ホストのコールバックへ渡す。
+
+### 困っている点
+
+1. **`Engine.CurrentBuffer.Save(...)` という内部に手を伸ばす必要がある。**
+   ホストが保存を完了させる手段が「`Engine`（`Editor.Core` の型）→ `CurrentBuffer`（`VimBuffer`）→ `Save`」しか
+   なく、`Editor.Core` の内部構造に密結合する。`Editor.Controls` だけを参照して完結できない。
+
+2. **ファイルに紐づかない「仮想ドキュメント」を開く正規の手段が無い。**
+   そのため一時ファイルを作る必要があり、本来ディスクに残したくない内容（設定）がスクラッチファイルとして
+   `%TEMP%` に残る。
+
+3. **modified フラグやドキュメント種別をホストから扱う公開 API が乏しい**
+   （`IsModified` は公開されておらず、`SaveRequestedEventArgs` は `FilePath` のみで、仮想ドキュメントの識別子が無い）。
+
+---
+
+## 要望（優先度順）
+
+### 1.（高）ホスト向けの保存メソッド `VimEditorControl.Save(string? path = null)`
+
+`SaveRequested` ハンドラ内でホストが呼ぶだけで、`OnSaveStarted` → バッファ保存 → modified 解除 → `OnSaveFinished`
+までを内部で完結させるショートカット。`Engine.CurrentBuffer` への到達を不要にする。
+
+```csharp
+// 期待する使い方
+editor.SaveRequested += (s, e) =>
+{
+    var content = editor.Text;          // 先に内容を取得
+    editor.Save(e.FilePath);            // 内部で OnSaveStarted/CurrentBuffer.Save/OnSaveFinished 相当
+    Persist(content);                   // ホスト側の永続化
+};
+```
+
+これだけでも要望 1（内部依存）は解消する。
+
+### 2.（中）仮想ドキュメントのサポート
+
+ファイルを介さずに「タイトル付きの編集可能バッファ」を開けるようにする。
+
+```csharp
+// 例
+string id = editor.OpenVirtualDocument(title: "loomo-system-prompt", content: initialText, syntax: "markdown");
+```
+
+- ディスクにファイルを作らない（タブのタイトルには `title` を表示）。
+- `:w` 時に `SaveRequested` を発火するが、**仮想ドキュメントである識別子**をイベントで渡せること（下記 3）。
+
+### 3.（中）`SaveRequestedEventArgs` の拡張
+
+仮想ドキュメントの保存を識別・処理できるよう、最低限どちらかを追加：
+
+```csharp
+public class SaveRequestedEventArgs : EventArgs
+{
+    public string? FilePath { get; }        // 既存
+    public bool   IsVirtual { get; }        // 追加: 仮想ドキュメントか
+    public string? DocumentId { get; }      // 追加: OpenVirtualDocument が返した id
+    // 内容自体は editor.Text で取得できるため Args に含めなくても可
+}
+```
+
+### 4.（低）`VimEditorControl.IsModified { get; }` の公開
+
+ホストが「未保存あり」を UI 表示・終了確認に使えるようにする（現状は内部のみ）。
+
+### 5.（低）仮想ドキュメントの modified 解除 `editor.MarkSaved(string? documentId = null)`
+
+ホストが永続化を終えた後に modified を落とすための明示 API（要望 1 の `Save` で代替できるなら不要）。
+
+---
+
+## まとめ
+
+- **要望 1（`Save` メソッド）だけでも実装が大幅にきれいになる**（`Editor.Core` 内部への依存が消える）。これが最優先。
+- 仮想ドキュメント（要望 2・3）が入ると、一時ファイルのワークアラウンドが不要になり、設定のような
+  「ディスクに残したくない内容」をエディタで安全に編集できる。
+- 現状でも Loomo 側は動作するため、これらは**ブロッカーではなく改善要望**。

@@ -18,6 +18,14 @@ public class VimBuffer
     /// <summary>File encoding name (vim-style, e.g. "utf-8", "utf-16", "latin1").</summary>
     public string FileEncoding { get; set; } = "utf-8";
 
+    // ─── Virtual document (not backed by a file on disk) ───
+    /// <summary>True when this buffer is an in-memory document with no backing file.</summary>
+    public bool IsVirtual { get; set; }
+    /// <summary>Host-supplied identifier for a virtual document (null for file-backed buffers).</summary>
+    public string? DocumentId { get; set; }
+    /// <summary>Display title for a virtual document (shown instead of a file name).</summary>
+    public string? DisplayName { get; set; }
+
     private static int _nextId = 1;
     public VimBuffer() => Id = _nextId++;
     public VimBuffer(string filePath, string? preferredEncoding = null) : this()

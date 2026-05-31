@@ -19,9 +19,13 @@ using Editor.Core.Snippets;
 
 namespace Editor.Controls;
 
-public class SaveRequestedEventArgs(string? filePath) : EventArgs
+public class SaveRequestedEventArgs(string? filePath, bool isVirtual = false, string? documentId = null) : EventArgs
 {
     public string? FilePath { get; } = filePath;
+    /// <summary>True when the saved buffer is a virtual document (see <see cref="VimEditorControl.OpenVirtualDocument"/>).</summary>
+    public bool IsVirtual { get; } = isVirtual;
+    /// <summary>The id returned by <see cref="VimEditorControl.OpenVirtualDocument"/>, or null for file-backed buffers.</summary>
+    public string? DocumentId { get; } = documentId;
 }
 public class QuitRequestedEventArgs(bool force) : EventArgs
 {
@@ -295,6 +299,10 @@ public partial class VimEditorControl : UserControl
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
     public string? FilePath => _engine.CurrentBuffer.FilePath;
+    /// <summary>True when the current buffer has unsaved changes.</summary>
+    public bool IsModified => _engine.CurrentBuffer.Text.IsModified;
+    /// <summary>True when the current buffer is a virtual (file-less) document.</summary>
+    public bool IsVirtualDocument => _engine.CurrentBuffer.IsVirtual;
     public VimEngine Engine => _engine;
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => _lspManager.CurrentDiagnostics;
     public double VerticalScrollRatio
@@ -967,6 +975,77 @@ public partial class VimEditorControl : UserControl
         else
             SyncStatusBar();
         _saveStartedFilePath = null;
+    }
+
+    /// <summary>
+    /// Host-facing save shortcut for use inside a <see cref="SaveRequested"/> handler. Writes the
+    /// current buffer to disk (to <paramref name="path"/> when given, otherwise the buffer's own
+    /// path), clears the modified flag, and brackets the write with
+    /// <see cref="OnSaveStarted"/>/<see cref="OnSaveFinished"/> so the file watcher does not raise a
+    /// reload prompt. Hosts no longer need to reach into <c>Engine.CurrentBuffer</c>.
+    /// Not valid for virtual documents (which have no path) — use <see cref="MarkSaved"/> instead.
+    /// </summary>
+    public void Save(string? path = null)
+    {
+        OnSaveStarted();
+        try
+        {
+            _engine.CurrentBuffer.Save(path);
+        }
+        finally
+        {
+            OnSaveFinished();
+        }
+    }
+
+    /// <summary>
+    /// Opens an in-memory document that is not backed by a file; nothing is written to disk.
+    /// On <c>:w</c> the control raises <see cref="SaveRequested"/> with
+    /// <see cref="SaveRequestedEventArgs.IsVirtual"/> set and the returned id in
+    /// <see cref="SaveRequestedEventArgs.DocumentId"/>, letting the host persist the content
+    /// (available via <see cref="Text"/>) wherever it wants. After persisting, call
+    /// <see cref="MarkSaved"/> to clear the modified flag.
+    /// </summary>
+    /// <param name="title">Display title for the document (used instead of a file name).</param>
+    /// <param name="content">Initial text content.</param>
+    /// <param name="syntax">Syntax language name for highlighting (e.g. "Markdown", "C#"), or null for none.</param>
+    /// <returns>An opaque document id reported back on save.</returns>
+    public string OpenVirtualDocument(string title, string content = "", string? syntax = null)
+    {
+        ExitMultiCursorMode();
+        ClearSelectionRangeState();
+        _fileWatcher?.Dispose();
+        _fileWatcher = null;
+
+        var id = Guid.NewGuid().ToString("N");
+        var buf = _engine.CurrentBuffer;
+        _engine.SetText(content);
+        buf.FilePath = null;
+        buf.Text.MarkSaved();
+        buf.Undo.Clear();
+        buf.Folds.Clear();
+        buf.IsVirtual = true;
+        buf.DocumentId = id;
+        buf.DisplayName = title;
+
+        _engine.Syntax.SetLanguage(syntax ?? "");
+
+        UpdateAll();
+        SyncStatusBar();
+        return id;
+    }
+
+    /// <summary>
+    /// Clears the modified flag without writing to disk. Hosts call this after persisting a
+    /// virtual document's content themselves. When <paramref name="documentId"/> is supplied it
+    /// acts as a guard: the flag is only cleared if it matches the current document's id.
+    /// </summary>
+    public void MarkSaved(string? documentId = null)
+    {
+        if (documentId != null && _engine.CurrentBuffer.DocumentId != documentId)
+            return;
+        _engine.CurrentBuffer.Text.MarkSaved();
+        SyncStatusBar();
     }
 
     private void SetupFileWatcher(string filePath)
@@ -3115,8 +3194,12 @@ public partial class VimEditorControl : UserControl
                     Canvas.SetSubstitutePreview(spe.PreviewLines);
                     break;
                 case VimEventType.SaveRequested when evt is SaveRequestedEvent sre:
-                    SaveRequested?.Invoke(this, new SaveRequestedEventArgs(sre.FilePath));
+                {
+                    var saveBuf = _engine.CurrentBuffer;
+                    SaveRequested?.Invoke(this, new SaveRequestedEventArgs(
+                        sre.FilePath, saveBuf.IsVirtual, saveBuf.DocumentId));
                     break;
+                }
                 case VimEventType.QuitRequested when evt is QuitRequestedEvent qre:
                     QuitRequested?.Invoke(this, new QuitRequestedEventArgs(qre.Force));
                     break;
