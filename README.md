@@ -89,47 +89,27 @@ Editor.Core.Tests -> Editor.Core
 - `Editor.Controls.Defaults`
   `Editor.Controls` 用の既定 Git/LSP 実装
 
-このリポジトリの NuGet 配布先は GitHub Packages です。利用には GitHub 認証が必要です。
-
-- 利用者は GitHub アカウントの `PAT classic` を作成してください
-- 必要な scope は最低でも `read:packages` です
-- package が private のままの場合、token の所有ユーザーにも package への read 権限が必要です
-- token を repo に commit しないでください
-
-まず `NuGet.Config.template` を `NuGet.Config` にコピーし、`YOUR_GITHUB_USERNAME` と `YOUR_GITHUB_PAT_CLASSIC` を自分の値に置き換えます。`NuGet.Config` は `.gitignore` 済みです。
-
-```bash
-copy NuGet.Config.template NuGet.Config
-```
-
-`NuGet.Config` を使って restore する方法でも構いませんが、ローカル環境の NuGet source として登録しておく方が扱いやすいです。
-
-```bash
-dotnet nuget add source --username YOUR_GITHUB_USER --password YOUR_GITHUB_PAT --store-password-in-clear-text --name github "https://nuget.pkg.github.com/sk0ya/index.json"
-```
+このリポジトリの NuGet 配布先は [nuget.org](https://www.nuget.org/) です。公開パッケージは認証なしで取得できます。
 
 利用側のアプリでは、コントロール本体と既定実装を追加します。
 
 ```bash
-dotnet add package Editor.Controls --version 0.1.1
-dotnet add package Editor.Controls.Defaults --version 0.1.1
+dotnet add package sk0ya.Editor.Controls --version 1.0.1
+dotnet add package sk0ya.Editor.Controls.Defaults --version 1.0.1
 ```
+
+`sk0ya.Editor.Core` は上記パッケージの依存として自動的に取得されます。
 
 `Editor.App` では `VimEditorControlDefaults.CreateOptions()` を使って既定の Git/LSP 実装を注入しています。
 
-GitHub 公式ドキュメント:
+## NuGet 公開
 
-- GitHub Packages の NuGet registry: https://docs.github.com/en/enterprise-cloud@latest/packages/working-with-a-github-packages-registry/working-with-the-nuget-registry
-- package permissions: https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages
-
-## GitHub Packages 公開
-
-`.github/workflows/publish-nuget.yml` は次の条件でパッケージを公開します。
+`.github/workflows/publish-nuget.yml` は次の条件で nuget.org にパッケージを公開します。
 
 - `v*` 形式の Git タグを push したとき
-- GitHub Actions の `workflow_dispatch` で手動実行したとき
+- GitHub Actions の `workflow_dispatch` で手動実行したとき（`version` を指定）
 
-タグ `v0.1.1` を push すると、`0.1.1` を package version として `Editor.Core` / `Editor.Controls` / `Editor.Controls.Defaults` を GitHub Packages に push します。
+公開には GitHub リポジトリのシークレット `NUGET_API_KEY`（nuget.org の API キー）が必要です。タグ `v1.0.1` を push すると、`1.0.1` を package version として `sk0ya.Editor.Core` / `sk0ya.Editor.Controls` / `sk0ya.Editor.Controls.Defaults` を nuget.org に push します。
 
 ## LSP キーバインド
 
