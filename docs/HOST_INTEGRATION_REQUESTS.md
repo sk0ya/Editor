@@ -6,6 +6,11 @@
 対象バージョン: `sk0ya.Editor.Controls` 1.0.0 / `Editor.Core` 1.0.0
 作成日: 2026-05-31
 
+> **ステータス: 実装済み（1.0.1）。** 要望 1〜5 はすべて 1.0.1 で対応:
+> `VimEditorControl.Save(string?)` / `OpenVirtualDocument(title, content, syntax?)` / `MarkSaved(string?)` /
+> `IsModified` / `IsVirtualDocument`、および `SaveRequestedEventArgs` への `IsVirtual` / `DocumentId` 追加。
+> Loomo は 1.0.1 を参照し、仮想ドキュメント方式（一時ファイル不要）へ移行済み。以下は当初要望の記録。
+
 ---
 
 ## 背景：ホストでやりたいこと
