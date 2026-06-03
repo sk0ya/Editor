@@ -111,3 +111,34 @@ public class SaveRequestedEventArgs : EventArgs
 - 仮想ドキュメント（要望 2・3）が入ると、一時ファイルのワークアラウンドが不要になり、設定のような
   「ディスクに残したくない内容」をエディタで安全に編集できる。
 - 現状でも Loomo 側は動作するため、これらは**ブロッカーではなく改善要望**。
+
+---
+
+## 追加: メタ情報取得 API（1.0.2）
+
+ホストが「いまエディタで何が起きているか」を読み取れるよう、`VimEditorControl` に
+読み取り専用のメタ情報 API を追加。型はすべて `Editor.Controls` に定義され、
+ホストは `Editor.Controls` 参照だけで完結する（`Engine` 内部へ手を伸ばす必要なし）。
+
+```csharp
+// カーソル位置（0-based。Display* は 1-based 表示用）
+CaretInfo caret = editor.Caret;
+editor.CaretMoved += (s, c) => ShowStatus($"Ln {c.DisplayLine}, Col {c.DisplayColumn}");
+
+// 選択テキスト
+if (editor.HasSelection)
+{
+    string text = editor.SelectedText;          // 選択中の文字列（Vim 準拠・inclusive）
+    TextSelectionInfo? sel = editor.Selection;  // Start/End/Kind(Character/Line/Block) + Text
+}
+editor.SelectionChanged += (s, sel) => { /* sel == null で選択解除 */ };
+
+// ファイル/ドキュメント メタ
+DocumentMeta meta = editor.DocumentInfo;
+//   FilePath, IsVirtual, DocumentId, IsModified, LineCount, Language, Mode
+```
+
+- 公開型: `CaretInfo` / `TextSelectionInfo` / `SelectionKind` / `DocumentMeta`（すべて `Editor.Controls`）。
+- 公開メンバ: `Caret` / `CaretMoved`、`HasSelection` / `SelectedText` / `Selection` / `SelectionChanged`、`DocumentInfo`。
+- 選択テキスト抽出は `VimEngine.GetSelectionText()`（副作用なし＝レジスタ非破壊）に集約。
+- マウス位置の公開は今回は見送り（必要になれば `EditorCanvas` のヒットテストを中継して追加可能）。

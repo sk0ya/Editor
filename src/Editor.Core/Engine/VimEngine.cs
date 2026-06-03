@@ -99,6 +99,51 @@ public class VimEngine
     public ExCommandProcessor ExProcessor => _exProcessor;
     public bool FoldsDisabled => _foldDisabled;
 
+    /// <summary>
+    /// Returns the text covered by the current visual selection, honouring the
+    /// selection type (character/line/block). Returns an empty string when there
+    /// is no active selection. This has no side effects (registers untouched).
+    /// </summary>
+    public string GetSelectionText()
+    {
+        if (_selection is not { } sel || sel.IsEmpty) return string.Empty;
+        var buf = _bufferManager.Current.Text;
+        var start = sel.NormalizedStart;
+        var end = sel.NormalizedEnd;
+
+        switch (sel.Type)
+        {
+            case SelectionType.Line:
+                return string.Join("\n", buf.GetLines(start.Line, end.Line));
+
+            case SelectionType.Block:
+            {
+                var lines = new List<string>();
+                foreach (var range in GetBlockLineRanges(sel))
+                {
+                    var text = buf.GetLine(range.Line);
+                    if (text.Length <= range.StartColumn) { lines.Add(""); continue; }
+                    var endExclusive = Math.Min(text.Length, range.EndColumn + 1);
+                    lines.Add(text[range.StartColumn..endExclusive]);
+                }
+                return string.Join("\n", lines);
+            }
+
+            default: // Character
+                if (start.Line == end.Line)
+                {
+                    int endCol = Math.Min(end.Column + 1, buf.GetLineLength(start.Line));
+                    return buf.GetLine(start.Line)[start.Column..endCol];
+                }
+                var sb = new System.Text.StringBuilder();
+                sb.Append(buf.GetLine(start.Line)[start.Column..]);
+                for (int l = start.Line + 1; l < end.Line; l++)
+                    sb.Append('\n').Append(buf.GetLine(l));
+                sb.Append('\n').Append(buf.GetLine(end.Line)[..Math.Min(end.Column + 1, buf.GetLineLength(end.Line))]);
+                return sb.ToString();
+        }
+    }
+
     /// <summary>Sets the viewport state so H/M/L motions target correct visible lines.</summary>
     public void SetViewportState(int topLine, int visibleLines)
     {

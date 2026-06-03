@@ -115,6 +115,41 @@ public class GitCommitRequestedEventArgs(string? filePath, string template) : Ev
     public string Template { get; } = template;
 }
 
+/// <summary>The kind of a text selection (mirrors the engine's selection type).</summary>
+public enum SelectionKind { Character, Line, Block }
+
+/// <summary>
+/// Caret (cursor) position exposed to hosts. <see cref="Line"/> and <see cref="Column"/>
+/// are 0-based; use <see cref="DisplayLine"/>/<see cref="DisplayColumn"/> for 1-based display.
+/// </summary>
+public sealed record CaretInfo(int Line, int Column)
+{
+    /// <summary>1-based line number for display.</summary>
+    public int DisplayLine => Line + 1;
+    /// <summary>1-based column number for display.</summary>
+    public int DisplayColumn => Column + 1;
+}
+
+/// <summary>
+/// A text selection exposed to hosts. Positions are 0-based and normalized so
+/// (<see cref="StartLine"/>, <see cref="StartColumn"/>) is never after the end.
+/// </summary>
+public sealed record TextSelectionInfo(
+    int StartLine, int StartColumn,
+    int EndLine, int EndColumn,
+    SelectionKind Kind,
+    string Text);
+
+/// <summary>Snapshot of metadata about the document currently shown in the editor.</summary>
+public sealed record DocumentMeta(
+    string? FilePath,
+    bool IsVirtual,
+    string? DocumentId,
+    bool IsModified,
+    int LineCount,
+    string? Language,
+    VimMode Mode);
+
 public partial class VimEditorControl : UserControl
 {
     // ─────────────── Win32 P/Invoke ───────────────
@@ -295,6 +330,10 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<TerminalCommandRequestedEvent>? TerminalCommandRequested;
     public event EventHandler? MarkdownPreviewRequested;
     public event EventHandler? ViewportScrolled;
+    /// <summary>Raised whenever the caret moves, carrying the new caret position.</summary>
+    public event EventHandler<CaretInfo>? CaretMoved;
+    /// <summary>Raised whenever the selection changes; the argument is null when the selection is cleared.</summary>
+    public event EventHandler<TextSelectionInfo?>? SelectionChanged;
 
     public VimMode CurrentMode => _engine.Mode;
     public string Text => _engine.CurrentBuffer.Text.GetText();
@@ -303,6 +342,54 @@ public partial class VimEditorControl : UserControl
     public bool IsModified => _engine.CurrentBuffer.Text.IsModified;
     /// <summary>True when the current buffer is a virtual (file-less) document.</summary>
     public bool IsVirtualDocument => _engine.CurrentBuffer.IsVirtual;
+
+    /// <summary>Current caret position (0-based line/column).</summary>
+    public CaretInfo Caret
+    {
+        get { var c = _engine.Cursor; return new CaretInfo(c.Line, c.Column); }
+    }
+
+    /// <summary>True when there is an active (non-empty) visual-mode selection.</summary>
+    public bool HasSelection => _engine.Selection is { } s && !s.IsEmpty;
+
+    /// <summary>The current selection, or null when nothing is selected.</summary>
+    public TextSelectionInfo? Selection => BuildSelectionInfo();
+
+    /// <summary>The currently selected text, or an empty string when nothing is selected.</summary>
+    public string SelectedText => _engine.GetSelectionText();
+
+    /// <summary>A metadata snapshot for the document currently shown in the editor.</summary>
+    public DocumentMeta DocumentInfo
+    {
+        get
+        {
+            var buf = _engine.CurrentBuffer;
+            return new DocumentMeta(
+                buf.FilePath,
+                buf.IsVirtual,
+                buf.DocumentId,
+                buf.Text.IsModified,
+                buf.Text.LineCount,
+                _engine.Syntax.LanguageName,
+                _engine.Mode);
+        }
+    }
+
+    private TextSelectionInfo? BuildSelectionInfo()
+    {
+        if (_engine.Selection is not { } sel || sel.IsEmpty) return null;
+        var start = sel.NormalizedStart;
+        var end = sel.NormalizedEnd;
+        var kind = sel.Type switch
+        {
+            SelectionType.Line => SelectionKind.Line,
+            SelectionType.Block => SelectionKind.Block,
+            _ => SelectionKind.Character,
+        };
+        return new TextSelectionInfo(
+            start.Line, start.Column, end.Line, end.Column, kind, _engine.GetSelectionText());
+    }
+
     public VimEngine Engine => _engine;
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => _lspManager.CurrentDiagnostics;
     public double VerticalScrollRatio
@@ -3137,6 +3224,7 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.CursorMoved when evt is CursorMovedEvent ce:
                     needCursorUpdate = true;
+                    CaretMoved?.Invoke(this, new CaretInfo(ce.Position.Line, ce.Position.Column));
                     if (!needFullUpdate)
                     {
                         Canvas.SetCursor(ce.Position);
@@ -3174,6 +3262,7 @@ public partial class VimEditorControl : UserControl
                     break;
                 case VimEventType.SelectionChanged when evt is SelectionChangedEvent se:
                     Canvas.SetSelection(se.Selection);
+                    SelectionChanged?.Invoke(this, BuildSelectionInfo());
                     break;
                 case VimEventType.StatusMessage when evt is StatusMessageEvent sme:
                     ActiveStatusBar.UpdateStatus(sme.Message);

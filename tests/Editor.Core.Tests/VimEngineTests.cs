@@ -151,6 +151,32 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void GetSelectionText_NoSelection_ReturnsEmpty()
+    {
+        var engine = CreateEngine("hello");
+        Assert.Equal("", engine.GetSelectionText());
+    }
+
+    [Fact]
+    public void GetSelectionText_CharacterwiseInclusive()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("v");   // selects 'h'
+        engine.ProcessKey("l");   // extend to 'e'
+        engine.ProcessKey("l");   // extend to 'l'
+        Assert.Equal("hel", engine.GetSelectionText());
+    }
+
+    [Fact]
+    public void GetSelectionText_Linewise()
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+        engine.ProcessKey("V");
+        engine.ProcessKey("j");
+        Assert.Equal("line1\nline2", engine.GetSelectionText());
+    }
+
+    [Fact]
     public void VisualMode_Gg_MovesToFirstLine()
     {
         var engine = CreateEngine("line1\nline2\nline3");
