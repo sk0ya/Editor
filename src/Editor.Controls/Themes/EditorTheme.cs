@@ -271,7 +271,11 @@ public class EditorTheme
         ConflictTheirs       = new SolidColorBrush(Color.FromArgb(0x22, 0x61, 0xAF, 0xEF)),
     };
 
-    public static EditorTheme GetByName(string name) => name.ToLower() switch
+    /// <summary>Names accepted by <see cref="GetByName"/> for the built-in themes.</summary>
+    public static IReadOnlyList<string> BuiltInThemeNames { get; } =
+        ["dark", "dracula", "nord", "tokyonight", "onedark"];
+
+    public static EditorTheme GetByName(string? name) => (name ?? "").ToLower() switch
     {
         "dracula"     => Dracula,
         "nord"        => Nord,

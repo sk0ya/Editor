@@ -1452,11 +1452,30 @@ public partial class VimEditorControl : UserControl
         ProcessVimEvents(events);
     }
 
+    /// <summary>
+    /// The color theme currently applied to the editor. Defaults to
+    /// <see cref="EditorTheme.Dracula"/>. Assign a new value (or call
+    /// <see cref="SetTheme(EditorTheme)"/> / <see cref="SetTheme(string)"/>) to change it.
+    /// </summary>
+    public EditorTheme Theme
+    {
+        get => _theme;
+        set => SetTheme(value);
+    }
+
+    /// <summary>Applies a color theme to the editor and all of its chrome.</summary>
     public void SetTheme(EditorTheme theme)
     {
-        _theme = theme;
+        _theme = theme ?? throw new ArgumentNullException(nameof(theme));
         ApplyTheme();
     }
+
+    /// <summary>
+    /// Applies a built-in color theme by name (case-insensitive), e.g. "dracula",
+    /// "nord", "tokyonight", "onedark" or "dark". Unknown names fall back to the
+    /// default dark theme. See <see cref="EditorTheme.BuiltInThemeNames"/>.
+    /// </summary>
+    public void SetTheme(string name) => SetTheme(EditorTheme.GetByName(name));
 
     /// <summary>
     /// Search workspace symbols via LSP. When isClass=true, returns only type-definition kinds
@@ -1473,6 +1492,44 @@ public partial class VimEditorControl : UserControl
         if (_sharedStatusBar != null) _sharedStatusBar.Theme = _theme;
         Background = _theme.Background;
         Canvas.InvalidateVisual();
+    }
+
+    // ─────────────── Font ───────────────
+
+    private string _editorFontFamily = "Consolas";
+    private double _editorFontSize = 14;
+
+    /// <summary>
+    /// The font family used to render editor text (the gutter, code, and
+    /// completion/diagnostic overlays). Defaults to "Consolas". Use a monospaced
+    /// font for correct column alignment.
+    /// </summary>
+    public string EditorFontFamily
+    {
+        get => _editorFontFamily;
+        set => SetFont(value, _editorFontSize);
+    }
+
+    /// <summary>
+    /// The font size (in device-independent pixels) used to render editor text.
+    /// Defaults to 14. Values are clamped to a minimum of 1.
+    /// </summary>
+    public double EditorFontSize
+    {
+        get => _editorFontSize;
+        set => SetFont(_editorFontFamily, value);
+    }
+
+    /// <summary>
+    /// Sets the editor font family and size in a single call, then re-renders.
+    /// A null/blank <paramref name="family"/> keeps the current family; the size
+    /// is clamped to a minimum of 1.
+    /// </summary>
+    public void SetFont(string family, double size)
+    {
+        if (!string.IsNullOrWhiteSpace(family)) _editorFontFamily = family;
+        _editorFontSize = Math.Max(1, size);
+        Canvas.UpdateFont(_editorFontFamily, _editorFontSize);
     }
 
     // ─────────────── Shared status bar ───────────────
