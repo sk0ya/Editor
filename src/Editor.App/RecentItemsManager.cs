@@ -28,6 +28,7 @@ internal sealed class RecentItemsManager
         public string? CustomBackground { get; set; }
         public string? CustomAccent { get; set; }
         public string MarkdownPreviewStyle { get; set; } = "Dracula";
+        public bool VimEnabled { get; set; } = true;
     }
 
     private RecentData _data;
@@ -45,6 +46,7 @@ internal sealed class RecentItemsManager
     public string? CustomBackground => _data.CustomBackground;
     public string? CustomAccent => _data.CustomAccent;
     public string MarkdownPreviewStyle => _data.MarkdownPreviewStyle;
+    public bool VimEnabled => _data.VimEnabled;
 
     public void AddFolder(string path)
     {
@@ -75,6 +77,12 @@ internal sealed class RecentItemsManager
     public void SaveMarkdownPreviewStyle(string style)
     {
         _data.MarkdownPreviewStyle = style;
+        Save();
+    }
+
+    public void SaveVimEnabled(bool enabled)
+    {
+        _data.VimEnabled = enabled;
         Save();
     }
 

@@ -200,6 +200,7 @@ public partial class MainWindow : Window
     private string? _customBackground;
     private string? _customAccent;
     private string _markdownPreviewStyle = "Dracula";
+    private bool _vimEnabled = true;
     private bool _sidebarVisible;
     private double _sidebarWidth = 220;
     private string? _currentFolderPath;
@@ -271,6 +272,10 @@ public partial class MainWindow : Window
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
+        // Restore the Vim on/off setting before any editor is created so the
+        // initial editor picks it up via CreateEditor.
+        _vimEnabled = _recentItems.VimEnabled;
+
         // Create the initial global editor and set up the pane tree
         var initialEditor = CreateEditor(null);
         _globalRoot = new EditorPaneNode { Editor = initialEditor };
@@ -298,6 +303,7 @@ public partial class MainWindow : Window
         ApplyTabPlacement(_recentItems.TabPlacement);
         ApplyColorTheme(_recentItems.ThemeName, _recentItems.CustomBackground, _recentItems.CustomAccent);
         ApplyMarkdownPreviewStyle(_recentItems.MarkdownPreviewStyle);
+        VimEnabledCheck.IsChecked = _vimEnabled;
         InitColorPalettes();
 
         // Restore command/search history from viminfo
@@ -1055,6 +1061,7 @@ public partial class MainWindow : Window
     {
         var editor = new VimEditorControl(VimEditorControlDefaults.CreateOptions());
         editor.SetTheme(_currentTheme);
+        editor.VimEnabled = _vimEnabled;
         editor.SetSharedStatusBar(SharedStatusBar);
         WireEditorEvents(editor);
         if (filePath != null && File.Exists(filePath))
@@ -3033,6 +3040,19 @@ public partial class MainWindow : Window
         if (sender is not RadioButton rb || rb.Tag is not string placementStr) return;
         ApplyTabPlacement(placementStr);
         _recentItems.SaveTabPlacement(placementStr);
+    }
+
+    private void VimEnabled_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (sender is not CheckBox cb) return;
+        bool enabled = cb.IsChecked == true;
+        if (enabled == _vimEnabled) return;
+        _vimEnabled = enabled;
+        foreach (var ed in AllEditors())
+            ed.VimEnabled = _vimEnabled;
+        _recentItems.SaveVimEnabled(_vimEnabled);
+        _focusedEditor?.Focus();
     }
 
     private void ApplyTabPlacement(string placement)

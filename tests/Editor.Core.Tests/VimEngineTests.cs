@@ -117,6 +117,228 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void WhenVimDisabled_CtrlA_DoesNotEnterVisualMode()
+    {
+        // Regression: Ctrl+A used to run SelectAllVisualLine and re-expose modal
+        // editing. With the central plain-text gate it is inert.
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("a", ctrl: true);
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Null(engine.Selection);
+    }
+
+    [Fact]
+    public void WhenVimDisabled_CtrlW_DoesNotDeleteWord()
+    {
+        // Vim insert Ctrl+W (delete word back) must not run in plain mode.
+        var engine = CreateEngine("");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("h");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w", ctrl: true);
+        Assert.Equal("hi", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_CtrlR_DoesNotEnterRegisterPending()
+    {
+        // Ctrl+R used to set _awaitingInsertRegister and swallow the next key.
+        var engine = CreateEngine("");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("r", ctrl: true);
+        engine.ProcessKey("x");
+        Assert.Equal("x", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_BackspaceDeletesChar()
+    {
+        var engine = CreateEngine("");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("h");
+        engine.ProcessKey("i");
+        engine.ProcessKey("Back");
+        Assert.Equal("h", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_CtrlZ_UndoesEditRunAsOneStep()
+    {
+        var engine = CreateEngine("");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("h");
+        engine.ProcessKey("i");
+        engine.ProcessKey("z", ctrl: true); // undo the whole typing run
+        Assert.Equal("", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_CursorMovementSplitsUndoGroups()
+    {
+        var engine = CreateEngine("");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("a");
+        engine.ProcessKey("Left");  // ends the first edit run
+        engine.ProcessKey("b");
+        engine.ProcessKey("z", ctrl: true); // undo only the second run
+        Assert.Equal("a", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_MouseDrag_SetsSelectionWithoutEnteringVisual()
+    {
+        // Regression: mouse drag used to send ProcessKey("v"), inserting a literal
+        // 'v'. It must now set a plain selection and stay out of Visual mode.
+        var engine = CreateEngine("hello world");
+        engine.SetVimEnabled(false);
+        // Half-open [0,5): selects "hello" (caret boundary excluded).
+        engine.SetPlainSelection(new CursorPosition(0, 0), new CursorPosition(0, 5));
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.NotNull(engine.Selection);
+        Assert.Equal("hello world", engine.CurrentBuffer.Text.GetText()); // no stray 'v'
+        Assert.Equal("hello", engine.GetSelectionText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_TypingReplacesPlainSelection()
+    {
+        var engine = CreateEngine("hello world");
+        engine.SetVimEnabled(false);
+        engine.SetPlainSelection(new CursorPosition(0, 0), new CursorPosition(0, 5)); // "hello"
+        engine.ProcessKey("H");
+        engine.ProcessKey("i");
+        Assert.Equal("Hi world", engine.CurrentBuffer.Text.GetText());
+        Assert.Null(engine.Selection);
+    }
+
+    [Fact]
+    public void WhenVimDisabled_BackspaceDeletesPlainSelection()
+    {
+        var engine = CreateEngine("hello world");
+        engine.SetVimEnabled(false);
+        engine.SetPlainSelection(new CursorPosition(0, 0), new CursorPosition(0, 6)); // "hello "
+        engine.ProcessKey("Back");
+        Assert.Equal("world", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_ClickClearsPlainSelection()
+    {
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.SetPlainSelection(new CursorPosition(0, 0), new CursorPosition(0, 3));
+        Assert.NotNull(engine.Selection);
+        engine.ClearPlainSelection();
+        Assert.Null(engine.Selection);
+    }
+
+    [Fact]
+    public void WhenVimDisabled_ShiftRightExtendsSelection()
+    {
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("Right", shift: true);
+        engine.ProcessKey("Right", shift: true);
+        Assert.NotNull(engine.Selection);
+        Assert.Equal("he", engine.GetSelectionText()); // anchor at 0, caret extended
+    }
+
+    [Fact]
+    public void WhenVimDisabled_ArrowWithoutShiftClearsSelection()
+    {
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.SetPlainSelection(new CursorPosition(0, 0), new CursorPosition(0, 3));
+        engine.ProcessKey("Right"); // no shift → clears selection
+        Assert.Null(engine.Selection);
+    }
+
+    [Fact]
+    public void WhenVimDisabled_HomeAndEndDoNotInsertText()
+    {
+        // Regression: Home/End used to arrive as the Vim motions "0"/"$" and be
+        // inserted as literal characters in plain mode.
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("End");
+        engine.ProcessKey("Home");
+        Assert.Equal("hello", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void WhenVimDisabled_SingleCharSelection_CanBeDeletedByTyping()
+    {
+        // Regression: a 1-char plain selection used to collapse to Selection.IsEmpty
+        // (inclusive End == Start), so it couldn't be deleted/replaced/copied.
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.SetPlainSelection(new CursorPosition(0, 0), new CursorPosition(0, 1)); // "h"
+        engine.ProcessKey("X"); // typing must replace the selected char, not insert before it
+        Assert.Equal("Xello", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_SingleCharSelection_BackspaceDeletesIt()
+    {
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.SetPlainSelection(new CursorPosition(0, 0), new CursorPosition(0, 1)); // "h"
+        engine.ProcessKey("Back");
+        Assert.Equal("ello", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_CutThenUndo_RestoresText()
+    {
+        // Regression: Ctrl+X cut ran with snapshots suppressed and took no snapshot
+        // of its own, so the cut could not be undone.
+        var engine = CreateEngine("hello world");
+        engine.SetVimEnabled(false);
+        engine.SetPlainSelection(new CursorPosition(0, 0), new CursorPosition(0, 6)); // "hello "
+        engine.ProcessKey("x", ctrl: true); // cut
+        Assert.Equal("world", engine.CurrentBuffer.Text.GetText());
+        engine.ProcessKey("z", ctrl: true); // undo
+        Assert.Equal("hello world", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_DeleteAtEndOfLine_JoinsNextLine()
+    {
+        // Regression: forward-Delete at end of line was a no-op (couldn't join).
+        var engine = CreateEngine("ab\ncd");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("End"); // caret at column 2 (end of "ab")
+        engine.ProcessKey("Delete");
+        Assert.Equal("abcd", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_DeleteAtEndOfBuffer_IsNoOp()
+    {
+        var engine = CreateEngine("ab");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("End");
+        engine.ProcessKey("Delete"); // nothing to delete or join
+        Assert.Equal("ab", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_DownArrowCanReachEndOfShorterLine()
+    {
+        // Regression: Up/Down clamped to lineLen-1, stranding the caret one cell
+        // short of end-of-line. Typing should land at the true end.
+        var engine = CreateEngine("abcd\nab");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("End");  // end of "abcd" (column 4)
+        engine.ProcessKey("Down"); // goal column 4 → clamp to end of "ab" (column 2)
+        Assert.Equal(2, engine.Cursor.Column);
+        engine.ProcessKey("Z");
+        Assert.Equal("abcd\nabZ", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
     public void SetSelection_EntersVisualModeAndSetsCursorAndSelection()
     {
         var engine = CreateEngine("abcdef");

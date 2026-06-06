@@ -233,6 +233,48 @@
             </Setter>
         </Style>
 
+        <Style x:Key="SettingCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="FontFamily" Value="Cascadia Code, Consolas"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="Box" Grid.Column="0" Width="14" Height="14"
+                                    CornerRadius="2" BorderBrush="#666666" BorderThickness="1.5"
+                                    Background="Transparent"
+                                    VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <TextBlock x:Name="Check" Text="&#xE73E;"
+                                           FontFamily="Segoe MDL2 Assets" FontSize="9"
+                                           Foreground="#CCCCCC"
+                                           VerticalAlignment="Center" HorizontalAlignment="Center"
+                                           Visibility="Collapsed"/>
+                            </Border>
+                            <ContentPresenter Grid.Column="1" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="Box" Property="BorderBrush" Value="#CCCCCC"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Box" Property="BorderBrush" Value="#AAAAAA"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- ── Activity Bar toggle button ── -->
         <Style x:Key="ActivityBarButton" TargetType="ToggleButton">
             <Setter Property="Width" Value="48"/>
@@ -844,6 +886,20 @@
 
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="12,12,12,12">
+
+                        <TextBlock Text="エディタ"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="#888888"
+                                   FontFamily="Cascadia Code, Consolas"
+                                   Margin="0,0,0,6"/>
+                        <CheckBox x:Name="VimEnabledCheck"
+                                  Content="Vimキーバインドを有効にする"
+                                  Style="{StaticResource SettingCheckBox}"
+                                  Checked="VimEnabled_Changed"
+                                  Unchecked="VimEnabled_Changed"/>
+
+                        <!-- Separator -->
+                        <Border Height="1" Background="#3A3D46" Margin="0,14,0,14"/>
 
                         <TextBlock Text="タブの位置"
                                    FontSize="11" FontWeight="SemiBold"

@@ -25,6 +25,14 @@ public class VimEngine
 
     private VimMode _mode = VimMode.Normal;
     private bool _vimEnabled = true;
+    // Plain (Vim-disabled) editing groups a run of edits into a single undo step;
+    // cursor movement ends the run so the next edit starts a fresh undo group.
+    private bool _plainEditRunActive;
+    // Plain selection is tracked as half-open caret boundaries [anchor, caret)
+    // (standard text-box semantics), then converted to an inclusive cell Selection
+    // for rendering/yank/delete. _plainSelActive marks an in-progress selection.
+    private bool _plainSelActive;
+    private CursorPosition _plainSelAnchor;
     private CursorPosition _cursor = CursorPosition.Zero;
     private bool _suppressSnapshot;
     private Selection? _selection;
@@ -302,10 +310,15 @@ public class VimEngine
         }
 
         _vimEnabled = enabled;
+        _plainEditRunActive = false;
+        _plainSelActive = false;
 
         if (!enabled)
         {
-            // Drop into a plain-editor insert state.
+            // Present an Insert-mode resting state to the host so it renders a
+            // text caret and routes IME/text input here. Key *handling* while
+            // disabled is done entirely by HandlePlainTextKey via the gate in
+            // ProcessStroke — this mode value is for the host's benefit only.
             _insertStart = _cursor;
             ChangeMode(VimMode.Insert, events);
         }
@@ -335,6 +348,17 @@ public class VimEngine
 
     private void ProcessStroke(VimKeyStroke stroke, List<VimEvent> events, bool allowMapping)
     {
+        // Single decision point for the Vim-disabled (plain editor) state. Every
+        // key is routed to one minimal handler — no modal mappings, macro
+        // recording, pastetoggle, or Vim insert-mode key semantics run. This
+        // replaces the previous approach of forcing Insert mode and patching its
+        // individual exits, which leaked modal behaviour (e.g. Ctrl+A → Visual).
+        if (!_vimEnabled)
+        {
+            HandlePlainTextKey(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt, events);
+            return;
+        }
+
         if (allowMapping && TryApplyMapping(stroke, events))
             return;
 
@@ -1626,19 +1650,12 @@ public class VimEngine
             switch (key.ToLower())
             {
                 case "[": // Ctrl+[
-                    // When Vim is disabled the editor is permanently in insert mode;
-                    // Ctrl+[ (Vim's Escape synonym) must not leave insert mode.
-                    if (_vimEnabled)
-                        ExitInsertMode(events);
+                    ExitInsertMode(events);
                     return;
                 case "w": DeleteWordBack(events); return;
                 case "u": DeleteLineBack(events); return;
                 case "h": DeleteCharBack(events); return;
                 case "o": // Ctrl+O — execute one Normal command then return to Insert
-                    // Suppressed when Vim is disabled: the temporary Normal-mode
-                    // hop would re-expose modal editing the host turned off.
-                    if (!_vimEnabled)
-                        return;
                     _pendingInsertReturn = true;
                     ChangeMode(VimMode.Normal, events);
                     return;
@@ -1693,10 +1710,7 @@ public class VimEngine
         switch (key)
         {
             case "Escape":
-                // When Vim is disabled the editor is permanently in insert mode;
-                // Escape must not drop the user into Normal mode.
-                if (_vimEnabled)
-                    ExitInsertMode(events);
+                ExitInsertMode(events);
                 break;
             case "Back":
                 if (_config.Options.Pairs && !_config.Options.Paste && _mode == VimMode.Insert && _cursor.Column > 0)
@@ -1802,6 +1816,282 @@ public class VimEngine
                 }
                 break;
         }
+    }
+
+    // ─────────────── PLAIN (Vim-disabled) MODE ───────────────
+    // Sole input handler when VimEnabled == false. Behaves like an ordinary text
+    // box: text insertion, navigation and a small set of standard shortcuts.
+    // Deliberately excludes every Vim-specific behaviour — no Normal/Visual/Command
+    // modes, no mappings/abbreviations, no Vim insert-mode Ctrl keys (W/U/R/K/X/O),
+    // digraphs, completion sub-modes, or pastetoggle. Nothing here ever changes
+    // _mode, so modal editing cannot leak back in.
+    private void HandlePlainTextKey(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        bool hasSelection = PlainSelectionRange() is not null;
+
+        if (ctrl && !alt)
+        {
+            switch (key.ToLowerInvariant())
+            {
+                case "z": _plainEditRunActive = false; ClearPlainSelection(events); ExecuteUndo(events); return;
+                case "y": _plainEditRunActive = false; ClearPlainSelection(events); ExecuteRedo(events); return;
+                case "c": // Copy selection (or, with no selection, the whole current line) to the clipboard.
+                    if (hasSelection) CopyPlainSelectionToClipboard();
+                    else CopyCurrentLineToClipboard();
+                    return;
+                case "x": // Cut selection to the clipboard.
+                    if (hasSelection) { CopyPlainSelectionToClipboard(); BeginPlainEdit(); DeletePlainSelection(events); }
+                    return;
+                case "v": // Paste, replacing any selection.
+                    BeginPlainEdit();
+                    if (hasSelection) DeletePlainSelection(events);
+                    PasteClipboardNoSnapshot(events);
+                    return;
+            }
+            // Any other Ctrl combo is inert in plain mode (never inserted as text).
+            return;
+        }
+
+        switch (key)
+        {
+            // Cursor movement: with Shift it extends the selection, otherwise it
+            // ends the current edit run and drops any selection.
+            case "Left":  PlainMoveCaret(new MotionEngine(buf).MoveLeft(_cursor), shift, events); return;
+            case "Right": PlainMoveCaret(new MotionEngine(buf).MoveRight(_cursor, 1, true), shift, events); return;
+            case "Up":    PlainMoveVertical(-1, shift, events); return;
+            case "Down":  PlainMoveVertical(1, shift, events); return;
+            case "Home":  PlainMoveCaret(_cursor with { Column = 0 }, shift, events); return;
+            case "End":   PlainMoveCaret(_cursor with { Column = buf.GetLineLength(_cursor.Line) }, shift, events); return;
+            case "Escape": ClearPlainSelection(events); return; // no mode to leave — just drop the selection
+            case "Back":
+                BeginPlainEdit();
+                if (hasSelection) DeletePlainSelection(events);
+                else DeleteCharBack(events);
+                return;
+            case "Delete":
+                if (hasSelection) { BeginPlainEdit(); DeletePlainSelection(events); return; }
+                // Forward delete: remove the char under the caret, or join the next
+                // line when at end-of-line. At end-of-buffer there is nothing to do,
+                // so we take no snapshot and emit no (spurious) TextChanged.
+                if (_cursor.Column < buf.GetLineLength(_cursor.Line))
+                {
+                    BeginPlainEdit();
+                    buf.DeleteChar(_cursor.Line, _cursor.Column);
+                    EmitText(events);
+                }
+                else if (_cursor.Line < buf.LineCount - 1)
+                {
+                    BeginPlainEdit();
+                    buf.JoinLines(_cursor.Line);
+                    EmitText(events);
+                }
+                return;
+            case "Return":
+                BeginPlainEdit();
+                if (hasSelection) DeletePlainSelection(events);
+                InsertNewline(events);
+                return;
+            case "Tab":
+                BeginPlainEdit();
+                if (hasSelection) DeletePlainSelection(events);
+                if (_config.Options.ExpandTab)
+                {
+                    var spaces = new string(' ', _config.Options.TabStop);
+                    buf.InsertText(_cursor.Line, _cursor.Column, spaces);
+                    _cursor = _cursor with { Column = _cursor.Column + spaces.Length };
+                }
+                else
+                {
+                    buf.InsertChar(_cursor.Line, _cursor.Column, '\t');
+                    _cursor = _cursor with { Column = _cursor.Column + 1 };
+                }
+                EmitText(events);
+                return;
+            default:
+                if (key.Length == 1)
+                {
+                    BeginPlainEdit();
+                    if (hasSelection) DeletePlainSelection(events);
+                    buf.InsertChar(_cursor.Line, _cursor.Column, key[0]);
+                    _cursor = _cursor with { Column = _cursor.Column + 1 };
+                    EmitText(events);
+                }
+                return;
+        }
+    }
+
+    // Snapshot once at the start of a contiguous run of plain-mode edits so the
+    // whole run undoes as a single step (cursor movement resets the run).
+    private void BeginPlainEdit()
+    {
+        if (_plainEditRunActive) return;
+        Snapshot();
+        _plainEditRunActive = true;
+    }
+
+    /// <summary>
+    /// Sets a plain (non-modal) selection anchored at <paramref name="anchor"/>
+    /// with the caret at <paramref name="caret"/>, without entering Visual mode.
+    /// Both are half-open caret boundaries (the caret position is excluded), giving
+    /// standard text-box selection. Used to drive mouse drag-selection while Vim is
+    /// disabled.
+    /// </summary>
+    public IReadOnlyList<VimEvent> SetPlainSelection(CursorPosition anchor, CursorPosition caret)
+    {
+        var buf = _bufferManager.Current.Text;
+        _plainSelActive = true;
+        _plainSelAnchor = buf.ClampCursor(anchor, insertMode: true);
+        var events = new List<VimEvent>();
+        UpdatePlainSelection(buf.ClampCursor(caret, insertMode: true), events);
+        _preferredColumn = _cursor.Column;
+        return events;
+    }
+
+    /// <summary>Clears any active plain selection (e.g. on a plain mouse click).</summary>
+    public IReadOnlyList<VimEvent> ClearPlainSelection()
+    {
+        var events = new List<VimEvent>();
+        ClearPlainSelection(events);
+        return events;
+    }
+
+    // Plain-mode keyboard caret move. With Shift it extends the selection from the
+    // existing anchor (or the current caret if none); without Shift it drops any
+    // selection and just moves the caret.
+    private void PlainMoveCaret(CursorPosition target, bool shift, List<VimEvent> events)
+    {
+        _plainEditRunActive = false;
+        if (shift)
+        {
+            if (!_plainSelActive) { _plainSelAnchor = _cursor; _plainSelActive = true; }
+            UpdatePlainSelection(target, events);
+        }
+        else
+        {
+            ClearPlainSelection(events);
+            _cursor = target;
+            EmitCursor(events);
+        }
+        _preferredColumn = _cursor.Column;
+    }
+
+    // Vertical caret move in plain mode. Uses _preferredColumn as the goal column
+    // (preserved across consecutive Up/Down) and an insert-mode column clamp so the
+    // caret can rest at end-of-line — unlike the Normal-mode MotionEngine.MoveUp/Down,
+    // which clamp to lineLen-1 and would strand the caret one cell short.
+    private void PlainMoveVertical(int delta, bool shift, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        int line = Math.Clamp(_cursor.Line + delta, 0, buf.LineCount - 1);
+        int col = Math.Min(_preferredColumn, buf.GetLineLength(line));
+        var target = new CursorPosition(line, col);
+        _plainEditRunActive = false;
+        if (shift)
+        {
+            if (!_plainSelActive) { _plainSelAnchor = _cursor; _plainSelActive = true; }
+            UpdatePlainSelection(target, events);
+        }
+        else
+        {
+            ClearPlainSelection(events);
+            _cursor = target;
+            EmitCursor(events);
+        }
+        // _preferredColumn is intentionally left unchanged so the goal column
+        // survives moving through shorter lines.
+    }
+
+    // Moves the caret to a boundary and recomputes the inclusive cell Selection for
+    // the half-open range [anchor, caret). Emits cursor + selection events.
+    private void UpdatePlainSelection(CursorPosition caret, List<VimEvent> events)
+    {
+        _cursor = caret;
+        events.Add(VimEvent.CursorMoved(_cursor));
+
+        if (PlainSelectionRange() is not { } range)
+        {
+            // Empty range — no characters selected.
+            if (_selection != null) { _selection = null; events.Add(VimEvent.SelectionChanged(null)); }
+            return;
+        }
+
+        _selection = new Selection(range.start, range.endCell, SelectionType.Character);
+        events.Add(VimEvent.SelectionChanged(_selection));
+    }
+
+    // The active plain selection as a normalized inclusive cell range [start, endCell],
+    // or null when there is no selection or it is empty. The source of truth is the
+    // half-open caret range [_plainSelAnchor, _cursor); converting to inclusive cells
+    // here means a single selected cell (anchor and caret one apart) is never mistaken
+    // for an empty Selection (whose Start == End reads as IsEmpty).
+    private (CursorPosition start, CursorPosition endCell)? PlainSelectionRange()
+    {
+        if (!_plainSelActive || _plainSelAnchor == _cursor) return null;
+        var (low, high) = ComparePos(_plainSelAnchor, _cursor) <= 0
+            ? (_plainSelAnchor, _cursor)
+            : (_cursor, _plainSelAnchor);
+        return (low, InclusiveEndCell(high));
+    }
+
+    // Converts the exclusive upper boundary of a selection to the inclusive cell
+    // index of the last selected character.
+    private CursorPosition InclusiveEndCell(CursorPosition boundary)
+    {
+        if (boundary.Column > 0)
+            return boundary with { Column = boundary.Column - 1 };
+        if (boundary.Line > 0)
+            return new CursorPosition(boundary.Line - 1, _bufferManager.Current.Text.GetLineLength(boundary.Line - 1));
+        return boundary;
+    }
+
+    private static int ComparePos(CursorPosition a, CursorPosition b)
+        => a.Line != b.Line ? a.Line.CompareTo(b.Line) : a.Column.CompareTo(b.Column);
+
+    private void ClearPlainSelection(List<VimEvent> events)
+    {
+        _plainSelActive = false;
+        if (_selection == null) return;
+        _selection = null;
+        events.Add(VimEvent.SelectionChanged(null));
+    }
+
+    // Deletes the active plain selection, leaving the caret at its start. Assumes
+    // a snapshot has already been taken (callers go through BeginPlainEdit).
+    private void DeletePlainSelection(List<VimEvent> events)
+    {
+        if (PlainSelectionRange() is not { } range) return;
+        _plainSelActive = false;
+        _selection = null;
+        events.Add(VimEvent.SelectionChanged(null));
+        var prevSuppress = _suppressSnapshot;
+        _suppressSnapshot = true; // BeginPlainEdit already snapshotted this run
+        ExecuteDelete(range.start, range.endCell, false, events);
+        _suppressSnapshot = prevSuppress;
+        _cursor = _bufferManager.Current.Text.ClampCursor(range.start, insertMode: true);
+        EmitCursor(events);
+    }
+
+    private void CopyPlainSelectionToClipboard()
+    {
+        if (PlainSelectionRange() is not { } range) return;
+        YankRange('+', range.start, range.endCell, false);
+    }
+
+    // Copy with no selection: yank the whole current line plus its trailing newline
+    // as a charwise register, so a later paste reproduces a full line instead of
+    // splicing the bare text into the middle of another line.
+    private void CopyCurrentLineToClipboard()
+    {
+        var buf = _bufferManager.Current.Text;
+        _registerManager.SetYank('+', new Register(buf.GetLine(_cursor.Line) + "\n", RegisterType.Character));
+    }
+
+    private void PasteClipboardNoSnapshot(List<VimEvent> events)
+    {
+        var reg = _registerManager.Get('+');
+        if (reg.IsEmpty) return;
+        InsertTextAtCursor(reg.Text, events);
     }
 
     // ─────────────── VISUAL MODE ───────────────

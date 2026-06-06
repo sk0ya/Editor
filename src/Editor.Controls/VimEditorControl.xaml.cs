@@ -248,6 +248,7 @@ public partial class VimEditorControl : UserControl
     private EditorTheme _theme = EditorTheme.Dracula;
     private bool _keyDownHandledByVim;
     private bool _isDragSelecting = false;
+    private CursorPosition _dragAnchor;
     private readonly IEditorLspManager _lspManager;
     private readonly IEditorGitService _gitProvider;
     private bool _blameActive;
@@ -345,7 +346,18 @@ public partial class VimEditorControl : UserControl
     public bool VimEnabled
     {
         get => _engine.VimEnabled;
-        set => ProcessVimEvents(_engine.SetVimEnabled(value));
+        set
+        {
+            if (!value)
+            {
+                // Entering plain mode: tear down any open LSP sub-mode UI so a popup
+                // left over from Vim editing can't linger and hijack keys.
+                _lspManager.HideCompletion();
+                _lspManager.HideSignatureHelp();
+                _completionDebounce.Stop();
+            }
+            ProcessVimEvents(_engine.SetVimEnabled(value));
+        }
     }
 
     public string Text => _engine.CurrentBuffer.Text.GetText();
@@ -1540,6 +1552,15 @@ public partial class VimEditorControl : UserControl
     {
         Focus();
         ClearSelectionRangeState();
+
+        // Vim disabled: drop any plain selection and move the caret like a text box.
+        if (!_engine.VimEnabled)
+        {
+            ProcessVimEvents(_engine.ClearPlainSelection());
+            ProcessVimEvents(_engine.SetCursorPosition(new CursorPosition(line, col)));
+            return;
+        }
+
         // Exit visual mode if active, then move cursor
         if (_engine.Mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock)
         {
@@ -1554,6 +1575,20 @@ public partial class VimEditorControl : UserControl
     private void OnCanvasMouseDragging(int line, int col)
     {
         ClearSelectionRangeState();
+
+        // Vim disabled: drive a plain (non-modal) character selection from the
+        // anchor instead of entering Visual mode (which would insert a literal 'v').
+        if (!_engine.VimEnabled)
+        {
+            if (!_isDragSelecting)
+            {
+                _isDragSelecting = true;
+                _dragAnchor = _engine.Cursor;
+            }
+            ProcessVimEvents(_engine.SetPlainSelection(_dragAnchor, new CursorPosition(line, col)));
+            return;
+        }
+
         if (!_isDragSelecting)
         {
             _isDragSelecting = true;
@@ -1758,7 +1793,7 @@ public partial class VimEditorControl : UserControl
             //   NO MATCH     → replay buffered + current to IME (if ASCII letters/
             //                  digits), or flush as literal text (fallback), then
             //                  check if the current key starts a new sequence.
-            if (e.Key == Key.ImeProcessed)
+            if (e.Key == Key.ImeProcessed && _engine.VimEnabled)
             {
                 // Replayed keys: skip imap detection and let the IME process them.
                 if (_replayingImeKeys)
@@ -2014,8 +2049,10 @@ public partial class VimEditorControl : UserControl
         // In normal/visual/command mode, handle all key presses as vim keys
         var mode = _engine.Mode;
 
-        // LSP: Ctrl+Space triggers completion in Insert mode
-        if (ctrl && key == Key.Space && mode == VimMode.Insert)
+        // LSP: Ctrl+Space triggers completion in Insert mode. Skipped when Vim is
+        // disabled — plain mode parks the engine in Insert as a resting state but
+        // must not expose completion sub-modes.
+        if (ctrl && key == Key.Space && mode == VimMode.Insert && _engine.VimEnabled)
         {
             var cursor = _engine.Cursor;
             _ = TriggerCompletionAsync(cursor.Line, cursor.Column);
@@ -2023,8 +2060,8 @@ public partial class VimEditorControl : UserControl
             return;
         }
 
-        // LSP: completion popup navigation
-        if (_lspManager.CompletionVisible && mode == VimMode.Insert)
+        // LSP: completion popup navigation (never active while Vim is disabled)
+        if (_lspManager.CompletionVisible && mode == VimMode.Insert && _engine.VimEnabled)
         {
             if (key == Key.Down || (ctrl && key == Key.N))
             {
@@ -2157,15 +2194,17 @@ public partial class VimEditorControl : UserControl
             }
         }
 
-        // Navigation keys in all modes
+        // Navigation keys in all modes. When Vim is disabled the editor is a plain
+        // text box, so Home/End must move the caret (engine "Home"/"End"), not be
+        // fed as the Vim motions "0"/"$" which would insert literal characters.
         keyStr = key switch
         {
             Key.Left => "Left",
             Key.Right => "Right",
             Key.Up => "Up",
             Key.Down => "Down",
-            Key.Home => "0",
-            Key.End => "$",
+            Key.Home => _engine.VimEnabled ? "0" : "Home",
+            Key.End => _engine.VimEnabled ? "$" : "End",
             Key.PageUp => ctrl ? "b" : null,
             Key.PageDown => ctrl ? "f" : null,
             Key.F1 => null,
@@ -2250,8 +2289,10 @@ public partial class VimEditorControl : UserControl
         if (events.Any(e => e.Type == VimEventType.TextChanged))
             _lspManager.OnTextChanged(_engine.CurrentBuffer.Text.GetText());
 
-        // LSP: update completion popup after each Insert-mode keypress
-        if (_engine.Mode == VimMode.Insert && !ctrl && !alt && key.Length == 1)
+        // LSP: update completion popup after each Insert-mode keypress. Plain mode
+        // (Vim disabled) sits in Insert as a resting state but must not drive LSP
+        // completion / signature help, so gate on VimEnabled.
+        if (_engine.Mode == VimMode.Insert && _engine.VimEnabled && !ctrl && !alt && key.Length == 1)
         {
             char ch = key[0];
             if (hadCompletion)
