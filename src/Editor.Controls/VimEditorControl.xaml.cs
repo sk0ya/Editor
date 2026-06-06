@@ -336,6 +336,18 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<TextSelectionInfo?>? SelectionChanged;
 
     public VimMode CurrentMode => _engine.Mode;
+
+    /// <summary>
+    /// Enables or disables Vim modal editing. When set to <c>false</c> the control
+    /// behaves like an ordinary text editor: keys insert text, Escape does nothing,
+    /// and there is no Normal/Visual mode. Defaults to <c>true</c>.
+    /// </summary>
+    public bool VimEnabled
+    {
+        get => _engine.VimEnabled;
+        set => ProcessVimEvents(_engine.SetVimEnabled(value));
+    }
+
     public string Text => _engine.CurrentBuffer.Text.GetText();
     public string? FilePath => _engine.CurrentBuffer.FilePath;
     /// <summary>True when the current buffer has unsaved changes.</summary>

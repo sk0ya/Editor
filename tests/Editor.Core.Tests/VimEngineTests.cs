@@ -41,6 +41,82 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void SetVimEnabledFalse_DropsIntoInsertMode()
+    {
+        var engine = CreateEngine("hello");
+        var events = engine.SetVimEnabled(false);
+        Assert.False(engine.VimEnabled);
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Contains(events, e => e.Type == VimEventType.ModeChanged);
+    }
+
+    [Fact]
+    public void WhenVimDisabled_EscapeStaysInInsert()
+    {
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("Escape");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+    }
+
+    [Fact]
+    public void WhenVimDisabled_PrintableKeysInsertText()
+    {
+        var engine = CreateEngine("");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("h");
+        engine.ProcessKey("i");
+        Assert.Equal("hi", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void WhenVimDisabled_CtrlLeftBracketStaysInInsert()
+    {
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("[", ctrl: true);
+        Assert.Equal(VimMode.Insert, engine.Mode);
+    }
+
+    [Fact]
+    public void WhenVimDisabled_CtrlOStaysInInsert()
+    {
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.ProcessKey("o", ctrl: true);
+        Assert.Equal(VimMode.Insert, engine.Mode);
+    }
+
+    [Fact]
+    public void DisablingVim_FromCommandMode_ClearsCommandLine()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey(":");
+        Assert.Equal(VimMode.Command, engine.Mode);
+        var events = engine.SetVimEnabled(false);
+        Assert.Equal("", engine.CommandLine);
+        Assert.Contains(events, e => e.Type == VimEventType.CommandLineChanged);
+    }
+
+    [Fact]
+    public void ReEnablingVim_ReturnsToNormalMode()
+    {
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+        engine.SetVimEnabled(true);
+        Assert.True(engine.VimEnabled);
+        Assert.Equal(VimMode.Normal, engine.Mode);
+    }
+
+    [Fact]
+    public void SetVimEnabled_NoChange_ReturnsNoEvents()
+    {
+        var engine = CreateEngine("hello");
+        var events = engine.SetVimEnabled(true); // already enabled
+        Assert.Empty(events);
+    }
+
+    [Fact]
     public void SetSelection_EntersVisualModeAndSetsCursorAndSelection()
     {
         var engine = CreateEngine("abcdef");

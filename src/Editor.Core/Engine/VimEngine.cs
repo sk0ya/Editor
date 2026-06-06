@@ -24,6 +24,7 @@ public class VimEngine
     private readonly SpellChecker _spellChecker = new();
 
     private VimMode _mode = VimMode.Normal;
+    private bool _vimEnabled = true;
     private CursorPosition _cursor = CursorPosition.Zero;
     private bool _suppressSnapshot;
     private Selection? _selection;
@@ -85,6 +86,14 @@ public class VimEngine
     private sealed record BlockInsertState(int StartLine, int EndLine, int Column, IReadOnlyDictionary<int, int> LineColumns);
 
     public VimMode Mode => _mode;
+
+    /// <summary>
+    /// When false, modal Vim key handling is bypassed and the engine stays in a
+    /// plain (non-modal) insert state so the control behaves like an ordinary
+    /// text editor. Defaults to true. Toggle via <see cref="SetVimEnabled"/>.
+    /// </summary>
+    public bool VimEnabled => _vimEnabled;
+
     public CursorPosition Cursor => _cursor;
     public Selection? Selection => _selection;
     public string CommandLine => _cmdLine;
@@ -260,6 +269,57 @@ public class VimEngine
     {
         var events = new List<VimEvent>();
         ProcessStroke(new VimKeyStroke(key, ctrl, shift, alt), events, allowMapping: true);
+        return events;
+    }
+
+    /// <summary>
+    /// Enables or disables Vim key handling. When disabled, the engine drops into
+    /// a plain insert (non-modal) state where keys insert text like an ordinary
+    /// editor and Escape no longer leaves insert mode. When re-enabled, the engine
+    /// returns to Normal mode. Returns the events the host should process to
+    /// refresh its UI (mode, status line, selection).
+    /// </summary>
+    public IReadOnlyList<VimEvent> SetVimEnabled(bool enabled)
+    {
+        var events = new List<VimEvent>();
+        if (_vimEnabled == enabled)
+            return events;
+
+        // Clear any pending modal state regardless of direction.
+        _commandParser.Reset();
+        _pendingMappedInput.Clear();
+        if (_selection != null)
+        {
+            _selection = null;
+            events.Add(VimEvent.SelectionChanged(null));
+        }
+
+        // If a command/search line is open, dismiss it so no stale ':' text lingers.
+        if (_mode is VimMode.Command or VimMode.SearchForward or VimMode.SearchBackward)
+        {
+            _cmdLine = "";
+            events.Add(VimEvent.CommandLineChanged(""));
+        }
+
+        _vimEnabled = enabled;
+
+        if (!enabled)
+        {
+            // Drop into a plain-editor insert state.
+            _insertStart = _cursor;
+            ChangeMode(VimMode.Insert, events);
+        }
+        else if (_mode == VimMode.Insert || _mode == VimMode.Replace)
+        {
+            // Cleanly return to Normal mode (Vim's resting state).
+            ExitInsertMode(events);
+        }
+        else
+        {
+            ChangeMode(VimMode.Normal, events);
+        }
+
+        EmitStatus(events, "");
         return events;
     }
 
@@ -1566,12 +1626,19 @@ public class VimEngine
             switch (key.ToLower())
             {
                 case "[": // Ctrl+[
-                    ExitInsertMode(events);
+                    // When Vim is disabled the editor is permanently in insert mode;
+                    // Ctrl+[ (Vim's Escape synonym) must not leave insert mode.
+                    if (_vimEnabled)
+                        ExitInsertMode(events);
                     return;
                 case "w": DeleteWordBack(events); return;
                 case "u": DeleteLineBack(events); return;
                 case "h": DeleteCharBack(events); return;
                 case "o": // Ctrl+O — execute one Normal command then return to Insert
+                    // Suppressed when Vim is disabled: the temporary Normal-mode
+                    // hop would re-expose modal editing the host turned off.
+                    if (!_vimEnabled)
+                        return;
                     _pendingInsertReturn = true;
                     ChangeMode(VimMode.Normal, events);
                     return;
@@ -1626,7 +1693,10 @@ public class VimEngine
         switch (key)
         {
             case "Escape":
-                ExitInsertMode(events);
+                // When Vim is disabled the editor is permanently in insert mode;
+                // Escape must not drop the user into Normal mode.
+                if (_vimEnabled)
+                    ExitInsertMode(events);
                 break;
             case "Back":
                 if (_config.Options.Pairs && !_config.Options.Paste && _mode == VimMode.Insert && _cursor.Column > 0)
