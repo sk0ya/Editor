@@ -1452,6 +1452,67 @@ public partial class VimEditorControl : UserControl
         ProcessVimEvents(events);
     }
 
+    // ── Split / tab window APIs ────────────────────────────────────────────
+    // These raise the same events that the corresponding Vim commands
+    // (`:split`, `:vsplit`, `:tabnew`, `Ctrl+W`, …) fire, so a host can drive
+    // window/tab management programmatically without synthesizing keystrokes.
+    // The actual pane/tab layout is owned by the host (e.g. MainWindow), which
+    // realizes these requests by handling the matching events.
+
+    /// <summary>
+    /// Requests a horizontal split (a new editor below the current one), as
+    /// with <c>:split</c>. Optionally opens <paramref name="filePath"/> in the
+    /// new window. Raises <see cref="SplitRequested"/> with
+    /// <see cref="SplitRequestedEventArgs.Vertical"/> = <c>false</c>.
+    /// </summary>
+    public void SplitHorizontal(string? filePath = null)
+        => SplitRequested?.Invoke(this, new SplitRequestedEventArgs(vertical: false, filePath));
+
+    /// <summary>
+    /// Requests a vertical split (a new editor beside the current one), as with
+    /// <c>:vsplit</c>. Optionally opens <paramref name="filePath"/> in the new
+    /// window. Raises <see cref="SplitRequested"/> with
+    /// <see cref="SplitRequestedEventArgs.Vertical"/> = <c>true</c>.
+    /// </summary>
+    public void SplitVertical(string? filePath = null)
+        => SplitRequested?.Invoke(this, new SplitRequestedEventArgs(vertical: true, filePath));
+
+    /// <summary>
+    /// Requests a new editor tab, as with <c>:tabnew</c>. Optionally opens
+    /// <paramref name="filePath"/> in it. Raises <see cref="NewTabRequested"/>.
+    /// </summary>
+    public void NewTab(string? filePath = null)
+        => NewTabRequested?.Invoke(this, new NewTabRequestedEventArgs(filePath));
+
+    /// <summary>Activates the next tab, as with <c>gt</c>. Raises <see cref="NextTabRequested"/>.</summary>
+    public void NextTab() => NextTabRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Activates the previous tab, as with <c>gT</c>. Raises <see cref="PrevTabRequested"/>.</summary>
+    public void PrevTab() => PrevTabRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>
+    /// Requests closing the current tab, as with <c>:tabclose</c>. When
+    /// <paramref name="force"/> is <c>true</c>, unsaved changes are discarded.
+    /// Raises <see cref="CloseTabRequested"/>.
+    /// </summary>
+    public void CloseTab(bool force = false)
+        => CloseTabRequested?.Invoke(this, new CloseTabRequestedEventArgs(force));
+
+    /// <summary>
+    /// Moves window focus in the given direction, as with the <c>Ctrl+W</c>
+    /// window commands. Raises <see cref="WindowNavRequested"/>.
+    /// </summary>
+    public void FocusWindow(WindowNavDir dir)
+        => WindowNavRequested?.Invoke(this, new WindowNavRequestedEventArgs(dir));
+
+    /// <summary>
+    /// Requests closing the current split window, as with <c>Ctrl+W q</c> /
+    /// <c>:close</c>. When <paramref name="force"/> is <c>true</c>, unsaved
+    /// changes are discarded. Raises <see cref="WindowCloseRequested"/>.
+    /// </summary>
+    public void CloseWindow(bool force = false)
+        => WindowCloseRequested?.Invoke(this, new WindowCloseRequestedEventArgs(force));
+
     /// <summary>
     /// The color theme currently applied to the editor. Defaults to
     /// <see cref="EditorTheme.Dracula"/>. Assign a new value (or call
