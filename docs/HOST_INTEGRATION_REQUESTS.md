@@ -142,3 +142,40 @@ DocumentMeta meta = editor.DocumentInfo;
 - 公開メンバ: `Caret` / `CaretMoved`、`HasSelection` / `SelectedText` / `Selection` / `SelectionChanged`、`DocumentInfo`。
 - 選択テキスト抽出は `VimEngine.GetSelectionText()`（副作用なし＝レジスタ非破壊）に集約。
 - マウス位置の公開は今回は見送り（必要になれば `EditorCanvas` のヒットテストを中継して追加可能）。
+
+---
+
+## 追加: 分割・タブ ウィンドウ API（1.0.5）
+
+`:split` / `:vsplit` / `:tabnew` / `Ctrl+W` といったウィンドウ・タブ操作を、
+ホストがキーストロークを合成せずに**プログラムから直接呼べる**よう、
+`VimEditorControl` に強く型付けされたメソッドを追加。これらは対応する既存の
+イベントを発火するだけで、実際のペイン／タブのレイアウトは従来どおり**ホスト側**
+（イベント購読側）が実装する。`theme` / `font` / `VimEnabled` の公開と同じパターン。
+
+```csharp
+editor.SplitVertical();              // 縦分割（:vsplit 相当）
+editor.SplitHorizontal("notes.md");  // 横分割して notes.md を開く（:split 相当）
+editor.NewTab();                     // 新規タブ（:tabnew 相当）
+editor.NextTab();  editor.PrevTab(); // gt / gT 相当
+editor.CloseTab(force: true);        // 現タブを閉じる（:tabclose! 相当）
+editor.FocusWindow(WindowNavDir.Right); // 隣のペインへフォーカス（Ctrl+W l 相当）
+editor.CloseWindow();                // 現在の分割ウィンドウを閉じる（Ctrl+W q / :close 相当）
+```
+
+| メソッド | 相当する Vim 操作 | 発火イベント |
+|---|---|---|
+| `SplitHorizontal(filePath?)` | `:split` | `SplitRequested (Vertical=false)` |
+| `SplitVertical(filePath?)` | `:vsplit` | `SplitRequested (Vertical=true)` |
+| `NewTab(filePath?)` | `:tabnew` | `NewTabRequested` |
+| `NextTab()` / `PrevTab()` | `gt` / `gT` | `NextTabRequested` / `PrevTabRequested` |
+| `CloseTab(force?)` | `:tabclose` | `CloseTabRequested` |
+| `FocusWindow(WindowNavDir)` | `Ctrl+W h/j/k/l/w/W` | `WindowNavRequested` |
+| `CloseWindow(force?)` | `Ctrl+W q` / `:close` | `WindowCloseRequested` |
+
+- `Split*` / `CloseTab` / `CloseWindow` のハンドラは `sender`（＝呼び出したエディタ
+  インスタンス）を対象に作用する。`NextTab` / `PrevTab` / `FocusWindow` は Vim の
+  `gt` / `Ctrl+W` と同様、ホスト側のグローバル状態（選択タブ・フォーカス中ペイン）に作用する。
+- ホストがこれらのイベントを購読していない（例: `VimEditorControl` を単体で使う）場合、
+  各メソッドは安全に no-op となる（`?.Invoke`）。
+- 公開型: `WindowNavDir`（`Editor.Core.Models`。`Next/Prev/Left/Right/Up/Down`）。
