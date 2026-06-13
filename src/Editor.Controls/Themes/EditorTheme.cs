@@ -57,6 +57,9 @@ public class EditorTheme
     public Brush MinimapBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0xC8, 0x1A, 0x1A, 0x1A));
     public Brush MinimapViewport   { get; init; } = new SolidColorBrush(Color.FromArgb(0x55, 0xAA, 0xAA, 0xAA));
 
+    // Hyperlink underline drawn under detected URLs (Ctrl+Click/hover to open)
+    public Brush LinkColor { get; init; } = new SolidColorBrush(Color.FromRgb(0x4D, 0xA8, 0xFF));
+
     // Diagnostic colors
     public Brush DiagnosticError   { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0x00));
     public Brush DiagnosticWarning { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0xA5, 0x00));

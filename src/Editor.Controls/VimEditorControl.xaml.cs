@@ -114,6 +114,16 @@ public class GitCommitRequestedEventArgs(string? filePath, string template) : Ev
     public string? FilePath { get; } = filePath;
     public string Template { get; } = template;
 }
+/// <summary>
+/// Raised when a link is activated (Ctrl+Click on a detected URL, or <c>gx</c>).
+/// Set <see cref="Handled"/> to <c>true</c> to suppress the default behavior
+/// (opening the URL with the OS shell via <see cref="System.Diagnostics.Process.Start(System.Diagnostics.ProcessStartInfo)"/>).
+/// </summary>
+public class LinkClickedEventArgs(string url) : EventArgs
+{
+    public string Url { get; } = url;
+    public bool Handled { get; set; }
+}
 
 /// <summary>The kind of a text selection (mirrors the engine's selection type).</summary>
 public enum SelectionKind { Character, Line, Block }
@@ -323,6 +333,7 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<string>? QuickfixReplaceRequested;
     public event EventHandler<GitOutputRequestedEventArgs>? GitOutputRequested;
     public event EventHandler<GitCommitRequestedEventArgs>? GitCommitRequested;
+    public event EventHandler<LinkClickedEventArgs>? LinkClicked;
     public event EventHandler<WindowNavRequestedEventArgs>? WindowNavRequested;
     public event EventHandler<WindowCloseRequestedEventArgs>? WindowCloseRequested;
     public event EventHandler<string>? MkSessionRequested;
@@ -480,6 +491,7 @@ public partial class VimEditorControl : UserControl
         Canvas.MouseDragging += OnCanvasMouseDragging;
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.FoldGutterClicked += OnFoldGutterClicked;
+        Canvas.LinkClicked += OnCanvasLinkClicked;
 
         // Keep VimEngine informed of viewport state for H/M/L motions
         Canvas.ScrollChanged += (_, _) =>
@@ -1539,6 +1551,34 @@ public partial class VimEditorControl : UserControl
     public void SetTheme(string name) => SetTheme(EditorTheme.GetByName(name));
 
     /// <summary>
+    /// Opens <paramref name="url"/> as a link. Raises <see cref="LinkClicked"/> first so a
+    /// host can customize how links are opened (e.g. show them in an embedded browser); set
+    /// <see cref="LinkClickedEventArgs.Handled"/> to <c>true</c> on that event to suppress the
+    /// default behavior. If left unhandled, the URL is opened with the OS shell via
+    /// <see cref="System.Diagnostics.Process.Start(System.Diagnostics.ProcessStartInfo)"/>.
+    /// Triggered by Ctrl+Click on a detected URL, and by the <c>gx</c> normal-mode command.
+    /// </summary>
+    public void OpenLink(string url)
+    {
+        var args = new LinkClickedEventArgs(url);
+        LinkClicked?.Invoke(this, args);
+        if (!args.Handled)
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
+                {
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                ShowStatusMessage($"Could not open link: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
     /// Search workspace symbols via LSP. When isClass=true, returns only type-definition kinds
     /// (Class/Interface/Enum/Struct/TypeParameter).
     /// </summary>
@@ -1665,6 +1705,12 @@ public partial class VimEditorControl : UserControl
     }
 
     // ─────────────── Mouse handling ───────────────
+
+    private void OnCanvasLinkClicked(string url)
+    {
+        Focus();
+        OpenLink(url);
+    }
 
     private void OnCanvasMouseClicked(int line, int col)
     {
@@ -3467,10 +3513,7 @@ public partial class VimEditorControl : UserControl
                     OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(ofre.FilePath));
                     break;
                 case VimEventType.OpenUrlRequested when evt is OpenUrlRequestedEvent oure:
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(oure.Url)
-                    {
-                        UseShellExecute = true
-                    });
+                    OpenLink(oure.Url);
                     break;
                 case VimEventType.MkSessionRequested when evt is MkSessionRequestedEvent mksre:
                     MkSessionRequested?.Invoke(this, mksre.FilePath);

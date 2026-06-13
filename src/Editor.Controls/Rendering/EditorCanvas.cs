@@ -7,6 +7,7 @@ using Editor.Core.Engine;
 using Editor.Core.Lsp;
 using Editor.Core.Models;
 using Editor.Core.Syntax;
+using Editor.Core.Text;
 
 namespace Editor.Controls.Rendering;
 
@@ -46,6 +47,7 @@ public class EditorCanvas : FrameworkElement
     private int _imeCandidateSelection = -1;
     private VisualLineSegment[] _visualLines = [new VisualLineSegment(0, 0, false)];
     private bool _wrapLines;
+    private readonly Dictionary<int, (string Text, IReadOnlyList<(int Start, int End, string Url)> Links)> _linkCache = [];
     private double _contentWidth;
     // Folds
     private int[] _visibleLineMap = [];
@@ -115,6 +117,7 @@ public class EditorCanvas : FrameworkElement
     public event Action<int, int>? MouseDragging;      // (line, col) during drag
     public event Action? MouseDragEnded;
     public event Action<int>? FoldGutterClicked;       // (bufferLine) fold indicator clicked
+    public event Action<string>? LinkClicked;          // (url) Ctrl+clicked on a detected link
 
     // Brushes/pens for popup chrome and spell underlines — created once (theme-independent)
     private static readonly SolidColorBrush s_popupBg1    = Freeze(new SolidColorBrush(Color.FromArgb(0xF0, 0x25, 0x26, 0x33)));
@@ -655,6 +658,19 @@ public class EditorCanvas : FrameworkElement
         }
 
         var (line, col) = HitTest(point);
+
+        // Ctrl+Click on a detected URL opens it instead of moving the cursor
+        if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0)
+        {
+            var link = GetLinkAt(line, col);
+            if (link != null)
+            {
+                LinkClicked?.Invoke(link.Value.Url);
+                e.Handled = true;
+                return;
+            }
+        }
+
         MouseClicked?.Invoke(line, col);
         e.Handled = true;
     }
@@ -707,7 +723,16 @@ public class EditorCanvas : FrameworkElement
         else
         {
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
-            Cursor = System.Windows.Input.Cursors.IBeam;
+
+            // Ctrl+hover over a link shows a hand cursor as a clickability cue
+            bool ctrlDown = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0;
+            bool onLink = false;
+            if (ctrlDown)
+            {
+                var (hLine, hCol) = HitTest(point);
+                onLink = GetLinkAt(hLine, hCol) != null;
+            }
+            Cursor = onLink ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.IBeam;
         }
     }
 
@@ -1010,6 +1035,9 @@ public class EditorCanvas : FrameworkElement
             // Spell check errors (blue wavy underlines)
             DrawSpellErrors(dc, l, y, textLeft, lineText);
 
+            // Detected link underlines
+            DrawLinkUnderline(dc, l, y, textLeft, lineText, segment.StartColumn, GetSegmentEndColumn(vi));
+
             // Cursor
             DrawCursor(dc, l, y, textLeft, lineText);
 
@@ -1256,6 +1284,50 @@ public class EditorCanvas : FrameworkElement
             double yBase  = y + _lineHeight - 2;
 
             DrawWavyLine(dc, new Pen(brush, 1.0), xStart, xEnd, yBase);
+        }
+    }
+
+    /// <summary>Detected links for <paramref name="lineText"/>, cached until the line's text changes.</summary>
+    private IReadOnlyList<(int Start, int End, string Url)> GetLinks(int line, string lineText)
+    {
+        if (_linkCache.TryGetValue(line, out var cached) && cached.Text == lineText)
+            return cached.Links;
+
+        var links = LinkDetector.FindLinks(lineText);
+        _linkCache[line] = (lineText, links);
+        return links;
+    }
+
+    /// <summary>Returns the link at buffer (line, col), or null if none — shared by Ctrl+Click and Ctrl+hover.</summary>
+    private (int Start, int End, string Url)? GetLinkAt(int line, int col)
+    {
+        string lineText = line < _lines.Length ? _lines[line] : string.Empty;
+        foreach (var link in GetLinks(line, lineText))
+        {
+            if (col >= link.Start && col < link.End)
+                return link;
+        }
+        return null;
+    }
+
+    private void DrawLinkUnderline(DrawingContext dc, int line, double y, double textLeft, string lineText, int segStart, int segEnd)
+    {
+        var links = GetLinks(line, lineText);
+        if (links.Count == 0) return;
+
+        double yBase = y + _lineHeight - 2;
+        var pen = new Pen(Theme.LinkColor, 1.0);
+        foreach (var link in links)
+        {
+            // Clip the link span to this visual segment so a link that crosses a
+            // word-wrap boundary doesn't draw an underline into adjacent rows.
+            int start = Math.Max(link.Start, segStart);
+            int end = Math.Min(link.End, segEnd);
+            if (end <= start) continue;
+
+            double xStart = textLeft + GetVisualX(lineText, start) - _scrollOffsetX;
+            double xEnd   = textLeft + GetVisualX(lineText, end)   - _scrollOffsetX;
+            dc.DrawLine(pen, new Point(xStart, yBase), new Point(xEnd, yBase));
         }
     }
 
