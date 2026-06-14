@@ -371,6 +371,27 @@ public partial class VimEditorControl : UserControl
         }
     }
 
+    /// <summary>
+    /// When <c>true</c>, hides all editor chrome — the line-number gutter (and fold/git
+    /// column), the status bar, the scrollbar, and the minimap — so the control looks like
+    /// a plain <c>TextBox</c>. This is purely visual: Vim modal editing still works (use
+    /// <see cref="VimEnabled"/> to turn that off). Defaults to <c>false</c>.
+    /// </summary>
+    public bool MinimalChrome
+    {
+        get => _minimalChrome;
+        set
+        {
+            if (_minimalChrome == value) return;
+            _minimalChrome = value;
+            // Status bar follows the preset, but stays collapsed if a shared bar is in use.
+            StatusBar.Visibility = (value || _sharedStatusBar != null)
+                ? Visibility.Collapsed : Visibility.Visible;
+            UpdateAll();
+        }
+    }
+    private bool _minimalChrome;
+
     public string Text => _engine.CurrentBuffer.Text.GetText();
     public string? FilePath => _engine.CurrentBuffer.FilePath;
     /// <summary>True when the current buffer has unsaved changes.</summary>
@@ -1643,7 +1664,7 @@ public partial class VimEditorControl : UserControl
     public void SetSharedStatusBar(VimStatusBar? bar)
     {
         _sharedStatusBar = bar;
-        StatusBar.Visibility = bar != null ? Visibility.Collapsed : Visibility.Visible;
+        StatusBar.Visibility = (bar != null || _minimalChrome) ? Visibility.Collapsed : Visibility.Visible;
         if (bar != null) bar.Theme = _theme;
     }
 
@@ -3698,14 +3719,14 @@ public partial class VimEditorControl : UserControl
 
         Canvas.SetCursor(_engine.Cursor);
         Canvas.SetMode(_engine.Mode);
-        Canvas.ShowLineNumbers(_engine.Options.Number || _engine.Options.RelativeNumber);
+        Canvas.ShowLineNumbers(!_minimalChrome && (_engine.Options.Number || _engine.Options.RelativeNumber));
         Canvas.ShowRelativeLineNumbers(_engine.Options.RelativeNumber);
         Canvas.SetScrollOff(_engine.Options.ScrollOff);
         Canvas.SetList(_engine.Options.List, _engine.Options.ListChars);
         Canvas.SetColorColumn(_engine.Options.ColorColumn);
         Canvas.SetIndentGuides(_engine.Options.IndentGuides, _engine.Options.TabStop);
-        Canvas.SetScrollbar(_engine.Options.Scrollbar);
-        Canvas.SetMinimap(_engine.Options.Minimap);
+        Canvas.SetScrollbar(!_minimalChrome && _engine.Options.Scrollbar);
+        Canvas.SetMinimap(!_minimalChrome && _engine.Options.Minimap);
         Canvas.SetColorPreview(_engine.Options.ColorPreview);
 
         UpdateViewportDecorations();
