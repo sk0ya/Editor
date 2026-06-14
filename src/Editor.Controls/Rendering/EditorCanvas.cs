@@ -47,7 +47,13 @@ public class EditorCanvas : FrameworkElement
     private int _imeCandidateSelection = -1;
     private VisualLineSegment[] _visualLines = [new VisualLineSegment(0, 0, false)];
     private bool _wrapLines;
-    private readonly Dictionary<int, (string Text, IReadOnlyList<(int Start, int End, string Url)> Links)> _linkCache = [];
+    private readonly Dictionary<int, (string Text, IReadOnlyList<Editor.Core.Text.DetectedLink> Links)> _linkCache = [];
+    // File-path link verification (resolved absolute path → exists on disk). Null while a
+    // background check is in flight. Populated off the UI thread; reads/writes happen on the
+    // UI thread except the one assignment inside the Dispatcher callback in EnsurePathVerified.
+    private readonly Dictionary<string, bool> _pathExists = [];
+    private readonly HashSet<string> _pathChecking = [];
+    private string? _documentDirectory;
     private double _contentWidth;
     // Folds
     private int[] _visibleLineMap = [];
@@ -117,7 +123,8 @@ public class EditorCanvas : FrameworkElement
     public event Action<int, int>? MouseDragging;      // (line, col) during drag
     public event Action? MouseDragEnded;
     public event Action<int>? FoldGutterClicked;       // (bufferLine) fold indicator clicked
-    public event Action<string>? LinkClicked;          // (url) Ctrl+clicked on a detected link
+    public event Action<string>? LinkClicked;          // (url) Ctrl+clicked on a detected URL
+    public event Action<string>? FileLinkClicked;      // (absolutePath) Ctrl+clicked on a detected file path
 
     // Brushes/pens for popup chrome and spell underlines — created once (theme-independent)
     private static readonly SolidColorBrush s_popupBg1    = Freeze(new SolidColorBrush(Color.FromArgb(0xF0, 0x25, 0x26, 0x33)));
@@ -181,6 +188,25 @@ public class EditorCanvas : FrameworkElement
         _lineNumberWidth = Math.Max(3, _lines.Length.ToString().Length);
         RebuildVisualLayout();
         InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Directory used to resolve relative file-path links to absolute paths (the directory of
+    /// the document being edited). Setting it to a new value discards cached path-existence
+    /// results so links are re-verified against the new base directory.
+    /// </summary>
+    public string? DocumentDirectory
+    {
+        get => _documentDirectory;
+        set
+        {
+            if (string.Equals(_documentDirectory, value, StringComparison.OrdinalIgnoreCase))
+                return;
+            _documentDirectory = value;
+            _pathExists.Clear();
+            _pathChecking.Clear();
+            InvalidateVisual();
+        }
     }
 
     public bool IsActive
@@ -659,13 +685,20 @@ public class EditorCanvas : FrameworkElement
 
         var (line, col) = HitTest(point);
 
-        // Ctrl+Click on a detected URL opens it instead of moving the cursor
+        // Ctrl+Click on a detected URL or file path opens it instead of moving the cursor
         if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0)
         {
             var link = GetLinkAt(line, col);
             if (link != null)
             {
-                LinkClicked?.Invoke(link.Value.Url);
+                if (link.Value.Kind == Editor.Core.Text.LinkKind.Url)
+                {
+                    LinkClicked?.Invoke(link.Value.Text);
+                }
+                else if (ResolveLinkPath(link.Value.Text) is { } resolved)
+                {
+                    FileLinkClicked?.Invoke(resolved);
+                }
                 e.Handled = true;
                 return;
             }
@@ -1288,7 +1321,7 @@ public class EditorCanvas : FrameworkElement
     }
 
     /// <summary>Detected links for <paramref name="lineText"/>, cached until the line's text changes.</summary>
-    private IReadOnlyList<(int Start, int End, string Url)> GetLinks(int line, string lineText)
+    private IReadOnlyList<Editor.Core.Text.DetectedLink> GetLinks(int line, string lineText)
     {
         if (_linkCache.TryGetValue(line, out var cached) && cached.Text == lineText)
             return cached.Links;
@@ -1298,13 +1331,75 @@ public class EditorCanvas : FrameworkElement
         return links;
     }
 
-    /// <summary>Returns the link at buffer (line, col), or null if none — shared by Ctrl+Click and Ctrl+hover.</summary>
-    private (int Start, int End, string Url)? GetLinkAt(int line, int col)
+    /// <summary>
+    /// Whether a detected link should be treated as live (underlined / clickable). URLs always
+    /// are; a file-path candidate is live only once a background check confirms it exists on
+    /// disk. Unverified candidates kick off that check and report not-live for now.
+    /// </summary>
+    private bool IsLinkLive(Editor.Core.Text.DetectedLink link)
+    {
+        if (link.Kind == Editor.Core.Text.LinkKind.Url) return true;
+
+        var resolved = ResolveLinkPath(link.Text);
+        if (resolved == null) return false;
+        if (_pathExists.TryGetValue(resolved, out bool exists)) return exists;
+
+        EnsurePathVerified(resolved);
+        return false;
+    }
+
+    /// <summary>Resolves a file-path link to an absolute path, or null if it can't be resolved.</summary>
+    private string? ResolveLinkPath(string text)
+    {
+        try
+        {
+            string path = text;
+            if (path.Length >= 1 && path[0] == '~')
+            {
+                string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                path = home + path[1..];
+            }
+
+            if (!System.IO.Path.IsPathRooted(path))
+            {
+                if (string.IsNullOrEmpty(_documentDirectory)) return null;
+                path = System.IO.Path.Combine(_documentDirectory, path);
+            }
+            return System.IO.Path.GetFullPath(path);
+        }
+        catch
+        {
+            return null; // invalid path characters, etc.
+        }
+    }
+
+    /// <summary>Checks <paramref name="resolved"/> existence off the UI thread, then redraws.</summary>
+    private void EnsurePathVerified(string resolved)
+    {
+        if (!_pathChecking.Add(resolved)) return; // already in flight
+
+        Task.Run(() =>
+        {
+            bool exists;
+            try { exists = System.IO.File.Exists(resolved) || System.IO.Directory.Exists(resolved); }
+            catch { exists = false; }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                _pathChecking.Remove(resolved);
+                _pathExists[resolved] = exists;
+                if (exists) InvalidateVisual(); // reveal newly-confirmed link underline
+            });
+        });
+    }
+
+    /// <summary>Returns the live link at buffer (line, col), or null if none — shared by Ctrl+Click and Ctrl+hover.</summary>
+    private Editor.Core.Text.DetectedLink? GetLinkAt(int line, int col)
     {
         string lineText = line < _lines.Length ? _lines[line] : string.Empty;
         foreach (var link in GetLinks(line, lineText))
         {
-            if (col >= link.Start && col < link.End)
+            if (col >= link.Start && col < link.End && IsLinkLive(link))
                 return link;
         }
         return null;
@@ -1319,6 +1414,8 @@ public class EditorCanvas : FrameworkElement
         var pen = new Pen(Theme.LinkColor, 1.0);
         foreach (var link in links)
         {
+            if (!IsLinkLive(link)) continue;
+
             // Clip the link span to this visual segment so a link that crosses a
             // word-wrap boundary doesn't draw an underline into adjacent rows.
             int start = Math.Max(link.Start, segStart);

@@ -125,6 +125,20 @@ public class LinkClickedEventArgs(string url) : EventArgs
     public bool Handled { get; set; }
 }
 
+/// <summary>
+/// Raised when a file-path link is activated (Ctrl+Click on a detected path).
+/// <see cref="Path"/> is an absolute path; <see cref="IsDirectory"/> indicates whether it
+/// points at a directory. Set <see cref="Handled"/> to <c>true</c> to suppress the default
+/// behavior (opening a file in the editor via <c>OpenFileRequested</c>, or a directory in the
+/// OS file explorer).
+/// </summary>
+public class FileLinkClickedEventArgs(string path, bool isDirectory) : EventArgs
+{
+    public string Path { get; } = path;
+    public bool IsDirectory { get; } = isDirectory;
+    public bool Handled { get; set; }
+}
+
 /// <summary>The kind of a text selection (mirrors the engine's selection type).</summary>
 public enum SelectionKind { Character, Line, Block }
 
@@ -334,6 +348,7 @@ public partial class VimEditorControl : UserControl
     public event EventHandler<GitOutputRequestedEventArgs>? GitOutputRequested;
     public event EventHandler<GitCommitRequestedEventArgs>? GitCommitRequested;
     public event EventHandler<LinkClickedEventArgs>? LinkClicked;
+    public event EventHandler<FileLinkClickedEventArgs>? FileLinkClicked;
     public event EventHandler<WindowNavRequestedEventArgs>? WindowNavRequested;
     public event EventHandler<WindowCloseRequestedEventArgs>? WindowCloseRequested;
     public event EventHandler<string>? MkSessionRequested;
@@ -513,6 +528,7 @@ public partial class VimEditorControl : UserControl
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.FoldGutterClicked += OnFoldGutterClicked;
         Canvas.LinkClicked += OnCanvasLinkClicked;
+        Canvas.FileLinkClicked += OnCanvasFileLinkClicked;
 
         // Keep VimEngine informed of viewport state for H/M/L motions
         Canvas.ScrollChanged += (_, _) =>
@@ -1600,6 +1616,45 @@ public partial class VimEditorControl : UserControl
     }
 
     /// <summary>
+    /// Opens <paramref name="path"/> as a file-path link. Raises <see cref="FileLinkClicked"/>
+    /// first so a host can customize how the path is opened; set
+    /// <see cref="FileLinkClickedEventArgs.Handled"/> to <c>true</c> on that event to suppress
+    /// the default behavior. By default a file is opened in the editor (via
+    /// <see cref="OpenFileRequested"/>) and a directory is opened in the OS file explorer via
+    /// <see cref="System.Diagnostics.Process.Start(System.Diagnostics.ProcessStartInfo)"/>.
+    /// Triggered by Ctrl+Click on a detected file path.
+    /// </summary>
+    public void OpenFileLink(string path)
+    {
+        bool isDir = Directory.Exists(path);
+        var args = new FileLinkClickedEventArgs(path, isDir);
+        FileLinkClicked?.Invoke(this, args);
+        if (args.Handled)
+            return;
+
+        if (isDir)
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path)
+                {
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                ShowStatusMessage($"Could not open folder: {ex.Message}");
+            }
+            return;
+        }
+
+        // A file: open it in the editor, unless it's already the current buffer.
+        if (string.Equals(path, _engine.CurrentBuffer.FilePath, StringComparison.OrdinalIgnoreCase))
+            return;
+        OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(path));
+    }
+
+    /// <summary>
     /// Search workspace symbols via LSP. When isClass=true, returns only type-definition kinds
     /// (Class/Interface/Enum/Struct/TypeParameter).
     /// </summary>
@@ -1731,6 +1786,12 @@ public partial class VimEditorControl : UserControl
     {
         Focus();
         OpenLink(url);
+    }
+
+    private void OnCanvasFileLinkClicked(string filePath)
+    {
+        Focus();
+        OpenFileLink(filePath);
     }
 
     private void OnCanvasMouseClicked(int line, int col)
@@ -3709,6 +3770,9 @@ public partial class VimEditorControl : UserControl
         var lines = GetCachedLines(buf);
 
         Canvas.SetLines(lines);
+        Canvas.DocumentDirectory = buf.FilePath is { Length: > 0 } fp
+            ? System.IO.Path.GetDirectoryName(fp)
+            : null;
 
         // Push fold state to canvas
         var folds = buf.Folds;
