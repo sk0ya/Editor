@@ -1826,7 +1826,7 @@ public class EditorCanvas : FrameworkElement
             _mode is VimMode.Insert or VimMode.Replace &&
             !string.IsNullOrEmpty(_imeCompositionText))
         {
-            DrawLineTextWithImeComposition(dc, lineText, y, textLeft);
+            DrawLineTextWithImeComposition(dc, lineIndex, lineText, y, textLeft);
             return;
         }
 
@@ -1986,14 +1986,61 @@ public class EditorCanvas : FrameworkElement
         }
     }
 
-    private void DrawLineTextWithImeComposition(DrawingContext dc, string lineText, double y, double textLeft)
+    private void DrawLineTextWithImeComposition(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft)
     {
         int cursorCol = Math.Clamp(_cursor.Column, 0, lineText.Length);
         string merged = lineText.Insert(cursorCol, _imeCompositionText);
         if (string.IsNullOrEmpty(merged)) return;
 
-        var ft = FormatText(merged, Theme.Foreground);
-        dc.DrawText(ft, new Point(textLeft - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+        if (_substitutePreviewLines.ContainsKey(lineIndex))
+        {
+            var ft = FormatText(merged, Theme.Foreground);
+            dc.DrawText(ft, new Point(textLeft - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+            return;
+        }
+
+        IEnumerable<(int StartCol, int Length, Brush? Brush)> segments = [];
+
+        if (_semanticTokensByLine.TryGetValue(lineIndex, out var semTokens) && semTokens.Count > 0)
+        {
+            segments = semTokens.Select(t => (t.StartChar, t.Length, (Brush?)t.Brush));
+        }
+        else if (_tokensByLine.TryGetValue(lineIndex, out var tokens) && tokens.Length > 0)
+        {
+            segments = tokens.Select(t => (t.StartColumn, t.Length, (Brush?)Theme.GetTokenBrush(t.Kind)));
+        }
+
+        DrawLineTextWithSegments(dc, merged, y, textLeft,
+            ShiftSegmentsForImeComposition(segments, lineText.Length, cursorCol, _imeCompositionText.Length));
+    }
+
+    private static IEnumerable<(int StartCol, int Length, Brush? Brush)> ShiftSegmentsForImeComposition(
+        IEnumerable<(int StartCol, int Length, Brush? Brush)> segments,
+        int originalLength,
+        int cursorCol,
+        int compositionLength)
+    {
+        foreach (var (startCol, length, brush) in segments)
+        {
+            if (length <= 0) continue;
+
+            int start = Math.Clamp(startCol, 0, originalLength);
+            int end = Math.Clamp(startCol + length, 0, originalLength);
+            if (end <= start) continue;
+
+            if (start < cursorCol)
+            {
+                int beforeEnd = Math.Min(end, cursorCol);
+                if (beforeEnd > start)
+                    yield return (start, beforeEnd - start, brush);
+            }
+
+            if (end > cursorCol)
+            {
+                int afterStart = Math.Max(start, cursorCol);
+                yield return (afterStart + compositionLength, end - afterStart, brush);
+            }
+        }
     }
 
     private void DrawCursor(DrawingContext dc, int line, double y, double textLeft, string lineText)
