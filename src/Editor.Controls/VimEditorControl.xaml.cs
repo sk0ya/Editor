@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using System.IO;
 using Editor.Controls.Git;
 using Editor.Controls.Lsp;
@@ -178,10 +179,11 @@ public partial class VimEditorControl : UserControl
 {
     // ─────────────── Win32 P/Invoke ───────────────
 
-    // imm32 — cancel an active IME composition
+    // imm32 — inspect/cancel an active IME composition
     [DllImport("imm32.dll")] private static extern IntPtr ImmGetContext(IntPtr hWnd);
     [DllImport("imm32.dll")] private static extern bool   ImmReleaseContext(IntPtr hWnd, IntPtr hImc);
     [DllImport("imm32.dll")] private static extern bool   ImmNotifyIME(IntPtr hImc, int dwAction, int dwIndex, int dwValue);
+    [DllImport("imm32.dll", CharSet = CharSet.Unicode)] private static extern int ImmGetCompositionStringW(IntPtr hImc, int dwIndex, IntPtr lpBuf, int dwBufLen);
     [DllImport("imm32.dll")] private static extern bool   ImmSetCompositionWindow(IntPtr hImc, ref COMPOSITIONFORM lpCompForm);
     [DllImport("imm32.dll")] private static extern bool   ImmSetCandidateWindow(IntPtr hImc, ref CANDIDATEFORM lpCandidateForm);
     [DllImport("imm32.dll", CharSet = CharSet.Unicode)] private static extern uint ImmGetCandidateListW(IntPtr hImc, uint deIndex, IntPtr lpCandList, uint dwBufLen);
@@ -194,6 +196,7 @@ public partial class VimEditorControl : UserControl
 
     private const int  NI_COMPOSITIONSTR      = 0x0015;
     private const int  CPS_CANCEL             = 0x0004;
+    private const int  GCS_COMPSTR            = 0x0008;
     private const uint CFS_POINT              = 0x0002;
     private const uint CFS_FORCE_POSITION     = 0x0020;
     private const uint CFS_CANDIDATEPOS       = 0x0040;
@@ -314,6 +317,9 @@ public partial class VimEditorControl : UserControl
     // that the replayed PreviewKeyDown events bypass imap interception.
     private bool _replayingImeKeys = false;
     private int  _replayCount      = 0;
+    private bool _exitInsertAfterImeCommit = false;
+    private string _lastImeCompositionText = string.Empty;
+    private string? _pendingImeCommitText;
     private bool _imeWindowUpdateInProgress = false;
     private bool _imeSuppressionCaretCreated = false;
     private ITfSource? _tsfSource;
@@ -1988,7 +1994,8 @@ public partial class VimEditorControl : UserControl
         if (string.IsNullOrEmpty(text))
             text = composition?.SystemCompositionText;
 
-        Canvas.SetImeCompositionText(text ?? string.Empty);
+        _lastImeCompositionText = text ?? string.Empty;
+        Canvas.SetImeCompositionText(_lastImeCompositionText);
         UpdateImeWindowPos();
         if (!string.IsNullOrEmpty(text))
         {
@@ -2003,6 +2010,7 @@ public partial class VimEditorControl : UserControl
 
     private void ClearImeCompositionOverlay()
     {
+        _lastImeCompositionText = string.Empty;
         Canvas.SetImeCompositionText(string.Empty);
         ClearImeCandidateOverlay();
     }
@@ -2023,6 +2031,18 @@ public partial class VimEditorControl : UserControl
         var mode = _engine.Mode;
         if (mode == VimMode.Insert || mode == VimMode.Replace)
         {
+            if (e.Key == Key.ImeProcessed && actualKey == Key.Escape)
+            {
+                _imeInsertBuffer.Clear();
+                _pendingImeCommitText = GetImeCompositionText();
+                if (string.IsNullOrEmpty(_pendingImeCommitText))
+                    _pendingImeCommitText = _lastImeCompositionText;
+                SendVirtualKeyToIme((ushort)KeyInterop.VirtualKeyFromKey(Key.Return));
+                RequestExitInsertAfterImeCommit();
+                e.Handled = true;
+                return;
+            }
+
             // ── IME insert-mode mapping detection ──────────────────────────────
             // With IME ON every key comes as Key.ImeProcessed.  We need to
             // intercept the keys that are prefixes of configured imap sequences
@@ -2489,6 +2509,9 @@ public partial class VimEditorControl : UserControl
                 ProcessKey(ch.ToString(), false, false, false);
             }
             e.Handled = true;
+            _pendingImeCommitText = null;
+            if (_exitInsertAfterImeCommit)
+                FinishImeCommitEscape();
             return;
         }
 
@@ -3443,6 +3466,16 @@ public partial class VimEditorControl : UserControl
         SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT_SEND>());
     }
 
+    private static void SendVirtualKeyToIme(ushort vk)
+    {
+        INPUT_SEND[] inputs =
+        [
+            new() { type = INPUTTYPE_KEYBOARD, wVk = vk },
+            new() { type = INPUTTYPE_KEYBOARD, wVk = vk, dwFlags = KBDEVENTF_KEYUP }
+        ];
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT_SEND>());
+    }
+
     /// <summary>
     /// Hides native IME windows (composition/candidate) because composition
     /// text is rendered directly inside the editor canvas.
@@ -3506,6 +3539,70 @@ public partial class VimEditorControl : UserControl
         ImmNotifyIME(imc, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
         ImmReleaseContext(source.Handle, imc);
         ClearImeCompositionOverlay();
+    }
+
+    private string GetImeCompositionText()
+    {
+        if (PresentationSource.FromVisual(this) is not HwndSource source) return string.Empty;
+        var imc = ImmGetContext(source.Handle);
+        if (imc == IntPtr.Zero) return string.Empty;
+
+        try
+        {
+            int byteCount = ImmGetCompositionStringW(imc, GCS_COMPSTR, IntPtr.Zero, 0);
+            if (byteCount <= 0) return string.Empty;
+
+            var buffer = Marshal.AllocHGlobal(byteCount);
+            try
+            {
+                int copied = ImmGetCompositionStringW(imc, GCS_COMPSTR, buffer, byteCount);
+                return copied > 0 ? Marshal.PtrToStringUni(buffer, copied / 2) ?? string.Empty : string.Empty;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+        finally
+        {
+            ImmReleaseContext(source.Handle, imc);
+        }
+    }
+
+    private void RequestExitInsertAfterImeCommit()
+    {
+        _exitInsertAfterImeCommit = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            if (_exitInsertAfterImeCommit)
+                FinishImeCommitEscape();
+        }));
+    }
+
+    private void FinishImeCommitEscape()
+    {
+        _exitInsertAfterImeCommit = false;
+        var fallbackText = _pendingImeCommitText;
+        bool usedFallbackPath = fallbackText != null;
+        _pendingImeCommitText = null;
+
+        if (!string.IsNullOrEmpty(fallbackText) && _engine.Mode is VimMode.Insert or VimMode.Replace)
+        {
+            foreach (var ch in fallbackText)
+            {
+                if (ch < 32) continue;
+                ProcessKey(ch.ToString(), false, false, false);
+            }
+        }
+
+        if (usedFallbackPath)
+            CancelImeComposition();
+
+        ClearImeCompositionOverlay();
+        ClearSnippetState();
+
+        if (_engine.Mode is VimMode.Insert or VimMode.Replace)
+            ProcessKey("Escape", false, false, false);
     }
 
     private void ProcessVimEvents(IReadOnlyList<VimEvent> events)
