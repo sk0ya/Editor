@@ -823,8 +823,39 @@ public class VimEngine
         }
     }
 
+    /// <summary>
+    /// When the current buffer is read-only (e.g. a binary file that was not loaded), emit the
+    /// "cannot make changes" status message and return true so the caller can abort the mutation.
+    /// </summary>
+    private bool BlockedReadOnly(List<VimEvent> events)
+    {
+        if (!_bufferManager.Current.IsBinary) return false;
+        EmitStatus(events, "E21: Cannot make changes (binary file is read-only)");
+        return true;
+    }
+
+    /// <summary>True when the parsed normal-mode command would modify buffer text.</summary>
+    private static bool CommandMutatesBuffer(ParsedCommand cmd)
+    {
+        // All operators change text except yank (d, c, >, <, =, gu, gU, g~, gc, gq, ys, ...).
+        if (cmd.Operator != null) return cmd.Operator != "y";
+        // Surround rewrites: cs{from}{to} and ds{char}.
+        if (cmd.Motion is not null && (cmd.Motion.StartsWith("cs") || cmd.Motion.StartsWith("ds")))
+            return true;
+        return cmd.Motion switch
+        {
+            "i" or "I" or "a" or "A" or "o" or "O" or "R" or "gi"
+            or "x" or "X" or "s" or "S" or "C" or "D"
+            or "p" or "P" or "r"
+            or "J" or "gJ" or "~" or "&" => true,
+            _ => false,
+        };
+    }
+
     private void ExecuteNormalCommand(ParsedCommand cmd, List<VimEvent> events)
     {
+        if (CommandMutatesBuffer(cmd) && BlockedReadOnly(events)) return;
+
         var buf = _bufferManager.Current.Text;
         var motion = new MotionEngine(buf);
         int count = cmd.Count;
@@ -1511,6 +1542,15 @@ public class VimEngine
         _ctrlWPending = false;
         var buf = _bufferManager.Current.Text;
 
+        // Read-only buffer (e.g. a binary file): never reachable via normal-mode entry (that is
+        // already blocked), but guard here too so any direct/IME insert path cannot edit the buffer.
+        if (_bufferManager.Current.IsBinary)
+        {
+            if (key == "Escape") { ExitInsertMode(events); return; }
+            BlockedReadOnly(events);
+            return;
+        }
+
         if (_awaitingInsertRegister)
         {
             _awaitingInsertRegister = false;
@@ -1829,6 +1869,15 @@ public class VimEngine
     {
         var buf = _bufferManager.Current.Text;
         bool hasSelection = PlainSelectionRange() is not null;
+
+        // Read-only buffer (e.g. a binary file): permit caret movement, selection and copy, but
+        // reject anything that would edit the text.
+        if (_bufferManager.Current.IsBinary)
+        {
+            bool isCopy = ctrl && !alt && string.Equals(key, "c", StringComparison.OrdinalIgnoreCase);
+            bool isNav = key is "Left" or "Right" or "Up" or "Down" or "Home" or "End" or "Escape";
+            if (!isCopy && !isNav) { BlockedReadOnly(events); return; }
+        }
 
         if (ctrl && !alt)
         {

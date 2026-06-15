@@ -84,6 +84,8 @@ public class RegisterManager
                 try
                 {
                     var text = _clipboard.GetText();
+                    if (text == _unnamed.Text)
+                        return _unnamed;
                     if (!string.IsNullOrEmpty(text))
                         return new Register(text, RegisterType.Character);
                 }

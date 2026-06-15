@@ -224,6 +224,8 @@ public class ExCommandProcessor
 
         if (cmd is "wq" or "wq!" or "x" or "x!" or "xit" or "exit")
         {
+            if (_bufferManager.Current.IsBinary)
+                return new ExResult(false, "E21: Cannot write a binary file (read-only)");
             var buf = _bufferManager.Current;
             try { buf.Save(); }
             catch (Exception ex) { return new ExResult(false, ex.Message); }
@@ -236,6 +238,8 @@ public class ExCommandProcessor
         // :w [file] :write [file]
         if (TryParseWriteCommand(cmd, out var writePath))
         {
+            if (_bufferManager.Current.IsBinary && string.IsNullOrWhiteSpace(writePath))
+                return new ExResult(false, "E21: Cannot write a binary file (read-only)");
             var buf = _bufferManager.Current;
             var targetPath = string.IsNullOrWhiteSpace(writePath) ? buf.FilePath : writePath;
             if (string.IsNullOrWhiteSpace(targetPath))

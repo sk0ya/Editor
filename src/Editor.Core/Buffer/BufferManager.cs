@@ -18,6 +18,9 @@ public class VimBuffer
     /// <summary>File encoding name (vim-style, e.g. "utf-8", "utf-16", "latin1").</summary>
     public string FileEncoding { get; set; } = "utf-8";
 
+    /// <summary>True when the backing file was detected as binary; its content is not loaded and the buffer is read-only.</summary>
+    public bool IsBinary { get; private set; }
+
     // ─── Virtual document (not backed by a file on disk) ───
     /// <summary>True when this buffer is an in-memory document with no backing file.</summary>
     public bool IsVirtual { get; set; }
@@ -38,6 +41,17 @@ public class VimBuffer
             FileEncoding = detectedEncoding == "utf-8" && !string.IsNullOrWhiteSpace(preferredEncoding)
                 ? preferredEncoding
                 : detectedEncoding;
+            // UTF-16 text legitimately contains NUL bytes, so only run the NUL-byte scan when the
+            // BOM did not already identify the file as a known (UTF-16) text encoding.
+            bool isUtf16 = FileEncoding is "utf-16" or "utf-16le" or "utf-16be";
+            if (!isUtf16 && IsBinaryContent(bytes))
+            {
+                // Binary file: create the buffer but do not decode the content into the editor.
+                IsBinary = true;
+                Text.SetText($"[Binary file — {bytes.Length:N0} bytes, not loaded]");
+                Text.MarkSaved();
+                return;
+            }
             var enc = GetEncoding(FileEncoding);
             // Strip BOM bytes before decoding if present
             int bomLen = GetBomLength(bytes, enc);
@@ -46,6 +60,18 @@ public class VimBuffer
             Text.SetText(raw);
             Text.MarkSaved();
         }
+    }
+
+    /// <summary>
+    /// Heuristically detect binary content by scanning the first 8KB for a NUL byte
+    /// (the same approach Git uses). Text files virtually never contain NUL bytes.
+    /// </summary>
+    public static bool IsBinaryContent(byte[] bytes)
+    {
+        int scan = Math.Min(bytes.Length, 8000);
+        for (int i = 0; i < scan; i++)
+            if (bytes[i] == 0) return true;
+        return false;
     }
 
     /// <summary>Detect encoding name from BOM bytes; returns "utf-8" if no BOM is found.</summary>
@@ -98,6 +124,10 @@ public class VimBuffer
 
     public void Save(string? path = null)
     {
+        // Binary files are never decoded into the buffer, so writing the placeholder text back
+        // would destroy the original file. Refuse to save.
+        if (IsBinary)
+            throw new InvalidOperationException("E21: Cannot write a binary file (read-only).");
         path ??= FilePath ?? throw new InvalidOperationException("No file path specified.");
         FilePath = path;
         // GetText() joins lines with \n; replace with the desired line ending.

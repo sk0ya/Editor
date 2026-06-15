@@ -2,11 +2,20 @@ using System.IO;
 using Editor.Core.Config;
 using Editor.Core.Engine;
 using Editor.Core.Models;
+using Editor.Core.Registers;
 
 namespace Editor.Core.Tests;
 
 public class VimEngineTests
 {
+    private sealed class FakeClipboardProvider : IClipboardProvider
+    {
+        private string _text = "";
+
+        public string GetText() => _text;
+        public void SetText(string text) => _text = text;
+    }
+
     private VimEngine CreateEngine(string text = "", VimConfig? config = null)
     {
         var engine = new VimEngine(config ?? new VimConfig());
@@ -423,7 +432,24 @@ public class VimEngineTests
         engine.ProcessKey("y");
         engine.ProcessKey("y");
         engine.ProcessKey("p");
-        Assert.Equal(3, engine.CurrentBuffer.Text.LineCount);
+        Assert.Equal("hello\nhello\nworld", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(new CursorPosition(1, 0), engine.Cursor);
+    }
+
+    [Fact]
+    public void YY_P_PreservesLinewisePasteWithUnnamedClipboard()
+    {
+        var config = new VimConfig();
+        config.Options.Clipboard = "unnamed";
+        var engine = CreateEngine("hello\nworld", config);
+        engine.SetClipboardProvider(new FakeClipboardProvider());
+
+        engine.ProcessKey("y");
+        engine.ProcessKey("y");
+        engine.ProcessKey("p");
+
+        Assert.Equal("hello\nhello\nworld", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(new CursorPosition(1, 0), engine.Cursor);
     }
 
     [Fact]
@@ -2129,6 +2155,84 @@ public class VimEngineTests
         {
             File.Delete(path);
         }
+    }
+
+    private static string WriteTempBinaryFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "editor-binary-" + Guid.NewGuid().ToString("N") + ".bin");
+        // NUL byte in the first 8KB marks the file as binary.
+        File.WriteAllBytes(path, [0x50, 0x4B, 0x03, 0x04, 0x00, 0x01, 0x02, 0x03]);
+        return path;
+    }
+
+    [Fact]
+    public void LoadFile_BinaryFile_IsNotLoadedAndMarkedBinary()
+    {
+        var path = WriteTempBinaryFile();
+        try
+        {
+            var engine = CreateEngine();
+            engine.LoadFile(path);
+
+            Assert.True(engine.CurrentBuffer.IsBinary);
+            // Content is a placeholder, not the raw bytes decoded as text.
+            Assert.Contains("Binary file", engine.CurrentBuffer.Text.GetText());
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void BinaryFile_InsertKey_DoesNotEnterInsertMode()
+    {
+        var path = WriteTempBinaryFile();
+        try
+        {
+            var engine = CreateEngine();
+            engine.LoadFile(path);
+            var before = engine.CurrentBuffer.Text.GetText();
+
+            engine.ProcessKey("i");
+
+            Assert.Equal(VimMode.Normal, engine.Mode);
+            Assert.Equal(before, engine.CurrentBuffer.Text.GetText());
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void BinaryFile_DeleteCommands_DoNotModifyBuffer()
+    {
+        var path = WriteTempBinaryFile();
+        try
+        {
+            var engine = CreateEngine();
+            engine.LoadFile(path);
+            var before = engine.CurrentBuffer.Text.GetText();
+
+            engine.ProcessKey("x");
+            engine.ProcessKey("d"); engine.ProcessKey("d");
+            engine.ProcessKey("p");
+
+            Assert.Equal(before, engine.CurrentBuffer.Text.GetText());
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void BinaryFile_Save_Throws()
+    {
+        var path = WriteTempBinaryFile();
+        var originalBytes = File.ReadAllBytes(path);
+        try
+        {
+            var engine = CreateEngine();
+            engine.LoadFile(path);
+
+            Assert.Throws<InvalidOperationException>(() => engine.CurrentBuffer.Save());
+            // The original file on disk is untouched.
+            Assert.Equal(originalBytes, File.ReadAllBytes(path));
+        }
+        finally { File.Delete(path); }
     }
 
     [Fact]
