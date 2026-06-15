@@ -42,6 +42,7 @@ public class EditorCanvas : FrameworkElement
     private bool _isActive = true;
     private System.Windows.Threading.DispatcherTimer? _cursorTimer;
     private bool _isDragging = false;
+    private Point? _mouseDownPoint;
     private string _imeCompositionText = string.Empty;
     private string[] _imeCandidates = [];
     private int _imeCandidateSelection = -1;
@@ -637,8 +638,9 @@ public class EditorCanvas : FrameworkElement
         base.OnMouseLeftButtonDown(e);
         CaptureMouse();
         _isDragging = false;
+        _mouseDownPoint = e.GetPosition(this);
 
-        var point = e.GetPosition(this);
+        var point = _mouseDownPoint.Value;
 
         // Minimap click — scroll to the clicked position
         if (_showMinimap && point.X >= RenderSize.Width - MinimapWidth)
@@ -715,6 +717,17 @@ public class EditorCanvas : FrameworkElement
 
         if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed && IsMouseCaptured)
         {
+            if (!_isDragging && _mouseDownPoint is { } downPoint)
+            {
+                double dx = Math.Abs(point.X - downPoint.X);
+                double dy = Math.Abs(point.Y - downPoint.Y);
+                if (dx < SystemParameters.MinimumHorizontalDragDistance &&
+                    dy < SystemParameters.MinimumVerticalDragDistance)
+                {
+                    return;
+                }
+            }
+
             _isDragging = true;
             // Don't fire MouseDragging when dragging in minimap area
             if (!(_showMinimap && point.X >= RenderSize.Width - MinimapWidth))
@@ -773,6 +786,7 @@ public class EditorCanvas : FrameworkElement
     {
         base.OnMouseLeftButtonUp(e);
         if (IsMouseCaptured) ReleaseMouseCapture();
+        _mouseDownPoint = null;
         if (_isDragging)
         {
             _isDragging = false;

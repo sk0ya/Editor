@@ -1843,6 +1843,9 @@ public partial class VimEditorControl : UserControl
 
         if (!_isDragSelecting)
         {
+            if (new CursorPosition(line, col) == _engine.Cursor)
+                return;
+
             _isDragSelecting = true;
             if (_engine.Mode is not (VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock))
             {
