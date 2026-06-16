@@ -184,6 +184,7 @@ public partial class VimEditorControl : UserControl
     [DllImport("imm32.dll")] private static extern bool   ImmReleaseContext(IntPtr hWnd, IntPtr hImc);
     [DllImport("imm32.dll")] private static extern bool   ImmNotifyIME(IntPtr hImc, int dwAction, int dwIndex, int dwValue);
     [DllImport("imm32.dll", CharSet = CharSet.Unicode)] private static extern int ImmGetCompositionStringW(IntPtr hImc, int dwIndex, IntPtr lpBuf, int dwBufLen);
+    [DllImport("imm32.dll", CharSet = CharSet.Unicode)] private static extern bool ImmSetCompositionStringW(IntPtr hImc, int dwIndex, string? lpComp, int dwCompLen, string? lpRead, int dwReadLen);
     [DllImport("imm32.dll")] private static extern bool   ImmSetCompositionWindow(IntPtr hImc, ref COMPOSITIONFORM lpCompForm);
     [DllImport("imm32.dll")] private static extern bool   ImmSetCandidateWindow(IntPtr hImc, ref CANDIDATEFORM lpCandidateForm);
     [DllImport("imm32.dll", CharSet = CharSet.Unicode)] private static extern uint ImmGetCandidateListW(IntPtr hImc, uint deIndex, IntPtr lpCandList, uint dwBufLen);
@@ -197,6 +198,7 @@ public partial class VimEditorControl : UserControl
     private const int  NI_COMPOSITIONSTR      = 0x0015;
     private const int  CPS_CANCEL             = 0x0004;
     private const int  GCS_COMPSTR            = 0x0008;
+    private const int  SCS_SETSTR             = 0x0009; // GCS_COMPREADSTR | GCS_COMPSTR
     private const uint CFS_POINT              = 0x0002;
     private const uint CFS_FORCE_POSITION     = 0x0020;
     private const uint CFS_CANDIDATEPOS       = 0x0040;
@@ -319,7 +321,6 @@ public partial class VimEditorControl : UserControl
     private int  _replayCount      = 0;
     private bool _exitInsertAfterImeCommit = false;
     private string _lastImeCompositionText = string.Empty;
-    private string? _pendingImeCommitText;
     private bool _imeWindowUpdateInProgress = false;
     private bool _imeSuppressionCaretCreated = false;
     private ITfSource? _tsfSource;
@@ -2036,12 +2037,30 @@ public partial class VimEditorControl : UserControl
         {
             if (e.Key == Key.ImeProcessed && actualKey == Key.Escape)
             {
+                // Commit the active composition by letting the IME finalize it itself:
+                // inject a real Return, which the IME consumes to commit the kana (no
+                // newline) and — crucially — tears the TSF-backed composition down
+                // cleanly. IMM-level CPS_CANCEL / emptying the string does NOT reach
+                // the TSF composition, so leftover kana otherwise resurfaces on the
+                // next keystroke. The committed text arrives via OnTextInput, which is
+                // the single completion point: it inserts the text and then exits
+                // Insert (Input priority, queue order — no Background inversion).
                 _imeInsertBuffer.Clear();
-                _pendingImeCommitText = GetImeCompositionText();
-                if (string.IsNullOrEmpty(_pendingImeCommitText))
-                    _pendingImeCommitText = _lastImeCompositionText;
+                _exitInsertAfterImeCommit = true;
                 SendVirtualKeyToIme((ushort)KeyInterop.VirtualKeyFromKey(Key.Return));
-                RequestExitInsertAfterImeCommit();
+                // Safety net: if the IME produced no commit text (e.g. empty
+                // composition), OnTextInput never fires — exit Insert anyway so we are
+                // not stuck. Background priority so it runs only AFTER the injected
+                // Return's commit has been delivered; it no-ops in the normal case
+                // because OnTextInput already cleared the flag.
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+                {
+                    if (!_exitInsertAfterImeCommit) return;
+                    _exitInsertAfterImeCommit = false;
+                    ClearSnippetState();
+                    if (_engine.Mode is VimMode.Insert or VimMode.Replace)
+                        ProcessKey("Escape", false, false, false);
+                }));
                 e.Handled = true;
                 return;
             }
@@ -2329,8 +2348,14 @@ public partial class VimEditorControl : UserControl
             return;
         }
 
-        // LSP: completion popup navigation (never active while Vim is disabled)
-        if (_lspManager.CompletionVisible && mode == VimMode.Insert && _engine.VimEnabled)
+        // LSP: completion popup navigation (never active while Vim is disabled).
+        // Skip while the IME is mid-composition (e.Key == Key.ImeProcessed): the
+        // Enter/Tab/↑/↓ belong to the IME (confirm conversion, move candidate) and
+        // must not be hijacked as completion actions — doing so steals the commit
+        // Enter and sets _keyDownHandledByVim, which then drops the committed text
+        // in OnTextInput. Mirrors the same guard in OnPreviewKeyDown.
+        if (_lspManager.CompletionVisible && mode == VimMode.Insert && _engine.VimEnabled
+            && e.Key != Key.ImeProcessed)
         {
             if (key == Key.Down || (ctrl && key == Key.N))
             {
@@ -2362,8 +2387,10 @@ public partial class VimEditorControl : UserControl
             }
         }
 
-        // LSP: code actions popup navigation (Normal mode)
-        if (_lspManager.CodeActionsVisible && mode == VimMode.Normal)
+        // LSP: code actions popup navigation (Normal mode). Same IME guard as above —
+        // never consume keys the IME is still composing with.
+        if (_lspManager.CodeActionsVisible && mode == VimMode.Normal
+            && e.Key != Key.ImeProcessed)
         {
             if (key == Key.J || key == Key.Down)
             {
@@ -2512,9 +2539,16 @@ public partial class VimEditorControl : UserControl
                 ProcessKey(ch.ToString(), false, false, false);
             }
             e.Handled = true;
-            _pendingImeCommitText = null;
-            if (_exitInsertAfterImeCommit)
-                FinishImeCommitEscape();
+
+            // Escape-commit (ImeProcessed Escape) finalised the composition via an
+            // injected Return; now that the committed text has been inserted, exit
+            // Insert. This is the single completion point for the Escape-commit flow.
+            if (_exitInsertAfterImeCommit && (mode == VimMode.Insert || mode == VimMode.Replace))
+            {
+                _exitInsertAfterImeCommit = false;
+                ClearSnippetState();
+                ProcessKey("Escape", false, false, false);
+            }
             return;
         }
 
@@ -3469,6 +3503,13 @@ public partial class VimEditorControl : UserControl
         SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT_SEND>());
     }
 
+    /// <summary>
+    /// Synchronously commits the active IME composition: inserts the in-progress
+    /// composition string at the cursor, then discards the native composition so the
+    /// IME does not also deliver the same text later via WM_IME_COMPOSITION →
+    /// OnTextInput (which would duplicate it). Runs in-line with the triggering
+    /// keystroke so no subsequent input can be reordered ahead of the commit.
+    /// </summary>
     private static void SendVirtualKeyToIme(ushort vk)
     {
         INPUT_SEND[] inputs =
@@ -3539,6 +3580,13 @@ public partial class VimEditorControl : UserControl
         if (PresentationSource.FromVisual(this) is not HwndSource source) return;
         var imc = ImmGetContext(source.Handle);
         if (imc == IntPtr.Zero) return;
+        // Empty the composition string before cancelling. CPS_CANCEL on its own has
+        // been observed to leave a TSF-backed composition alive, so the leftover kana
+        // is flushed into the *next* keystroke. Explicitly zeroing the composition
+        // string (SCS_SETSTR with an empty string) guarantees nothing survives the
+        // cancel. SCS_SETSTR updates GCS_COMPSTR (not GCS_RESULTSTR), so it produces
+        // no committed text / OnTextInput echo.
+        ImmSetCompositionStringW(imc, SCS_SETSTR, string.Empty, 0, string.Empty, 0);
         ImmNotifyIME(imc, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
         ImmReleaseContext(source.Handle, imc);
         ClearImeCompositionOverlay();
@@ -3570,42 +3618,6 @@ public partial class VimEditorControl : UserControl
         {
             ImmReleaseContext(source.Handle, imc);
         }
-    }
-
-    private void RequestExitInsertAfterImeCommit()
-    {
-        _exitInsertAfterImeCommit = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
-        {
-            if (_exitInsertAfterImeCommit)
-                FinishImeCommitEscape();
-        }));
-    }
-
-    private void FinishImeCommitEscape()
-    {
-        _exitInsertAfterImeCommit = false;
-        var fallbackText = _pendingImeCommitText;
-        bool usedFallbackPath = fallbackText != null;
-        _pendingImeCommitText = null;
-
-        if (!string.IsNullOrEmpty(fallbackText) && _engine.Mode is VimMode.Insert or VimMode.Replace)
-        {
-            foreach (var ch in fallbackText)
-            {
-                if (ch < 32) continue;
-                ProcessKey(ch.ToString(), false, false, false);
-            }
-        }
-
-        if (usedFallbackPath)
-            CancelImeComposition();
-
-        ClearImeCompositionOverlay();
-        ClearSnippetState();
-
-        if (_engine.Mode is VimMode.Insert or VimMode.Replace)
-            ProcessKey("Escape", false, false, false);
     }
 
     private void ProcessVimEvents(IReadOnlyList<VimEvent> events)
