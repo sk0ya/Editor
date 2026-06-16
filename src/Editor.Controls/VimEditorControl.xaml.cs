@@ -203,6 +203,7 @@ public partial class VimEditorControl : UserControl
     private const uint CFS_FORCE_POSITION     = 0x0020;
     private const uint CFS_CANDIDATEPOS       = 0x0040;
     private const int  WM_IME_STARTCOMPOSITION = 0x010D;
+    private const int  WM_IME_ENDCOMPOSITION   = 0x010E;
     private const int  WM_IME_SETCONTEXT       = 0x0281;
     private const int  WM_IME_NOTIFY           = 0x0282;
     private const int  WM_IME_REQUEST          = 0x0288;
@@ -321,6 +322,10 @@ public partial class VimEditorControl : UserControl
     private int  _replayCount      = 0;
     private bool _exitInsertAfterImeCommit = false;
     private string _lastImeCompositionText = string.Empty;
+    // Bumped on every WPF text-composition update/commit. Used to detect the case
+    // where Backspace empties the composition: WPF raises no update event for the
+    // final 1→0 char deletion, so the in-editor overlay would otherwise linger.
+    private int _imeCompositionSeq = 0;
     private bool _imeWindowUpdateInProgress = false;
     private bool _imeSuppressionCaretCreated = false;
     private ITfSource? _tsfSource;
@@ -727,6 +732,13 @@ public partial class VimEditorControl : UserControl
         if (msg == WM_IME_STARTCOMPOSITION)
         {
             UpdateImeWindowPos(hwnd);
+        }
+        else if (msg == WM_IME_ENDCOMPOSITION)
+        {
+            // Legacy IMM IMEs: the composition ended (e.g. backspaced away). Clear the
+            // in-editor overlay so no character lingers. (TSF IMEs don't send this; the
+            // ScheduleImeOverlayResync path covers them.)
+            ClearImeCompositionOverlay();
         }
         else if (msg == WM_IME_REQUEST)
         {
@@ -1998,6 +2010,7 @@ public partial class VimEditorControl : UserControl
         if (string.IsNullOrEmpty(text))
             text = composition?.SystemCompositionText;
 
+        _imeCompositionSeq++;
         _lastImeCompositionText = text ?? string.Empty;
         Canvas.SetImeCompositionText(_lastImeCompositionText);
         UpdateImeWindowPos();
@@ -2017,6 +2030,24 @@ public partial class VimEditorControl : UserControl
         _lastImeCompositionText = string.Empty;
         Canvas.SetImeCompositionText(string.Empty);
         ClearImeCandidateOverlay();
+    }
+
+    /// <summary>
+    /// Clears the in-editor composition overlay if no composition update or commit
+    /// happened after a Backspace that emptied the composition. WPF raises no
+    /// text-composition update for the final 1→0 char deletion, so without this the
+    /// last character stays drawn until the next keystroke.
+    /// </summary>
+    private void ScheduleImeOverlayResync()
+    {
+        int seq = _imeCompositionSeq;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
+        {
+            // A real update/commit bumps _imeCompositionSeq — if it changed, the
+            // overlay is already in sync and must not be cleared.
+            if (_imeCompositionSeq == seq && !string.IsNullOrEmpty(_lastImeCompositionText))
+                ClearImeCompositionOverlay();
+        }));
     }
 
     // ─────────────── Key handling ───────────────
@@ -2064,6 +2095,15 @@ public partial class VimEditorControl : UserControl
                 e.Handled = true;
                 return;
             }
+
+            // Backspace inside a composition: when it deletes the LAST char (1→0), WPF
+            // raises no text-composition update, so the in-editor overlay would linger.
+            // Schedule a deferred resync that clears the overlay only if no update/commit
+            // arrives after the IME processes this Backspace. Mode-independent so it also
+            // covers plain (Vim-disabled) Insert.
+            if (e.Key == Key.ImeProcessed && actualKey == Key.Back
+                && !string.IsNullOrEmpty(_lastImeCompositionText))
+                ScheduleImeOverlayResync();
 
             // ── IME insert-mode mapping detection ──────────────────────────────
             // With IME ON every key comes as Key.ImeProcessed.  We need to
@@ -2520,6 +2560,7 @@ public partial class VimEditorControl : UserControl
     {
         // IME committed a composition — the key sequence is now finalised by the IME,
         // so any partially-tracked imap prefix is no longer valid.
+        _imeCompositionSeq++;
         _imeInsertBuffer.Clear();
         ClearImeCompositionOverlay();
 
