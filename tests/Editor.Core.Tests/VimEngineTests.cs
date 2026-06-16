@@ -3553,6 +3553,53 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VisualPaste_ReplacesCharwiseSelection()
+    {
+        // Yank "foo" charwise, then visually select "bar" and paste over it.
+        var engine = CreateEngine("foo bar");
+        // Yank "foo" (3 chars) into the unnamed register.
+        engine.ProcessKey("v");
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        engine.ProcessKey("y");
+        // Move to "bar", select it, paste.
+        engine.ProcessKey("w");        // cursor on 'b'
+        engine.ProcessKey("v");
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        engine.ProcessKey("p");
+        Assert.Equal("foo foo", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void VisualLinePaste_ReplacesSelectedLines()
+    {
+        // Yank line 0 linewise, then visual-line select line 1 and paste over it.
+        var engine = CreateEngine("alpha\nbeta\ngamma");
+        engine.ProcessKey("y");
+        engine.ProcessKey("y");        // yank "alpha" linewise
+        engine.ProcessKey("j");        // line 1 "beta"
+        engine.ProcessKey("V");
+        engine.ProcessKey("p");
+        Assert.Equal("alpha\nalpha\ngamma", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void VisualPaste_PutsReplacedTextInUnnamedRegister()
+    {
+        // After visual paste, the replaced text should be yanked into the unnamed register.
+        var engine = CreateEngine("foo bar");
+        engine.ProcessKey("v"); engine.ProcessKey("l"); engine.ProcessKey("l");
+        engine.ProcessKey("y");        // yank "foo"
+        engine.ProcessKey("w");
+        engine.ProcessKey("v"); engine.ProcessKey("l"); engine.ProcessKey("l");
+        engine.ProcessKey("p");        // replace "bar" with "foo"; "bar" → unnamed
+        // Paste at end: cursor on last 'o', append the now-unnamed "bar".
+        engine.ProcessKey("p");
+        Assert.Equal("foo foobar", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
     public void CtrlG_EmitsFileInfo()
     {
         // 3-line buffer; cursor is on line 1 col 2 (0-based) = line 2 col 3 (1-based)

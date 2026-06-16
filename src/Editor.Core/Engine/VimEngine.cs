@@ -2342,6 +2342,11 @@ public class VimEngine
                 _commandParser.Reset();
                 ExecuteVisualYank('"', events);
                 return;
+            case "p":
+            case "P":
+                _commandParser.Reset();
+                ExecuteVisualPaste('"', events);
+                return;
             case "c":
             case "C":
             case "s":
@@ -5266,6 +5271,107 @@ public class VimEngine
             YankRange(register, start, end, false);
             ExecuteDelete(start, end, false, events);
         }
+        ExitVisualMode(events);
+    }
+
+    // Visual-mode paste: replaces the selection with the register contents.
+    // The deleted selection is yanked into the unnamed register (Vim behavior),
+    // so the register is read up front before any delete overwrites it.
+    private void ExecuteVisualPaste(char register, List<VimEvent> events)
+    {
+        if (_selection == null) { ExitVisualMode(events); return; }
+
+        var reg = _registerManager.Get(register);
+        if (reg.IsEmpty) { ExecuteVisualDelete('"', events); return; }
+        var regType = reg.Type;
+        var regText = reg.Text;
+        var regLines = reg.GetLines();
+
+        var sel = _selection.Value;
+        var mode = _mode;
+        var start = sel.NormalizedStart;
+        var end = sel.NormalizedEnd;
+
+        Snapshot();
+        var buf = _bufferManager.Current.Text;
+
+        if (mode == VimMode.VisualBlock)
+        {
+            var (blockStartLine, _, _, _) = GetBlockBounds(sel);
+            var leftColumn = GetBlockLeftColumn(sel);
+            YankBlock('"', sel);
+            DeleteBlock(sel);
+            _cursor = buf.ClampCursor(new CursorPosition(blockStartLine, leftColumn));
+            if (regType == RegisterType.Line)
+                InsertLinewisePaste(regLines, after: false);
+            else
+            {
+                buf.InsertText(_cursor.Line, _cursor.Column, regText);
+                _cursor = buf.ClampCursor(new CursorPosition(_cursor.Line, _cursor.Column + regText.Length - 1));
+            }
+            EmitText(events);
+            ExitVisualMode(events);
+            return;
+        }
+
+        if (mode == VimMode.VisualLine)
+        {
+            var deleted = buf.GetLines(start.Line, end.Line);
+            _registerManager.SetYank('"', new Register(string.Join("\n", deleted), RegisterType.Line));
+
+            string[] newLines = regType == RegisterType.Line ? regLines : regText.Split('\n');
+            bool deletedAll = start.Line == 0 && end.Line >= buf.LineCount - 1;
+
+            CurrentBuffer.Folds.OnLinesDeleted(start.Line, end.Line);
+            buf.DeleteLines(start.Line, end.Line);
+
+            if (deletedAll)
+            {
+                buf.ReplaceLine(0, newLines[0]);
+                if (newLines.Length > 1)
+                    buf.InsertLines(0, newLines[1..]);
+            }
+            else
+            {
+                for (int i = newLines.Length - 1; i >= 0; i--)
+                    buf.InsertLineAbove(start.Line, newLines[i]);
+            }
+            CurrentBuffer.Folds.OnLinesInserted(start.Line, newLines.Length);
+            _cursor = buf.ClampCursor(new CursorPosition(start.Line, 0));
+            EmitText(events);
+            ExitVisualMode(events);
+            return;
+        }
+
+        // Characterwise visual selection.
+        YankRange('"', start, end, false);
+        if (start.Line == end.Line)
+            buf.DeleteRange(start.Line, start.Column, Math.Min(end.Column + 1, buf.GetLineLength(start.Line)));
+        else
+        {
+            buf.DeleteRange(start.Line, start.Column, buf.GetLineLength(start.Line));
+            buf.DeleteRange(end.Line, 0, Math.Min(end.Column + 1, buf.GetLineLength(end.Line)));
+            for (int l = end.Line - 1; l > start.Line; l--)
+                buf.DeleteLines(l, l);
+            buf.JoinLines(start.Line);
+        }
+
+        if (regType == RegisterType.Line)
+        {
+            string curLine = buf.GetLine(start.Line);
+            string before = curLine[..Math.Min(start.Column, curLine.Length)];
+            string after = curLine[Math.Min(start.Column, curLine.Length)..];
+            buf.ReplaceLine(start.Line, before);
+            var insert = new List<string>(regLines) { after };
+            buf.InsertLines(start.Line, insert);
+            _cursor = buf.ClampCursor(new CursorPosition(start.Line + 1, 0));
+        }
+        else
+        {
+            buf.InsertText(start.Line, start.Column, regText);
+            _cursor = buf.ClampCursor(new CursorPosition(start.Line, start.Column + regText.Length - 1));
+        }
+        EmitText(events);
         ExitVisualMode(events);
     }
 
