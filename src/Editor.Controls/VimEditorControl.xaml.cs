@@ -2093,6 +2093,17 @@ public partial class VimEditorControl : UserControl
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Reset the "Vim already handled this key" flag at the start of EVERY key.
+        // OnKeyDown also resets it, but OnKeyDown does NOT fire for Key.ImeProcessed
+        // keys — so when a Normal/Visual-mode IME key is handled here (which sets the
+        // flag and marks the event handled), nothing would clear it. A stale `true`
+        // then survives into a later Insert-mode composition and makes OnTextInput drop
+        // the committed text (the kana vanishes on the confirming Enter). PreviewKeyDown
+        // fires for every key including ImeProcessed, so resetting here is the reliable
+        // single point. The same-key IME echo still arrives before the next key's
+        // PreviewKeyDown, so legitimate echo-dropping is preserved.
+        _keyDownHandledByVim = false;
+
         // Resolve actual key — handles IME (ImeProcessed) and Alt combos (System)
         Key actualKey = e.Key switch
         {
