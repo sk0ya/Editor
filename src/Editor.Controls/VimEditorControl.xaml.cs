@@ -2383,6 +2383,9 @@ public partial class VimEditorControl : UserControl
                 if (ctrlKey != null)
                 {
                     ProcessKey(ctrlKey, true, shift, alt);
+                    // Suppress the duplicate OnTextInput the IME still emits for this
+                    // key (see below).
+                    _keyDownHandledByVim = true;
                     e.Handled = true;
                     return;
                 }
@@ -2392,6 +2395,13 @@ public partial class VimEditorControl : UserControl
             if (keyStr != null)
             {
                 ProcessKey(keyStr, ctrl, shift, alt);
+                // With IME ON the same key is also committed as text — e.g. Space
+                // becomes a full-width '　' (U+3000) that arrives via OnTextInput and
+                // is normalized back to ' '. Marking it handled here makes OnTextInput
+                // drop that echo; otherwise the key is fed to the engine twice (a
+                // stray second leader space corrupts maps like `<Space>w`, and `i`
+                // would insert a literal 'い'). Mirrors the OnKeyDown path.
+                _keyDownHandledByVim = true;
                 e.Handled = true;
             }
         }
