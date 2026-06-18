@@ -33,9 +33,14 @@ All three share one version and must be bumped together:
    dotnet nuget push src/Editor.Controls.Defaults/bin/Release/sk0ya.Editor.Controls.Defaults.<VER>.nupkg --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY
    ```
    Replace `<VER>` with the new version.
-5. **Report** the new version and confirm each push succeeded ("Created" / "パッケージがプッシュされました").
+5. **Commit & push** the version bump:
+   ```
+   git add -A && git commit -m "Bump NuGet packages to <VER>" && git push
+   ```
+   End the commit message with the `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer.
+6. **Report** the new version and confirm each push succeeded ("Created" / "パッケージがプッシュされました") plus the commit hash.
 
 ## Notes
 
 - `Editor.Controls` and `Editor.Controls.Defaults` use `ProjectReference` to `Editor.Core`, so packing auto-adds a package dependency on the matching version — that's why lockstep bumping matters.
-- Commit/tag only if the user asks.
+- Commit straight to `main` (no feature branch). Tag only if the user asks.
