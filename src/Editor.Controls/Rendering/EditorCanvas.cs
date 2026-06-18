@@ -44,6 +44,10 @@ public class EditorCanvas : FrameworkElement
     private bool _isDragging = false;
     private Point? _mouseDownPoint;
     private string _imeCompositionText = string.Empty;
+    // Caret position (in characters) inside the composition string, as reported by
+    // the IME (GCS_CURSORPOS). -1 means "place the caret at the end" — used as the
+    // fallback when no position is known.
+    private int _imeCompositionCursor = -1;
     private string[] _imeCandidates = [];
     private int _imeCandidateSelection = -1;
     private VisualLineSegment[] _visualLines = [new VisualLineSegment(0, 0, false)];
@@ -473,11 +477,12 @@ public class EditorCanvas : FrameworkElement
         InvalidateVisual();
     }
 
-    public void SetImeCompositionText(string text)
+    public void SetImeCompositionText(string text, int cursor = -1)
     {
         text ??= string.Empty;
-        if (_imeCompositionText == text) return;
+        if (_imeCompositionText == text && _imeCompositionCursor == cursor) return;
         _imeCompositionText = text;
+        _imeCompositionCursor = cursor;
         InvalidateVisual();
     }
     public void SetImeCandidates(IReadOnlyList<string>? candidates, int selectedIndex)
@@ -2108,12 +2113,26 @@ public class EditorCanvas : FrameworkElement
 
         if (!_cursorVisible) return;
 
+        // While an IME composition is active, the composition text is rendered
+        // inserted at the cursor column. Advance the caret to the IME's own caret
+        // position within that composition (GCS_CURSORPOS), so arrow keys that move
+        // the IME caret are reflected. -1 falls back to the end of the composition.
+        double caretX = cursorX;
+        if (_mode is VimMode.Insert or VimMode.Replace && !string.IsNullOrEmpty(_imeCompositionText))
+        {
+            int caretChars = _imeCompositionCursor < 0
+                ? _imeCompositionText.Length
+                : Math.Clamp(_imeCompositionCursor, 0, _imeCompositionText.Length);
+            if (caretChars > 0)
+                caretX += FormatText(_imeCompositionText[..caretChars], Theme.Foreground).Width;
+        }
+
         if (_mode == VimMode.Insert || _mode == VimMode.Command ||
             _mode == VimMode.SearchForward || _mode == VimMode.SearchBackward)
         {
             // Thin line cursor
             var pen = new Pen(Theme.InsertCursor, 2);
-            dc.DrawLine(pen, new Point(cursorX, cursorY), new Point(cursorX, cursorY + _lineHeight));
+            dc.DrawLine(pen, new Point(caretX, cursorY), new Point(caretX, cursorY + _lineHeight));
         }
         else if (_mode == VimMode.Replace)
         {

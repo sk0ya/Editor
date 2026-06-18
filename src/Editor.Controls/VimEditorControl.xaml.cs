@@ -198,11 +198,13 @@ public partial class VimEditorControl : UserControl
     private const int  NI_COMPOSITIONSTR      = 0x0015;
     private const int  CPS_CANCEL             = 0x0004;
     private const int  GCS_COMPSTR            = 0x0008;
+    private const int  GCS_CURSORPOS          = 0x0080;
     private const int  SCS_SETSTR             = 0x0009; // GCS_COMPREADSTR | GCS_COMPSTR
     private const uint CFS_POINT              = 0x0002;
     private const uint CFS_FORCE_POSITION     = 0x0020;
     private const uint CFS_CANDIDATEPOS       = 0x0040;
     private const int  WM_IME_STARTCOMPOSITION = 0x010D;
+    private const int  WM_IME_COMPOSITION       = 0x010F;
     private const int  WM_IME_ENDCOMPOSITION   = 0x010E;
     private const int  WM_IME_SETCONTEXT       = 0x0281;
     private const int  WM_IME_NOTIFY           = 0x0282;
@@ -268,6 +270,8 @@ public partial class VimEditorControl : UserControl
     private static readonly Guid IID_ITfUIElementMgr = new("EA1EA135-19DF-11D7-A6D2-00065B84435C");
     private static readonly Guid IID_ITfUIElementSink = new("EA1EA136-19DF-11D7-A6D2-00065B84435C");
     private static readonly Guid IID_ITfSource = new("4EA48A35-60AE-446F-8FD6-E6A8D82459F7");
+    private static readonly Guid IID_ITfTextEditSink = new("8127D409-CCD3-4683-967A-B43D5B482BF7");
+    private const uint TF_DEFAULT_SELECTION = 0xFFFFFFFFu;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT_SEND[] pInputs, int cbSize);
@@ -331,6 +335,15 @@ public partial class VimEditorControl : UserControl
     private ITfSource? _tsfSource;
     private ITfUIElementSink? _tsfUiElementSink;
     private uint _tsfUiElementSinkCookie = TF_INVALID_COOKIE;
+
+    // TSF text-edit sink: tracks the composition caret within TSF-based IMEs (modern
+    // Microsoft IME), which don't populate the legacy IMM composition string. OnEndEdit
+    // fires for every edit — including arrow-key caret moves inside the composition —
+    // and hands us a read-only cookie, so no foreign synchronous lock is needed.
+    private ITfContext? _tsfContext;
+    private ITfSource? _tsfContextSource;
+    private ITfTextEditSink? _tsfTextEditSink;
+    private uint _tsfTextEditCookie = TF_INVALID_COOKIE;
 
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
@@ -705,6 +718,7 @@ public partial class VimEditorControl : UserControl
         ClearImeCandidateOverlay();
         DestroyImeSuppressionCaret();
         DetachTsfUiElementSink();
+        DetachTsfTextEditSink();
         if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
             hwndSource.RemoveHook(ImeWndProc);
         _completionDebounce.Stop();
@@ -732,6 +746,20 @@ public partial class VimEditorControl : UserControl
         if (msg == WM_IME_STARTCOMPOSITION)
         {
             UpdateImeWindowPos(hwnd);
+        }
+        else if (msg == WM_IME_COMPOSITION)
+        {
+            // The IME caret may move within the composition (e.g. arrow keys re-select
+            // a clause) without changing the composition text, so WPF raises no
+            // text-input update. Re-read GCS_CURSORPOS after the message settles and
+            // refresh the rendered caret. We don't mark it handled — WPF still needs to
+            // process this message for text commits.
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
+            {
+                if (_engine.Mode is (VimMode.Insert or VimMode.Replace)
+                    && !string.IsNullOrEmpty(_lastImeCompositionText))
+                    Canvas.SetImeCompositionText(_lastImeCompositionText, GetImeCursorPos());
+            });
         }
         else if (msg == WM_IME_ENDCOMPOSITION)
         {
@@ -877,6 +905,127 @@ public partial class VimEditorControl : UserControl
         }
     }
 
+    /// <summary>
+    /// Advises an <see cref="ITfTextEditSink"/> on the currently focused TSF context so
+    /// that composition caret moves (arrow keys inside the composition) are observed.
+    /// No-op if already advised or if TSF is unavailable. Failures fall back silently to
+    /// the IMM / end-of-composition caret behaviour.
+    /// </summary>
+    private void EnsureTsfTextEditSink()
+    {
+        if (_tsfTextEditCookie != TF_INVALID_COOKIE) return;
+
+        IntPtr threadMgrPtr = IntPtr.Zero;
+        ITfThreadMgr? threadMgr = null;
+        ITfDocumentMgr? docMgr = null;
+        ITfContext? ctx = null;
+        try
+        {
+            if (TF_GetThreadMgr(out threadMgrPtr) < 0 || threadMgrPtr == IntPtr.Zero) return;
+            threadMgr = (ITfThreadMgr)Marshal.GetObjectForIUnknown(threadMgrPtr);
+
+            if (threadMgr.GetFocus(out docMgr) < 0 || docMgr == null) return;
+            if (docMgr.GetTop(out ctx) < 0 || ctx == null) return;
+
+            var source = (ITfSource)ctx; // QI ITfSource on the context
+            var sink = new TsfTextEditSink(this);
+            var iid = IID_ITfTextEditSink;
+            if (source.AdviseSink(ref iid, sink, out uint cookie) >= 0)
+            {
+                _tsfContext = ctx;
+                _tsfContextSource = source;
+                _tsfTextEditSink = sink;
+                _tsfTextEditCookie = cookie;
+                ctx = null; // ownership transferred to the fields; don't release below
+            }
+        }
+        catch
+        {
+            // TSF caret tracking is best-effort; never let it disrupt input.
+        }
+        finally
+        {
+            if (ctx != null && Marshal.IsComObject(ctx)) Marshal.ReleaseComObject(ctx);
+            if (docMgr != null && Marshal.IsComObject(docMgr)) Marshal.ReleaseComObject(docMgr);
+            if (threadMgr != null && Marshal.IsComObject(threadMgr)) Marshal.ReleaseComObject(threadMgr);
+            if (threadMgrPtr != IntPtr.Zero) Marshal.Release(threadMgrPtr);
+        }
+    }
+
+    private void DetachTsfTextEditSink()
+    {
+        try
+        {
+            if (_tsfContextSource != null && _tsfTextEditCookie != TF_INVALID_COOKIE)
+                _ = _tsfContextSource.UnadviseSink(_tsfTextEditCookie);
+        }
+        catch
+        {
+            // Sink detach failures should not affect editor shutdown.
+        }
+        finally
+        {
+            _tsfTextEditCookie = TF_INVALID_COOKIE;
+            _tsfTextEditSink = null;
+            // _tsfContextSource is a QI of _tsfContext, so for COM the runtime hands back
+            // the same RCW instance — release it only once to avoid over-releasing.
+            var src = _tsfContextSource;
+            var ctx = _tsfContext;
+            _tsfContextSource = null;
+            _tsfContext = null;
+            if (src != null && Marshal.IsComObject(src))
+                Marshal.ReleaseComObject(src);
+            if (ctx != null && !ReferenceEquals(ctx, src) && Marshal.IsComObject(ctx))
+                Marshal.ReleaseComObject(ctx);
+        }
+    }
+
+    /// <summary>
+    /// Called from <see cref="ITfTextEditSink.OnEndEdit"/>. Reads the current selection
+    /// (the composition caret) under the provided read-only cookie and updates the
+    /// in-editor composition caret. The WPF text store holds only the in-flight
+    /// composition, so the selection's character anchor is the caret offset within it.
+    /// </summary>
+    private void OnTsfEndEdit(uint ecReadOnly)
+    {
+        if (_engine.Mode is not (VimMode.Insert or VimMode.Replace)) return;
+        if (_tsfContext == null || string.IsNullOrEmpty(_lastImeCompositionText)) return;
+
+        try
+        {
+            var selection = new TF_SELECTION[1];
+            if (_tsfContext.GetSelection(ecReadOnly, TF_DEFAULT_SELECTION, 1, selection, out uint fetched) < 0
+                || fetched < 1 || selection[0].range == IntPtr.Zero)
+                return;
+
+            int caret = -1;
+            try
+            {
+                var range = (ITfRangeACP)Marshal.GetObjectForIUnknown(selection[0].range);
+                try
+                {
+                    if (range.GetExtent(out int anchor, out int length) >= 0)
+                        caret = anchor + length; // caret sits at the end of the selection
+                }
+                finally
+                {
+                    if (Marshal.IsComObject(range)) Marshal.ReleaseComObject(range);
+                }
+            }
+            finally
+            {
+                Marshal.Release(selection[0].range);
+            }
+
+            if (caret >= 0)
+                Canvas.SetImeCompositionText(_lastImeCompositionText, caret);
+        }
+        catch
+        {
+            // A failed read just leaves the caret at its current (end) position.
+        }
+    }
+
     private static IntPtr FilterImeContextFlags(IntPtr lParam)
     {
         uint flags = unchecked((uint)lParam.ToInt64());
@@ -908,6 +1057,83 @@ public partial class VimEditorControl : UserControl
 
         [PreserveSig]
         int UnadviseSink(uint dwCookie);
+    }
+
+    // Minimal TSF interfaces for reading the composition caret. Only the methods we call
+    // are given real signatures; preceding vtable slots are declared as no-arg
+    // placeholders (never invoked) purely to preserve the COM vtable layout — the IID
+    // guarantees the slot order, so the declared method lands on the correct slot.
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("AA80E801-2021-11D2-93E0-0060B067B86E")]
+    private interface ITfThreadMgr
+    {
+        [PreserveSig] int Activate(out uint ptid);
+        [PreserveSig] int Deactivate();
+        [PreserveSig] int CreateDocumentMgr(out IntPtr ppdim);
+        [PreserveSig] int EnumDocumentMgrs(out IntPtr ppEnum);
+        [PreserveSig] int GetFocus(out ITfDocumentMgr? ppdimFocus);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("AA80E7F4-2021-11D2-93E0-0060B067B86E")]
+    private interface ITfDocumentMgr
+    {
+        [PreserveSig] int CreateContext(uint tidOwner, uint dwFlags, IntPtr punk, out IntPtr ppic, out uint pecTextStore);
+        [PreserveSig] int Push(IntPtr pic);
+        [PreserveSig] int Pop(uint dwFlags);
+        [PreserveSig] int GetTop(out ITfContext? ppic);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("AA80E7FD-2021-11D2-93E0-0060B067B86E")]
+    private interface ITfContext
+    {
+        [PreserveSig] int RequestEditSession(uint tid, IntPtr pes, uint dwFlags, out int phrSession);
+        [PreserveSig] int InWriteSession(uint tid, out bool pfWriteSession);
+        [PreserveSig] int GetSelection(uint ec, uint ulIndex, uint ulCount,
+            [Out, MarshalAs(UnmanagedType.LPArray)] TF_SELECTION[] pSelection, out uint pcFetched);
+    }
+
+    // ITfRangeACP derives from ITfRange; the 22 ITfRange methods precede GetExtent.
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("057A6296-029B-4154-B79A-0D461D4EA94C")]
+    private interface ITfRangeACP
+    {
+        [PreserveSig] int _01(); [PreserveSig] int _02(); [PreserveSig] int _03();
+        [PreserveSig] int _04(); [PreserveSig] int _05(); [PreserveSig] int _06();
+        [PreserveSig] int _07(); [PreserveSig] int _08(); [PreserveSig] int _09();
+        [PreserveSig] int _10(); [PreserveSig] int _11(); [PreserveSig] int _12();
+        [PreserveSig] int _13(); [PreserveSig] int _14(); [PreserveSig] int _15();
+        [PreserveSig] int _16(); [PreserveSig] int _17(); [PreserveSig] int _18();
+        [PreserveSig] int _19(); [PreserveSig] int _20(); [PreserveSig] int _21();
+        [PreserveSig] int _22();
+        [PreserveSig] int GetExtent(out int pacpAnchor, out int pcch);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("8127D409-CCD3-4683-967A-B43D5B482BF7")]
+    private interface ITfTextEditSink
+    {
+        [PreserveSig] int OnEndEdit(IntPtr pic, uint ecReadOnly, IntPtr pEditRecord);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TF_SELECTIONSTYLE
+    {
+        public int ase;          // TfActiveSelEnd
+        public int fInterimChar; // BOOL
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TF_SELECTION
+    {
+        public IntPtr range;     // ITfRange*
+        public TF_SELECTIONSTYLE style;
     }
 
     [ComImport]
@@ -955,6 +1181,21 @@ public partial class VimEditorControl : UserControl
         {
             if (_owner.TryGetTarget(out var owner))
                 owner.ClearImeCandidateOverlay();
+            return 0;
+        }
+    }
+
+    [ClassInterface(ClassInterfaceType.None)]
+    private sealed class TsfTextEditSink(VimEditorControl owner) : ITfTextEditSink
+    {
+        private readonly WeakReference<VimEditorControl> _owner = new(owner);
+
+        public int OnEndEdit(IntPtr pic, uint ecReadOnly, IntPtr pEditRecord)
+        {
+            // Runs on the UI thread (the TSF document lock is held on the owning thread),
+            // so we can read the selection and update the canvas directly.
+            if (_owner.TryGetTarget(out var owner))
+                owner.OnTsfEndEdit(ecReadOnly);
             return 0;
         }
     }
@@ -2028,6 +2269,9 @@ public partial class VimEditorControl : UserControl
 
     private void OnPreviewTextInputStart(object sender, TextCompositionEventArgs e)
     {
+        // Ensure the TSF caret tracker is attached to the focused context before the
+        // composition becomes active, so arrow-key caret moves inside it are observed.
+        EnsureTsfTextEditSink();
         UpdateImeCompositionOverlay(e);
     }
 
@@ -2051,7 +2295,7 @@ public partial class VimEditorControl : UserControl
 
         _imeCompositionSeq++;
         _lastImeCompositionText = text ?? string.Empty;
-        Canvas.SetImeCompositionText(_lastImeCompositionText);
+        Canvas.SetImeCompositionText(_lastImeCompositionText, GetImeCursorPos());
         UpdateImeWindowPos();
         if (!string.IsNullOrEmpty(text))
         {
@@ -3691,6 +3935,34 @@ public partial class VimEditorControl : UserControl
         ImmNotifyIME(imc, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
         ImmReleaseContext(source.Handle, imc);
         ClearImeCompositionOverlay();
+    }
+
+    /// <summary>
+    /// Reads the IME caret position (in characters from the start of the composition
+    /// string) via GCS_CURSORPOS. Returns -1 when no IME context is available, so the
+    /// caller falls back to placing the caret at the end of the composition.
+    /// </summary>
+    private int GetImeCursorPos()
+    {
+        if (PresentationSource.FromVisual(this) is not HwndSource source) return -1;
+        var imc = ImmGetContext(source.Handle);
+        if (imc == IntPtr.Zero) return -1;
+        try
+        {
+            // TSF-based IMEs (e.g. the modern Microsoft IME) don't populate the legacy
+            // IMM composition string, so GCS_CURSORPOS reads back as 0 and would pin the
+            // caret to the start of the composition. Only trust the cursor position when
+            // the IMM composition string actually exists; otherwise fall back to the end.
+            if (ImmGetCompositionStringW(imc, GCS_COMPSTR, IntPtr.Zero, 0) <= 0) return -1;
+
+            // GCS_CURSORPOS returns the position directly (low word), not via a buffer.
+            int pos = ImmGetCompositionStringW(imc, GCS_CURSORPOS, IntPtr.Zero, 0);
+            return pos < 0 ? -1 : (pos & 0xFFFF);
+        }
+        finally
+        {
+            ImmReleaseContext(source.Handle, imc);
+        }
     }
 
     private string GetImeCompositionText()
