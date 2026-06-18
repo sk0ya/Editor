@@ -173,8 +173,8 @@ public class EditorConfigTests : IDisposable
         var options = new VimOptions();
         settings.ApplyTo(options);
 
-        Assert.Equal(4, options.ShiftWidth);
-        Assert.Equal(4, options.TabStop);
+        Assert.Equal(2, options.ShiftWidth);
+        Assert.Equal(2, options.TabStop);
         Assert.Equal("utf-8", options.FileEncoding);
     }
 

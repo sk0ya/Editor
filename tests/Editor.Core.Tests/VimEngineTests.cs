@@ -2247,7 +2247,7 @@ public class VimEngineTests
 
             engine.LoadFile(path);
 
-            Assert.Equal(4, engine.Options.TabStop);
+            Assert.Equal(2, engine.Options.TabStop);
             Assert.True(engine.Options.ExpandTab);
         }
         finally
@@ -2293,7 +2293,7 @@ public class VimEngineTests
             engine.LoadFile(path);
 
             Assert.Equal(2, engine.Options.TabStop);
-            Assert.Equal(4, engine.Options.ShiftWidth);
+            Assert.Equal(2, engine.Options.ShiftWidth);
         }
         finally
         {
@@ -2329,7 +2329,7 @@ public class VimEngineTests
         var cfg = new VimConfig();
         cfg.ParseLines(["set notabstop=2 nofileformat=dos shiftwidth=3"]);
 
-        Assert.Equal(4, cfg.Options.TabStop);
+        Assert.Equal(2, cfg.Options.TabStop);
         Assert.Equal("unix", cfg.Options.FileFormat);
         Assert.Equal(3, cfg.Options.ShiftWidth);
     }
@@ -3877,22 +3877,22 @@ public class VimEngineTests
         engine.ProcessKey("t", ctrl: true);
         Assert.Equal(VimMode.Insert, engine.Mode);
         var text = engine.CurrentBuffer.Text.GetText();
-        // Line should now start with 4 spaces (default shiftwidth)
-        Assert.StartsWith("    ", text);
+        // Line should now start with 2 spaces (default shiftwidth)
+        Assert.StartsWith("  ", text);
         Assert.Contains("hello", text);
     }
 
     [Fact]
     public void InsertCtrlD_DedentsCurrentLine()
     {
-        var engine = CreateEngine("    hello");
+        var engine = CreateEngine("  hello");
         // Enter insert mode at start of indented line, then Ctrl+D
         engine.ProcessKey("i");
         Assert.Equal(VimMode.Insert, engine.Mode);
         engine.ProcessKey("d", ctrl: true);
         Assert.Equal(VimMode.Insert, engine.Mode);
         var text = engine.CurrentBuffer.Text.GetText();
-        // 4 leading spaces removed
+        // 2 leading spaces (one shiftwidth) removed
         Assert.Equal("hello", text);
     }
 

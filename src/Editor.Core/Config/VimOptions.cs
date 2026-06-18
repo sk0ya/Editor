@@ -12,8 +12,8 @@ public class VimOptions
     public bool ShowCmd { get; set; } = true;
 
     // Editing
-    public int TabStop { get; set; } = 4;
-    public int ShiftWidth { get; set; } = 4;
+    public int TabStop { get; set; } = 2;
+    public int ShiftWidth { get; set; } = 2;
     public bool ExpandTab { get; set; } = true;
     public bool AutoIndent { get; set; } = true;
     public bool SmartIndent { get; set; } = true;

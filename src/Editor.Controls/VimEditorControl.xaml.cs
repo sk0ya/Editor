@@ -1728,6 +1728,45 @@ public partial class VimEditorControl : UserControl
         Canvas.UpdateFont(_editorFontFamily, _editorFontSize);
     }
 
+    // ─────────────── Indentation (tab width) ───────────────
+
+    /// <summary>
+    /// The indentation width in columns. Maps to both the <c>tabstop</c> (how wide a
+    /// tab renders) and <c>shiftwidth</c> (how far <c>&gt;&gt;</c>/<c>&lt;&lt;</c> and
+    /// auto-indent move) options. Defaults to 2. Setting this re-renders the editor.
+    /// Values are clamped to a minimum of 1.
+    /// </summary>
+    public int TabWidth
+    {
+        get => _engine.Options.TabStop;
+        set => SetTabWidth(value, _engine.Options.ExpandTab);
+    }
+
+    /// <summary>
+    /// When <c>true</c> (the default), pressing Tab and auto-indent insert spaces;
+    /// when <c>false</c>, a literal tab character is inserted. Maps to the
+    /// <c>expandtab</c> option. Setting this re-renders the editor.
+    /// </summary>
+    public bool ExpandTabs
+    {
+        get => _engine.Options.ExpandTab;
+        set => SetTabWidth(_engine.Options.TabStop, value);
+    }
+
+    /// <summary>
+    /// Sets the indentation width and whether Tab inserts spaces in a single call,
+    /// then re-renders. Updates the <c>tabstop</c>, <c>shiftwidth</c> and
+    /// <c>expandtab</c> options. The width is clamped to a minimum of 1.
+    /// </summary>
+    public void SetTabWidth(int width, bool expandTabs = true)
+    {
+        width = Math.Max(1, width);
+        _engine.Options.TabStop = width;
+        _engine.Options.ShiftWidth = width;
+        _engine.Options.ExpandTab = expandTabs;
+        UpdateAll();
+    }
+
     // ─────────────── Shared status bar ───────────────
 
     /// <summary>
