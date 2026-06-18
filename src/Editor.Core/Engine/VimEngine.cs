@@ -491,9 +491,17 @@ public class VimEngine
 
     private static bool AreSameStroke(VimKeyStroke left, VimKeyStroke right) =>
         left.Ctrl == right.Ctrl &&
-        left.Shift == right.Shift &&
         left.Alt == right.Alt &&
-        string.Equals(left.Key, right.Key, StringComparison.Ordinal);
+        string.Equals(left.Key, right.Key, StringComparison.Ordinal) &&
+        // For a single printable character the Shift state is already encoded in
+        // the character itself (e.g. 'H' == Shift+h), so the Shift flag is
+        // redundant. A map LHS is parsed with Shift=false (see ParseMappingSequence),
+        // but key delivery routes disagree on the flag — the IME / OnKeyDown path
+        // reports Shift=true for 'H' while the OnTextInput path reports false. Only
+        // enforce Shift equality for named keys (Tab, Space, F-keys, …) where
+        // <S-…> is a genuinely distinct chord; otherwise an uppercase-letter map
+        // like `nnoremap H ^` silently fails whenever Shift is reported.
+        (left.Key.Length == 1 || left.Shift == right.Shift);
 
     private static IReadOnlyList<VimKeyStroke> ParseMappingSequence(string sequence)
     {

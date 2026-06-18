@@ -1389,6 +1389,23 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void NormalMap_UppercaseLhs_MatchesWhenShiftReported()
+    {
+        // `nnoremap H ^` — when the key arrives with Shift reported (the IME /
+        // OnPreviewKeyDown path passes shift=true for 'H'), the map must still fire
+        // and move to first non-blank, not fall through to the built-in `H` motion.
+        var config = new VimConfig();
+        config.NormalMaps["H"] = "^";
+        var engine = CreateEngine("    abc", config);
+        engine.SetCursorPosition(new CursorPosition(0, 6));
+
+        engine.ProcessKey("H", ctrl: false, shift: true, alt: false);
+
+        Assert.Equal(0, engine.Cursor.Line);
+        Assert.Equal(4, engine.Cursor.Column); // first non-blank, via `^`
+    }
+
+    [Fact]
     public void InsertMap_FromConfig_CanLeaveInsertMode()
     {
         var config = new VimConfig();
