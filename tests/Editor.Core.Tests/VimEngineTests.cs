@@ -4405,4 +4405,78 @@ public class VimEngineTests
             File.Delete(path);
         }
     }
+
+    // --- Markdown list Tab indent/outdent (shiftwidth = 2 by default) ---
+
+    private VimEngine CreateMarkdownEngine(string text)
+    {
+        var engine = CreateEngine(text);
+        engine.CurrentBuffer.FilePath = "notes.md";
+        return engine;
+    }
+
+    [Fact]
+    public void Tab_OnMarkdownListItem_IndentsWholeLine()
+    {
+        var engine = CreateMarkdownEngine("- item");
+        engine.ProcessKey("i"); // Insert mode at column 0
+        engine.ProcessKey("Tab", false, false, false);
+        Assert.Equal("  - item", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Tab_OnMarkdownListItem_IndentsRegardlessOfCursorColumn()
+    {
+        var engine = CreateMarkdownEngine("- item");
+        engine.ProcessKey("A"); // Insert mode at end of line
+        engine.ProcessKey("Tab", false, false, false);
+        Assert.Equal("  - item", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void ShiftTab_OnMarkdownListItem_OutdentsWholeLine()
+    {
+        var engine = CreateMarkdownEngine("    - item");
+        engine.ProcessKey("A");
+        engine.ProcessKey("Tab", false, true, false); // Shift+Tab
+        Assert.Equal("  - item", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void ShiftTab_OnUnindentedMarkdownListItem_IsNoOp()
+    {
+        var engine = CreateMarkdownEngine("- item");
+        engine.ProcessKey("A");
+        engine.ProcessKey("Tab", false, true, false);
+        Assert.Equal("- item", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Tab_OnMarkdownOrderedListItem_IndentsWholeLine()
+    {
+        var engine = CreateMarkdownEngine("1. item");
+        engine.ProcessKey("A");
+        engine.ProcessKey("Tab", false, false, false);
+        Assert.Equal("  1. item", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Tab_OnMarkdownNonListLine_InsertsTabAtCursor()
+    {
+        var engine = CreateMarkdownEngine("text");
+        engine.ProcessKey("i"); // Insert at column 0
+        engine.ProcessKey("Tab", false, false, false);
+        // shiftwidth/tabstop = 2, expandtab default → two spaces inserted at cursor
+        Assert.Equal("  text", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Tab_OnListItem_NonMarkdownFile_InsertsTabAtCursor()
+    {
+        var engine = CreateEngine("- item");
+        engine.CurrentBuffer.FilePath = "notes.txt";
+        engine.ProcessKey("A"); // end of line
+        engine.ProcessKey("Tab", false, false, false);
+        Assert.Equal("- item  ", engine.CurrentBuffer.Text.GetText());
+    }
 }

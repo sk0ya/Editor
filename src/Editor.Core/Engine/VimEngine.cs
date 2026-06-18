@@ -1804,6 +1804,12 @@ public class VimEngine
                 EmitCursor(events);
                 break;
             case "Tab":
+                if (IsMarkdownListContext())
+                {
+                    ApplyMarkdownListIndent(shift, events);
+                    break;
+                }
+                if (shift) break; // Shift+Tab outside a markdown list is a no-op
                 if (_config.Options.ExpandTab)
                 {
                     var spaces = new string(' ', _config.Options.TabStop);
@@ -1950,6 +1956,13 @@ public class VimEngine
                 InsertNewline(events);
                 return;
             case "Tab":
+                if (IsMarkdownListContext())
+                {
+                    BeginPlainEdit();
+                    ApplyMarkdownListIndent(shift, events);
+                    return;
+                }
+                if (shift) return; // Shift+Tab outside a markdown list is a no-op
                 BeginPlainEdit();
                 if (hasSelection) DeletePlainSelection(events);
                 if (_config.Options.ExpandTab)
@@ -4693,6 +4706,67 @@ public class VimEngine
     }
 
     private void AutoIndentRange(int start, int end, List<VimEvent> events) { EmitText(events); }
+
+    // Markdown list Tab indenting: in a .md/.markdown file, when the cursor line
+    // is a list item, Tab should indent (and Shift+Tab dedent) the whole item by
+    // one shiftwidth — matching Obsidian/VS Code — instead of inserting a tab at
+    // the cursor. Callers test this first and fall back to normal Tab otherwise.
+    private bool IsMarkdownListContext()
+    {
+        var path = _bufferManager.Current.FilePath;
+        if (path == null) return false;
+        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        if (ext != ".md" && ext != ".markdown") return false;
+        return IsMarkdownListItem(_bufferManager.Current.Text.GetLine(_cursor.Line));
+    }
+
+    private static bool IsMarkdownListItem(string line)
+    {
+        int i = 0;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t')) i++;
+        if (i >= line.Length) return false;
+        char c = line[i];
+        // Unordered list marker: -, *, + followed by a space.
+        if (c == '-' || c == '*' || c == '+')
+            return i + 1 < line.Length && line[i + 1] == ' ';
+        // Ordered list marker: digits followed by '.' or ')' then a space.
+        if (char.IsDigit(c))
+        {
+            int j = i;
+            while (j < line.Length && char.IsDigit(line[j])) j++;
+            if (j < line.Length && (line[j] == '.' || line[j] == ')'))
+                return j + 1 < line.Length && line[j + 1] == ' ';
+        }
+        return false;
+    }
+
+    // Indents (or, when dedent, outdents) the cursor line by one shiftwidth.
+    // Assumes the caller has already taken an undo snapshot for this edit.
+    private void ApplyMarkdownListIndent(bool dedent, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+        var sw = Math.Max(1, _config.Options.ShiftWidth);
+        if (!dedent)
+        {
+            var indentStr = _config.Options.ExpandTab ? new string(' ', sw) : "\t";
+            buf.InsertText(_cursor.Line, 0, indentStr);
+            _cursor = _cursor with { Column = _cursor.Column + indentStr.Length };
+            EmitText(events);
+            return;
+        }
+
+        var line = buf.GetLine(_cursor.Line);
+        int toRemove = 0;
+        for (int i = 0; i < sw && i < line.Length && (line[i] == ' ' || line[i] == '\t'); i++)
+        {
+            toRemove++;
+            if (line[i] == '\t') break; // a tab counts as a full level
+        }
+        if (toRemove == 0) return; // nothing to outdent
+        buf.DeleteRange(_cursor.Line, 0, toRemove);
+        _cursor = _cursor with { Column = Math.Max(0, _cursor.Column - toRemove) };
+        EmitText(events);
+    }
 
     private void ToggleCommentLines(int startLine, int endLine, List<VimEvent> events)
     {

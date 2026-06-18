@@ -2322,12 +2322,12 @@ public partial class VimEditorControl : UserControl
                         return;
                     }
 
-                    // Fall through to normal Tab behaviour (indent)
-                    if (!shift)
-                    {
-                        ProcessKey("Tab", false, false, false);
-                        e.Handled = true;
-                    }
+                    // Fall through to normal Tab behaviour (indent). Shift+Tab is
+                    // routed too so markdown list lines can be outdented; the engine
+                    // treats it as a no-op elsewhere. Either way we mark it handled
+                    // to suppress WPF focus traversal.
+                    ProcessKey("Tab", false, shift, false);
+                    e.Handled = true;
                 }
                 else if (actualKey == Key.Return)
                 {
