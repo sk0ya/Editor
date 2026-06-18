@@ -5271,8 +5271,10 @@ public class VimEngine
         if (_mode == VimMode.VisualLine)
         {
             YankLines(start.Line, end.Line, register, events);
+            CurrentBuffer.Folds.OnLinesDeleted(start.Line, end.Line);
             _bufferManager.Current.Text.DeleteLines(start.Line, end.Line);
             _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(start.Line, 0));
+            EmitText(events);
         }
         else
         {

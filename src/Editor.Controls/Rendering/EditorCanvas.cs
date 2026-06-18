@@ -48,6 +48,17 @@ public class EditorCanvas : FrameworkElement
     private int _imeCandidateSelection = -1;
     private VisualLineSegment[] _visualLines = [new VisualLineSegment(0, 0, false)];
     private bool _wrapLines;
+
+    // Layout batching: while batching, RebuildVisualLayout() is deferred so a burst of
+    // Canvas.SetXxx() calls (e.g. one keystroke's UpdateAll) rebuilds the layout once
+    // instead of 3+ times. See BeginBatch/EndBatch.
+    private bool _batchingLayout;
+    private bool _layoutDirtyDuringBatch;
+
+    // Cached max line width for the horizontal content extent. Only meaningful when not
+    // wrapping; recomputed only when the line array itself changes (keyed by reference).
+    private string[]? _maxLineWidthCacheLines;
+    private double _cachedMaxLineWidth;
     private readonly Dictionary<int, (string Text, IReadOnlyList<Editor.Core.Text.DetectedLink> Links)> _linkCache = [];
     // File-path link verification (resolved absolute path → exists on disk). Null while a
     // background check is in flight. Populated off the UI thread; reads/writes happen on the
@@ -175,8 +186,31 @@ public class EditorCanvas : FrameworkElement
         _fontSize = size;
         _charWidth = 0;
         _charWidthCache.Clear();
+        _maxLineWidthCacheLines = null; // char widths changed — invalidate cached extent
         MeasureChar();
         RebuildVisualLayout();
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Begin a batch of state updates. While batching, <see cref="RebuildVisualLayout"/> calls
+    /// from the various Set/Show methods are coalesced and deferred until <see cref="EndBatch"/>,
+    /// so a single edit rebuilds the visual layout once rather than several times.
+    /// </summary>
+    public void BeginBatch() => _batchingLayout = true;
+
+    /// <summary>Ends a batch started by <see cref="BeginBatch"/>, applying a single layout rebuild if needed.</summary>
+    public void EndBatch()
+    {
+        _batchingLayout = false;
+        if (_layoutDirtyDuringBatch)
+        {
+            _layoutDirtyDuringBatch = false;
+            RebuildVisualLayout();
+            // Any SetCursor() during the batch computed scroll against the stale layout;
+            // recompute now that the visual lines are rebuilt.
+            EnsureCursorVisible();
+        }
         InvalidateVisual();
     }
 
@@ -500,6 +534,9 @@ public class EditorCanvas : FrameworkElement
 
     private void RebuildVisualLayout()
     {
+        // Defer while batching — EndBatch() performs a single rebuild.
+        if (_batchingLayout) { _layoutDirtyDuringBatch = true; return; }
+
         MeasureChar();
         var (_, _, gutterWidth) = GetGutterMetrics();
         double minimapReserve = _showMinimap ? MinimapWidth : 0;
@@ -510,16 +547,23 @@ public class EditorCanvas : FrameworkElement
             : Enumerable.Range(0, Math.Max(1, _lines.Length)).ToArray();
 
         var visualLines = new List<VisualLineSegment>(visibleLines.Length);
-        double maxLineWidth = 0;
+
+        // The horizontal extent (maxLineWidth) only matters when not wrapping, and only changes
+        // when the line array changes. Reuse the cached value to skip the O(total chars) scan on
+        // edits that don't touch text (cursor/mode/fold/line-number toggles).
+        bool needMaxWidth = !_wrapLines;
+        bool widthCached = needMaxWidth && ReferenceEquals(_maxLineWidthCacheLines, _lines);
+        double maxLineWidth = widthCached ? _cachedMaxLineWidth : 0;
 
         foreach (int lineIndex in visibleLines)
         {
             int safeLine = Math.Clamp(lineIndex, 0, Math.Max(0, _lines.Length - 1));
             string lineText = safeLine < _lines.Length ? _lines[safeLine] : string.Empty;
-            maxLineWidth = Math.Max(maxLineWidth, GetVisualX(lineText, lineText.Length));
 
             if (!_wrapLines || lineText.Length == 0 || availableTextWidth <= 1)
             {
+                if (needMaxWidth && !widthCached)
+                    maxLineWidth = Math.Max(maxLineWidth, GetVisualX(lineText, lineText.Length));
                 visualLines.Add(new VisualLineSegment(safeLine, 0, false));
                 continue;
             }
@@ -537,6 +581,12 @@ public class EditorCanvas : FrameworkElement
 
         if (visualLines.Count == 0)
             visualLines.Add(new VisualLineSegment(0, 0, false));
+
+        if (needMaxWidth && !widthCached)
+        {
+            _cachedMaxLineWidth = maxLineWidth;
+            _maxLineWidthCacheLines = _lines;
+        }
 
         _visualLines = visualLines.ToArray();
         _contentWidth = _wrapLines ? RenderSize.Width : gutterWidth + maxLineWidth;

@@ -3982,32 +3982,42 @@ public partial class VimEditorControl : UserControl
         var buf = _engine.CurrentBuffer;
         var lines = GetCachedLines(buf);
 
-        Canvas.SetLines(lines);
-        Canvas.DocumentDirectory = buf.FilePath is { Length: > 0 } fp
-            ? System.IO.Path.GetDirectoryName(fp)
-            : null;
+        // Batch all canvas state updates so the visual layout is rebuilt once for this edit
+        // instead of once per Set/Show call (SetLines, SetFolds, ShowLineNumbers each rebuild).
+        Canvas.BeginBatch();
+        try
+        {
+            Canvas.SetLines(lines);
+            Canvas.DocumentDirectory = buf.FilePath is { Length: > 0 } fp
+                ? System.IO.Path.GetDirectoryName(fp)
+                : null;
 
-        // Push fold state to canvas
-        var folds = buf.Folds;
-        var visMap = folds.BuildVisibleLineMap(buf.Text.LineCount);
-        var closedStarts = folds.Folds.Where(f => f.IsClosed).Select(f => f.StartLine);
-        var openStarts = folds.Folds.Where(f => !f.IsClosed).Select(f => f.StartLine);
-        Canvas.SetFolds(visMap, closedStarts, openStarts);
+            // Push fold state to canvas
+            var folds = buf.Folds;
+            var visMap = folds.BuildVisibleLineMap(buf.Text.LineCount);
+            var closedStarts = folds.Folds.Where(f => f.IsClosed).Select(f => f.StartLine);
+            var openStarts = folds.Folds.Where(f => !f.IsClosed).Select(f => f.StartLine);
+            Canvas.SetFolds(visMap, closedStarts, openStarts);
 
-        Canvas.SetCursor(_engine.Cursor);
-        Canvas.SetMode(_engine.Mode);
-        Canvas.ShowLineNumbers(!_minimalChrome && (_engine.Options.Number || _engine.Options.RelativeNumber));
-        Canvas.ShowRelativeLineNumbers(_engine.Options.RelativeNumber);
-        Canvas.SetScrollOff(_engine.Options.ScrollOff);
-        Canvas.SetList(_engine.Options.List, _engine.Options.ListChars);
-        Canvas.SetColorColumn(_engine.Options.ColorColumn);
-        Canvas.SetIndentGuides(_engine.Options.IndentGuides, _engine.Options.TabStop);
-        Canvas.SetScrollbar(!_minimalChrome && _engine.Options.Scrollbar);
-        Canvas.SetMinimap(!_minimalChrome && _engine.Options.Minimap);
-        Canvas.SetColorPreview(_engine.Options.ColorPreview);
+            Canvas.SetCursor(_engine.Cursor);
+            Canvas.SetMode(_engine.Mode);
+            Canvas.ShowLineNumbers(!_minimalChrome && (_engine.Options.Number || _engine.Options.RelativeNumber));
+            Canvas.ShowRelativeLineNumbers(_engine.Options.RelativeNumber);
+            Canvas.SetScrollOff(_engine.Options.ScrollOff);
+            Canvas.SetList(_engine.Options.List, _engine.Options.ListChars);
+            Canvas.SetColorColumn(_engine.Options.ColorColumn);
+            Canvas.SetIndentGuides(_engine.Options.IndentGuides, _engine.Options.TabStop);
+            Canvas.SetScrollbar(!_minimalChrome && _engine.Options.Scrollbar);
+            Canvas.SetMinimap(!_minimalChrome && _engine.Options.Minimap);
+            Canvas.SetColorPreview(_engine.Options.ColorPreview);
 
-        UpdateViewportDecorations();
-        UpdateSearchHighlights(_engine.SearchPattern);
+            UpdateViewportDecorations();
+            UpdateSearchHighlights(_engine.SearchPattern);
+        }
+        finally
+        {
+            Canvas.EndBatch();
+        }
 
         SyncStatusBar();
     }

@@ -543,6 +543,22 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VisualLineDelete_EmitsTextChanged()
+    {
+        // Regression: linewise-visual delete (V + d over several lines) mutated the
+        // buffer but emitted no TextChanged event, so the host never refreshed the
+        // canvas — the deleted lines stayed visible until the next edit.
+        var engine = CreateEngine("a\nb\nc\nd");
+        engine.ProcessKey("V");
+        engine.ProcessKey("j");
+        var events = engine.ProcessKey("d");
+
+        Assert.Equal("c\nd", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        Assert.Contains(events, e => e.Type == VimEventType.TextChanged);
+    }
+
+    [Fact]
     public void VisualMode_Colon_EntersCommandModeWithRange()
     {
         var engine = CreateEngine("a\nb\nc");
