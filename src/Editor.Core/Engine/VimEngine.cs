@@ -1313,6 +1313,7 @@ public class VimEngine
                 var sStart = _cursor;
                 ExecuteDelete(_cursor, motion.MoveRight(_cursor, count), false, events);
                 _cursor = _bufferManager.Current.Text.ClampCursor(sStart, true);
+                EmitCursor(events);
                 EnterInsertMode(false, events);
                 break;
             case "S":
@@ -1331,6 +1332,7 @@ public class VimEngine
                 var ceol = GetLineLength() - 1;
                 if (ceol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = ceol }, false, events);
                 _cursor = _bufferManager.Current.Text.ClampCursor(cStart, true);
+                EmitCursor(events);
                 EnterInsertMode(false, events);
                 break;
             case "Y": YankLines(_cursor.Line, _cursor.Line + count - 1, cmd.Register ?? '"', events); break;
@@ -1526,6 +1528,7 @@ public class VimEngine
                     YankRange(register, start, end, false);
                     ExecuteDelete(start, end, false, events);
                     _cursor = _bufferManager.Current.Text.ClampCursor(start, true);
+                    EmitCursor(events);
                     EnterInsertMode(false, events);
                 }
                 break;

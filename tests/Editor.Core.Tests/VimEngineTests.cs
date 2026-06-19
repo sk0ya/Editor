@@ -70,6 +70,55 @@ public class VimEngineTests
         Assert.Contains(events, e => e.Type == VimEventType.ModeChanged);
     }
 
+    // The s/C/cw insert-entry commands reposition the cursor with an insert-mode clamp
+    // after ExecuteDelete already emitted a normal-mode-clamped CursorMoved. They must
+    // re-emit the final cursor so the UI caret lands at the insert position (mirrors the
+    // `a` fix); otherwise at end-of-line the caret renders one column too far left.
+    [Fact]
+    public void PressS_AtEndOfLineEmitsInsertClampedCursor()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("$");
+
+        var events = engine.ProcessKey("s");
+        engine.ProcessKey("X");
+
+        Assert.Equal("hellX", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Contains(events, e => e is CursorMovedEvent { Position.Column: 4 });
+    }
+
+    [Fact]
+    public void PressC_ChangeToEndOfLineEmitsInsertClampedCursor()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("l");
+        engine.ProcessKey("l"); // cursor on 'l' (col 2)
+
+        var events = engine.ProcessKey("C"); // delete cols 2.. -> "he"
+        engine.ProcessKey("X");
+
+        Assert.Equal("heX", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Contains(events, e => e is CursorMovedEvent { Position.Column: 2 });
+    }
+
+    [Fact]
+    public void ChangeInnerWord_AtEndOfLine_OperatorPath_EmitsInsertClampedCursor()
+    {
+        var engine = CreateEngine("foo bar");
+        engine.ProcessKey("w"); // cursor on 'b' (col 4)
+
+        engine.ProcessKey("c");
+        engine.ProcessKey("i");
+        var events = engine.ProcessKey("w"); // change inner word "bar" -> "foo "
+        engine.ProcessKey("X");
+
+        Assert.Equal("foo X", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Contains(events, e => e is CursorMovedEvent { Position.Column: 4 });
+    }
+
     [Fact]
     public void PressEscape_InInsert_ReturnsToNormal()
     {
