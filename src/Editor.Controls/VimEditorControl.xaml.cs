@@ -203,6 +203,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private const uint CFS_POINT              = 0x0002;
     private const uint CFS_FORCE_POSITION     = 0x0020;
     private const uint CFS_CANDIDATEPOS       = 0x0040;
+    private const int  WM_SETFOCUS             = 0x0007;
     private const int  WM_IME_STARTCOMPOSITION = 0x010D;
     private const int  WM_IME_COMPOSITION       = 0x010F;
     private const int  WM_IME_ENDCOMPOSITION   = 0x010E;
@@ -772,7 +773,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // (no legacy IMM composition window), and the native candidate UI is positioned
         // via ITextStoreACP.GetTextExt — so the IMM-based suppression below must stand down.
         if (_customTextStoreActive)
+        {
+            // The window (this shared HWND) just regained focus from another top-level
+            // window. If the editor is the focused element, re-point the thread's TSF
+            // focus at our store — otherwise a competing control's document manager (or
+            // WPF's default) may still own it and IME input would land elsewhere.
+            if (msg == WM_SETFOCUS && IsKeyboardFocusWithin)
+                FocusCustomTextStore();
             return IntPtr.Zero;
+        }
 
         if (msg == WM_IME_SETCONTEXT && wParam != IntPtr.Zero)
         {
@@ -2680,6 +2689,22 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (!_customTextStoreActive || _tsfStoreThreadMgr == null || _tsfStoreDocMgr == null) return;
         try { _ = _tsfStoreThreadMgr.SetFocus(_tsfStoreDocMgr); }
         catch { /* focus hand-off is best-effort */ }
+
+        // When the editor is embedded in a host window that also contains native WPF
+        // text controls (e.g. an app's own TextBoxes), WPF's TextServicesContext reacts
+        // to the same keyboard-focus change by setting the thread's TSF focus to its own
+        // default document manager. That can run *after* the synchronous SetFocus above,
+        // leaving the IME composing into WPF's (empty) store instead of ours — the symptom
+        // being that with the IME on, nothing is typed into the editor. Re-assert once more
+        // after the focus change has fully settled so our store wins the arbitration. A
+        // standalone editor-only window has no competitor, so this is simply idempotent.
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+        {
+            if (!_customTextStoreActive || _tsfStoreThreadMgr == null || _tsfStoreDocMgr == null) return;
+            if (!IsKeyboardFocusWithin) return;   // focus moved on in the meantime — don't steal it back
+            try { _ = _tsfStoreThreadMgr.SetFocus(_tsfStoreDocMgr); }
+            catch { /* best-effort */ }
+        });
     }
 
     private void DisposeCustomTextStore()
@@ -2696,7 +2721,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         try
         {
-            if (_tsfStoreThreadMgr != null
+            // Hand the window association back to whoever held it before us — but only if
+            // we are the editor that currently owns keyboard focus. Several editors can
+            // share one window HWND in an embedding host (tabs / splits / a host's other
+            // editor panes); a backgrounded editor being unloaded must NOT overwrite the
+            // *focused* editor's live association with our now-stale previous document
+            // manager (which would silently kill the focused editor's IME input).
+            if (_tsfStoreThreadMgr != null && IsKeyboardFocusWithin
                 && PresentationSource.FromVisual(this) is HwndSource source && source.Handle != IntPtr.Zero)
                 _ = _tsfStoreThreadMgr.AssociateFocus(source.Handle, _tsfStorePrevDocMgr, out _);
         }
