@@ -2325,25 +2325,14 @@ public class EditorCanvas : FrameworkElement
         return new Point(Math.Max(gutterWidth, x), y);
     }
 
-    // ─────────────── Full-width character helpers ───────────────
+    // ─────────────── Character width helpers ───────────────
 
-    private static bool IsFullWidth(char c) =>
-        (c >= '\u1100' && c <= '\u115F') ||
-        (c >= '\u2E80' && c <= '\u303E') ||
-        (c >= '\u3041' && c <= '\u33BF') ||
-        (c >= '\u3400' && c <= '\u4DBF') ||
-        (c >= '\u4E00' && c <= '\uA4CF') ||
-        (c >= '\uA960' && c <= '\uA97F') ||
-        (c >= '\uAC00' && c <= '\uD7FF') ||
-        (c >= '\uF900' && c <= '\uFAFF') ||
-        (c >= '\uFE10' && c <= '\uFE1F') ||
-        (c >= '\uFE30' && c <= '\uFE6F') ||
-        (c >= '\uFF01' && c <= '\uFF60') ||
-        (c >= '\uFFE0' && c <= '\uFFE6');
+    private static bool UsesBaseMonospaceWidth(char c) =>
+        c is '\t' || (c >= '\u0020' && c <= '\u007E');
 
     private double CharW(char c)
     {
-        if (!IsFullWidth(c)) return _charWidth;
+        if (UsesBaseMonospaceWidth(c)) return _charWidth;
         if (_charWidthCache.TryGetValue(c, out double w)) return w;
         var ft = new FormattedText(c.ToString(), CultureInfo.CurrentCulture,
             FlowDirection.LeftToRight, _typeface, _fontSize, Brushes.White, GetDpi());
