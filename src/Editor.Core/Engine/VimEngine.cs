@@ -85,12 +85,18 @@ public class VimEngine
     private RepeatChange? _lastRepeatChange;
     private ParsedCommand? _pendingInsertRepeatCommand;
     private List<VimKeyStroke>? _pendingInsertRepeatKeys;
+    private List<VimKeyStroke>? _pendingVisualRepeatKeys;
+    private (char Name, Register Value)? _pendingVisualRepeatRegister;
     private bool _isDotReplaying;
     private BlockInsertState? _blockInsertState;
     private readonly List<VimKeyStroke> _pendingMappedInput = [];
     private int _autocmdDepth;
 
-    private sealed record RepeatChange(ParsedCommand Command, IReadOnlyList<VimKeyStroke> InsertKeys);
+    private sealed record RepeatChange(
+        ParsedCommand? Command,
+        IReadOnlyList<VimKeyStroke> Keys,
+        IReadOnlyList<VimKeyStroke> InsertKeys,
+        (char Name, Register Value)? RegisterSnapshot);
     private sealed record BlockInsertState(int StartLine, int EndLine, int Column, IReadOnlyDictionary<int, int> LineColumns);
 
     public VimMode Mode => _mode;
@@ -371,6 +377,7 @@ public class VimEngine
         ProcessKeyInternal(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt, events);
         SyncSpellChecker();
         TrackPendingInsertRepeat(stroke, modeBefore);
+        TrackPendingVisualRepeat(stroke, modeBefore, events);
     }
 
     private bool TryApplyMapping(VimKeyStroke stroke, List<VimEvent> events)
@@ -4511,9 +4518,20 @@ public class VimEngine
         {
             for (int i = 0; i < count; i++)
             {
-                ExecuteNormalCommand(_lastRepeatChange.Command, events);
-                foreach (var stroke in _lastRepeatChange.InsertKeys)
-                    ProcessKeyInternal(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt, events);
+                if (_lastRepeatChange.RegisterSnapshot is { } snapshot)
+                    _registerManager.Set(snapshot.Name, snapshot.Value);
+
+                if (_lastRepeatChange.Command.HasValue)
+                {
+                    ExecuteNormalCommand(_lastRepeatChange.Command.Value, events);
+                    foreach (var stroke in _lastRepeatChange.InsertKeys)
+                        ProcessKeyInternal(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt, events);
+                }
+                else
+                {
+                    foreach (var stroke in _lastRepeatChange.Keys)
+                        ProcessStroke(stroke, events, allowMapping: false);
+                }
             }
         }
         finally
@@ -4525,9 +4543,11 @@ public class VimEngine
     private void SetRepeatChange(ParsedCommand cmd)
     {
         if (_isDotReplaying) return;
-        _lastRepeatChange = new RepeatChange(cmd, []);
+        _lastRepeatChange = new RepeatChange(cmd, [], [], null);
         _pendingInsertRepeatCommand = null;
         _pendingInsertRepeatKeys = null;
+        _pendingVisualRepeatKeys = null;
+        _pendingVisualRepeatRegister = null;
     }
 
     private void BeginInsertRepeat(ParsedCommand cmd)
@@ -4547,9 +4567,66 @@ public class VimEngine
         if (_mode is VimMode.Insert or VimMode.Replace) return;
         if (_pendingInsertRepeatCommand == null) return;
 
-        _lastRepeatChange = new RepeatChange(_pendingInsertRepeatCommand.Value, [.. _pendingInsertRepeatKeys]);
+        _lastRepeatChange = new RepeatChange(_pendingInsertRepeatCommand.Value, [], [.. _pendingInsertRepeatKeys], null);
         _pendingInsertRepeatCommand = null;
         _pendingInsertRepeatKeys = null;
+    }
+
+    private void TrackPendingVisualRepeat(VimKeyStroke stroke, VimMode modeBefore, List<VimEvent> events)
+    {
+        if (_isDotReplaying) return;
+
+        var wasVisual = IsVisualMode(modeBefore);
+        var isVisual = IsVisualMode(_mode);
+        var wasInsert = modeBefore is VimMode.Insert or VimMode.Replace;
+        var isInsert = _mode is VimMode.Insert or VimMode.Replace;
+
+        if (_pendingVisualRepeatKeys == null)
+        {
+            if (modeBefore == VimMode.Normal && isVisual)
+                _pendingVisualRepeatKeys = [stroke];
+            return;
+        }
+
+        _pendingVisualRepeatKeys.Add(stroke);
+
+        if (isVisual || isInsert || IsCommandLineMode(_mode))
+            return;
+
+        if (_mode == VimMode.Normal)
+        {
+            if (wasInsert || (wasVisual && events.Any(e => e.Type == VimEventType.TextChanged)) ||
+                (IsCommandLineMode(modeBefore) && events.Any(e => e.Type == VimEventType.TextChanged)))
+            {
+                SetRepeatChange([.. _pendingVisualRepeatKeys]);
+            }
+            else if (wasVisual || IsCommandLineMode(modeBefore))
+            {
+                _pendingVisualRepeatKeys = null;
+                _pendingVisualRepeatRegister = null;
+            }
+
+            return;
+        }
+
+        _pendingVisualRepeatKeys = null;
+        _pendingVisualRepeatRegister = null;
+    }
+
+    private static bool IsVisualMode(VimMode mode) =>
+        mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock;
+
+    private static bool IsCommandLineMode(VimMode mode) =>
+        mode is VimMode.Command or VimMode.SearchForward or VimMode.SearchBackward;
+
+    private void SetRepeatChange(IReadOnlyList<VimKeyStroke> keys)
+    {
+        if (_isDotReplaying) return;
+        _lastRepeatChange = new RepeatChange(null, keys, [], _pendingVisualRepeatRegister);
+        _pendingInsertRepeatCommand = null;
+        _pendingInsertRepeatKeys = null;
+        _pendingVisualRepeatKeys = null;
+        _pendingVisualRepeatRegister = null;
     }
 
     private void JoinLines(int count, List<VimEvent> events)
@@ -5370,6 +5447,8 @@ public class VimEngine
         var regType = reg.Type;
         var regText = reg.Text;
         var regLines = reg.GetLines();
+        if (!_isDotReplaying)
+            _pendingVisualRepeatRegister = (register, new Register(reg.Text, reg.Type));
 
         var sel = _selection.Value;
         var mode = _mode;

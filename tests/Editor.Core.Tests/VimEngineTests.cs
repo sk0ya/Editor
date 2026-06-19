@@ -3605,6 +3605,26 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void Dot_RepeatsVisualPasteWithOriginalRegisterText()
+    {
+        var engine = CreateEngine("foo bar baz");
+
+        engine.ProcessKey("v");
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        engine.ProcessKey("y");
+
+        engine.ProcessKey("w");
+        engine.ProcessKey("v");
+        engine.ProcessKey("e");
+        engine.ProcessKey("p");
+        engine.ProcessKey("w");
+        engine.ProcessKey(".");
+
+        Assert.Equal("foo foo foo", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
     public void VisualLinePaste_ReplacesSelectedLines()
     {
         // Yank line 0 linewise, then visual-line select line 1 and paste over it.
