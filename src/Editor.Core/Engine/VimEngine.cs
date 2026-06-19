@@ -954,6 +954,18 @@ public class VimEngine
             return;
         }
 
+        // Operator + motion (dw, cw, de, d$, yw, >j, guw, ...). The movement switch
+        // below has standalone cases for w/b/e/$/0/h/l/j/k/G/gg/... that move the
+        // cursor and ignore cmd.Operator, so any command still carrying an operator
+        // must be dispatched here first. Double-operator (dd/cc/yy), surround, and
+        // linewise-forced operators are handled above; text objects, gn, and
+        // f/t/F/T are resolved inside ExecuteOperatorMotion.
+        if (cmd.Operator != null)
+        {
+            ExecuteOperatorMotion(cmd, events);
+            return;
+        }
+
         switch (cmd.Motion)
         {
             // Mode transitions
@@ -1488,7 +1500,23 @@ public class VimEngine
         }
 
         // Calculate motion target
-        var mot = motion.Calculate(cmd.Motion ?? "", _cursor, cmd.Count);
+        var motionName = cmd.Motion ?? "";
+
+        // cw / cW behave like ce / cE when the cursor is on a non-blank (Vim special
+        // case): the trailing whitespace after the word must be preserved.
+        if (cmd.Operator == "c" && motionName is "w" or "W")
+        {
+            var lineText = buf.GetLine(_cursor.Line);
+            if (_cursor.Column < lineText.Length && !char.IsWhiteSpace(lineText[_cursor.Column]))
+                motionName = motionName == "w" ? "e" : "E";
+        }
+
+        // `dw`/`dW` (and other operators over w/W) extend over the whole last word of a
+        // line, unlike the cursor-movement `w` which stops on its last character. Use the
+        // unclamped operator word-end so the exclusive delete covers the word.
+        var mot = (cmd.Operator != null && motionName is "w" or "W")
+            ? motion.WordForwardOperatorEnd(_cursor, Math.Max(1, cmd.Count), motionName == "W")
+            : motion.Calculate(motionName, _cursor, cmd.Count);
         if (mot == null) return;
 
         bool linewise = mot.Value.Type == MotionType.Linewise || cmd.LinewiseForced;
@@ -1502,7 +1530,40 @@ public class VimEngine
         if (cmd.Operator == "c") BeginInsertRepeat(cmd);
         else if (cmd.Operator is "d" or "<" or ">" or "=" or "gu" or "gU" or "g~") SetRepeatChange(cmd);
 
-        ExecuteOperator(cmd.Operator, _cursor, mot.Value.Target, cmd.Register ?? '"', linewise, events);
+        var opFrom = _cursor;
+        var opTo = mot.Value.Target;
+
+        // ExecuteOperator deletes inclusively (through the char at the far endpoint).
+        // An exclusive motion must NOT include that character, so step the far endpoint
+        // back one position. At column 0 this moves to the end of the previous line —
+        // matching Vim's exclusive-to-inclusive rule and keeping `dw` on the last word
+        // of a line from joining the following line.
+        if (!linewise && mot.Value.Type == MotionType.Exclusive)
+        {
+            var (lo, hi) = ComparePositions(opFrom, opTo) <= 0 ? (opFrom, opTo) : (opTo, opFrom);
+            if (lo == hi) return; // empty motion — nothing to operate on
+            var steppedHi = StepBackOnePosition(hi);
+            if (ComparePositions(steppedHi, lo) < 0) return;
+            if (opTo == hi) opTo = steppedHi; else opFrom = steppedHi;
+        }
+
+        ExecuteOperator(cmd.Operator, opFrom, opTo, cmd.Register ?? '"', linewise, events);
+    }
+
+    private static int ComparePositions(CursorPosition a, CursorPosition b) =>
+        a.Line != b.Line ? a.Line.CompareTo(b.Line) : a.Column.CompareTo(b.Column);
+
+    /// <summary>One buffer position earlier than <paramref name="pos"/>; at column 0 wraps to
+    /// the last character of the previous line (or its column 0 if empty).</summary>
+    private CursorPosition StepBackOnePosition(CursorPosition pos)
+    {
+        if (pos.Column > 0) return pos with { Column = pos.Column - 1 };
+        if (pos.Line > 0)
+        {
+            int prevLen = _bufferManager.Current.Text.GetLineLength(pos.Line - 1);
+            return new CursorPosition(pos.Line - 1, Math.Max(0, prevLen - 1));
+        }
+        return pos;
     }
 
     private void ExecuteOperator(string op, CursorPosition from, CursorPosition to,

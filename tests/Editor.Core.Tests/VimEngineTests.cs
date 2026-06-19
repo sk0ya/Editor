@@ -119,6 +119,80 @@ public class VimEngineTests
         Assert.Contains(events, e => e is CursorMovedEvent { Position.Column: 4 });
     }
 
+    // Operator + single-character motion (dw, cw, de, d$, db, dl, d0, dj, dG, guw, ...).
+    // These motions also exist as standalone movement cases in ExecuteNormalCommand, which
+    // used to ignore the pending operator — so `dw` etc. silently became a plain cursor move.
+    [Theory]
+    [InlineData("hello world", 0, "dw", "world")]      // exclusive, deletes trailing space
+    [InlineData("foo bar", 4, "dw", "foo ")]           // last word of line — whole word removed
+    [InlineData("foo b", 4, "dw", "foo ")]             // single-char last word
+    [InlineData("hello world", 0, "de", " world")]     // inclusive
+    [InlineData("hello world", 0, "d$", "")]           // to end of line
+    [InlineData("hello world", 6, "db", "world")]      // backward exclusive
+    [InlineData("hello", 0, "dl", "ello")]             // one char right
+    [InlineData("hello", 3, "d0", "lo")]               // to line start
+    [InlineData("a b c d", 0, "2dw", "c d")]           // count before operator
+    [InlineData("a b c d", 0, "d2w", "c d")]           // count after operator
+    [InlineData("a.b cd", 0, "dW", "cd")]              // WORD includes punctuation
+    public void OperatorMotion_DeletesExpectedRange(string text, int startCol, string keys, string expected)
+    {
+        var engine = CreateEngine(text);
+        for (int i = 0; i < startCol; i++) engine.ProcessKey("l");
+        foreach (var k in keys) engine.ProcessKey(k.ToString());
+        Assert.Equal(expected, engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Cw_ActsLikeCe_PreservingTrailingWhitespace()
+    {
+        var engine = CreateEngine("foo bar");
+        engine.ProcessKey("c");
+        engine.ProcessKey("w"); // change "foo" (not the trailing space)
+        engine.ProcessKey("X");
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Equal("X bar", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Dj_DeletesTwoLinesLinewise()
+    {
+        var engine = CreateEngine("aaa\nbbb\nccc");
+        engine.ProcessKey("d");
+        engine.ProcessKey("j");
+        Assert.Equal("ccc", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void DG_DeletesFromCurrentLineToEnd()
+    {
+        var engine = CreateEngine("aaa\nbbb\nccc");
+        engine.ProcessKey("j"); // line 1
+        engine.ProcessKey("d");
+        engine.ProcessKey("G");
+        Assert.Equal("aaa", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Guw_LowercasesWord()
+    {
+        var engine = CreateEngine("HELLO x");
+        engine.ProcessKey("g");
+        engine.ProcessKey("u");
+        engine.ProcessKey("w");
+        Assert.Equal("hello x", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Yw_YanksWordIncludingTrailingSpace()
+    {
+        var engine = CreateEngine("hello world");
+        engine.ProcessKey("y");
+        engine.ProcessKey("w");
+        engine.ProcessKey("$");
+        engine.ProcessKey("p");
+        Assert.Equal("hello worldhello ", engine.CurrentBuffer.Text.GetText());
+    }
+
     [Fact]
     public void PressEscape_InInsert_ReturnsToNormal()
     {

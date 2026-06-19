@@ -274,6 +274,51 @@ public class MotionEngine
         return new Motion(pos, MotionType.Exclusive);
     }
 
+    /// <summary>
+    /// Exclusive end position for operator word motions (dw/dW/yw/cw...). Identical to
+    /// <see cref="WordForward"/> except it does NOT clamp to the last column when the
+    /// final word sits at the end of the line — it returns the column just past the last
+    /// character (== line length). Callers apply the exclusive-to-inclusive step, so an
+    /// operator over the last word of a line covers the whole word (Vim's `dw` rule).
+    /// </summary>
+    public Motion WordForwardOperatorEnd(CursorPosition cursor, int count, bool WORD)
+    {
+        var pos = cursor;
+        for (int c = 0; c < count; c++)
+        {
+            var line = _buffer.GetLine(pos.Line);
+            int col = pos.Column;
+
+            if (col >= line.Length)
+            {
+                if (pos.Line < _buffer.LineCount - 1)
+                { pos = new CursorPosition(pos.Line + 1, 0); continue; }
+                break;
+            }
+
+            bool inWord = WORD ? !char.IsWhiteSpace(line[col]) : IsWordChar(line[col]);
+
+            if (inWord)
+            {
+                while (col < line.Length && (WORD ? !char.IsWhiteSpace(line[col]) : IsWordChar(line[col])))
+                    col++;
+            }
+            else if (!char.IsWhiteSpace(line[col]))
+            {
+                while (col < line.Length && !IsWordChar(line[col]) && !char.IsWhiteSpace(line[col]))
+                    col++;
+            }
+
+            while (col < line.Length && char.IsWhiteSpace(line[col])) col++;
+
+            if (col >= line.Length && pos.Line < _buffer.LineCount - 1)
+                pos = new CursorPosition(pos.Line + 1, 0);
+            else
+                pos = pos with { Column = col }; // unclamped: may equal line length
+        }
+        return new Motion(pos, MotionType.Exclusive);
+    }
+
     private Motion WordBackward(CursorPosition cursor, int count, bool WORD)
     {
         var pos = cursor;
