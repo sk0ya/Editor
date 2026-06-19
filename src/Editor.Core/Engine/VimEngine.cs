@@ -4027,8 +4027,8 @@ public class VimEngine
         else
         {
             var col = Math.Min(_cursor.Column + 1, buf.GetLineLength(_cursor.Line));
-            buf.InsertText(_cursor.Line, col, reg.Text);
-            _cursor = _cursor with { Column = col + reg.Text.Length - 1 };
+            var end = InsertCharacterwiseText(buf, _cursor.Line, col, reg.Text);
+            _cursor = CursorOnLastInsertedChar(new CursorPosition(_cursor.Line, col), end);
         }
         EmitText(events);
     }
@@ -4044,8 +4044,9 @@ public class VimEngine
             InsertLinewisePaste(reg.GetLines(), after: false);
         else
         {
-            buf.InsertText(_cursor.Line, _cursor.Column, reg.Text);
-            _cursor = _cursor with { Column = _cursor.Column + reg.Text.Length - 1 };
+            var start = _cursor;
+            var end = InsertCharacterwiseText(buf, start.Line, start.Column, reg.Text);
+            _cursor = CursorOnLastInsertedChar(start, end);
         }
         EmitText(events);
     }
@@ -4062,12 +4063,32 @@ public class VimEngine
         }
         else
         {
-            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, 1);
-            buf.InsertLineAbove(_cursor.Line);
-            for (int i = 0; i < lines.Length; i++)
-                buf.ReplaceLine(_cursor.Line + i, lines[i]);
+            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, lines.Length);
+            buf.InsertLines(_cursor.Line - 1, lines);
             _cursor = new CursorPosition(_cursor.Line, 0);
         }
+    }
+
+    private CursorPosition InsertCharacterwiseText(TextBuffer buf, int line, int col, string text)
+    {
+        var normalized = text.Replace("\r\n", "\n").Replace("\r", "\n");
+        var parts = normalized.Split('\n');
+        buf.InsertText(line, col, normalized);
+        if (parts.Length > 1)
+            CurrentBuffer.Folds.OnLinesInserted(line, parts.Length - 1);
+        return parts.Length == 1
+            ? new CursorPosition(line, col + parts[0].Length)
+            : new CursorPosition(line + parts.Length - 1, parts[^1].Length);
+    }
+
+    private CursorPosition CursorOnLastInsertedChar(CursorPosition start, CursorPosition insertionEnd)
+    {
+        var buf = _bufferManager.Current.Text;
+        if (insertionEnd.Column > 0)
+            return buf.ClampCursor(insertionEnd with { Column = insertionEnd.Column - 1 });
+        if (insertionEnd.Line > start.Line)
+            return buf.ClampCursor(new CursorPosition(insertionEnd.Line - 1, int.MaxValue));
+        return buf.ClampCursor(start);
     }
 
     /// <summary>
@@ -4110,13 +4131,14 @@ public class VimEngine
             if (after)
             {
                 var col = Math.Min(_cursor.Column + 1, buf.GetLineLength(_cursor.Line));
-                buf.InsertText(_cursor.Line, col, reg.Text);
-                _cursor = _cursor with { Column = col + reg.Text.Length - 1 };
+                var end = InsertCharacterwiseText(buf, _cursor.Line, col, reg.Text);
+                _cursor = CursorOnLastInsertedChar(new CursorPosition(_cursor.Line, col), end);
             }
             else
             {
-                buf.InsertText(_cursor.Line, _cursor.Column, reg.Text);
-                _cursor = _cursor with { Column = _cursor.Column + reg.Text.Length - 1 };
+                var start = _cursor;
+                var end = InsertCharacterwiseText(buf, start.Line, start.Column, reg.Text);
+                _cursor = CursorOnLastInsertedChar(start, end);
             }
         }
         EmitText(events);
@@ -5469,8 +5491,9 @@ public class VimEngine
                 InsertLinewisePaste(regLines, after: false);
             else
             {
-                buf.InsertText(_cursor.Line, _cursor.Column, regText);
-                _cursor = buf.ClampCursor(new CursorPosition(_cursor.Line, _cursor.Column + regText.Length - 1));
+                var startPos = _cursor;
+                var endPos = InsertCharacterwiseText(buf, startPos.Line, startPos.Column, regText);
+                _cursor = CursorOnLastInsertedChar(startPos, endPos);
             }
             EmitText(events);
             ExitVisualMode(events);
@@ -5531,8 +5554,8 @@ public class VimEngine
         }
         else
         {
-            buf.InsertText(start.Line, start.Column, regText);
-            _cursor = buf.ClampCursor(new CursorPosition(start.Line, start.Column + regText.Length - 1));
+            var endPos = InsertCharacterwiseText(buf, start.Line, start.Column, regText);
+            _cursor = CursorOnLastInsertedChar(start, endPos);
         }
         EmitText(events);
         ExitVisualMode(events);

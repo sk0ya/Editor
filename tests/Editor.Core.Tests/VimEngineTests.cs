@@ -453,6 +453,39 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void P_WithMultilineCharacterRegister_SplitsLinesAndEmitsTextChanged()
+    {
+        var clipboard = new FakeClipboardProvider();
+        clipboard.SetText("X\nY");
+        var engine = CreateEngine("ab");
+        engine.SetClipboardProvider(clipboard);
+
+        engine.ProcessKey("\"");
+        engine.ProcessKey("+");
+        var events = engine.ProcessKey("p");
+
+        Assert.Equal("aX\nYb", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(2, engine.CurrentBuffer.Text.LineCount);
+        Assert.All(engine.CurrentBuffer.Text.Snapshot(), line => Assert.DoesNotContain('\n', line));
+        Assert.Contains(events, e => e.Type == VimEventType.TextChanged);
+    }
+
+    [Fact]
+    public void P_Before_WithMultilineLinewiseRegister_DoesNotOverwriteCurrentLine()
+    {
+        var engine = CreateEngine("one\ntwo\nthree");
+
+        engine.ProcessKey("V");
+        engine.ProcessKey("j");
+        engine.ProcessKey("y");
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("P");
+
+        Assert.Equal("one\ntwo\none\ntwo\nthree", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
     public void Undo_RestoresText()
     {
         var engine = CreateEngine("hello");

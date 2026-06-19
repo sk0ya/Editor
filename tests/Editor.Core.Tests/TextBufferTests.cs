@@ -32,6 +32,19 @@ public class TextBufferTests
     }
 
     [Fact]
+    public void InsertText_WithNewlines_SplitsBufferLines()
+    {
+        var buf = new TextBuffer("abef");
+
+        buf.InsertText(0, 2, "c\nd");
+
+        Assert.Equal(2, buf.LineCount);
+        Assert.Equal("abc", buf.GetLine(0));
+        Assert.Equal("def", buf.GetLine(1));
+        Assert.Equal("abc\ndef", buf.GetText());
+    }
+
+    [Fact]
     public void JoinLines_MergesConsecutiveLines()
     {
         var buf = new TextBuffer("hello\nworld");

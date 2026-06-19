@@ -49,7 +49,21 @@ public class TextBuffer
         EnsureLine(line);
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
-        _lines[line] = s[..col] + text + s[col..];
+        text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+        var parts = text.Split('\n');
+        if (parts.Length == 1)
+        {
+            _lines[line] = s[..col] + text + s[col..];
+        }
+        else
+        {
+            var before = s[..col];
+            var after = s[col..];
+            _lines[line] = before + parts[0];
+            for (int i = 1; i < parts.Length; i++)
+                _lines.Insert(line + i, parts[i]);
+            _lines[line + parts.Length - 1] += after;
+        }
         MarkModified();
     }
 
