@@ -970,6 +970,7 @@ public class VimEngine
             case "a":
                 BeginInsertRepeat(cmd);
                 _cursor = motion.MoveRight(_cursor, 1, true);
+                EmitCursor(events);
                 EnterInsertMode(false, events);
                 break;
             case "A":

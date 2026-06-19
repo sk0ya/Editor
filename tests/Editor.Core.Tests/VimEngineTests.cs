@@ -41,6 +41,36 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void PressA_EntersInsertModeAfterCursor()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("l");
+
+        var events = engine.ProcessKey("a");
+        engine.ProcessKey("X");
+
+        Assert.Equal("heXllo", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Contains(events, e => e is CursorMovedEvent { Position.Column: 2 });
+        Assert.Contains(events, e => e.Type == VimEventType.ModeChanged);
+    }
+
+    [Fact]
+    public void PressA_AtEndOfLineEntersInsertModeAfterLastCharacter()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("$");
+
+        var events = engine.ProcessKey("a");
+        engine.ProcessKey("X");
+
+        Assert.Equal("helloX", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Contains(events, e => e is CursorMovedEvent { Position.Column: 5 });
+        Assert.Contains(events, e => e.Type == VimEventType.ModeChanged);
+    }
+
+    [Fact]
     public void PressEscape_InInsert_ReturnsToNormal()
     {
         var engine = CreateEngine("hello");
