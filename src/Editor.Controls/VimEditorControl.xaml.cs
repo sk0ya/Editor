@@ -2376,6 +2376,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private void OnCanvasMouseClicked(int line, int col)
     {
         Focus();
+        // Clicking into this editor makes it the active IME target. Re-point TSF focus to
+        // our store regardless of where WPF thinks keyboard focus is (shared window HWND).
+        AssertImeStoreFocus();
         ClearSelectionRangeState();
 
         // Vim disabled: drop any plain selection and move the caret like a text box.
@@ -2683,28 +2686,33 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
     }
 
-    /// <summary>Re-focuses our document manager when the control regains keyboard focus.</summary>
-    private void FocusCustomTextStore()
+    /// <summary>
+    /// Force the IME (the TSF thread-manager focus) to point at THIS editor's document
+    /// store. In an embedding host the window HWND is shared by several editors (and by
+    /// the host's own native text controls); the window-level <c>AssociateFocus</c>
+    /// default is simply whichever editor loaded last, and WPF keyboard focus may never
+    /// land on the editor (<see cref="UIElement.IsKeyboardFocusWithin"/> stays false) even
+    /// while it is the one receiving keystrokes. So we re-point TSF focus the moment this
+    /// editor becomes the active IME target (enters a text-input mode, is clicked, or gains
+    /// focus) rather than trusting a WPF focus event or the window-global association.
+    /// </summary>
+    private void AssertImeStoreFocus()
     {
         if (!_customTextStoreActive || _tsfStoreThreadMgr == null || _tsfStoreDocMgr == null) return;
         try { _ = _tsfStoreThreadMgr.SetFocus(_tsfStoreDocMgr); }
         catch { /* focus hand-off is best-effort */ }
+    }
 
-        // When the editor is embedded in a host window that also contains native WPF
-        // text controls (e.g. an app's own TextBoxes), WPF's TextServicesContext reacts
-        // to the same keyboard-focus change by setting the thread's TSF focus to its own
-        // default document manager. That can run *after* the synchronous SetFocus above,
-        // leaving the IME composing into WPF's (empty) store instead of ours — the symptom
-        // being that with the IME on, nothing is typed into the editor. Re-assert once more
-        // after the focus change has fully settled so our store wins the arbitration. A
-        // standalone editor-only window has no competitor, so this is simply idempotent.
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
-        {
-            if (!_customTextStoreActive || _tsfStoreThreadMgr == null || _tsfStoreDocMgr == null) return;
-            if (!IsKeyboardFocusWithin) return;   // focus moved on in the meantime — don't steal it back
-            try { _ = _tsfStoreThreadMgr.SetFocus(_tsfStoreDocMgr); }
-            catch { /* best-effort */ }
-        });
+    /// <summary>Re-focuses our document manager when the control regains keyboard focus.</summary>
+    private void FocusCustomTextStore()
+    {
+        AssertImeStoreFocus();
+
+        // WPF's own TextServicesContext may set the thread's TSF focus to its default
+        // document manager *after* this focus change settles; re-assert once more so our
+        // store wins. Harmless/idempotent in a standalone editor-only window.
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input,
+            () => AssertImeStoreFocus());
     }
 
     private void DisposeCustomTextStore()
@@ -4546,6 +4554,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                         // Clear document highlights when entering insert mode
                         _lspManager.ClearDocumentHighlights();
                     }
+                    // Entering a text-input mode makes this editor the active IME target.
+                    // Claim the TSF thread focus now (before any composition starts) so the
+                    // IME composes into our store and not whichever editor happened to win
+                    // the shared window's AssociateFocus default. See AssertImeStoreFocus.
+                    if (IsImeTextInputMode(me.Mode))
+                        AssertImeStoreFocus();
                     ActiveStatusBar.UpdateMode(me.Mode);
                     Canvas.SetMode(me.Mode);
                     ModeChanged?.Invoke(this, new ModeChangedEventArgs(me.Mode));
