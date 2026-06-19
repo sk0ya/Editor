@@ -1657,6 +1657,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _lspManager.OnFileOpened(filePath, text);
         _ = RefreshGitDiffAsync();
         ActiveStatusBar.UpdateStatus($"\"{filePath}\" reloaded");
+        // 外部変更の取り込み（ウォッチャの自動リロード／:e!）でも本文は変わるので、編集と同じく
+        // BufferChanged で通知する。これがないと、本文を購読するホスト（プレビュー等）が取り残される。
+        BufferChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Call before writing a file to disk to prevent the watcher from triggering a reload prompt.</summary>
