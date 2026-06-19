@@ -48,6 +48,14 @@ public class EditorCanvas : FrameworkElement
     // the IME (GCS_CURSORPOS). -1 means "place the caret at the end" — used as the
     // fallback when no position is known.
     private int _imeCompositionCursor = -1;
+    // Target clause (注目文節) range within the composition string, in characters
+    // [start, end). Highlighted while converting so arrow-key clause navigation is
+    // visible. start < 0 means "no target clause".
+    private int _imeTargetClauseStart = -1;
+    private int _imeTargetClauseEnd = -1;
+    // Clause start offsets (incl. 0) splitting the composition into 文節 segments;
+    // empty when the composition isn't segmented.
+    private int[] _imeClauseStarts = [];
     private string[] _imeCandidates = [];
     private int _imeCandidateSelection = -1;
     private VisualLineSegment[] _visualLines = [new VisualLineSegment(0, 0, false)];
@@ -483,6 +491,22 @@ public class EditorCanvas : FrameworkElement
         if (_imeCompositionText == text && _imeCompositionCursor == cursor) return;
         _imeCompositionText = text;
         _imeCompositionCursor = cursor;
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Sets the IME clause segmentation for the active composition. <paramref name="starts"/>
+    /// holds the character offset of each clause start (including 0); the focused clause
+    /// is [targetStart, targetEnd). Pass an empty array / -1 to clear.
+    /// </summary>
+    public void SetImeClauses(int[]? starts, int targetStart, int targetEnd)
+    {
+        starts ??= [];
+        if (_imeClauseStarts.AsSpan().SequenceEqual(starts)
+            && _imeTargetClauseStart == targetStart && _imeTargetClauseEnd == targetEnd) return;
+        _imeClauseStarts = starts;
+        _imeTargetClauseStart = targetStart;
+        _imeTargetClauseEnd = targetEnd;
         InvalidateVisual();
     }
     public void SetImeCandidates(IReadOnlyList<string>? candidates, int selectedIndex)
@@ -2192,12 +2216,44 @@ public class EditorCanvas : FrameworkElement
     {
         if (string.IsNullOrEmpty(_imeCompositionText)) return;
 
-        double width = Math.Max(1, FormatText(_imeCompositionText, Theme.Foreground).Width);
-        var pen = new Pen(Theme.InsertCursor, 1);
-        dc.DrawLine(
-            pen,
-            new Point(cursorX, cursorY + _lineHeight - 1),
-            new Point(cursorX + width, cursorY + _lineHeight - 1));
+        int len = _imeCompositionText.Length;
+        double underlineY = cursorY + _lineHeight - 1;
+        double CharX(int col) => cursorX + (col > 0 ? FormatText(_imeCompositionText[..Math.Clamp(col, 0, len)], Theme.Foreground).Width : 0);
+
+        // Build clause segments from the clause-start offsets. Fall back to a single
+        // segment covering the whole composition when no segmentation is available.
+        var bounds = new List<int> { 0 };
+        foreach (int s in _imeClauseStarts)
+            if (s > 0 && s < len && !bounds.Contains(s)) bounds.Add(s);
+        bounds.Sort();
+        bounds.Add(len);
+
+        var thinPen = new Pen(Theme.InsertCursor, 1);
+        for (int i = 0; i + 1 < bounds.Count; i++)
+        {
+            int cs = bounds[i], ce = bounds[i + 1];
+            if (ce <= cs) continue;
+            // Leave a 2px gap before each clause boundary so segments read as separate.
+            double x0 = CharX(cs);
+            double x1 = CharX(ce) - (ce < len ? 2 : 0);
+            if (x1 <= x0) x1 = x0 + 1;
+
+            bool isTarget = _imeTargetClauseStart >= 0
+                && cs >= _imeTargetClauseStart && ce <= _imeTargetClauseEnd;
+            if (isTarget)
+            {
+                // Focused clause: translucent background + thick underline.
+                var hl = new SolidColorBrush(Theme.InsertCursor is SolidColorBrush sb
+                    ? Color.FromArgb(48, sb.Color.R, sb.Color.G, sb.Color.B)
+                    : Color.FromArgb(48, 0x80, 0x80, 0xFF));
+                dc.DrawRectangle(hl, null, new Rect(x0, cursorY, Math.Max(1, x1 - x0), _lineHeight));
+                dc.DrawLine(new Pen(Theme.InsertCursor, 2), new Point(x0, underlineY), new Point(x1, underlineY));
+            }
+            else
+            {
+                dc.DrawLine(thinPen, new Point(x0, underlineY), new Point(x1, underlineY));
+            }
+        }
     }
 
     private void DrawImeCandidatePopup(DrawingContext dc, double textLeft, Size size)

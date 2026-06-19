@@ -175,7 +175,7 @@ public sealed record DocumentMeta(
     string? Language,
     VimMode Mode);
 
-public partial class VimEditorControl : UserControl
+public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditorTextStoreHost
 {
     // ─────────────── Win32 P/Invoke ───────────────
 
@@ -272,6 +272,15 @@ public partial class VimEditorControl : UserControl
     private static readonly Guid IID_ITfSource = new("4EA48A35-60AE-446F-8FD6-E6A8D82459F7");
     private static readonly Guid IID_ITfTextEditSink = new("8127D409-CCD3-4683-967A-B43D5B482BF7");
     private const uint TF_DEFAULT_SELECTION = 0xFFFFFFFFu;
+    // Target-clause (注目文節) reading: GUID_PROP_ATTRIBUTE carries per-range display
+    // attribute atoms; resolve them via the category + display-attribute managers.
+    private static readonly Guid GUID_PROP_ATTRIBUTE = new("34B45670-7526-11D2-A147-00105A2799B5");
+    private static readonly Guid CLSID_TF_CategoryMgr = new("A4B544A1-438D-4B41-9325-869523E2D6C7");
+    private static readonly Guid CLSID_TF_DisplayAttributeMgr = new("3CE74DE4-53D3-4D74-8B83-431B3828BA53");
+    // TF_ATTR_TARGET_CONVERTED = 1, TF_ATTR_TARGET_NOTCONVERTED = 3 mark the focused clause.
+    private const int TF_ATTR_TARGET_CONVERTED = 1;
+    private const int TF_ATTR_TARGET_NOTCONVERTED = 3;
+    private const int TF_ANCHOR_END = 1;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT_SEND[] pInputs, int cbSize);
@@ -332,6 +341,20 @@ public partial class VimEditorControl : UserControl
     private int _imeCompositionSeq = 0;
     private bool _imeWindowUpdateInProgress = false;
     private bool _imeSuppressionCaretCreated = false;
+
+    // ─── Custom TSF text store (ITextStoreACP) ───
+    // When active, the editor is a real TSF application: the IME writes its composition
+    // and display attributes into our own store (Editor.Controls.Ime.EditorTextStore),
+    // which we read to render composition in-editor and commit through the engine.
+    private Editor.Controls.Ime.EditorTextStore? _customTextStore;
+    private Editor.Controls.Ime.ITfThreadMgrTs? _tsfStoreThreadMgr;
+    private Editor.Controls.Ime.ITfDocumentMgrTs? _tsfStoreDocMgr;
+    private Editor.Controls.Ime.ITfDocumentMgrTs? _tsfStorePrevDocMgr;
+    private Editor.Controls.Ime.ITfContextTs? _tsfStoreContext;
+    private Editor.Controls.Ime.ITfSourceTs? _tsfStoreContextSource;
+    private uint _tsfStoreCompositionCookie = TF_INVALID_COOKIE;
+    private bool _customTextStoreActive;
+
     private ITfSource? _tsfSource;
     private ITfUIElementSink? _tsfUiElementSink;
     private uint _tsfUiElementSinkCookie = TF_INVALID_COOKIE;
@@ -344,6 +367,9 @@ public partial class VimEditorControl : UserControl
     private ITfSource? _tsfContextSource;
     private ITfTextEditSink? _tsfTextEditSink;
     private uint _tsfTextEditCookie = TF_INVALID_COOKIE;
+    // Cached for the control lifetime; used to resolve target-clause display attributes.
+    private ITfCategoryMgr? _tsfCategoryMgr;
+    private ITfDisplayAttributeMgr? _tsfDisplayAttrMgr;
 
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
@@ -543,7 +569,7 @@ public partial class VimEditorControl : UserControl
         PreviewKeyDown += OnPreviewKeyDown;
 
         // Active-pane cursor and status bar
-        GotKeyboardFocus  += (_, _) => { Canvas.IsActive = true;  SyncStatusBar(); };
+        GotKeyboardFocus  += (_, _) => { Canvas.IsActive = true;  SyncStatusBar(); FocusCustomTextStore(); };
         LostKeyboardFocus += (_, _) => Canvas.IsActive = false;
 
         // Mouse and scroll wiring
@@ -696,8 +722,16 @@ public partial class VimEditorControl : UserControl
         Focus();
         UpdateAll();
         TryAttachTsfUiElementSink();
-        TextCompositionManager.AddPreviewTextInputStartHandler(this, OnPreviewTextInputStart);
-        TextCompositionManager.AddPreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
+
+        // Install our own TSF text store so the IME composes directly into us. On any
+        // failure, fall back to WPF's default IME path (the handlers registered below).
+        bool customStore = InitializeCustomTextStore();
+
+        if (!customStore)
+        {
+            TextCompositionManager.AddPreviewTextInputStartHandler(this, OnPreviewTextInputStart);
+            TextCompositionManager.AddPreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
+        }
         if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
             hwndSource.AddHook(ImeWndProc);
         // LSP: notify for files already loaded before Loaded fired (e.g. command-line arg).
@@ -719,6 +753,7 @@ public partial class VimEditorControl : UserControl
         DestroyImeSuppressionCaret();
         DetachTsfUiElementSink();
         DetachTsfTextEditSink();
+        DisposeCustomTextStore();
         if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
             hwndSource.RemoveHook(ImeWndProc);
         _completionDebounce.Stop();
@@ -733,6 +768,12 @@ public partial class VimEditorControl : UserControl
     /// </summary>
     private IntPtr ImeWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        // With the custom TSF text store active the IME composes inline into our store
+        // (no legacy IMM composition window), and the native candidate UI is positioned
+        // via ITextStoreACP.GetTextExt — so the IMM-based suppression below must stand down.
+        if (_customTextStoreActive)
+            return IntPtr.Zero;
+
         if (msg == WM_IME_SETCONTEXT && wParam != IntPtr.Zero)
         {
             UpdateImeWindowPos(hwnd);
@@ -915,6 +956,12 @@ public partial class VimEditorControl : UserControl
     {
         if (_tsfTextEditCookie != TF_INVALID_COOKIE) return;
 
+        if (_customTextStoreActive)
+        {
+            EnsureCustomTsfTextEditSink();
+            return;
+        }
+
         IntPtr threadMgrPtr = IntPtr.Zero;
         ITfThreadMgr? threadMgr = null;
         ITfDocumentMgr? docMgr = null;
@@ -952,6 +999,40 @@ public partial class VimEditorControl : UserControl
         }
     }
 
+    private void EnsureCustomTsfTextEditSink()
+    {
+        if (_tsfTextEditCookie != TF_INVALID_COOKIE) return;
+        if (_tsfStoreContext == null) return;
+
+        ITfContext? ctx = null;
+        ITfSource? source = null;
+        try
+        {
+            ctx = (ITfContext)_tsfStoreContext;
+            source = (ITfSource)_tsfStoreContext;
+            var sink = new TsfTextEditSink(this);
+            var iid = IID_ITfTextEditSink;
+            if (source.AdviseSink(ref iid, sink, out uint cookie) >= 0)
+            {
+                _tsfContext = ctx;
+                _tsfContextSource = source;
+                _tsfTextEditSink = sink;
+                _tsfTextEditCookie = cookie;
+                ctx = null;
+                source = null;
+            }
+        }
+        catch
+        {
+            // Custom-store edit tracking is best-effort; composition still commits through the store.
+        }
+        finally
+        {
+            if (source != null && Marshal.IsComObject(source)) Marshal.ReleaseComObject(source);
+            if (ctx != null && !ReferenceEquals(ctx, source) && Marshal.IsComObject(ctx)) Marshal.ReleaseComObject(ctx);
+        }
+    }
+
     private void DetachTsfTextEditSink()
     {
         try
@@ -977,6 +1058,12 @@ public partial class VimEditorControl : UserControl
                 Marshal.ReleaseComObject(src);
             if (ctx != null && !ReferenceEquals(ctx, src) && Marshal.IsComObject(ctx))
                 Marshal.ReleaseComObject(ctx);
+            if (_tsfCategoryMgr != null && Marshal.IsComObject(_tsfCategoryMgr))
+                Marshal.ReleaseComObject(_tsfCategoryMgr);
+            _tsfCategoryMgr = null;
+            if (_tsfDisplayAttrMgr != null && Marshal.IsComObject(_tsfDisplayAttrMgr))
+                Marshal.ReleaseComObject(_tsfDisplayAttrMgr);
+            _tsfDisplayAttrMgr = null;
         }
     }
 
@@ -1017,12 +1104,108 @@ public partial class VimEditorControl : UserControl
                 Marshal.Release(selection[0].range);
             }
 
-            if (caret >= 0)
-                Canvas.SetImeCompositionText(_lastImeCompositionText, caret);
+            int[] clauseStarts = [];
+            int tcStart = -1, tcEnd = -1;
+            try { ReadImeClauses(ecReadOnly, out clauseStarts, out tcStart, out tcEnd); }
+            catch { clauseStarts = []; tcStart = tcEnd = -1; }
+
+            Canvas.SetImeCompositionText(_lastImeCompositionText, caret);
+            Canvas.SetImeClauses(clauseStarts, tcStart, tcEnd);
         }
         catch
         {
             // A failed read just leaves the caret at its current (end) position.
+        }
+    }
+
+    /// <summary>
+    /// Walks the GUID_PROP_ATTRIBUTE property ranges of the composition to obtain the
+    /// clause (文節) segmentation. Each property range is a maximal run of one display
+    /// attribute, so its start is a clause boundary; the range whose attribute is
+    /// TARGET_CONVERTED / TARGET_NOTCONVERTED is the focused clause. Returns false when
+    /// no segmentation is available.
+    /// </summary>
+    private bool ReadImeClauses(uint ec, out int[] clauseStarts, out int targetStart, out int targetEnd)
+    {
+        clauseStarts = [];
+        targetStart = -1;
+        targetEnd = -1;
+        if (_tsfContext == null) return false;
+
+        // Lazily create the category / display-attribute managers (cached for lifetime).
+        if (_tsfCategoryMgr == null || _tsfDisplayAttrMgr == null)
+        {
+            if (Type.GetTypeFromCLSID(CLSID_TF_CategoryMgr) is { } catType
+                && Activator.CreateInstance(catType) is ITfCategoryMgr cm)
+                _tsfCategoryMgr = cm;
+            if (Type.GetTypeFromCLSID(CLSID_TF_DisplayAttributeMgr) is { } daType
+                && Activator.CreateInstance(daType) is ITfDisplayAttributeMgr dm)
+                _tsfDisplayAttrMgr = dm;
+            if (_tsfCategoryMgr == null || _tsfDisplayAttrMgr == null) return false;
+        }
+
+        var propGuid = GUID_PROP_ATTRIBUTE;
+        int propHr = _tsfContext.GetProperty(ref propGuid, out var prop);
+        if (propHr < 0 || prop == null) return false;
+
+        var starts = new List<int>();
+        ITfRangeACP? docRange = null;
+        ITfRangeACP? docEnd = null;
+        IEnumTfRanges? ranges = null;
+        try
+        {
+            // Build a range covering the whole document (the in-flight composition).
+            int startHr = _tsfContext.GetStart(ec, out docRange);
+            if (startHr < 0 || docRange == null) return false;
+            int endHr = _tsfContext.GetEnd(ec, out docEnd);
+            if (endHr < 0 || docEnd == null) return false;
+            docRange.ShiftEndToRange(ec, docEnd, TF_ANCHOR_END);
+
+            int enumHr = prop.EnumRanges(ec, out ranges, docRange);
+            if (enumHr < 0 || ranges == null) return false;
+
+            var one = new ITfRangeACP?[1];
+            while (ranges.Next(1, one, out uint fetched) == 0 && fetched == 1 && one[0] != null)
+            {
+                var range = one[0]!;
+                try
+                {
+                    if (range.GetExtent(out int acp, out int len) < 0 || len <= 0) continue;
+                    starts.Add(acp); // each attribute run start is a clause boundary
+
+                    int valueHr = prop.GetValue(ec, range, out object val);
+                    if (valueHr < 0 || val is not int atom) continue;
+                    if (_tsfCategoryMgr!.GetGUID(unchecked((uint)atom), out Guid attrGuid) < 0) continue;
+                    if (_tsfDisplayAttrMgr!.GetDisplayAttributeInfo(ref attrGuid, out var info, out _) < 0
+                        || info == null) continue;
+                    try
+                    {
+                        if (info.GetAttributeInfo(out var da) >= 0
+                            && (da.bAttr == TF_ATTR_TARGET_CONVERTED || da.bAttr == TF_ATTR_TARGET_NOTCONVERTED))
+                        {
+                            targetStart = acp;
+                            targetEnd = acp + len;
+                        }
+                    }
+                    finally
+                    {
+                        if (Marshal.IsComObject(info)) Marshal.ReleaseComObject(info);
+                    }
+                }
+                finally
+                {
+                    if (Marshal.IsComObject(range)) Marshal.ReleaseComObject(range);
+                }
+            }
+            clauseStarts = [.. starts];
+            return starts.Count > 0;
+        }
+        finally
+        {
+            if (ranges != null && Marshal.IsComObject(ranges)) Marshal.ReleaseComObject(ranges);
+            if (docEnd != null && Marshal.IsComObject(docEnd)) Marshal.ReleaseComObject(docEnd);
+            if (docRange != null && Marshal.IsComObject(docRange)) Marshal.ReleaseComObject(docRange);
+            if (Marshal.IsComObject(prop)) Marshal.ReleaseComObject(prop);
         }
     }
 
@@ -1095,9 +1278,17 @@ public partial class VimEditorControl : UserControl
         [PreserveSig] int InWriteSession(uint tid, out bool pfWriteSession);
         [PreserveSig] int GetSelection(uint ec, uint ulIndex, uint ulCount,
             [Out, MarshalAs(UnmanagedType.LPArray)] TF_SELECTION[] pSelection, out uint pcFetched);
+        [PreserveSig] int SetSelection();   // slot 4 — placeholder
+        [PreserveSig] int GetStart(uint ec, out ITfRangeACP? ppStart);
+        [PreserveSig] int GetEnd(uint ec, out ITfRangeACP? ppEnd);
+        [PreserveSig] int GetActiveView(); // slot 7 — placeholder
+        [PreserveSig] int EnumViews();      // slot 8 — placeholder
+        [PreserveSig] int GetStatus();      // slot 9 — placeholder
+        [PreserveSig] int GetProperty(ref Guid guidProp, out ITfReadOnlyProperty? ppProp);
     }
 
     // ITfRangeACP derives from ITfRange; the 22 ITfRange methods precede GetExtent.
+    // Slot 9 is ITfRange::ShiftEndToRange, which we use to build a whole-document range.
     [ComImport]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     [Guid("057A6296-029B-4154-B79A-0D461D4EA94C")]
@@ -1105,13 +1296,87 @@ public partial class VimEditorControl : UserControl
     {
         [PreserveSig] int _01(); [PreserveSig] int _02(); [PreserveSig] int _03();
         [PreserveSig] int _04(); [PreserveSig] int _05(); [PreserveSig] int _06();
-        [PreserveSig] int _07(); [PreserveSig] int _08(); [PreserveSig] int _09();
+        [PreserveSig] int _07(); [PreserveSig] int _08();
+        [PreserveSig] int ShiftEndToRange(uint ec, ITfRangeACP pRange, int aPos); // slot 9
         [PreserveSig] int _10(); [PreserveSig] int _11(); [PreserveSig] int _12();
         [PreserveSig] int _13(); [PreserveSig] int _14(); [PreserveSig] int _15();
         [PreserveSig] int _16(); [PreserveSig] int _17(); [PreserveSig] int _18();
         [PreserveSig] int _19(); [PreserveSig] int _20(); [PreserveSig] int _21();
         [PreserveSig] int _22();
         [PreserveSig] int GetExtent(out int pacpAnchor, out int pcch);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("17D49A3D-F8B8-4B2F-B254-52319DD64C53")]
+    private interface ITfReadOnlyProperty
+    {
+        [PreserveSig] int GetType(out Guid pguid); // slot 1
+        [PreserveSig] int EnumRanges(uint ec, out IEnumTfRanges? ppEnum, ITfRangeACP pTargetRange);
+        [PreserveSig] int GetValue(uint ec, ITfRangeACP pRange,
+            [MarshalAs(UnmanagedType.Struct)] out object pvarValue);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("F99D3F40-8E32-11D2-BF46-00105A2799B5")]
+    private interface IEnumTfRanges
+    {
+        [PreserveSig] int Clone(out IEnumTfRanges? ppEnum); // slot 1
+        [PreserveSig] int Next(uint ulCount,
+            [Out, MarshalAs(UnmanagedType.LPArray)] ITfRangeACP?[] rgRange, out uint pcFetched);
+    }
+
+    // ITfCategoryMgr::GetGUID is slot 13; the preceding 12 are placeholders.
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("C3ACEFB5-F69D-4905-938F-FCADCF4BE830")]
+    private interface ITfCategoryMgr
+    {
+        [PreserveSig] int _01(); [PreserveSig] int _02(); [PreserveSig] int _03();
+        [PreserveSig] int _04(); [PreserveSig] int _05(); [PreserveSig] int _06();
+        [PreserveSig] int _07(); [PreserveSig] int _08(); [PreserveSig] int _09();
+        [PreserveSig] int _10(); [PreserveSig] int _11(); [PreserveSig] int _12();
+        [PreserveSig] int GetGUID(uint guidatom, out Guid pguid);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("8DED7393-5DB1-475C-9E71-A39111B0FF67")]
+    private interface ITfDisplayAttributeMgr
+    {
+        [PreserveSig] int OnUpdateInfo();              // slot 1 — placeholder
+        [PreserveSig] int EnumDisplayAttributeInfo();  // slot 2 — placeholder
+        [PreserveSig] int GetDisplayAttributeInfo(ref Guid guid,
+            out ITfDisplayAttributeInfo? ppInfo, out Guid pguidOwner);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("70528852-2F26-4AEA-8C96-215150578932")]
+    private interface ITfDisplayAttributeInfo
+    {
+        [PreserveSig] int GetGUID(out Guid pguid);            // slot 1 — placeholder
+        [PreserveSig] int GetDescription(out IntPtr pbstrDesc); // slot 2 — placeholder
+        [PreserveSig] int GetAttributeInfo(out TF_DISPLAYATTRIBUTE pda);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TF_DA_COLOR
+    {
+        public int type;  // TF_DA_COLORTYPE
+        public uint cr;   // union: COLORREF or system-color index
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TF_DISPLAYATTRIBUTE
+    {
+        public TF_DA_COLOR crText;
+        public TF_DA_COLOR crBk;
+        public int lsStyle;     // TF_DA_LINESTYLE
+        public int fBoldLine;   // BOOL
+        public TF_DA_COLOR crLine;
+        public int bAttr;       // TF_DA_ATTR_INFO
     }
 
     [ComImport]
@@ -1162,6 +1427,11 @@ public partial class VimEditorControl : UserControl
             if (!_owner.TryGetTarget(out var owner))
                 return 0;
 
+            // The custom TSF store renders composition in-editor but leaves the candidate
+            // list to the native (correctly positioned) popup, so don't suppress it.
+            if (owner._customTextStoreActive)
+                return 0;
+
             if (ShouldSuppressNativeImeUi(owner._engine.Mode))
             {
                 pbShow = false;
@@ -1172,14 +1442,15 @@ public partial class VimEditorControl : UserControl
 
         public int UpdateUIElement(uint dwUIElementId)
         {
-            if (_owner.TryGetTarget(out var owner) && ShouldSuppressNativeImeUi(owner._engine.Mode))
+            if (_owner.TryGetTarget(out var owner) && !owner._customTextStoreActive
+                && ShouldSuppressNativeImeUi(owner._engine.Mode))
                 owner.UpdateImeWindowPos();
             return 0;
         }
 
         public int EndUIElement(uint dwUIElementId)
         {
-            if (_owner.TryGetTarget(out var owner))
+            if (_owner.TryGetTarget(out var owner) && !owner._customTextStoreActive)
                 owner.ClearImeCandidateOverlay();
             return 0;
         }
@@ -2312,7 +2583,225 @@ public partial class VimEditorControl : UserControl
     {
         _lastImeCompositionText = string.Empty;
         Canvas.SetImeCompositionText(string.Empty);
+        Canvas.SetImeClauses([], -1, -1);
         ClearImeCandidateOverlay();
+    }
+
+    /// <summary>
+    /// Inserts IME-committed (or directly typed) <paramref name="text"/> through the engine,
+    /// one character at a time, mirroring the legacy OnTextInput insert path. Used both by
+    /// WPF's OnTextInput (ASCII) and by the custom TSF store's composition-commit callback.
+    /// </summary>
+    private void InsertCommittedText(string text)
+    {
+        var mode = _engine.Mode;
+        if (!IsImeTextInputMode(mode))
+            return;
+
+        foreach (var ch in text)
+        {
+            if (ch < 32) continue; // Skip control chars
+            ProcessKey(ch.ToString(), false, false, false);
+        }
+
+        // Escape-commit (ImeProcessed Escape) finalised the composition via an injected
+        // Return; now that the committed text is inserted, exit Insert. This is the single
+        // completion point for the Escape-commit flow.
+        if (_exitInsertAfterImeCommit && (mode is VimMode.Insert or VimMode.Replace))
+        {
+            _exitInsertAfterImeCommit = false;
+            ClearSnippetState();
+            ProcessKey("Escape", false, false, false);
+        }
+    }
+
+    // ─────────────── Custom TSF text store wiring ───────────────
+
+    /// <summary>
+    /// Installs our own <see cref="Editor.Controls.Ime.EditorTextStore"/> as the IME input
+    /// target for the hosting window. Returns false (leaving WPF's default IME path intact)
+    /// if any step fails, so a TSF failure never leaves the editor without input.
+    /// </summary>
+    private bool InitializeCustomTextStore()
+    {
+        if (_customTextStoreActive) return true;
+
+        IntPtr threadMgrPtr = IntPtr.Zero;
+        try
+        {
+            if (PresentationSource.FromVisual(this) is not HwndSource source || source.Handle == IntPtr.Zero)
+                return false;
+            if (TF_GetThreadMgr(out threadMgrPtr) < 0 || threadMgrPtr == IntPtr.Zero)
+                return false;
+
+            var threadMgr = (Editor.Controls.Ime.ITfThreadMgrTs)Marshal.GetObjectForIUnknown(threadMgrPtr);
+            if (threadMgr.Activate(out uint clientId) < 0)
+                return false;
+            if (threadMgr.CreateDocumentMgr(out var docMgr) < 0 || docMgr == null)
+                return false;
+
+            var store = new Editor.Controls.Ime.EditorTextStore(this);
+            if (docMgr.CreateContext(clientId, 0, store, out var ctx, out _) < 0 || ctx == null)
+                return false;
+
+            if (docMgr.Push(ctx) < 0)
+                return false;
+
+            // Bind our document manager to the window so the IME composes into our store,
+            // then focus it explicitly for the current keyboard-focus state.
+            _ = threadMgr.AssociateFocus(source.Handle, docMgr, out var prevDocMgr);
+            _ = threadMgr.SetFocus(docMgr);
+
+            _tsfStoreThreadMgr = threadMgr;
+            _tsfStoreDocMgr = docMgr;
+            _tsfStorePrevDocMgr = prevDocMgr;
+            _tsfStoreContext = ctx;
+            _tsfStoreContextSource = (Editor.Controls.Ime.ITfSourceTs)ctx;
+            _tsfStoreCompositionCookie = TF_INVALID_COOKIE;
+            _customTextStore = store;
+            _customTextStoreActive = true;
+            EnsureTsfTextEditSink();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (threadMgrPtr != IntPtr.Zero)
+                Marshal.Release(threadMgrPtr);
+        }
+    }
+
+    /// <summary>Re-focuses our document manager when the control regains keyboard focus.</summary>
+    private void FocusCustomTextStore()
+    {
+        if (!_customTextStoreActive || _tsfStoreThreadMgr == null || _tsfStoreDocMgr == null) return;
+        try { _ = _tsfStoreThreadMgr.SetFocus(_tsfStoreDocMgr); }
+        catch { /* focus hand-off is best-effort */ }
+    }
+
+    private void DisposeCustomTextStore()
+    {
+        if (!_customTextStoreActive) return;
+        _customTextStoreActive = false;
+
+        try
+        {
+            if (_tsfStoreContextSource != null && _tsfStoreCompositionCookie != TF_INVALID_COOKIE)
+                _ = _tsfStoreContextSource.UnadviseSink(_tsfStoreCompositionCookie);
+        }
+        catch { }
+
+        try
+        {
+            if (_tsfStoreThreadMgr != null
+                && PresentationSource.FromVisual(this) is HwndSource source && source.Handle != IntPtr.Zero)
+                _ = _tsfStoreThreadMgr.AssociateFocus(source.Handle, _tsfStorePrevDocMgr, out _);
+        }
+        catch { }
+
+        try { _ = _tsfStoreDocMgr?.Pop(0); } catch { }
+        try { InputMethod.SetIsInputMethodEnabled(this, true); } catch { }
+
+        _tsfStoreCompositionCookie = TF_INVALID_COOKIE;
+
+        var ctx = _tsfStoreContext;
+        var src = _tsfStoreContextSource;
+        var prev = _tsfStorePrevDocMgr;
+        var docMgr = _tsfStoreDocMgr;
+        var threadMgr = _tsfStoreThreadMgr;
+        _tsfStoreContext = null;
+        _tsfStoreContextSource = null;
+        _tsfStorePrevDocMgr = null;
+        _tsfStoreDocMgr = null;
+        _tsfStoreThreadMgr = null;
+        _customTextStore = null;
+
+        // src is a QI of ctx (same COM identity → same RCW), so release it only once.
+        if (src != null && Marshal.IsComObject(src)) Marshal.ReleaseComObject(src);
+        if (ctx != null && !ReferenceEquals(ctx, src) && Marshal.IsComObject(ctx)) Marshal.ReleaseComObject(ctx);
+        if (prev != null && Marshal.IsComObject(prev)) Marshal.ReleaseComObject(prev);
+        if (docMgr != null && Marshal.IsComObject(docMgr)) Marshal.ReleaseComObject(docMgr);
+        if (threadMgr != null && Marshal.IsComObject(threadMgr)) Marshal.ReleaseComObject(threadMgr);
+    }
+
+    // ─────────────── IEditorTextStoreHost ───────────────
+
+    private static bool IsImeTextInputMode(VimMode mode)
+        => mode is VimMode.Insert or VimMode.Replace or VimMode.Command
+            or VimMode.SearchForward or VimMode.SearchBackward;
+
+    bool Editor.Controls.Ime.IEditorTextStoreHost.IsCompositionAllowed
+        => IsImeTextInputMode(_engine.Mode);
+
+    IntPtr Editor.Controls.Ime.IEditorTextStoreHost.WindowHandle
+        => PresentationSource.FromVisual(this) is HwndSource s ? s.Handle : IntPtr.Zero;
+
+    void Editor.Controls.Ime.IEditorTextStoreHost.OnCompositionUpdated(string text, int caret)
+    {
+        if (!IsImeTextInputMode(_engine.Mode))
+        {
+            ClearImeCompositionOverlay();
+            return;
+        }
+        // Attach the read-only edit sink to our (now focused) context so clause boundaries
+        // and the focused clause are read from GUID_PROP_ATTRIBUTE and rendered.
+        EnsureTsfTextEditSink();
+        _imeCompositionSeq++;
+        _lastImeCompositionText = text ?? string.Empty;
+        Canvas.SetImeCompositionText(_lastImeCompositionText, caret);
+    }
+
+    void Editor.Controls.Ime.IEditorTextStoreHost.OnCompositionCommitted(string text)
+    {
+        _imeCompositionSeq++;
+        _imeInsertBuffer.Clear();
+        ClearImeCompositionOverlay();
+        InsertCommittedText(text);
+    }
+
+    void Editor.Controls.Ime.IEditorTextStoreHost.OnCompositionCanceled()
+    {
+        _imeCompositionSeq++;
+        _imeInsertBuffer.Clear();
+        ClearImeCompositionOverlay();
+    }
+
+    bool Editor.Controls.Ime.IEditorTextStoreHost.TryGetCaretScreenRect(out int left, out int top, out int right, out int bottom)
+    {
+        left = top = right = bottom = 0;
+        try
+        {
+            if (Canvas.ActualWidth <= 0 || Canvas.ActualHeight <= 0) return false;
+            var p = Canvas.GetCursorPixelPosition();
+            var topPt = Canvas.PointToScreen(p);
+            var botPt = Canvas.PointToScreen(new Point(p.X, p.Y + Canvas.LineHeight));
+            left = (int)topPt.X;
+            top = (int)topPt.Y;
+            right = (int)topPt.X + 1;
+            bottom = (int)botPt.Y;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    bool Editor.Controls.Ime.IEditorTextStoreHost.TryGetClientScreenRect(out int left, out int top, out int right, out int bottom)
+    {
+        left = top = right = bottom = 0;
+        try
+        {
+            if (Canvas.ActualWidth <= 0 || Canvas.ActualHeight <= 0) return false;
+            var tl = Canvas.PointToScreen(new Point(0, 0));
+            var br = Canvas.PointToScreen(new Point(Canvas.ActualWidth, Canvas.ActualHeight));
+            left = (int)tl.X;
+            top = (int)tl.Y;
+            right = (int)br.X;
+            bottom = (int)br.Y;
+            return true;
+        }
+        catch { return false; }
     }
 
     /// <summary>
@@ -2878,22 +3367,8 @@ public partial class VimEditorControl : UserControl
         if (mode == VimMode.Insert || mode == VimMode.Replace ||
             mode == VimMode.Command || mode == VimMode.SearchForward || mode == VimMode.SearchBackward)
         {
-            foreach (var ch in e.Text)
-            {
-                if (ch < 32) continue; // Skip control chars
-                ProcessKey(ch.ToString(), false, false, false);
-            }
+            InsertCommittedText(e.Text);
             e.Handled = true;
-
-            // Escape-commit (ImeProcessed Escape) finalised the composition via an
-            // injected Return; now that the committed text has been inserted, exit
-            // Insert. This is the single completion point for the Escape-commit flow.
-            if (_exitInsertAfterImeCommit && (mode == VimMode.Insert || mode == VimMode.Replace))
-            {
-                _exitInsertAfterImeCommit = false;
-                ClearSnippetState();
-                ProcessKey("Escape", false, false, false);
-            }
             return;
         }
 
