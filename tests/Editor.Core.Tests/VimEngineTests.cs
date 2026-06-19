@@ -2599,6 +2599,49 @@ public class VimEngineTests
         Assert.Equal(1, engine.Cursor.Line);
     }
 
+    [Fact]
+    public void SetSearchHighlight_SetsPatternAndEmitsCount_WithoutMovingCursor()
+    {
+        var engine = CreateEngine("foo bar\nbaz foo\nqux");
+        engine.ProcessKey("j"); // cursor on line 1
+        var before = engine.Cursor;
+
+        var events = engine.SetSearchHighlight("foo");
+
+        Assert.Equal("foo", engine.SearchPattern);
+        Assert.Equal(before, engine.Cursor); // cursor unchanged
+        var changed = Assert.IsType<SearchResultChangedEvent>(
+            events.Single(e => e.Type == VimEventType.SearchResultChanged));
+        Assert.Equal("foo", changed.Pattern);
+        Assert.Equal(2, changed.MatchCount);
+    }
+
+    [Fact]
+    public void SetSearchHighlight_Empty_ClearsPattern()
+    {
+        var engine = CreateEngine("foo foo");
+        engine.SetSearchHighlight("foo");
+
+        var events = engine.SetSearchHighlight("");
+
+        Assert.Equal("", engine.SearchPattern);
+        var changed = Assert.IsType<SearchResultChangedEvent>(
+            events.Single(e => e.Type == VimEventType.SearchResultChanged));
+        Assert.Equal(0, changed.MatchCount);
+    }
+
+    [Fact]
+    public void SetSearchHighlight_NoMatches_EmitsZeroCount()
+    {
+        var engine = CreateEngine("foo bar");
+        var events = engine.SetSearchHighlight("zzz");
+
+        Assert.Equal("zzz", engine.SearchPattern);
+        var changed = Assert.IsType<SearchResultChangedEvent>(
+            events.Single(e => e.Type == VimEventType.SearchResultChanged));
+        Assert.Equal(0, changed.MatchCount);
+    }
+
     // ── :set option tests ──────────────────────────────────────────────────
 
     private static IReadOnlyList<VimEvent> ExCmd(VimEngine engine, string cmd)

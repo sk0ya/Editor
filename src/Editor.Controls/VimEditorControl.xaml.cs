@@ -2021,6 +2021,20 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         ProcessVimEvents(events);
     }
 
+    /// <summary>
+    /// Highlights every occurrence of <paramref name="pattern"/> in the buffer as
+    /// if it were the active search pattern (honours <c>hlsearch</c>/<c>ignorecase</c>/
+    /// <c>smartcase</c>), without moving the cursor or touching search history. Pass an
+    /// empty string to clear. Useful for highlighting a query (e.g. a grep hit opened
+    /// from a host's sidebar) — typically called right after <see cref="NavigateTo"/>.
+    /// Matching is literal substring (same as <c>hlsearch</c>), so regex is treated literally.
+    /// </summary>
+    public void HighlightSearch(string pattern)
+    {
+        var events = _engine.SetSearchHighlight(pattern ?? "");
+        ProcessVimEvents(events);
+    }
+
     public void SetText(string text)
     {
         ClearSelectionRangeState();

@@ -3058,6 +3058,32 @@ public class VimEngine
     private bool GetSearchIgnoreCase(string pattern) =>
         _config.Options.SmartCase ? !pattern.Any(char.IsUpper) : _config.Options.IgnoreCase;
 
+    /// <summary>
+    /// Sets the active search pattern as if the user had searched for it, so all
+    /// matches get highlighted (honouring <c>hlsearch</c>/<c>ignorecase</c>/<c>smartcase</c>),
+    /// but WITHOUT moving the cursor or recording search history. Pass an empty
+    /// string to clear the highlight. Intended for hosts that want to highlight a
+    /// query (e.g. a grep hit opened from a sidebar) in the buffer. Matching is the
+    /// same literal substring matching as <c>hlsearch</c>, so regex patterns are
+    /// treated literally.
+    /// </summary>
+    public IReadOnlyList<VimEvent> SetSearchHighlight(string pattern)
+    {
+        var events = new List<VimEvent>();
+        _searchPattern = pattern ?? "";
+        if (!string.IsNullOrEmpty(_searchPattern) && _config.Options.HlSearch)
+        {
+            var ignoreCase = GetSearchIgnoreCase(_searchPattern);
+            var all = _bufferManager.Current.Text.FindAll(_searchPattern, ignoreCase);
+            events.Add(VimEvent.SearchChanged(_searchPattern, all.Count));
+        }
+        else
+        {
+            events.Add(VimEvent.SearchChanged(_searchPattern, 0));
+        }
+        return events;
+    }
+
     private void DoSearch(bool forward, List<VimEvent> events)
     {
         if (string.IsNullOrEmpty(_searchPattern)) return;
