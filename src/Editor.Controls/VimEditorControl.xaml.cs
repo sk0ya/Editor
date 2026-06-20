@@ -302,6 +302,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private VimStatusBar? _sharedStatusBar;
     private VimStatusBar ActiveStatusBar => _sharedStatusBar ?? StatusBar;
     private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
+    // ── Insert-mode filesystem path completion (LSP-independent) ──────────────
+    private List<LspCompletionItem> _pathCompletionItems = [];
+    private int _pathCompletionSelection = -1;
+    private int _pathCompletionScroll;
+    private int _pathCompletionReplaceStart;   // column where the editable filename segment begins
+    private bool _pathCompletionVisible;
+    private bool _suppressPathCompletion;      // guard while programmatically inserting an accepted item
     private VimBuffer? _cachedLinesBuffer;
     private long _cachedLinesVersion = -1;
     private string[] _cachedLines = [];
@@ -601,7 +608,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private void OnLspStateChanged()
     {
         Canvas.SetDiagnostics(_lspManager.CurrentDiagnostics);
-        Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection, _lspManager.CompletionScrollOffset);
+        if (!_pathCompletionVisible)
+            Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection, _lspManager.CompletionScrollOffset);
         Canvas.SetSignatureHelp(_lspManager.CurrentSignatureHelp);
         Canvas.SetCodeActions(_lspManager.CurrentCodeActions, _lspManager.CodeActionsSelection, _lspManager.CodeActionsScrollOffset);
     }
@@ -2903,6 +2911,22 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         // Handle keys that WPF normally consumes (Tab, etc.)
         var mode = _engine.Mode;
+
+        // Ctrl+Space → completion. Handled here (not only OnKeyDown) so it also works
+        // while the IME is active, where the key arrives as Key.ImeProcessed and
+        // OnKeyDown never fires. Marking the preview event handled suppresses the
+        // bubbling KeyDown, so the OnKeyDown branch won't double-trigger.
+        if (actualKey == Key.Space
+            && (e.KeyboardDevice.Modifiers & ModifierKeys.Control) != 0
+            && (mode == VimMode.Insert || mode == VimMode.Replace)
+            && _engine.VimEnabled)
+        {
+            TriggerCtrlSpaceCompletion();
+            _keyDownHandledByVim = true;
+            e.Handled = true;
+            return;
+        }
+
         if (mode == VimMode.Insert || mode == VimMode.Replace)
         {
             if (e.Key == Key.ImeProcessed && actualKey == Key.Escape)
@@ -3080,8 +3104,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             {
                 if (actualKey == Key.Tab)
                 {
-                    // Let OnKeyDown handle Tab when completion popup is visible.
-                    if (_lspManager.CompletionVisible) return;
+                    // Let OnKeyDown handle Tab when a completion popup is visible.
+                    if (_lspManager.CompletionVisible || _pathCompletionVisible) return;
 
                     bool shift = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
 
@@ -3120,8 +3144,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 }
                 else if (actualKey == Key.Return)
                 {
-                    // Let OnKeyDown handle Enter when completion popup is visible.
-                    if (_lspManager.CompletionVisible) return;
+                    // Let OnKeyDown handle Enter when a completion popup is visible.
+                    if (_lspManager.CompletionVisible || _pathCompletionVisible) return;
                     ProcessKey("Return", false, false, false);
                     e.Handled = true;
                 }
@@ -3226,13 +3250,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // In normal/visual/command mode, handle all key presses as vim keys
         var mode = _engine.Mode;
 
-        // LSP: Ctrl+Space triggers completion in Insert mode. Skipped when Vim is
+        // Ctrl+Space triggers completion in Insert mode. Skipped when Vim is
         // disabled — plain mode parks the engine in Insert as a resting state but
-        // must not expose completion sub-modes.
+        // must not expose completion sub-modes. Note: with IME ON this is handled
+        // in OnPreviewKeyDown instead (OnKeyDown doesn't fire for ImeProcessed).
         if (ctrl && key == Key.Space && mode == VimMode.Insert && _engine.VimEnabled)
         {
-            var cursor = _engine.Cursor;
-            _ = TriggerCompletionAsync(cursor.Line, cursor.Column);
+            TriggerCtrlSpaceCompletion();
             e.Handled = true;
             return;
         }
@@ -3243,6 +3267,39 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // must not be hijacked as completion actions — doing so steals the commit
         // Enter and sets _keyDownHandledByVim, which then drops the committed text
         // in OnTextInput. Mirrors the same guard in OnPreviewKeyDown.
+        // Filesystem path completion popup navigation (LSP-independent). Same IME
+        // guard as the LSP popup below.
+        if (_pathCompletionVisible && mode == VimMode.Insert && _engine.VimEnabled
+            && e.Key != Key.ImeProcessed)
+        {
+            if (key == Key.Down || (ctrl && key == Key.N))
+            {
+                MovePathCompletionSelection(1);
+                e.Handled = true;
+                return;
+            }
+            if (key == Key.Up || (ctrl && key == Key.P))
+            {
+                MovePathCompletionSelection(-1);
+                e.Handled = true;
+                return;
+            }
+            if (key == Key.Tab || key == Key.Return)
+            {
+                InsertPathCompletion();
+                e.Handled = true;
+                _keyDownHandledByVim = true;
+                return;
+            }
+            if (key == Key.Escape)
+            {
+                HidePathCompletion();
+                e.Handled = true;
+                _keyDownHandledByVim = true;
+                return;
+            }
+        }
+
         if (_lspManager.CompletionVisible && mode == VimMode.Insert && _engine.VimEnabled
             && e.Key != Key.ImeProcessed)
         {
@@ -3477,7 +3534,30 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (_engine.Mode == VimMode.Insert && _engine.VimEnabled && !ctrl && !alt && key.Length == 1)
         {
             char ch = key[0];
-            if (hadCompletion)
+
+            // A path delimiter (space, quote, …) ends the path and dismisses the popup.
+            if (!_suppressPathCompletion && IsPathDelimiter(ch))
+                HidePathCompletion();
+
+            // Keep an active path popup alive while the token is being refined
+            // (forced), but only auto-START one when a separator has been typed.
+            bool keepPath = !_suppressPathCompletion
+                && !IsPathDelimiter(ch)
+                && UpdatePathCompletion(forced: _pathCompletionVisible);
+
+            if (_suppressPathCompletion)
+            {
+                // Programmatic insert from accepting a path item — drive nothing.
+            }
+            else if (keepPath)
+            {
+                // A filesystem path popup is active; it owns the completion UI, so
+                // suppress LSP completion / signature help for this keystroke.
+                _lspManager.HideCompletion();
+                _completionDebounce.Stop();
+                _lspManager.HideSignatureHelp();
+            }
+            else if (hadCompletion)
             {
                 // Popup already visible — re-filter or close
                 var cursor = _engine.Cursor;
@@ -3539,11 +3619,20 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 _completionDebounce.Stop();
             }
             _lspManager.HideSignatureHelp();
+            HidePathCompletion();
         }
         else if (!ctrl && !alt && (key == "Back" || key == "Delete"))
         {
+            // Backspace/Delete: while a path popup session is open, keep it live
+            // (forced) so refining the token doesn't dismiss it; otherwise re-filter
+            // the LSP popup.
+            bool wasPath = _pathCompletionVisible;
+            if (!_suppressPathCompletion && wasPath && UpdatePathCompletion(forced: true))
+            {
+                // path popup refreshed
+            }
             // Backspace/Delete in insert with popup: re-filter
-            if (hadCompletion && _engine.Mode == VimMode.Insert)
+            else if (!wasPath && hadCompletion && _engine.Mode == VimMode.Insert)
             {
                 var cursor = _engine.Cursor;
                 var bufLine = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
@@ -3695,6 +3784,208 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         foreach (var ch in insertText)
             ProcessKey(ch.ToString(), false, false, false);
+    }
+
+    // ─── Filesystem path completion (Insert mode, LSP-independent) ─────────────
+
+    private static bool IsPathDelimiter(char c) =>
+        c is ' ' or '\t' or '"' or '\'' or '`' or '(' or ')'
+          or '<' or '>' or '=' or ',' or ';' or '|' or '*' or '?';
+
+    /// <summary>
+    /// Ctrl+Space handler. Offers filesystem path completion when the cursor is in
+    /// a path-like token (or always, when no language server is connected); falls
+    /// back to LSP completion otherwise. Shared by OnKeyDown (IME off) and
+    /// OnPreviewKeyDown (IME on, where OnKeyDown never fires).
+    /// </summary>
+    private void TriggerCtrlSpaceCompletion()
+    {
+        // forced only when there is no server: then a bare token (no separator)
+        // still lists the current directory. With a server, require a separator so
+        // Ctrl+Space on a normal identifier keeps going to LSP.
+        if (UpdatePathCompletion(forced: !_lspManager.IsConnected))
+        {
+            _lspManager.HideCompletion();
+            return;
+        }
+        var cursor = _engine.Cursor;
+        _ = TriggerCompletionAsync(cursor.Line, cursor.Column);
+    }
+
+    /// <summary>
+    /// Recompute path completion from the token before the cursor. On auto-trigger
+    /// the popup is shown only once the token contains a path separator (so plain
+    /// identifiers don't trigger it); a <paramref name="forced"/> invocation
+    /// (Ctrl+Space) treats the bare token as a path relative to the base directory.
+    /// Returns true when the path popup is active afterwards.
+    /// </summary>
+    private bool UpdatePathCompletion(bool forced = false)
+    {
+        if (_engine.Mode != VimMode.Insert || !_engine.VimEnabled)
+        {
+            HidePathCompletion();
+            return false;
+        }
+
+        var cursor = _engine.Cursor;
+        var line = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
+        int col = Math.Min(cursor.Column, line.Length);
+
+        int start = col;
+        while (start > 0 && !IsPathDelimiter(line[start - 1]))
+            start--;
+        string token = line[start..col];   // text before the cursor — used as the prefix
+
+        // Whether this is a path context is decided by the WHOLE token surrounding
+        // the cursor (scan forward over the rest of it too), not just the part before
+        // the cursor. Otherwise placing the cursor just before the '/' — e.g. after
+        // Esc moves it left onto the separator and `i` re-enters there — would drop
+        // the separator from the prefix and wrongly look like a plain identifier.
+        int end = col;
+        while (end < line.Length && !IsPathDelimiter(line[end]))
+            end++;
+        string fullToken = line[start..end];
+
+        // Auto-trigger only when the surrounding token contains a separator; a forced
+        // (Ctrl+Space) invocation lists the base directory even for a bare token.
+        if (!forced && (fullToken.Length == 0 || (fullToken.IndexOf('/') < 0 && fullToken.IndexOf('\\') < 0)))
+        {
+            HidePathCompletion();
+            return false;
+        }
+
+        var items = BuildPathCompletions(token, out int filePartLen);
+        if (items.Count == 0)
+        {
+            HidePathCompletion();
+            return false;
+        }
+
+        _pathCompletionItems = items;
+        _pathCompletionReplaceStart = col - filePartLen;
+        _pathCompletionSelection = 0;
+        _pathCompletionScroll = 0;
+        _pathCompletionVisible = true;
+        Canvas.SetCompletionItems(_pathCompletionItems, _pathCompletionSelection, _pathCompletionScroll);
+        return true;
+    }
+
+    /// <summary>Build directory/file completions for the given path token.</summary>
+    private List<LspCompletionItem> BuildPathCompletions(string token, out int filePartLen)
+    {
+        var items = new List<LspCompletionItem>();
+
+        int sep = token.LastIndexOfAny(['/', '\\']);
+        string dirPart = sep >= 0 ? token[..sep] : "";
+        string filePart = sep >= 0 ? token[(sep + 1)..] : token;
+        filePartLen = filePart.Length;
+
+        // Match the separator style the user is typing: append '\' to directories
+        // when the token already uses backslashes, otherwise '/'.
+        char sepChar = sep >= 0 ? token[sep] : (token.IndexOf('\\') >= 0 ? '\\' : '/');
+
+        // Base directory: the folder of the current file, else the working directory.
+        string? currentFile = _engine.CurrentBuffer.FilePath;
+        string baseDir = currentFile != null
+            ? (Path.GetDirectoryName(currentFile) ?? Directory.GetCurrentDirectory())
+            : Directory.GetCurrentDirectory();
+
+        string searchDir;
+        if (dirPart == "~" || dirPart.StartsWith("~/", StringComparison.Ordinal) || dirPart.StartsWith("~\\", StringComparison.Ordinal))
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var rest = dirPart.Length > 2 ? dirPart[2..] : "";
+            searchDir = rest.Length > 0 ? Path.Combine(home, rest) : home;
+        }
+        else if (dirPart.Length == 2 && char.IsLetter(dirPart[0]) && dirPart[1] == ':')
+            // Drive spec without a trailing separator ("C:") means the drive ROOT
+            // here, not the drive's current directory — normalize to "C:\".
+            searchDir = dirPart + Path.DirectorySeparatorChar;
+        else if (Path.IsPathRooted(dirPart))
+            searchDir = dirPart;
+        else
+            searchDir = Path.Combine(baseDir, dirPart);
+
+        const int maxItems = 200;
+        try
+        {
+            if (!Directory.Exists(searchDir)) return items;
+
+            foreach (var dir in Directory.EnumerateDirectories(searchDir)
+                         .Where(d => Path.GetFileName(d).StartsWith(filePart, StringComparison.OrdinalIgnoreCase))
+                         .OrderBy(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase))
+            {
+                items.Add(new LspCompletionItem(Path.GetFileName(dir) + sepChar, CompletionItemKind.Module));
+                if (items.Count >= maxItems) return items;
+            }
+            foreach (var file in Directory.EnumerateFiles(searchDir)
+                         .Where(f => Path.GetFileName(f).StartsWith(filePart, StringComparison.OrdinalIgnoreCase))
+                         .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase))
+            {
+                items.Add(new LspCompletionItem(Path.GetFileName(file), CompletionItemKind.File));
+                if (items.Count >= maxItems) return items;
+            }
+        }
+        catch (UnauthorizedAccessException) { }
+        catch (IOException) { }
+        catch (ArgumentException) { }
+
+        return items;
+    }
+
+    private void MovePathCompletionSelection(int delta)
+    {
+        if (!_pathCompletionVisible || _pathCompletionItems.Count == 0) return;
+        int n = _pathCompletionItems.Count;
+        _pathCompletionSelection = (_pathCompletionSelection + delta + n) % n;
+
+        const int maxVisible = 10; // matches DrawCompletionPopup
+        if (_pathCompletionSelection < _pathCompletionScroll)
+            _pathCompletionScroll = _pathCompletionSelection;
+        else if (_pathCompletionSelection >= _pathCompletionScroll + maxVisible)
+            _pathCompletionScroll = _pathCompletionSelection - maxVisible + 1;
+
+        Canvas.SetCompletionItems(_pathCompletionItems, _pathCompletionSelection, _pathCompletionScroll);
+    }
+
+    private void InsertPathCompletion()
+    {
+        if (!_pathCompletionVisible || _pathCompletionSelection < 0
+            || _pathCompletionSelection >= _pathCompletionItems.Count) return;
+
+        var label = _pathCompletionItems[_pathCompletionSelection].Label;
+        int col = _engine.Cursor.Column;
+        int deleteCount = Math.Max(0, col - _pathCompletionReplaceStart);
+
+        HidePathCompletion();
+
+        _suppressPathCompletion = true;
+        try
+        {
+            for (int i = 0; i < deleteCount; i++)
+                ProcessKey("Back", false, false, false);
+            foreach (var ch in label)
+                ProcessKey(ch.ToString(), false, false, false);
+        }
+        finally
+        {
+            _suppressPathCompletion = false;
+        }
+
+        // Completing a directory descends into it; offer its contents immediately.
+        if (label.EndsWith('/') || label.EndsWith('\\'))
+            UpdatePathCompletion();
+    }
+
+    private void HidePathCompletion()
+    {
+        if (!_pathCompletionVisible) return;
+        _pathCompletionVisible = false;
+        _pathCompletionItems = [];
+        _pathCompletionSelection = -1;
+        _pathCompletionScroll = 0;
+        // Hand the popup back to the LSP layer (usually nothing to show).
+        Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection, _lspManager.CompletionScrollOffset);
     }
 
     // ─── Snippet helpers ──────────────────────────────────────────────────────
