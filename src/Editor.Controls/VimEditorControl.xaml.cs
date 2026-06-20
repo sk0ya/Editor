@@ -194,6 +194,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     [DllImport("user32.dll")] private static extern bool   DestroyCaret();
     [DllImport("user32.dll")] private static extern bool   SetCaretPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool   HideCaret(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern uint   MapVirtualKey(uint uCode, uint uMapType);
 
     private const int  NI_COMPOSITIONSTR      = 0x0015;
     private const int  CPS_CANCEL             = 0x0004;
@@ -5283,27 +5284,46 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         };
     }
 
-    private static string? GetCtrlKey(Key key) => key switch
+    private static string? GetCtrlKey(Key key)
     {
-        Key.D => "d",
-        Key.U => "u",
-        Key.F => "f",
-        Key.B => "b",
-        Key.R => "r",
-        Key.O => "o",
-        Key.I => "i",
-        Key.V => "v",
-        Key.W => "w",
-        Key.H => "h",
-        Key.J => "j",
-        Key.M => "m",
-        Key.A => "a",
-        Key.C => "c",
-        Key.X => "x",
-        Key.OemOpenBrackets => "[",
-        Key.D6 => "6",
-        _ => null
-    };
+        // Letters and digits sit on the same physical keys across keyboard
+        // layouts, so map them directly.
+        if (key >= Key.A && key <= Key.Z)
+            return ((char)('a' + (key - Key.A))).ToString();
+        if (key == Key.D6)
+            return "6"; // Ctrl+6 — alternate-buffer switch
+
+        // Punctuation differs by layout: e.g. ';' is VK_OEM_1 on US keyboards
+        // but VK_OEM_PLUS on JIS keyboards (where VK_OEM_1 is ':'). The
+        // Ctrl+key path never produces an OnTextInput event, so unlike the
+        // Normal/Visual punctuation path it can't rely on the OS-resolved
+        // character. Resolve the character the key actually prints on the
+        // active layout instead of hard-coding US positions.
+        return UnshiftedCharForKey(key) switch
+        {
+            '[' => "[",
+            ';' => ";",
+            _ => null
+        };
+    }
+
+    private const uint MAPVK_VK_TO_CHAR = 2;
+
+    /// <summary>
+    /// Returns the character a key produces with no modifiers on the active
+    /// keyboard layout, or null for non-printable / dead keys. Side-effect free
+    /// (unlike ToUnicode it does not disturb pending dead-key state).
+    /// </summary>
+    private static char? UnshiftedCharForKey(Key key)
+    {
+        int vk = KeyInterop.VirtualKeyFromKey(key);
+        if (vk == 0) return null;
+        uint mapped = MapVirtualKey((uint)vk, MAPVK_VK_TO_CHAR);
+        if (mapped == 0) return null;
+        // High bit flags a dead key; the character sits in the low word.
+        char ch = (char)(mapped & 0x7FFF);
+        return char.IsControl(ch) ? null : ch;
+    }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // Multi-cursor helpers

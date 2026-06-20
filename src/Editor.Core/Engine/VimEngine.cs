@@ -1802,6 +1802,10 @@ public class VimEngine
                     _digraphPendingChar = '\0';
                     events.Add(VimEvent.CommandLineChanged("^K"));
                     return;
+                case ";": // Ctrl+; — insert current date (yyyy/MM/dd)
+                    Snapshot();
+                    InsertTextAtCursor(System.DateTime.Now.ToString("yyyy/MM/dd"), events);
+                    return;
                 case "t": // Ctrl+T — indent current line by shiftwidth
                     IndentRange(_cursor.Line, _cursor.Line, true, events);
                     _cursor = _cursor with { Column = _cursor.Column + _config.Options.ShiftWidth };
