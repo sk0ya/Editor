@@ -8,8 +8,31 @@ internal static class MarkdownRenderer
     public static string RenderToHtml(string markdown, string? title = null, string styleName = "Dracula")
     {
         var body = new StringBuilder();
-        ProcessBlocks(markdown.Replace("\r\n", "\n").Replace("\r", "\n"), body);
+        var normalized = StripFrontMatter(markdown.Replace("\r\n", "\n").Replace("\r", "\n"));
+        ProcessBlocks(normalized, body);
         return BuildPage(body.ToString(), title, styleName);
+    }
+
+    // Removes a leading YAML front matter block (--- ... --- or --- ... ...) so
+    // document metadata is not rendered in the preview.
+    private static string StripFrontMatter(string text)
+    {
+        if (!text.StartsWith("---\n") && text != "---")
+            return text;
+
+        var lines = text.Split('\n');
+        if (lines.Length == 0 || lines[0].TrimEnd() != "---")
+            return text;
+
+        for (int i = 1; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].TrimEnd();
+            if (trimmed == "---" || trimmed == "...")
+                return string.Join("\n", lines.Skip(i + 1));
+        }
+
+        // No closing delimiter — leave the text untouched.
+        return text;
     }
 
     private static void ProcessBlocks(string text, StringBuilder html)
