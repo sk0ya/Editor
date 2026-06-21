@@ -140,6 +140,25 @@ public class FileLinkClickedEventArgs(string path, bool isDirectory) : EventArgs
     public bool Handled { get; set; }
 }
 
+/// <summary>
+/// Raised by <see cref="VimEditorControl.ContextMenuBuilding"/> while the right-click menu is built,
+/// after the editor's own items. Hosts append their own entries to <see cref="Menu"/> (typically
+/// guarded by <see cref="HasSelection"/> and acting on <see cref="SelectedText"/>).
+/// </summary>
+public class EditorContextMenuBuildingEventArgs(
+    string selectedText, bool hasSelection, System.Windows.Controls.ContextMenu menu) : EventArgs
+{
+    /// <summary>The current selection text (empty when nothing is selected).</summary>
+    public string SelectedText { get; } = selectedText;
+
+    /// <summary>Whether there is a non-empty selection.</summary>
+    public bool HasSelection { get; } = hasSelection;
+
+    /// <summary>The menu being built. Append <see cref="System.Windows.Controls.MenuItem"/>s or
+    /// separators here; unstyled additions inherit the editor's dark menu style.</summary>
+    public System.Windows.Controls.ContextMenu Menu { get; } = menu;
+}
+
 /// <summary>The kind of a text selection (mirrors the engine's selection type).</summary>
 public enum SelectionKind { Character, Line, Block }
 
@@ -421,6 +440,14 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     public event EventHandler<CaretInfo>? CaretMoved;
     /// <summary>Raised whenever the selection changes; the argument is null when the selection is cleared.</summary>
     public event EventHandler<TextSelectionInfo?>? SelectionChanged;
+    /// <summary>
+    /// Raised while the right-click context menu is being built, after the editor's own items have
+    /// been added. The host can append custom <see cref="MenuItem"/>s (and separators) to
+    /// <see cref="EditorContextMenuBuildingEventArgs.Menu"/>; appended items that have no explicit
+    /// <c>Style</c> get the editor's dark menu style applied automatically so they blend in.
+    /// A fresh menu is built on every right-click, so handlers don't need to remove prior additions.
+    /// </summary>
+    public event EventHandler<EditorContextMenuBuildingEventArgs>? ContextMenuBuilding;
 
     public VimMode CurrentMode => _engine.Mode;
 
@@ -2571,6 +2598,25 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 () => _ = ShowLspHoverAsync()));
             menu.Items.Add(MakeItem("Format Document", ":Format",
                 () => _ = HandleFormatDocumentAsync()));
+        }
+
+        // ── Host-provided items ──────────────────────────────────
+        // Let the embedding application append its own entries (e.g. "Ask AI", "Search the web")
+        // that act on the current selection. They are added after the editor's own items.
+        if (ContextMenuBuilding is { } handler)
+        {
+            var before = menu.Items.Count;
+            handler(this, new EditorContextMenuBuildingEventArgs(SelectedText, HasSelection, menu));
+
+            // Apply the dark menu styling to any items the host added without their own style,
+            // so host entries match the editor's native menu look.
+            for (int i = before; i < menu.Items.Count; i++)
+            {
+                if (menu.Items[i] is MenuItem { Style: null } mi)
+                    mi.Style = itemStyle;
+                else if (menu.Items[i] is Separator { Style: null } s)
+                    s.Style = sep;
+            }
         }
 
         return menu;
