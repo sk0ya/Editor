@@ -2586,7 +2586,9 @@ public partial class MainWindow : Window
         _focusedEditor = nextFocus;
         UpdateSelectedTabForEditor(nextFocus);
         nextFocus.Focus();
-        // WPF Unloaded event fires automatically and disposes LSP resources
+        // Release the closed editor's LSP/file-watcher resources. (Unloaded no longer does this —
+        // it fires on transient detaches too — so disposal is now the host's responsibility.)
+        editor.Dispose();
     }
 
     private void Editor_WindowCloseRequested(object? sender, WindowCloseRequestedEventArgs e)
@@ -4198,6 +4200,10 @@ public partial class MainWindow : Window
             _windowSource.RemoveHook(WindowMessageProc);
             _windowSource = null;
         }
+
+        // Release every editor's LSP/file-watcher resources on exit (Unloaded no longer does this).
+        foreach (var ed in AllEditors())
+            ed.Dispose();
 
         base.OnClosing(e);
     }

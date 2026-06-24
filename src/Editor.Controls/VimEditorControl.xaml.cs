@@ -194,7 +194,7 @@ public sealed record DocumentMeta(
     string? Language,
     VimMode Mode);
 
-public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditorTextStoreHost
+public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditorTextStoreHost, IDisposable
 {
     // ─────────────── Win32 P/Invoke ───────────────
 
@@ -793,6 +793,27 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         DisposeCustomTextStore();
         if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
             hwndSource.RemoveHook(ImeWndProc);
+        _completionDebounce.Stop();
+        // NOTE: the LSP client (language-server processes) and the file watcher are deliberately
+        // NOT torn down here. Unloaded fires on every detach from the visual tree — including the
+        // transient detach hosts perform when they cache the control across workspace/tab switches —
+        // and killing the language server on each of those made LSP die on workspace switch and
+        // re-index churn on switch-back. They are owned resources, released only in Dispose().
+    }
+
+    private bool _disposed;
+
+    /// <summary>
+    /// Releases resources that must outlive a transient detach from the visual tree: the LSP
+    /// client (language-server processes) and the file-change watcher. Call this only on a real
+    /// teardown — closing the editor or discarding the host that owns it — NOT on
+    /// <see cref="FrameworkElement.Unloaded"/>, which also fires when a host detaches the control
+    /// to cache it (e.g. workspace switching). Idempotent.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
         _completionDebounce.Stop();
         _lspManager.Dispose();
         _fileWatcher?.Dispose();
