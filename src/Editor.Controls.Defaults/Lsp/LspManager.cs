@@ -12,6 +12,7 @@ namespace Editor.Controls.Lsp;
 public sealed class LspManager : IEditorLspManager
 {
     private readonly Dispatcher _dispatcher;
+    private readonly LspServerRegistry _registry;
     private readonly Dictionary<string, LspClient> _clients = new();
     private readonly object _docLock = new();
     private readonly HashSet<string> _openDocuments = new();
@@ -106,7 +107,15 @@ public sealed class LspManager : IEditorLspManager
 
     public string? CurrentUri => _currentUri;
 
-    public LspManager(Dispatcher dispatcher) => _dispatcher = dispatcher;
+    /// <summary>
+    /// Creates the manager. <paramref name="registry"/> supplies the extension→server table; when null the
+    /// process-wide <see cref="LspServerRegistry.Default"/> is used so <c>:Lsp*</c> ex-command changes apply live.
+    /// </summary>
+    public LspManager(Dispatcher dispatcher, LspServerRegistry? registry = null)
+    {
+        _dispatcher = dispatcher;
+        _registry = registry ?? LspServerRegistry.Default;
+    }
 
     /// <summary>Call when a file is opened or the active buffer changes.</summary>
     public void OnFileOpened(string? filePath, string text)
@@ -138,7 +147,7 @@ public sealed class LspManager : IEditorLspManager
         }
 
         var ext = Path.GetExtension(filePath);
-        var def = LspServerConfig.GetForExtension(ext);
+        var def = _registry.GetForExtension(ext);
         if (def == null)
         {
             _currentUri = null;

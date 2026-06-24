@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using Editor.Core.Buffer;
 using Editor.Core.Config;
+using Editor.Core.Lsp;
 using Editor.Core.Marks;
 using Editor.Core.Models;
 using Editor.Core;
@@ -35,6 +36,7 @@ public class ExCommandProcessor
     private readonly Dictionary<string, string> _variables;
     private readonly Dictionary<string, VimFunctionDefinition> _functions;
     private readonly IReadOnlyList<string> _scriptNames;
+    private readonly LspServerRegistry _lspRegistry;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
     private readonly List<string> _searchHistory = [];
@@ -48,7 +50,8 @@ public class ExCommandProcessor
         Dictionary<string, string>? normalMaps = null, Dictionary<string, string>? insertMaps = null,
         Dictionary<string, string>? visualMaps = null, Dictionary<string, string>? variables = null,
         IReadOnlyList<string>? scriptNames = null,
-        Dictionary<string, VimFunctionDefinition>? functions = null)
+        Dictionary<string, VimFunctionDefinition>? functions = null,
+        LspServerRegistry? lspRegistry = null)
     {
         _bufferManager = bufferManager;
         _options = options;
@@ -61,6 +64,7 @@ public class ExCommandProcessor
         _variables = variables ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _functions = functions ?? new Dictionary<string, VimFunctionDefinition>(StringComparer.OrdinalIgnoreCase);
         _scriptNames = scriptNames ?? [];
+        _lspRegistry = lspRegistry ?? LspServerRegistry.Default;
     }
 
     public string? LastCommand => _history.Count > 0 ? _history[0] : null;
@@ -466,6 +470,23 @@ public class ExCommandProcessor
         if (cmd.Equals("diagnostics", StringComparison.OrdinalIgnoreCase) ||
             cmd.Equals("diag", StringComparison.OrdinalIgnoreCase))
             return new ExResult(true, null, VimEvent.WorkspaceDiagnosticsRequested());
+
+        // :Lsp / :LspList — show the configured extension→language-server table
+        if (cmd.Equals("Lsp", StringComparison.OrdinalIgnoreCase) ||
+            cmd.Equals("LspList", StringComparison.OrdinalIgnoreCase))
+            return new ExResult(true, FormatLspServers());
+
+        // :LspAdd <ext> <executable> [args...] — register/replace the server for an extension
+        if (cmd.StartsWith("LspAdd ", StringComparison.OrdinalIgnoreCase))
+            return ExecuteLspAdd(cmd[7..]);
+
+        // :LspRemove <ext> — remove a custom server, or hide a built-in one
+        if (cmd.StartsWith("LspRemove ", StringComparison.OrdinalIgnoreCase))
+            return ExecuteLspRemove(cmd[10..]);
+
+        // :LspReset <ext> — drop user changes for an extension, restoring the built-in default
+        if (cmd.StartsWith("LspReset ", StringComparison.OrdinalIgnoreCase))
+            return ExecuteLspReset(cmd[9..]);
 
         // Location list commands
         if (cmd is "lopen" or "lope" or "llist" or "lli")
@@ -2363,6 +2384,7 @@ public class ExCommandProcessor
         "split", "sp", "new",
         "vsplit", "vs", "vnew",
         "Format", "Rename", "Symbols", "sym", "outline", "digraphs",
+        "Lsp", "LspList", "LspAdd", "LspRemove", "LspReset",
         "read", "r",
         "Git blame", "Gblame",
         "Git status", "Gstatus", "gs",
@@ -2556,6 +2578,72 @@ public class ExCommandProcessor
             return "(no scripts sourced)";
 
         return string.Join('\n', _scriptNames.Select((path, index) => $"{index + 1,3}: {path}"));
+    }
+
+    // ── :Lsp* — manage the extension→language-server table ─────────────────────
+
+    private string FormatLspServers()
+    {
+        var entries = _lspRegistry.List();
+        if (entries.Count == 0)
+            return "(no language servers configured)";
+
+        var lines = entries.Select(e =>
+        {
+            var args = e.Server.Args.Length > 0 ? " " + string.Join(' ', e.Server.Args) : "";
+            var origin = e.Origin switch
+            {
+                LspServerOrigin.Custom   => "custom",
+                LspServerOrigin.Removed  => "removed",
+                _                        => "built-in",
+            };
+            // A hidden built-in is shown struck so the user can see what :LspReset would restore.
+            var cmd = e.Origin == LspServerOrigin.Removed ? $"(disabled: {e.Server.Executable}{args})" : $"{e.Server.Executable}{args}";
+            return $"  {e.Extension,-10} {cmd}  [{origin}]";
+        });
+        return "LSP servers (extension → command):\n" + string.Join('\n', lines);
+    }
+
+    private ExResult ExecuteLspAdd(string rest)
+    {
+        var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 2)
+            return new ExResult(false, "Usage: :LspAdd <ext> <executable> [args...]");
+
+        var ext = LspServerRegistry.NormalizeExt(parts[0]);
+        if (ext.Length == 0)
+            return new ExResult(false, "E474: invalid extension");
+
+        var executable = parts[1];
+        var args = parts.Length > 2 ? parts[2..] : [];
+        // languageId is derived from the extension (".cs" → "cs"); servers key off the executable, not this id.
+        var languageId = ext.TrimStart('.');
+        _lspRegistry.Set(ext, new LspServerDef(executable, args, languageId));
+
+        var argsText = args.Length > 0 ? " " + string.Join(' ', args) : "";
+        return new ExResult(true, $"LSP: {ext} → {executable}{argsText} (reopen the file to apply)");
+    }
+
+    private ExResult ExecuteLspRemove(string rest)
+    {
+        var ext = LspServerRegistry.NormalizeExt(rest.Trim());
+        if (ext.Length == 0)
+            return new ExResult(false, "Usage: :LspRemove <ext>");
+
+        return _lspRegistry.Remove(ext)
+            ? new ExResult(true, $"LSP: removed {ext} (reopen the file to apply)")
+            : new ExResult(false, $"LSP: no server configured for {ext}");
+    }
+
+    private ExResult ExecuteLspReset(string rest)
+    {
+        var ext = LspServerRegistry.NormalizeExt(rest.Trim());
+        if (ext.Length == 0)
+            return new ExResult(false, "Usage: :LspReset <ext>");
+
+        return _lspRegistry.Reset(ext)
+            ? new ExResult(true, $"LSP: reset {ext} to its built-in default (reopen the file to apply)")
+            : new ExResult(false, $"LSP: nothing to reset for {ext}");
     }
 
     private static string MakeRelative(string basePath, string fullPath)

@@ -84,8 +84,8 @@ The layout is: Title bar (30 px) → main area with Activity Bar (48 px vertical
 
 LSP support lives in two layers:
 
-- **`Editor.Core/Lsp/`** — `ILspClient`, `LspModels` (pure .NET, no WPF)
-- **`Editor.Controls/Lsp/`** — `LspProcess` (JSON-RPC 2.0 over stdio), `LspClient` (implements `ILspClient`), `LspServerConfig` (extension → server command map), `LspManager` (bridges `VimEditorControl` with LSP)
+- **`Editor.Core/Lsp/`** — `ILspClient`, `LspModels`, `LspServerRegistry` (extension → server command map; pure .NET, no WPF)
+- **`Editor.Controls.Defaults/Lsp/`** — `LspProcess` (JSON-RPC 2.0 over stdio), `LspClient` (implements `ILspClient`), `LspManager` (bridges `VimEditorControl` with LSP)
 
 `LspManager` is owned by `VimEditorControl`. It starts/shares language server processes per executable, syncs documents, and fires `StateChanged` to update `EditorCanvas` diagnostics and completion popup.
 
@@ -96,10 +96,17 @@ LSP support lives in two layers:
 - `Tab`/`Enter` — insert selected completion item
 - `Escape` — dismiss completion
 
-**Supported servers** (auto-detected by file extension, must be installed separately):
-`csharp-ls` (.cs), `pylsp` (.py), `typescript-language-server` (.ts/.js), `rust-analyzer` (.rs), `gopls` (.go), `clangd` (.c/.cpp), `lua-language-server` (.lua), `marksman` (.md/.markdown)
+**Built-in servers** (auto-detected by file extension, must be installed separately):
+`csharp-ls` (.cs), `pylsp` (.py), `typescript-language-server` (.ts/.js), `rust-analyzer` (.rs), `gopls` (.go), `clangd` (.c/.cpp), `lua-language-server` (.lua), `solargraph` (.rb), `marksman` (.md/.markdown)
 
-**Adding a new server:** Add an entry to `LspServerConfig._byExtension` in `Editor.Controls/Lsp/LspServerConfig.cs`.
+**Server registry & user configuration:** the extension→server map is `LspServerRegistry` (`Editor.Core/Lsp/LspServerRegistry.cs`). It layers user changes (additions, replacements, hidden built-ins) over the built-in table and **persists them as JSON** to `%APPDATA%/sk0ya.Editor/lsp-servers.json`, so the configured set survives restarts. `LspServerRegistry.Default` is the process-wide singleton shared by `LspManager` (which resolves servers through it) and the ex commands below; `LspManager(dispatcher, registry?)` and `ExCommandProcessor(..., lspRegistry?)` both default to it (tests inject an in-memory instance by passing a registry with no store path). The editor owns this config — hosts only **enable** LSP by supplying `VimEditorControlOptions.LspManagerFactory` (`VimEditorControlDefaults.CreateOptions()` wires `new LspManager(d)`).
+
+**Managing servers (user-facing, ex commands):**
+- `:Lsp` / `:LspList` — show the effective extension→command table (built-in / custom / removed).
+- `:LspAdd <ext> <executable> [args...]` — register or replace a server (e.g. `:LspAdd .zig zls`).
+- `:LspRemove <ext>` — drop a custom server, or hide a built-in.
+- `:LspReset <ext>` — discard user changes for an extension, restoring the built-in default.
+Changes apply to a file when it is (re)opened. Adding a new built-in default still means adding an entry to `LspServerRegistry`'s `Builtins` table.
 
 **Diagnostics** are rendered as wavy underlines on `EditorCanvas`. Colors are defined on `EditorTheme` (`DiagnosticError`, `DiagnosticWarning`, `DiagnosticInfo`, `DiagnosticHint`).
 
