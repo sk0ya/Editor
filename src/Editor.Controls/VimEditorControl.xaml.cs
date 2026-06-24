@@ -352,6 +352,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private FileSystemWatcher? _fileWatcher;
     private volatile bool _suppressFileWatcher;
     private bool _pendingWatcherReload;
+    private string? _lastSavedFilePath;
+    private DateTime _lastSavedWriteTimeUtc;
 
     // Buffer that tracks ImeProcessed key characters typed in Insert mode.
     // Used to detect imap sequences (e.g. "jj" → <Esc>) even when IME is ON.
@@ -1728,8 +1730,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     /// <summary>Call after the file has been written to disk to re-enable the watcher.</summary>
     public void OnSaveFinished()
     {
-        _suppressFileWatcher = false;
         var currentPath = _engine.CurrentBuffer.FilePath;
+        if (!string.IsNullOrEmpty(currentPath) && File.Exists(currentPath))
+        {
+            _lastSavedFilePath = currentPath;
+            try { _lastSavedWriteTimeUtc = File.GetLastWriteTimeUtc(currentPath); }
+            catch { _lastSavedWriteTimeUtc = default; }
+        }
+
+        _suppressFileWatcher = false;
         if (!string.Equals(_saveStartedFilePath, currentPath, StringComparison.OrdinalIgnoreCase))
             _ = RefreshGitDiffAsync();
         else
@@ -1859,6 +1868,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (!string.Equals(fullPath, _engine.CurrentBuffer.FilePath, StringComparison.OrdinalIgnoreCase))
             return;
 
+        if (IsOwnRecentSave(fullPath))
+            return;
+
         if (!_engine.CurrentBuffer.Text.IsModified)
         {
             ReloadCurrentFile();  // sets status to "\"<path>\" reloaded"
@@ -1873,6 +1885,32 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             if (result == MessageBoxResult.Yes)
                 ReloadCurrentFile();
         }
+    }
+
+    private bool IsOwnRecentSave(string fullPath)
+    {
+        if (!string.Equals(fullPath, _lastSavedFilePath, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (_lastSavedWriteTimeUtc == default)
+            return true;
+
+        try
+        {
+            if (File.Exists(fullPath)
+                && File.GetLastWriteTimeUtc(fullPath) == _lastSavedWriteTimeUtc)
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            return true;
+        }
+
+        _lastSavedFilePath = null;
+        _lastSavedWriteTimeUtc = default;
+        return false;
     }
 
     public void RefreshGitDiff() => _ = RefreshGitDiffAsync();
