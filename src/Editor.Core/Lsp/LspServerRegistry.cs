@@ -64,13 +64,30 @@ public sealed class LspServerRegistry
         Load();
     }
 
-    private static readonly Lazy<LspServerRegistry> _default =
-        new(() => new LspServerRegistry(DefaultStorePath()));
+    private static readonly object _defaultGate = new();
+    private static LspServerRegistry? _default;
 
-    /// <summary>The process-wide registry shared by the running editor and the <c>:Lsp*</c> ex commands.</summary>
-    public static LspServerRegistry Default => _default.Value;
+    /// <summary>
+    /// The process-wide registry shared by the running editor and the <c>:Lsp*</c> ex commands.
+    /// First access (lazily) creates one persisting to <see cref="DefaultStorePath"/>; a host can override
+    /// that location by calling <see cref="ConfigureDefault"/> at startup (before any editor control is built).
+    /// </summary>
+    public static LspServerRegistry Default
+    {
+        get { lock (_defaultGate) return _default ??= new LspServerRegistry(DefaultStorePath()); }
+    }
 
-    /// <summary>The persisted config path: <c>%APPDATA%/sk0ya.Editor/lsp-servers.json</c>.</summary>
+    /// <summary>
+    /// Replace the process-wide <see cref="Default"/> registry so it persists to <paramref name="storePath"/>
+    /// (pass null for an in-memory, non-persisting Default). Lets a host keep LSP config inside its own data
+    /// folder instead of <c>%APPDATA%/sk0ya.Editor</c>. Call once at startup, before opening any editor control.
+    /// </summary>
+    public static void ConfigureDefault(string? storePath)
+    {
+        lock (_defaultGate) _default = new LspServerRegistry(storePath);
+    }
+
+    /// <summary>The default persisted config path when no host override is set: <c>%APPDATA%/sk0ya.Editor/lsp-servers.json</c>.</summary>
     public static string DefaultStorePath() =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

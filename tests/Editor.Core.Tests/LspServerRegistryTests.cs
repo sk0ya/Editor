@@ -138,6 +138,27 @@ public class LspServerRegistryTests
     }
 
     [Fact]
+    public void ConfigureDefault_RedirectsPersistenceLocation()
+    {
+        var path = TempStore();
+        try
+        {
+            LspServerRegistry.ConfigureDefault(path);
+            LspServerRegistry.Default.Set(".zig", new LspServerDef("zls", [], "zig"));
+
+            Assert.True(File.Exists(path));   // persisted to the host-chosen location, not %APPDATA%/sk0ya.Editor
+
+            // A fresh registry at the same path sees what Default wrote.
+            Assert.Equal("zls", new LspServerRegistry(path).GetForExtension(".zig")!.Executable);
+        }
+        finally
+        {
+            LspServerRegistry.ConfigureDefault(null);   // leave Default in-memory for other tests
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void InMemoryRegistry_DoesNotWriteFile()
     {
         // A null store path means no persistence — Set must not throw or create files.
