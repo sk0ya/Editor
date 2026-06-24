@@ -317,6 +317,10 @@ public class CommandParser
 
         string motion = s switch
         {
+            "Left" => "h",
+            "Right" => "l",
+            "Up" => "k",
+            "Down" => "j",
             "h" or "j" or "k" or "l" or
             "w" or "b" or "e" or "W" or "B" or "E" or
             "0" or "^" or "$" or

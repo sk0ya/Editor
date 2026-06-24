@@ -568,6 +568,24 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void ArrowKeys_MoveInNormalMode()
+    {
+        var engine = CreateEngine("abc\ndef");
+        engine.ProcessKey("l");
+        engine.ProcessKey("Down");
+        Assert.Equal(new CursorPosition(1, 1), engine.Cursor);
+
+        engine.ProcessKey("Left");
+        Assert.Equal(new CursorPosition(1, 0), engine.Cursor);
+
+        engine.ProcessKey("Right");
+        Assert.Equal(new CursorPosition(1, 1), engine.Cursor);
+
+        engine.ProcessKey("Up");
+        Assert.Equal(new CursorPosition(0, 1), engine.Cursor);
+    }
+
+    [Fact]
     public void DD_DeletesLine()
     {
         var engine = CreateEngine("line1\nline2\nline3");

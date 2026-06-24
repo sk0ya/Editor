@@ -17,8 +17,15 @@ public partial class VimStatusBar : UserControl
         UpdateMode(VimMode.Normal);
     }
 
-    public void UpdateMode(VimMode mode)
+    public void UpdateMode(VimMode mode, bool vimEnabled = true)
     {
+        if (!vimEnabled)
+        {
+            ModeBorder.Visibility = System.Windows.Visibility.Collapsed;
+            return;
+        }
+
+        ModeBorder.Visibility = System.Windows.Visibility.Visible;
         (ModeText.Text, var bg) = mode switch
         {
             VimMode.Insert => ("-- INSERT --", Theme.StatusBarInsert),
