@@ -1012,6 +1012,13 @@ public class EditorCanvas : FrameworkElement
         // Background
         dc.DrawRectangle(Theme.Background, null, new Rect(size));
 
+        // Reserve space at the bottom for the horizontal scrollbar so it never
+        // overlaps the last line of text. Content (text/gutter/minimap) is clipped
+        // to contentBottom; the scrollbars themselves are drawn afterwards.
+        bool needHorizBar = _showScrollbar && !_wrapLines && TotalContentWidth > size.Width + 1;
+        double contentBottom = needHorizBar ? Math.Max(0, size.Height - ScrollbarSize) : size.Height;
+        dc.PushClip(new RectangleGeometry(new Rect(0, 0, size.Width, contentBottom)));
+
         var (lineNumWidth, foldColWidth, gutterWidth) = GetGutterMetrics();
         double textLeft = gutterWidth;
 
@@ -1042,7 +1049,7 @@ public class EditorCanvas : FrameworkElement
             var segment = GetVisualSegment(vi);
             int l = segment.BufferLine;
             double y = vi * _lineHeight - _scrollOffsetY;
-            if (y + _lineHeight < 0 || y > size.Height) continue;
+            if (y + _lineHeight < 0 || y > contentBottom) continue;
 
             var lineText = _substitutePreviewLines.TryGetValue(l, out var previewLine)
                 ? previewLine
@@ -1235,6 +1242,8 @@ public class EditorCanvas : FrameworkElement
         // Minimap
         if (_showMinimap)
             DrawMinimap(dc, size);
+
+        dc.Pop(); // end content clip (contentBottom)
 
         // Overlay scrollbars
         if (_showScrollbar)
