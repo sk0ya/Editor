@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using Editor.Core.Buffer;
 using Editor.Core.Config;
+using Editor.Core.Formatting;
 using Editor.Core.Lsp;
 using Editor.Core.Marks;
 using Editor.Core.Models;
@@ -487,6 +488,19 @@ public class ExCommandProcessor
         // :LspReset <ext> — drop user changes for an extension, restoring the built-in default
         if (cmd.StartsWith("LspReset ", StringComparison.OrdinalIgnoreCase))
             return ExecuteLspReset(cmd[9..]);
+
+        // :Fmt / :FmtList — show the configured extension→CLI-formatter table
+        if (cmd.Equals("Fmt", StringComparison.OrdinalIgnoreCase) ||
+            cmd.Equals("FmtList", StringComparison.OrdinalIgnoreCase))
+            return new ExResult(true, FormatFormatters());
+
+        // :FmtSet <ext> <executable> [args...] — register/replace the CLI formatter for an extension
+        if (cmd.StartsWith("FmtSet ", StringComparison.OrdinalIgnoreCase))
+            return ExecuteFmtSet(cmd[7..]);
+
+        // :FmtRemove <ext> — drop the configured formatter for an extension
+        if (cmd.StartsWith("FmtRemove ", StringComparison.OrdinalIgnoreCase))
+            return ExecuteFmtRemove(cmd[10..]);
 
         // Location list commands
         if (cmd is "lopen" or "lope" or "llist" or "lli")
@@ -2385,6 +2399,7 @@ public class ExCommandProcessor
         "vsplit", "vs", "vnew",
         "Format", "Rename", "Symbols", "sym", "outline", "digraphs",
         "Lsp", "LspList", "LspAdd", "LspRemove", "LspReset",
+        "Fmt", "FmtList", "FmtSet", "FmtRemove",
         "read", "r",
         "Git blame", "Gblame",
         "Git status", "Gstatus", "gs",
@@ -2644,6 +2659,51 @@ public class ExCommandProcessor
         return _lspRegistry.Reset(ext)
             ? new ExResult(true, $"LSP: reset {ext} to its built-in default (reopen the file to apply)")
             : new ExResult(false, $"LSP: nothing to reset for {ext}");
+    }
+
+    // ── :Fmt* — manage the extension→CLI-formatter table (used by :Format) ─────
+
+    private static string FormatFormatters()
+    {
+        var entries = FormatterRegistry.Default.List();
+        if (entries.Count == 0)
+            return "(no formatters configured) — :FmtSet <ext> <cmd>, or run :Format to auto-detect";
+
+        var lines = entries.Select(e =>
+        {
+            var args = e.Def.Args.Length > 0 ? " " + string.Join(' ', e.Def.Args) : "";
+            return $"  {e.Extension,-10} {e.Def.Executable}{args}";
+        });
+        return "Formatters (extension → command, stdin→stdout):\n" + string.Join('\n', lines);
+    }
+
+    private static ExResult ExecuteFmtSet(string rest)
+    {
+        var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 2)
+            return new ExResult(false, "Usage: :FmtSet <ext> <executable> [args...]  (use {file} for the path)");
+
+        var ext = FormatterRegistry.NormalizeExt(parts[0]);
+        if (ext.Length == 0)
+            return new ExResult(false, "E474: invalid extension");
+
+        var executable = parts[1];
+        var args = parts.Length > 2 ? parts[2..] : [];
+        FormatterRegistry.Default.Set(ext, new FormatterDef(executable, args));
+
+        var argsText = args.Length > 0 ? " " + string.Join(' ', args) : "";
+        return new ExResult(true, $"Format: {ext} → {executable}{argsText}");
+    }
+
+    private static ExResult ExecuteFmtRemove(string rest)
+    {
+        var ext = FormatterRegistry.NormalizeExt(rest.Trim());
+        if (ext.Length == 0)
+            return new ExResult(false, "Usage: :FmtRemove <ext>");
+
+        return FormatterRegistry.Default.Remove(ext)
+            ? new ExResult(true, $"Format: removed {ext}")
+            : new ExResult(false, $"Format: no formatter configured for {ext}");
     }
 
     private static string MakeRelative(string basePath, string fullPath)

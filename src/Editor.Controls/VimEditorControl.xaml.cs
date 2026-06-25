@@ -7,6 +7,8 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using System.IO;
+using System.Linq;
+using Editor.Controls.Formatting;
 using Editor.Controls.Git;
 using Editor.Controls.Lsp;
 using Editor.Controls.Themes;
@@ -14,6 +16,7 @@ using Editor.Core.Buffer;
 using Editor.Core.Config;
 using Editor.Core.Engine;
 using Editor.Core.Folds;
+using Editor.Core.Formatting;
 using Editor.Core.Lsp;
 using Editor.Core.Models;
 using Editor.Core.Snippets;
@@ -4327,20 +4330,79 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private async Task HandleFormatDocumentAsync()
     {
-        var tabSize = _engine.Options.TabStop;
-        var insertSpaces = _engine.Options.ExpandTab;
-        var edits = await _lspManager.RequestFormattingAsync(tabSize, insertSpaces);
-        if (edits.Count == 0)
+        var filePath = _engine.CurrentBuffer.FilePath;
+        var ext = string.IsNullOrEmpty(filePath) ? "" : Path.GetExtension(filePath);
+        var original = _engine.CurrentBuffer.Text.GetText();
+
+        // 1) A configured CLI formatter for this extension wins over LSP.
+        var def = FormatterRegistry.Default.GetForExtension(ext);
+        if (def is not null)
         {
-            ActiveStatusBar.UpdateStatus("Format: no changes");
+            await RunCliFormatterAsync(def, filePath, original, registeredFor: null);
             return;
         }
-        var original = _engine.CurrentBuffer.Text.GetText();
-        var formatted = ApplyTextEdits(original, edits);
+
+        // 2) Otherwise fall back to the language server's textDocument/formatting.
+        var edits = await _lspManager.RequestFormattingAsync(_engine.Options.TabStop, _engine.Options.ExpandTab);
+        if (edits.Count > 0)
+        {
+            var formatted = ApplyTextEdits(original, edits);
+            _engine.SetText(formatted);
+            UpdateAll();
+            _lspManager.OnTextChanged(formatted);
+            ActiveStatusBar.UpdateStatus("Format: document formatted");
+            return;
+        }
+
+        // 3) Neither a configured CLI formatter nor an LSP that formats — investigate known candidates.
+        var candidates = ext.Length == 0 ? [] : KnownFormatters.ForExtension(ext);
+        if (candidates.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus(ext.Length == 0 ? "Format: no changes" : $"Format: no formatter for {ext}");
+            return;
+        }
+        // Use the first installed candidate and register it (the host persists the mapping).
+        var installed = candidates.FirstOrDefault(c => FormatterRunner.IsOnPath(c.Executable));
+        if (installed is not null)
+        {
+            await RunCliFormatterAsync(new FormatterDef(installed.Executable, installed.Args), filePath, original, registeredFor: ext);
+            return;
+        }
+        var names = string.Join(", ", candidates.Select(c => c.Executable));
+        ActiveStatusBar.UpdateStatus($"Format: no formatter for {ext}. Install one of: {names}, or :FmtSet {ext} <cmd>");
+    }
+
+    /// <summary>Run a CLI formatter off the UI thread, apply its stdout to the buffer, and (optionally) persist the mapping.</summary>
+    private async Task RunCliFormatterAsync(FormatterDef def, string? filePath, string original, string? registeredFor)
+    {
+        var result = await Task.Run(() => FormatterRunner.Run(def, filePath, original));
+        if (!result.Ok)
+        {
+            ActiveStatusBar.UpdateStatus($"Format: {def.Executable} failed — {result.Error}");
+            return;
+        }
+        if (registeredFor is not null)
+            FormatterRegistry.Default.Set(registeredFor, def);
+
+        var formatted = PreserveEol(original, result.Output ?? "");
+        var where = registeredFor is not null ? $" (registered for {registeredFor})" : "";
+        if (string.Equals(formatted, original, StringComparison.Ordinal))
+        {
+            ActiveStatusBar.UpdateStatus($"Format: no changes — {def.Executable}{where}");
+            return;
+        }
         _engine.SetText(formatted);
         UpdateAll();
         _lspManager.OnTextChanged(formatted);
-        ActiveStatusBar.UpdateStatus("Format: document formatted");
+        ActiveStatusBar.UpdateStatus($"Format: formatted with {def.Executable}{where}");
+    }
+
+    /// <summary>Keep the document's existing newline style: if it used CRLF but the formatter emitted bare LF, restore CRLF.</summary>
+    private static string PreserveEol(string original, string formatted)
+    {
+        if (original.Contains("\r\n", StringComparison.Ordinal) && !formatted.Contains("\r\n", StringComparison.Ordinal))
+            return formatted.Replace("\n", "\r\n");
+        return formatted;
     }
 
     private async Task HandleRenameAsync(string? prefilledName = null)
