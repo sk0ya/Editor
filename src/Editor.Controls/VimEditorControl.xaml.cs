@@ -620,6 +620,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.MouseDragging += OnCanvasMouseDragging;
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.FoldGutterClicked += OnFoldGutterClicked;
+        Canvas.BreakpointToggled += OnCanvasBreakpointToggled;
         Canvas.LinkClicked += OnCanvasLinkClicked;
         Canvas.FileLinkClicked += OnCanvasFileLinkClicked;
 

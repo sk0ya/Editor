@@ -11,7 +11,7 @@ using Editor.Core.Text;
 
 namespace Editor.Controls.Rendering;
 
-public class EditorCanvas : FrameworkElement
+public partial class EditorCanvas : FrameworkElement
 {
     private readonly record struct VisualLineSegment(int BufferLine, int StartColumn, bool IsContinuation);
 
@@ -570,7 +570,7 @@ public class EditorCanvas : FrameworkElement
         if (_batchingLayout) { _layoutDirtyDuringBatch = true; return; }
 
         MeasureChar();
-        var (_, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, gutterWidth) = GetGutterMetrics();
         double minimapReserve = _showMinimap ? MinimapWidth : 0;
         double availableTextWidth = Math.Max(1, RenderSize.Width - gutterWidth - minimapReserve);
 
@@ -651,12 +651,15 @@ public class EditorCanvas : FrameworkElement
         return Math.Max(1, length);
     }
 
-    private (int lineNumWidth, double foldColWidth, int gutterWidth) GetGutterMetrics()
+    private (int bpColWidth, int lineNumWidth, double foldColWidth, int gutterWidth) GetGutterMetrics()
     {
+        // ブレークポイント列はガター最左に確保する。デバッグ無効時(_breakpointsEnabled=false)は幅0で
+        // 従来のガター（行番号＋フォールド列）と完全に一致する＝既存利用に影響しない。
+        int bpColWidth = _breakpointsEnabled ? (int)Math.Max(14.0, _charWidth + 2) : 0;
         int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
         double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
-        int gutterWidth = (int)(lineNumWidth + foldColWidth);
-        return (lineNumWidth, foldColWidth, gutterWidth);
+        int gutterWidth = (int)(bpColWidth + lineNumWidth + foldColWidth);
+        return (bpColWidth, lineNumWidth, foldColWidth, gutterWidth);
     }
 
     private void ClampScrollOffsets(bool raiseScrollChanged)
@@ -758,14 +761,21 @@ public class EditorCanvas : FrameworkElement
             return;
         }
 
-        int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
-        double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
-        int gutterWidth = (int)(lineNumWidth + foldColWidth);
+        var (bpColWidth, lineNumWidth, _, gutterWidth) = GetGutterMetrics();
+
+        // Breakpoint column click (far left) — toggle a breakpoint on that line.
+        if (_breakpointsEnabled && bpColWidth > 0 && point.X < bpColWidth)
+        {
+            int bufferLine = HitTestGutterLine(point);
+            if (bufferLine >= 0) BreakpointToggled?.Invoke(bufferLine);
+            e.Handled = true;
+            return;
+        }
 
         if (_showLineNumbers && point.X < gutterWidth)
         {
             // Fold column click — check for fold indicator
-            if (point.X >= lineNumWidth)
+            if (point.X >= bpColWidth + lineNumWidth)
             {
                 int bufferLine = HitTestGutterLine(point);
                 if (bufferLine >= 0 && (_closedFoldStarts.Contains(bufferLine) || _openFoldStarts.Contains(bufferLine)))
@@ -851,13 +861,20 @@ public class EditorCanvas : FrameworkElement
             return;
         }
 
-        // Update fold indicator hover state
-        int lineNumWidth2 = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
-        double foldColWidth2 = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
-        int gutterWidth2 = (int)(lineNumWidth2 + foldColWidth2);
-        if (_showLineNumbers && point.X >= lineNumWidth2 && point.X < gutterWidth2)
+        // Update fold/breakpoint hover state
+        var (bpColW, lineNumWidth2, _, gutterWidth2) = GetGutterMetrics();
+        if (_breakpointsEnabled && bpColW > 0 && point.X < bpColW)
+        {
+            // Hovering in breakpoint column — show a faint placeholder dot and a hand cursor.
+            int bufferLine = HitTestGutterLine(point);
+            Cursor = bufferLine >= 0 ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
+            SetHoveredBreakpointLine(bufferLine);
+            if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+        }
+        else if (_showLineNumbers && point.X >= bpColW + lineNumWidth2 && point.X < gutterWidth2)
         {
             // Hovering in fold column
+            SetHoveredBreakpointLine(-1);
             int bufferLine = HitTestGutterLine(point);
             bool onFold = bufferLine >= 0 && (_closedFoldStarts.Contains(bufferLine) || _openFoldStarts.Contains(bufferLine));
             Cursor = onFold ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
@@ -865,14 +882,16 @@ public class EditorCanvas : FrameworkElement
             _hoveredFoldLine = onFold ? bufferLine : -1;
             if (_hoveredFoldLine != prev) InvalidateVisual();
         }
-        else if (_showLineNumbers && point.X < lineNumWidth2)
+        else if (_showLineNumbers && point.X < bpColW + lineNumWidth2)
         {
             // Hovering in line number area
+            SetHoveredBreakpointLine(-1);
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
             Cursor = System.Windows.Input.Cursors.Arrow;
         }
         else
         {
+            SetHoveredBreakpointLine(-1);
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
 
             // Ctrl+hover over a link shows a hand cursor as a clickability cue
@@ -978,7 +997,7 @@ public class EditorCanvas : FrameworkElement
     {
         if (_lineHeight <= 0 || _charWidth <= 0) return (0, 0);
 
-        var (_, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, gutterWidth) = GetGutterMetrics();
 
         int visualLine = GetVisualLineIndexFromY(point.Y);
         var segment = GetVisualSegment(visualLine);
@@ -1025,7 +1044,7 @@ public class EditorCanvas : FrameworkElement
         }
         if (_charWidth > 0)
         {
-            var (_, _, gutterWidth) = GetGutterMetrics();
+            var (_, _, _, gutterWidth) = GetGutterMetrics();
             double minimapReserve = _showMinimap ? MinimapWidth : 0;
             double textAreaWidth = Math.Max(1, finalSize.Width - gutterWidth - minimapReserve);
             _visibleColumns = (int)(textAreaWidth / _charWidth) + 2;
@@ -1050,7 +1069,7 @@ public class EditorCanvas : FrameworkElement
         double contentBottom = needHorizBar ? Math.Max(0, size.Height - ScrollbarSize) : size.Height;
         dc.PushClip(new RectangleGeometry(new Rect(0, 0, size.Width, contentBottom)));
 
-        var (lineNumWidth, foldColWidth, gutterWidth) = GetGutterMetrics();
+        var (bpColWidth, lineNumWidth, foldColWidth, gutterWidth) = GetGutterMetrics();
         double textLeft = gutterWidth;
 
         int firstLine = (int)(_scrollOffsetY / _lineHeight);
@@ -1092,6 +1111,10 @@ public class EditorCanvas : FrameworkElement
             if (l == _cursor.Line && Theme.CurrentLineBg != null && size.Width > textLeft)
                 dc.DrawRectangle(Theme.CurrentLineBg, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
 
+            // Debug execution line highlight (the line the debugger is currently stopped at)
+            if (_breakpointsEnabled && l == _executionLine && size.Width > textLeft)
+                dc.DrawRectangle(ExecutionLineBrush, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
+
             if (_substitutePreviewLines.ContainsKey(l) && size.Width > textLeft)
                 dc.DrawRectangle(Theme.DocumentHighlightBackground, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
 
@@ -1130,7 +1153,7 @@ public class EditorCanvas : FrameworkElement
                     else
                         lineNumStr = (l + 1).ToString().PadLeft(_lineNumberWidth);
                     var numText = FormatText(lineNumStr, lineNumberBrush);
-                    dc.DrawText(numText, new Point(2, y + (_lineHeight - numText.Height) / 2));
+                    dc.DrawText(numText, new Point(bpColWidth + 2, y + (_lineHeight - numText.Height) / 2));
 
                     // Fold indicator in dedicated fold column (▶ closed, ▼ open)
                     bool isClosed = _closedFoldStarts.Contains(l);
@@ -1141,9 +1164,9 @@ public class EditorCanvas : FrameworkElement
                         var indicatorColor = hovered ? Theme.Foreground : Theme.LineNumberFg;
                         if (hovered)
                             dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)), null,
-                                new Rect(lineNumWidth, y, foldColWidth, _lineHeight));
+                                new Rect(bpColWidth + lineNumWidth, y, foldColWidth, _lineHeight));
                         var marker = FormatText(isClosed ? "▶" : "▼", indicatorColor);
-                        double mx = lineNumWidth + (foldColWidth - marker.Width) / 2;
+                        double mx = bpColWidth + lineNumWidth + (foldColWidth - marker.Width) / 2;
                         dc.DrawText(marker, new Point(mx, y + (_lineHeight - marker.Height) / 2));
                     }
 
@@ -1162,6 +1185,10 @@ public class EditorCanvas : FrameworkElement
                     }
                 }
             }
+
+            // Breakpoint glyph / execution-line arrow in the dedicated breakpoint column (far left).
+            if (_breakpointsEnabled && drawNumberAndFold && bpColWidth > 0)
+                DrawBreakpointGlyph(dc, l, y, bpColWidth);
 
             dc.PushClip(new RectangleGeometry(new Rect(textLeft, y, Math.Max(0, size.Width - textLeft), _lineHeight)));
 
@@ -2476,7 +2503,7 @@ public class EditorCanvas : FrameworkElement
     public Point GetCursorPixelPosition()
     {
         MeasureChar();
-        var (_, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, gutterWidth) = GetGutterMetrics();
         string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : string.Empty;
         int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);
         int cursorVisualLine = GetCursorVisualLine();
@@ -2579,7 +2606,7 @@ public class EditorCanvas : FrameworkElement
         }
         else
         {
-            var (_, _, gutterWidth) = GetGutterMetrics();
+            var (_, _, _, gutterWidth) = GetGutterMetrics();
             double viewportWidth = Math.Max(0, RenderSize.Width - gutterWidth);
             string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : string.Empty;
             int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);
