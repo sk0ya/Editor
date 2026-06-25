@@ -365,6 +365,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private int  _replayCount      = 0;
     private bool _exitInsertAfterImeCommit = false;
     private string _lastImeCompositionText = string.Empty;
+    private System.Windows.Threading.DispatcherTimer? _imeOverlayClearTimer;
     // Bumped on every WPF text-composition update/commit. Used to detect the case
     // where Backspace empties the composition: WPF raises no update event for the
     // final 1→0 char deletion, so the in-editor overlay would otherwise linger.
@@ -817,6 +818,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (_disposed) return;
         _disposed = true;
         _completionDebounce.Stop();
+        _imeOverlayClearTimer?.Stop();
         _lspManager.Dispose();
         _fileWatcher?.Dispose();
         _fileWatcher = null;
@@ -875,7 +877,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             // Legacy IMM IMEs: the composition ended (e.g. backspaced away). Clear the
             // in-editor overlay so no character lingers. (TSF IMEs don't send this; the
             // ScheduleImeOverlayResync path covers them.)
-            ClearImeCompositionOverlay();
+            ScheduleImeCompositionOverlayClear();
         }
         else if (msg == WM_IME_REQUEST)
         {
@@ -2683,6 +2685,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void OnPreviewTextInputStart(object sender, TextCompositionEventArgs e)
     {
+        if (_customTextStoreActive) return;
+
         // Ensure the TSF caret tracker is attached to the focused context before the
         // composition becomes active, so arrow-key caret moves inside it are observed.
         EnsureTsfTextEditSink();
@@ -2691,6 +2695,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void OnPreviewTextInputUpdate(object sender, TextCompositionEventArgs e)
     {
+        if (_customTextStoreActive) return;
         UpdateImeCompositionOverlay(e);
     }
 
@@ -2707,28 +2712,58 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (string.IsNullOrEmpty(text))
             text = composition?.SystemCompositionText;
 
+        if (string.IsNullOrEmpty(text))
+        {
+            ScheduleImeCompositionOverlayClear();
+            return;
+        }
+
+        CancelScheduledImeCompositionOverlayClear();
         _imeCompositionSeq++;
-        _lastImeCompositionText = text ?? string.Empty;
+        _lastImeCompositionText = text;
         Canvas.SetImeCompositionText(_lastImeCompositionText, GetImeCursorPos());
         UpdateImeWindowPos();
-        if (!string.IsNullOrEmpty(text))
-        {
-            if (PresentationSource.FromVisual(this) is HwndSource source)
-                UpdateImeCandidateOverlay(source.Handle, IntPtr.Zero);
-        }
-        else
-        {
-            ClearImeCandidateOverlay();
-        }
+        if (PresentationSource.FromVisual(this) is HwndSource source)
+            UpdateImeCandidateOverlay(source.Handle, IntPtr.Zero);
     }
 
     private void ClearImeCompositionOverlay()
     {
+        CancelScheduledImeCompositionOverlayClear();
         _lastImeCompositionText = string.Empty;
         Canvas.SetImeCompositionText(string.Empty);
         Canvas.SetImeClauses([], -1, -1);
         ClearImeCandidateOverlay();
     }
+
+    private void ScheduleImeCompositionOverlayClear()
+    {
+        _imeOverlayClearTimer ??= CreateImeOverlayClearTimer();
+        _imeOverlayClearTimer.Stop();
+        _imeOverlayClearTimer.Start();
+    }
+
+    private System.Windows.Threading.DispatcherTimer CreateImeOverlayClearTimer()
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.Background,
+            Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(60)
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            ClearImeCompositionOverlay();
+        };
+        return timer;
+    }
+
+    private void CancelScheduledImeCompositionOverlayClear()
+        => _imeOverlayClearTimer?.Stop();
+
+    private bool HasActiveImeComposition()
+        => !string.IsNullOrEmpty(_lastImeCompositionText);
 
     /// <summary>
     /// Inserts IME-committed (or directly typed) <paramref name="text"/> through the engine,
@@ -2920,7 +2955,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // and the focused clause are read from GUID_PROP_ATTRIBUTE and rendered.
         EnsureTsfTextEditSink();
         _imeCompositionSeq++;
-        _lastImeCompositionText = text ?? string.Empty;
+        text ??= string.Empty;
+        if (string.IsNullOrEmpty(text))
+        {
+            ScheduleImeCompositionOverlayClear();
+            return;
+        }
+
+        CancelScheduledImeCompositionOverlayClear();
+        _lastImeCompositionText = text;
         Canvas.SetImeCompositionText(_lastImeCompositionText, caret);
     }
 
@@ -2928,15 +2971,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         _imeCompositionSeq++;
         _imeInsertBuffer.Clear();
-        ClearImeCompositionOverlay();
         InsertCommittedText(text);
+        ClearImeCompositionOverlay();
     }
 
     void Editor.Controls.Ime.IEditorTextStoreHost.OnCompositionCanceled()
     {
         _imeCompositionSeq++;
         _imeInsertBuffer.Clear();
-        ClearImeCompositionOverlay();
+        ScheduleImeCompositionOverlayClear();
     }
 
     bool Editor.Controls.Ime.IEditorTextStoreHost.TryGetCaretScreenRect(out int left, out int top, out int right, out int bottom)
@@ -2988,7 +3031,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             // A real update/commit bumps _imeCompositionSeq — if it changed, the
             // overlay is already in sync and must not be cleared.
             if (_imeCompositionSeq == seq && !string.IsNullOrEmpty(_lastImeCompositionText))
-                ClearImeCompositionOverlay();
+                ScheduleImeCompositionOverlayClear();
         }));
     }
 
@@ -3035,6 +3078,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         if (mode == VimMode.Insert || mode == VimMode.Replace)
         {
+            if (actualKey == Key.Tab && HasActiveImeComposition())
+            {
+                _imeInsertBuffer.Clear();
+                return;
+            }
+
             if (e.Key == Key.ImeProcessed && actualKey == Key.Escape)
             {
                 // Commit the active composition by letting the IME finalize it itself:
@@ -3376,7 +3425,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // Filesystem path completion popup navigation (LSP-independent). Same IME
         // guard as the LSP popup below.
         if (_pathCompletionVisible && mode == VimMode.Insert && _engine.VimEnabled
-            && e.Key != Key.ImeProcessed)
+            && e.Key != Key.ImeProcessed && !HasActiveImeComposition())
         {
             if (key == Key.Down || (ctrl && key == Key.N))
             {
@@ -3407,7 +3456,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         if (_lspManager.CompletionVisible && mode == VimMode.Insert && _engine.VimEnabled
-            && e.Key != Key.ImeProcessed)
+            && e.Key != Key.ImeProcessed && !HasActiveImeComposition())
         {
             if (key == Key.Down || (ctrl && key == Key.N))
             {
@@ -3574,11 +3623,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // so any partially-tracked imap prefix is no longer valid.
         _imeCompositionSeq++;
         _imeInsertBuffer.Clear();
-        ClearImeCompositionOverlay();
 
         if (_keyDownHandledByVim)
         {
             _keyDownHandledByVim = false;
+            ClearImeCompositionOverlay();
             return;
         }
 
@@ -3587,9 +3636,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             mode == VimMode.Command || mode == VimMode.SearchForward || mode == VimMode.SearchBackward)
         {
             InsertCommittedText(e.Text);
+            ClearImeCompositionOverlay();
             e.Handled = true;
             return;
         }
+
+        ClearImeCompositionOverlay();
 
         if (mode == VimMode.Normal || mode == VimMode.Visual ||
             mode == VimMode.VisualLine || mode == VimMode.VisualBlock)
