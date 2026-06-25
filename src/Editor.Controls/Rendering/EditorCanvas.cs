@@ -43,6 +43,9 @@ public class EditorCanvas : FrameworkElement
     private System.Windows.Threading.DispatcherTimer? _cursorTimer;
     private bool _isDragging = false;
     private Point? _mouseDownPoint;
+    private bool _draggingVScrollbar = false;
+    private bool _draggingHScrollbar = false;
+    private double _scrollbarGrabOffset = 0;
     private string _imeCompositionText = string.Empty;
     // Caret position (in characters) inside the composition string, as reported by
     // the IME (GCS_CURSORPOS). -1 means "place the caret at the end" — used as the
@@ -715,11 +718,19 @@ public class EditorCanvas : FrameworkElement
     protected override void OnMouseLeftButtonDown(System.Windows.Input.MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
-        CaptureMouse();
         _isDragging = false;
         _mouseDownPoint = e.GetPosition(this);
 
         var point = _mouseDownPoint.Value;
+
+        // Scrollbar drag — the bars overlay everything, so test them first
+        if (_showScrollbar && TryBeginScrollbarDrag(point))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        CaptureMouse();
 
         // Minimap click — scroll to the clicked position
         if (_showMinimap && point.X >= RenderSize.Width - MinimapWidth)
@@ -794,6 +805,13 @@ public class EditorCanvas : FrameworkElement
         base.OnMouseMove(e);
         var point = e.GetPosition(this);
 
+        if ((_draggingVScrollbar || _draggingHScrollbar) &&
+            e.LeftButton == System.Windows.Input.MouseButtonState.Pressed)
+        {
+            UpdateScrollbarDrag(point);
+            return;
+        }
+
         if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed && IsMouseCaptured)
         {
             if (!_isDragging && _mouseDownPoint is { } downPoint)
@@ -814,6 +832,14 @@ public class EditorCanvas : FrameworkElement
                 var (line, col) = HitTest(point);
                 MouseDragging?.Invoke(line, col);
             }
+            return;
+        }
+
+        // Arrow cursor over the overlay scrollbars
+        if (_showScrollbar && IsOverScrollbar(point))
+        {
+            if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+            Cursor = System.Windows.Input.Cursors.Arrow;
             return;
         }
 
@@ -866,6 +892,11 @@ public class EditorCanvas : FrameworkElement
         base.OnMouseLeftButtonUp(e);
         if (IsMouseCaptured) ReleaseMouseCapture();
         _mouseDownPoint = null;
+        if (_draggingVScrollbar || _draggingHScrollbar)
+        {
+            _draggingVScrollbar = false;
+            _draggingHScrollbar = false;
+        }
         if (_isDragging)
         {
             _isDragging = false;
@@ -1308,41 +1339,163 @@ public class EditorCanvas : FrameworkElement
 
     private const double ScrollbarSize = 6.0;
     private const double ScrollbarThumbMinSize = 20.0;
+    // The visible bars are thin (ScrollbarSize); the grab zone is wider so the
+    // thumb is easy to hit and drag with the mouse.
+    private const double ScrollbarHitSize = 16.0;
 
-    private void DrawScrollbars(DrawingContext dc, Size size)
+    // Geometry of the overlay scrollbars, shared by rendering and mouse hit-testing.
+    private struct ScrollbarLayout
     {
+        public bool NeedVert;
+        public bool NeedHoriz;
+        public double VertTrackH;
+        public double VertThumbY;
+        public double VertThumbH;
+        public double VertMaxOff;
+        public double HorizTrackW;
+        public double HorizThumbX;
+        public double HorizThumbW;
+        public double HorizMaxOff;
+    }
+
+    private ScrollbarLayout ComputeScrollbarLayout(Size size)
+    {
+        var l = new ScrollbarLayout();
         double totalH = TotalContentHeight;
         double viewH  = size.Height;
         double totalW = TotalContentWidth;
         double viewW  = size.Width;
 
-        bool needVert  = totalH > viewH + 1;
-        bool needHoriz = !_wrapLines && totalW > viewW + 1;
-
-        if (!needVert && !needHoriz) return;
+        l.NeedVert  = totalH > viewH + 1;
+        l.NeedHoriz = !_wrapLines && totalW > viewW + 1;
+        if (!l.NeedVert && !l.NeedHoriz) return l;
 
         // Reserve space so the two bars don't overlap at the corner
-        double vertTrackH  = needHoriz ? size.Height - ScrollbarSize : size.Height;
-        double horizTrackW = needVert  ? size.Width  - ScrollbarSize : size.Width;
+        l.VertTrackH  = l.NeedHoriz ? size.Height - ScrollbarSize : size.Height;
+        l.HorizTrackW = l.NeedVert  ? size.Width  - ScrollbarSize : size.Width;
 
-        if (needVert && vertTrackH > 0)
+        if (l.NeedVert)
+        {
+            l.VertThumbH = Math.Min(l.VertTrackH, Math.Max(ScrollbarThumbMinSize, l.VertTrackH * viewH / totalH));
+            l.VertMaxOff = totalH - viewH;
+            l.VertThumbY = l.VertMaxOff > 0 ? (l.VertTrackH - l.VertThumbH) * (_scrollOffsetY / l.VertMaxOff) : 0;
+        }
+        if (l.NeedHoriz)
+        {
+            l.HorizThumbW = Math.Min(l.HorizTrackW, Math.Max(ScrollbarThumbMinSize, l.HorizTrackW * viewW / totalW));
+            l.HorizMaxOff = totalW - viewW;
+            l.HorizThumbX = l.HorizMaxOff > 0 ? (l.HorizTrackW - l.HorizThumbW) * (_scrollOffsetX / l.HorizMaxOff) : 0;
+        }
+        return l;
+    }
+
+    private void DrawScrollbars(DrawingContext dc, Size size)
+    {
+        var l = ComputeScrollbarLayout(size);
+        if (!l.NeedVert && !l.NeedHoriz) return;
+
+        if (l.NeedVert && l.VertTrackH > 0)
         {
             double trackX = size.Width - ScrollbarSize;
-            dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(trackX, 0, ScrollbarSize, vertTrackH));
-            double thumbH = Math.Min(vertTrackH, Math.Max(ScrollbarThumbMinSize, vertTrackH * viewH / totalH));
-            double maxOff = totalH - viewH;
-            double thumbY = maxOff > 0 ? (vertTrackH - thumbH) * (_scrollOffsetY / maxOff) : 0;
-            dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(trackX + 1, thumbY + 1, ScrollbarSize - 2, Math.Max(0, thumbH - 2)));
+            dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(trackX, 0, ScrollbarSize, l.VertTrackH));
+            dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(trackX + 1, l.VertThumbY + 1, ScrollbarSize - 2, Math.Max(0, l.VertThumbH - 2)));
         }
 
-        if (needHoriz && horizTrackW > 0)
+        if (l.NeedHoriz && l.HorizTrackW > 0)
         {
             double trackY = size.Height - ScrollbarSize;
-            dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(0, trackY, horizTrackW, ScrollbarSize));
-            double thumbW = Math.Min(horizTrackW, Math.Max(ScrollbarThumbMinSize, horizTrackW * viewW / totalW));
-            double maxOff = totalW - viewW;
-            double thumbX = maxOff > 0 ? (horizTrackW - thumbW) * (_scrollOffsetX / maxOff) : 0;
-            dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(thumbX + 1, trackY + 1, Math.Max(0, thumbW - 2), ScrollbarSize - 2));
+            dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(0, trackY, l.HorizTrackW, ScrollbarSize));
+            dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(l.HorizThumbX + 1, trackY + 1, Math.Max(0, l.HorizThumbW - 2), ScrollbarSize - 2));
+        }
+    }
+
+    private bool IsOverScrollbar(System.Windows.Point point)
+    {
+        var size = RenderSize;
+        var l = ComputeScrollbarLayout(size);
+        if (l.NeedVert && l.VertTrackH > 0 &&
+            point.X >= size.Width - ScrollbarHitSize && point.Y <= l.VertTrackH)
+            return true;
+        if (l.NeedHoriz && l.HorizTrackW > 0 &&
+            point.Y >= size.Height - ScrollbarHitSize && point.X <= l.HorizTrackW)
+            return true;
+        return false;
+    }
+
+    // Returns true and starts a drag if the click landed on a scrollbar.
+    private bool TryBeginScrollbarDrag(System.Windows.Point point)
+    {
+        var size = RenderSize;
+        var l = ComputeScrollbarLayout(size);
+
+        // Vertical scrollbar — rightmost strip
+        if (l.NeedVert && l.VertTrackH > 0 &&
+            point.X >= size.Width - ScrollbarHitSize && point.Y <= l.VertTrackH)
+        {
+            double thumbRange = l.VertTrackH - l.VertThumbH;
+            if (point.Y >= l.VertThumbY && point.Y <= l.VertThumbY + l.VertThumbH)
+            {
+                _scrollbarGrabOffset = point.Y - l.VertThumbY;
+            }
+            else
+            {
+                // Click on the track jumps the thumb so it centres on the cursor
+                double newThumbY = Math.Clamp(point.Y - l.VertThumbH / 2, 0, Math.Max(0, thumbRange));
+                _scrollbarGrabOffset = point.Y - newThumbY;
+                if (thumbRange > 0)
+                    ScrollTo(newThumbY / thumbRange * l.VertMaxOff, _scrollOffsetX);
+            }
+            _draggingVScrollbar = true;
+            CaptureMouse();
+            return true;
+        }
+
+        // Horizontal scrollbar — bottom strip
+        if (l.NeedHoriz && l.HorizTrackW > 0 &&
+            point.Y >= size.Height - ScrollbarHitSize && point.X <= l.HorizTrackW)
+        {
+            double thumbRange = l.HorizTrackW - l.HorizThumbW;
+            if (point.X >= l.HorizThumbX && point.X <= l.HorizThumbX + l.HorizThumbW)
+            {
+                _scrollbarGrabOffset = point.X - l.HorizThumbX;
+            }
+            else
+            {
+                double newThumbX = Math.Clamp(point.X - l.HorizThumbW / 2, 0, Math.Max(0, thumbRange));
+                _scrollbarGrabOffset = point.X - newThumbX;
+                if (thumbRange > 0)
+                    ScrollTo(_scrollOffsetY, newThumbX / thumbRange * l.HorizMaxOff);
+            }
+            _draggingHScrollbar = true;
+            CaptureMouse();
+            return true;
+        }
+
+        return false;
+    }
+
+    private void UpdateScrollbarDrag(System.Windows.Point point)
+    {
+        var size = RenderSize;
+        var l = ComputeScrollbarLayout(size);
+
+        if (_draggingVScrollbar && l.NeedVert)
+        {
+            double thumbRange = l.VertTrackH - l.VertThumbH;
+            if (thumbRange > 0)
+            {
+                double newThumbY = Math.Clamp(point.Y - _scrollbarGrabOffset, 0, thumbRange);
+                ScrollTo(newThumbY / thumbRange * l.VertMaxOff, _scrollOffsetX);
+            }
+        }
+        else if (_draggingHScrollbar && l.NeedHoriz)
+        {
+            double thumbRange = l.HorizTrackW - l.HorizThumbW;
+            if (thumbRange > 0)
+            {
+                double newThumbX = Math.Clamp(point.X - _scrollbarGrabOffset, 0, thumbRange);
+                ScrollTo(_scrollOffsetY, newThumbX / thumbRange * l.HorizMaxOff);
+            }
         }
     }
 
