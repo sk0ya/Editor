@@ -1698,7 +1698,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         var filePath = _engine.CurrentBuffer.FilePath;
         if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
-        var bytes = File.ReadAllBytes(filePath);
+        if (!TryReadAllBytesShared(filePath, out var bytes))
+        {
+            // ライターがまだハンドルを保持していてロック解放を待っても読めなかった。
+            // 投機的な外部リロードなので、落とさずステータス表示に留める。
+            ActiveStatusBar.UpdateStatus($"Could not reload \"{filePath}\" (file is locked)");
+            return;
+        }
         var detectedEnc = Editor.Core.Buffer.VimBuffer.DetectEncodingFromBom(bytes);
         var enc = Editor.Core.Buffer.VimBuffer.GetEncoding(detectedEnc);
         var bomLen = Editor.Core.Buffer.VimBuffer.GetBomLength(bytes, enc);
@@ -1721,6 +1727,41 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // 外部変更の取り込み（ウォッチャの自動リロード／:e!）でも本文は変わるので、編集と同じく
         // BufferChanged で通知する。これがないと、本文を購読するホスト（プレビュー等）が取り残される。
         BufferChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // 外部書き込み直後はライターがまだファイルハンドルを保持していることがあり、
+    // File.ReadAllBytes は FileShare.Read で開くため IOException（使用中）になる。
+    // 共有読み取り（FileShare.ReadWrite）で開き、ロック中は短くリトライして取り込む。
+    private static bool TryReadAllBytesShared(string path, out byte[] bytes)
+    {
+        bytes = Array.Empty<byte>();
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                using var fs = new FileStream(
+                    path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                var buffer = new byte[fs.Length];
+                var read = 0;
+                while (read < buffer.Length)
+                {
+                    var n = fs.Read(buffer, read, buffer.Length - read);
+                    if (n == 0) break;
+                    read += n;
+                }
+                bytes = read == buffer.Length ? buffer : buffer[..read];
+                return true;
+            }
+            catch (IOException)
+            {
+                System.Threading.Thread.Sleep(30);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                System.Threading.Thread.Sleep(30);
+            }
+        }
+        return false;
     }
 
     /// <summary>Call before writing a file to disk to prevent the watcher from triggering a reload prompt.</summary>
@@ -1847,8 +1888,20 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         {
             if (_pendingWatcherReload) return;
             _pendingWatcherReload = true;
-            HandleExternalFileChange(e.FullPath);
-            _pendingWatcherReload = false;
+            try
+            {
+                HandleExternalFileChange(e.FullPath);
+            }
+            catch (Exception ex)
+            {
+                // 外部変更の取り込みは投機的処理。読み込み失敗などで UI スレッドの
+                // 未ハンドル例外（＝プロセス即死）にしないよう、ここで握り潰す。
+                ActiveStatusBar.UpdateStatus($"Reload failed: {ex.Message}");
+            }
+            finally
+            {
+                _pendingWatcherReload = false;
+            }
         });
     }
 
