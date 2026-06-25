@@ -4378,7 +4378,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         var result = await Task.Run(() => FormatterRunner.Run(def, filePath, original));
         if (!result.Ok)
         {
-            ActiveStatusBar.UpdateStatus($"Format: {def.Executable} failed — {result.Error}");
+            ShowFormatStatus($"Format: {def.Executable} failed — {result.Error}");
             return;
         }
         if (registeredFor is not null)
@@ -4395,6 +4395,150 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         UpdateAll();
         _lspManager.OnTextChanged(formatted);
         ActiveStatusBar.UpdateStatus($"Format: formatted with {def.Executable}{where}");
+    }
+
+    /// <summary>
+    /// Surface a "Format: …" status message. The status bar is a single fixed-height line, so a multi-line
+    /// message (typically a formatter's stderr) would be clipped to nothing — when the text spans more than
+    /// one line, show the full text in a popup and keep only a one-line summary in the status bar.
+    /// </summary>
+    private void ShowFormatStatus(string message)
+    {
+        var trimmed = message.TrimEnd();
+        int nl = trimmed.IndexOf('\n');
+        if (nl < 0)
+        {
+            ActiveStatusBar.UpdateStatus(trimmed);
+            return;
+        }
+        ActiveStatusBar.UpdateStatus(trimmed[..nl].TrimEnd('\r') + " …");
+        ShowCopyableMessage("Format", trimmed);
+    }
+
+    /// <summary>
+    /// Show <paramref name="text"/> in a sleek, chromeless dark popup whose body is a read-only, selectable
+    /// monospace text box (so it can be copied). A header carries the title + accent and the footer shows
+    /// line/char counts alongside Copy/Close actions.
+    /// </summary>
+    private void ShowCopyableMessage(string title, string text)
+    {
+        // Palette pulled from the active editor theme so the popup matches whatever theme is in use.
+        var bg       = _theme.LineNumberBg;     // shell — the darker gutter shade for contrast against the body
+        var bodyBg   = _theme.Background;        // text area — the main editor background
+        var fg       = _theme.Foreground;
+        var muted    = _theme.LineNumberFg;      // de-emphasised metadata
+        var border   = _theme.IndentGuideBrush;
+        bool isError = text.Contains("fail", StringComparison.OrdinalIgnoreCase)
+                    || text.Contains("error", StringComparison.OrdinalIgnoreCase);
+        var accent   = isError ? _theme.DiagnosticError : _theme.LinkColor;
+        var mono     = new System.Windows.Media.FontFamily("Cascadia Code, Consolas");
+
+        int lineCount = text.Length == 0 ? 0 : text.Split('\n').Length;
+
+        // ── Header ──────────────────────────────────────────────────────
+        var accentBar = new Border { Width = 3, Background = accent, CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 0, 10, 0) };
+        var titleText = new TextBlock { Text = title, Foreground = fg, FontFamily = mono, FontSize = 13, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        var badgeText = new TextBlock { Text = isError ? "stderr" : "message", Foreground = accent, FontFamily = mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 1, 0, 0) };
+        var closeGlyph = new TextBlock { Text = "✕", Foreground = muted, FontFamily = mono, FontSize = 13, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(6, 2, 6, 2), VerticalAlignment = VerticalAlignment.Center };
+
+        var header = new Grid { Margin = new Thickness(14, 11, 8, 11) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(accentBar, 0); Grid.SetColumn(titleText, 1); Grid.SetColumn(badgeText, 2); Grid.SetColumn(closeGlyph, 4);
+        header.Children.Add(accentBar); header.Children.Add(titleText); header.Children.Add(badgeText); header.Children.Add(closeGlyph);
+
+        // ── Body ────────────────────────────────────────────────────────
+        var box = new TextBox
+        {
+            Text = text,
+            IsReadOnly = true,
+            IsReadOnlyCaretVisible = true,
+            TextWrapping = TextWrapping.NoWrap,
+            FontFamily = mono,
+            FontSize = 12.5,
+            Foreground = fg,
+            Background = bodyBg,
+            CaretBrush = accent,
+            SelectionBrush = accent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(12, 10, 12, 10),
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            AcceptsReturn = true,
+        };
+        var bodyWrap = new Border { Background = bodyBg, BorderBrush = border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Margin = new Thickness(12, 0, 12, 0), Child = box };
+
+        // ── Footer ──────────────────────────────────────────────────────
+        var stats = new TextBlock { Text = $"{lineCount} lines · {text.Length} chars", Foreground = muted, FontFamily = mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+
+        Button MakeButton(string label, bool primary)
+        {
+            var b = new Button { Content = label, FontFamily = mono, FontSize = 12, Height = 28, MinWidth = 84, Margin = new Thickness(8, 0, 0, 0), Foreground = primary ? bodyBg : fg, Background = primary ? accent : _theme.CurrentLineBg, BorderThickness = new Thickness(0), Cursor = System.Windows.Input.Cursors.Hand };
+            var tpl = new System.Windows.Controls.ControlTemplate(typeof(Button));
+            var bd = new System.Windows.FrameworkElementFactory(typeof(Border));
+            bd.SetValue(Border.BackgroundProperty, new System.Windows.Data.Binding(nameof(Button.Background)) { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            bd.SetValue(Border.CornerRadiusProperty, new CornerRadius(5));
+            var cp = new System.Windows.FrameworkElementFactory(typeof(ContentPresenter));
+            cp.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            cp.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            bd.AppendChild(cp);
+            tpl.VisualTree = bd;
+            b.Template = tpl;
+            return b;
+        }
+
+        var copyButton = MakeButton("Copy", primary: true);
+        copyButton.IsDefault = true;
+        copyButton.Click += (_, _) => { try { Clipboard.SetText(text); copyButton.Content = "Copied ✓"; } catch { /* clipboard may be busy */ } };
+        var closeButton = MakeButton("Close", primary: false);
+        closeButton.IsCancel = true;
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(copyButton);
+        buttons.Children.Add(closeButton);
+
+        var footer = new Grid { Margin = new Thickness(14, 11, 12, 12) };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(stats, 0); Grid.SetColumn(buttons, 1);
+        footer.Children.Add(stats); footer.Children.Add(buttons);
+
+        // ── Assemble ────────────────────────────────────────────────────
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(header, 0); Grid.SetRow(bodyWrap, 1); Grid.SetRow(footer, 2);
+        grid.Children.Add(header); grid.Children.Add(bodyWrap); grid.Children.Add(footer);
+
+        var shell = new Border { Background = bg, BorderBrush = border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Child = grid };
+
+        var window = new Window
+        {
+            Title = title,
+            Content = shell,
+            Width = 680,
+            Height = 380,
+            MinWidth = 360,
+            MinHeight = 200,
+            WindowStyle = WindowStyle.None,
+            AllowsTransparency = true,
+            Background = System.Windows.Media.Brushes.Transparent,
+            ResizeMode = ResizeMode.CanResizeWithGrip,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar = false,
+        };
+        // Drag the chromeless window by its header; click the glyph / Esc to close.
+        header.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == System.Windows.Input.MouseButtonState.Pressed) window.DragMove(); };
+        closeGlyph.MouseLeftButtonDown += (_, e) => { e.Handled = true; window.Close(); };
+        closeButton.Click += (_, _) => window.Close();
+
+        var owner = Window.GetWindow(this);
+        if (owner != null && owner != window) window.Owner = owner;
+        window.ShowDialog();
     }
 
     /// <summary>Keep the document's existing newline style: if it used CRLF but the formatter emitted bare LF, restore CRLF.</summary>
