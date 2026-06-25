@@ -3047,10 +3047,17 @@ public class VimEngineTests
 
     // ─────────────── AUTO-PAIRS ───────────────
 
+    private static VimConfig AutoPairsConfig()
+    {
+        var config = new VimConfig();
+        config.Options.Apply("pairs");
+        return config;
+    }
+
     [Fact]
     public void AutoPairs_OpenParen_InsertsClosingParen()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("(");
         Assert.Equal("()", engine.CurrentBuffer.Text.GetText());
@@ -3060,7 +3067,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_OpenBracket_InsertsClosingBracket()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("[");
         Assert.Equal("[]", engine.CurrentBuffer.Text.GetText());
@@ -3070,7 +3077,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_OpenBrace_InsertsClosingBrace()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("{");
         Assert.Equal("{}", engine.CurrentBuffer.Text.GetText());
@@ -3080,7 +3087,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_DoubleQuote_InsertsPair()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("\"");
         Assert.Equal("\"\"", engine.CurrentBuffer.Text.GetText());
@@ -3090,7 +3097,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_SingleQuote_InsertsPair()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("'");
         Assert.Equal("''", engine.CurrentBuffer.Text.GetText());
@@ -3100,7 +3107,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_Backtick_InsertsPair()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("`");
         Assert.Equal("``", engine.CurrentBuffer.Text.GetText());
@@ -3110,7 +3117,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_CloseParen_SkipsOver()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("("); // inserts "()" cursor at col 1
         engine.ProcessKey(")"); // should skip over, not insert
@@ -3121,7 +3128,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_CloseBracket_SkipsOver()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("[");
         engine.ProcessKey("]");
@@ -3132,7 +3139,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_CloseBrace_SkipsOver()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("{");
         engine.ProcessKey("}");
@@ -3144,7 +3151,7 @@ public class VimEngineTests
     public void AutoPairs_Quote_DoesNotSkip_InsertsNewPair()
     {
         // Symmetric pairs always insert rather than skip
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("\""); // inserts ""
         engine.ProcessKey("\""); // should insert another "" pair, not skip
@@ -3154,7 +3161,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_Backspace_DeletesBothChars()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("("); // inserts "()", cursor at 1
         engine.ProcessKey("Back"); // should delete both '(' and ')'
@@ -3165,7 +3172,7 @@ public class VimEngineTests
     [Fact]
     public void AutoPairs_TypeInsidePair()
     {
-        var engine = CreateEngine();
+        var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("(");   // "()" cursor=1
         engine.ProcessKey("x");   // "(x)" cursor=2
@@ -3175,22 +3182,27 @@ public class VimEngineTests
     }
 
     [Fact]
-    public void AutoPairs_Disabled_NoPairInsertion()
+    public void AutoPairs_Default_NoPairInsertion()
     {
-        var config = new VimConfig();
-        config.Options.Apply("nopairs");
-        var engine = CreateEngine(config: config);
+        var engine = CreateEngine();
         engine.ProcessKey("i");
         engine.ProcessKey("(");
         Assert.Equal("(", engine.CurrentBuffer.Text.GetText());
     }
 
     [Fact]
-    public void AutoPairs_Disabled_NoSkipOver()
+    public void AutoPairs_Default_NoQuotePairInsertion()
     {
-        var config = new VimConfig();
-        config.Options.Apply("nopairs");
-        var engine = CreateEngine("()", config: config);
+        var engine = CreateEngine();
+        engine.ProcessKey("i");
+        engine.ProcessKey("'");
+        Assert.Equal("'", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void AutoPairs_Default_NoSkipOver()
+    {
+        var engine = CreateEngine("()");
         engine.ProcessKey("i"); // enter insert at col 0
         engine.ProcessKey(")"); // no skip — inserts ")"
         Assert.Equal(")()", engine.CurrentBuffer.Text.GetText());

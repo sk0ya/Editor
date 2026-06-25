@@ -17,7 +17,7 @@ public class VimOptions
     public bool ExpandTab { get; set; } = true;
     public bool AutoIndent { get; set; } = true;
     public bool SmartIndent { get; set; } = true;
-    public bool Pairs { get; set; } = true;
+    public bool Pairs { get; set; } = false;
     public int TextWidth { get; set; } = 79;
 
     // Search
