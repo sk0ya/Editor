@@ -110,6 +110,18 @@ Changes apply to a file when it is (re)opened. Adding a new built-in default sti
 
 **Diagnostics** are rendered as wavy underlines on `EditorCanvas`. Colors are defined on `EditorTheme` (`DiagnosticError`, `DiagnosticWarning`, `DiagnosticInfo`, `DiagnosticHint`).
 
+## Document formatting (`:Format`)
+
+`:Format` (also the "Format Document" context-menu item) is handled by `VimEditorControl.HandleFormatDocumentAsync`. It is **not** LSP-only — many text-LSP servers (e.g. `marksman`) never implement `textDocument/formatting`, so there is a CLI-formatter layer alongside it:
+
+- **`Editor.Core/Formatting/FormatterRegistry.cs`** — extension→CLI-formatter map (`FormatterDef(Executable, Args)`, **stdin→stdout** convention; `{file}` in `Args` is replaced with the current path). Pure .NET, no WPF. Mirrors `LspServerRegistry` (`Default` singleton, `ConfigureDefault(path)`, JSON persistence to `%APPDATA%/sk0ya.Editor/formatters.json`) but ships **no built-in active mappings**.
+- **`Editor.Core/Formatting/KnownFormatters.cs`** — suggestion-only candidate catalog per extension (prettier/dprint/black/rustfmt/gofmt/…), **never auto-activated**.
+- **`Editor.Controls/Formatting/FormatterRunner.cs`** — runs the formatter as a one-shot child process (buffer → stdin, stdout → buffer, UTF-8/no-BOM, timeout). A non-zero exit or launch failure returns an error and leaves the buffer **untouched**. `IsOnPath` probes PATH (+PATHEXT).
+
+Resolution order in `HandleFormatDocumentAsync`: (1) a configured CLI formatter for the extension **wins** over LSP; (2) else LSP `textDocument/formatting`; (3) else probe `KnownFormatters` candidates on PATH and, if one is installed, use **and register** it (persisted via the host's `ConfigureDefault` store). Newline style is preserved (CRLF restored if the formatter emitted bare LF).
+
+**Managing formatters (ex commands):** `:Fmt` / `:FmtList`, `:FmtSet <ext> <executable> [args...]` (use `{file}` for the path, e.g. `:FmtSet .md prettier --stdin-filepath {file}`), `:FmtRemove <ext>`.
+
 ## Adding Syntax Highlighting for a New Language
 
 Implement `ISyntaxLanguage` (in `Editor.Core.Syntax`) and register the instance in the array inside `SyntaxEngine`. The interface requires `Name`, `Extensions`, and `Tokenize(string[] lines) → LineTokens[]`. Available `TokenKind` values: `Text`, `Keyword`, `Type`, `String`, `Comment`, `Number`, `Operator`, `Preprocessor`, `Identifier`, `Attribute`.
