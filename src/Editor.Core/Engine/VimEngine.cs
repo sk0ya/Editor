@@ -1,6 +1,7 @@
 using System.IO;
 using Editor.Core.Buffer;
 using Editor.Core.Config;
+using Editor.Core.Editing;
 using Editor.Core.Macros;
 using Editor.Core.Marks;
 using Editor.Core.Models;
@@ -22,6 +23,7 @@ public class VimEngine
     private readonly CommandParser _commandParser;
     private readonly VimConfig _config;
     private readonly SpellChecker _spellChecker = new();
+    private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
     private VimMode _mode = VimMode.Normal;
     private bool _vimEnabled = true;
@@ -1897,12 +1899,9 @@ public class VimEngine
                 EmitCursor(events);
                 break;
             case "Tab":
-                if (IsMarkdownListContext())
-                {
-                    ApplyMarkdownListIndent(shift, events);
+                if (TryEditAssistTab(shift, events))
                     break;
-                }
-                if (shift) break; // Shift+Tab outside a markdown list is a no-op
+                if (shift) break; // Shift+Tab with no edit-assist is a no-op
                 if (_config.Options.ExpandTab)
                 {
                     var spaces = new string(' ', _config.Options.TabStop);
@@ -2049,13 +2048,19 @@ public class VimEngine
                 InsertNewline(events);
                 return;
             case "Tab":
-                if (IsMarkdownListContext())
+                if (_editAssists.Resolve(_bufferManager.Current.FilePath) is { } tabAssist)
                 {
                     BeginPlainEdit();
-                    ApplyMarkdownListIndent(shift, events);
-                    return;
+                    var tabResult = tabAssist.OnTab(MakeEditContext(), shift);
+                    if (tabResult.Handled)
+                    {
+                        _cursor = tabResult.Cursor;
+                        EmitText(events);
+                        return;
+                    }
+                    // Assist declined — fall through to default tab handling.
                 }
-                if (shift) return; // Shift+Tab outside a markdown list is a no-op
+                if (shift) return; // Shift+Tab with no edit-assist is a no-op
                 BeginPlainEdit();
                 if (hasSelection) DeletePlainSelection(events);
                 if (_config.Options.ExpandTab)
@@ -4033,7 +4038,8 @@ public class VimEngine
     {
         Snapshot();
         var buf = _bufferManager.Current.Text;
-        var indent = GetAutoIndent(buf, _cursor.Line);
+        var indent = _editAssists.Resolve(_bufferManager.Current.FilePath)?.OpenLinePrefix(MakeEditContext(), above: false)
+                     ?? GetAutoIndent(buf, _cursor.Line);
         CurrentBuffer.Folds.OnLinesInserted(_cursor.Line, 1);
         buf.InsertLines(_cursor.Line, [indent]);
         _cursor = new CursorPosition(_cursor.Line + 1, indent.Length);
@@ -4044,7 +4050,8 @@ public class VimEngine
     {
         Snapshot();
         var buf = _bufferManager.Current.Text;
-        var indent = GetAutoIndent(buf, _cursor.Line);
+        var indent = _editAssists.Resolve(_bufferManager.Current.FilePath)?.OpenLinePrefix(MakeEditContext(), above: true)
+                     ?? GetAutoIndent(buf, _cursor.Line);
         CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, 1);
         buf.InsertLineAbove(_cursor.Line, indent);
         _cursor = _cursor with { Column = indent.Length };
@@ -4922,63 +4929,6 @@ public class VimEngine
     // is a list item, Tab should indent (and Shift+Tab dedent) the whole item by
     // one shiftwidth — matching Obsidian/VS Code — instead of inserting a tab at
     // the cursor. Callers test this first and fall back to normal Tab otherwise.
-    private bool IsMarkdownListContext()
-    {
-        var path = _bufferManager.Current.FilePath;
-        if (path == null) return false;
-        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
-        if (ext != ".md" && ext != ".markdown") return false;
-        return IsMarkdownListItem(_bufferManager.Current.Text.GetLine(_cursor.Line));
-    }
-
-    private static bool IsMarkdownListItem(string line)
-    {
-        int i = 0;
-        while (i < line.Length && (line[i] == ' ' || line[i] == '\t')) i++;
-        if (i >= line.Length) return false;
-        char c = line[i];
-        // Unordered list marker: -, *, + followed by a space.
-        if (c == '-' || c == '*' || c == '+')
-            return i + 1 < line.Length && line[i + 1] == ' ';
-        // Ordered list marker: digits followed by '.' or ')' then a space.
-        if (char.IsDigit(c))
-        {
-            int j = i;
-            while (j < line.Length && char.IsDigit(line[j])) j++;
-            if (j < line.Length && (line[j] == '.' || line[j] == ')'))
-                return j + 1 < line.Length && line[j + 1] == ' ';
-        }
-        return false;
-    }
-
-    // Indents (or, when dedent, outdents) the cursor line by one shiftwidth.
-    // Assumes the caller has already taken an undo snapshot for this edit.
-    private void ApplyMarkdownListIndent(bool dedent, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        var sw = Math.Max(1, _config.Options.ShiftWidth);
-        if (!dedent)
-        {
-            var indentStr = _config.Options.ExpandTab ? new string(' ', sw) : "\t";
-            buf.InsertText(_cursor.Line, 0, indentStr);
-            _cursor = _cursor with { Column = _cursor.Column + indentStr.Length };
-            EmitText(events);
-            return;
-        }
-
-        var line = buf.GetLine(_cursor.Line);
-        int toRemove = 0;
-        for (int i = 0; i < sw && i < line.Length && (line[i] == ' ' || line[i] == '\t'); i++)
-        {
-            toRemove++;
-            if (line[i] == '\t') break; // a tab counts as a full level
-        }
-        if (toRemove == 0) return; // nothing to outdent
-        buf.DeleteRange(_cursor.Line, 0, toRemove);
-        _cursor = _cursor with { Column = Math.Max(0, _cursor.Column - toRemove) };
-        EmitText(events);
-    }
-
     private void ToggleCommentLines(int startLine, int endLine, List<VimEvent> events)
     {
         var prefix = _syntaxEngine.GetCommentPrefix();
@@ -5898,9 +5848,43 @@ public class VimEngine
         _ => null
     };
 
+    // Builds the context passed to filetype edit-assists for the current buffer/caret.
+    private EditContext MakeEditContext() => new(
+        _bufferManager.Current.Text,
+        _cursor,
+        _bufferManager.Current.FilePath,
+        _config.Options.ShiftWidth,
+        _config.Options.ExpandTab);
+
+    // Lets a filetype edit-assist handle Tab/Shift+Tab. Returns true (and emits) when handled.
+    private bool TryEditAssistTab(bool shift, List<VimEvent> events)
+    {
+        var assist = _editAssists.Resolve(_bufferManager.Current.FilePath);
+        if (assist == null) return false;
+        var result = assist.OnTab(MakeEditContext(), shift);
+        if (!result.Handled) return false;
+        _cursor = result.Cursor;
+        EmitText(events);
+        return true;
+    }
+
     private void InsertNewline(List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
+
+        // Let a filetype edit-assist (e.g. Markdown list continuation) handle Enter first.
+        var assist = _editAssists.Resolve(_bufferManager.Current.FilePath);
+        if (assist != null)
+        {
+            var result = assist.OnEnter(MakeEditContext());
+            if (result.Handled)
+            {
+                _cursor = result.Cursor;
+                EmitText(events);
+                return;
+            }
+        }
+
         var indent = !_config.Options.Paste && _config.Options.AutoIndent ? GetAutoIndent(buf, _cursor.Line) : "";
         buf.BreakLine(_cursor.Line, _cursor.Column);
         _cursor = new CursorPosition(_cursor.Line + 1, 0);

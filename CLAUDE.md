@@ -126,8 +126,18 @@ Resolution order in `HandleFormatDocumentAsync`: (1) a configured CLI formatter 
 
 Implement `ISyntaxLanguage` (in `Editor.Core.Syntax`) and register the instance in the array inside `SyntaxEngine`. The interface requires `Name`, `Extensions`, and `Tokenize(string[] lines) → LineTokens[]`. Available `TokenKind` values: `Text`, `Keyword`, `Type`, `String`, `Comment`, `Number`, `Operator`, `Preprocessor`, `Identifier`, `Attribute`.
 
+## Filetype Edit Assists (smart Enter/Tab)
+
+Filetype-aware editing aids live in `Editor.Core/Editing/` (pure .NET, no WPF):
+
+- **`IEditAssist`** — `AppliesTo(filePath)` + `OnEnter(EditContext)` / `OnTab(EditContext, shift)` (each returning an `EditResult` = `Handled` + new `Cursor`) + `OpenLinePrefix(EditContext, above)` (the prefix to seed an `o`/`O`-opened line, or `null`). `EditAssistBase` declines every hook so implementations override only what they need. The assist mutates `EditContext.Buffer` in place and returns the new caret.
+- **`EditAssistRegistry`** — resolves the first assist that applies to a file; `Default` is the process-wide singleton used by `VimEngine`. Add an assist with `Register(...)` (most-recently-registered wins).
+- **`MarkdownEditAssist`** — `.md`/`.markdown`: Enter (and `o`/`O`) continues the current list item (`-`/`*`/`+`, or next ordinal for `1.`/`1)`; `O` keeps the ordinal) preserving indent; an empty item on Enter clears the marker (exits the list); Tab/Shift+Tab indent/outdent the list item even with no text yet.
+
+`VimEngine` calls the resolved assist in `InsertNewline` (Enter), `TryEditAssistTab` (Tab), and `OpenLineBelow`/`OpenLineAbove` (`o`/`O`), falling back to default behaviour when the assist declines. The Enter/Tab path covers both Vim Insert mode and the plain (Vim-disabled) edit mode. **To add smart editing for a new filetype, implement `IEditAssist` and register it — no `VimEngine` changes needed.**
+
 ## Tests
 
-Tests live in `tests/Editor.Core.Tests/`. Key files: `VimEngineTests.cs` (core vim ops), `TextBufferTests.cs` (buffer mutations), `ExCommandProcessorTests.cs` (`:` commands).
+Tests live in `tests/Editor.Core.Tests/`. Key files: `VimEngineTests.cs` (core vim ops), `TextBufferTests.cs` (buffer mutations), `ExCommandProcessorTests.cs` (`:` commands), `MarkdownEditAssistTests.cs` (edit assists).
 
 Test naming convention: `Subject_Behavior()` (e.g. `DD_DeletesLine`). Engine tests use a `CreateEngine(string text, VimConfig? config = null)` factory helper that returns a configured `VimEngine` with the given initial text. Assertions check `engine.Mode`, `engine.Cursor`, `engine.CurrentBuffer.GetText()`, and event lists via `events.Any(e => e.Type == VimEventType.X)`.
