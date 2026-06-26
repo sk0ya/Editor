@@ -80,6 +80,31 @@ public class TextBufferTests
     }
 
     [Fact]
+    public void FindNext_FromEmptyLine_DoesNotThrow()
+    {
+        // Regression: pressing `/` with the cursor on an empty line passed
+        // from.Column + 1 (= 1) as IndexOf's startIndex on a zero-length line,
+        // which threw ArgumentOutOfRangeException and crashed the app.
+        var buf = new TextBuffer("\nhello");
+        var pos = buf.FindNext("hello", new CursorPosition(0, 0), forward: true);
+        Assert.NotNull(pos);
+        Assert.Equal(1, pos!.Value.Line);
+        Assert.Equal(0, pos!.Value.Column);
+    }
+
+    [Fact]
+    public void FindNext_FromLineEnd_DoesNotThrow()
+    {
+        // Cursor column equal to the line length (e.g. end of line) must also
+        // not overrun IndexOf's startIndex.
+        var buf = new TextBuffer("abc\nabc");
+        var pos = buf.FindNext("abc", new CursorPosition(0, 3), forward: true);
+        Assert.NotNull(pos);
+        Assert.Equal(1, pos!.Value.Line);
+        Assert.Equal(0, pos!.Value.Column);
+    }
+
+    [Fact]
     public void ClampCursor_NormalMode_StaysWithinLine()
     {
         var buf = new TextBuffer("abc");

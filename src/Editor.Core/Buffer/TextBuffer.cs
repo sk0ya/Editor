@@ -180,6 +180,9 @@ public class TextBuffer
             {
                 var line = _lines[l];
                 var startCol = l == from.Line ? from.Column + 1 : 0;
+                // string.IndexOf throws when startIndex > Length (e.g. cursor on an empty line:
+                // Column 0, Length 0 → startCol 1). Nothing can match past the line end, so skip.
+                if (startCol > line.Length) continue;
                 var idx = line.IndexOf(pattern, startCol, comparison);
                 if (idx >= 0) return new CursorPosition(l, idx);
             }
