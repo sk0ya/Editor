@@ -77,6 +77,11 @@ public class VimOptions
     // Behaviour
     public bool Hidden { get; set; } = true; // Allow hidden buffers
     public int History { get; set; } = 1000;
+
+    // Mapping timeout — how long to wait for the next key of a multi-key
+    // mapping (e.g. `jj`) before flushing the pending prefix as literal input.
+    public bool Timeout { get; set; } = true;        // 'timeout' — on by default in Vim
+    public int TimeoutLen { get; set; } = 1000;      // 'timeoutlen' — milliseconds
     public bool Ruler { get; set; } = true;
     public string BackSpace { get; set; } = "indent,eol,start";
     public string Clipboard { get; set; } = ""; // "unnamed" or "unnamedplus"
@@ -164,6 +169,7 @@ public class VimOptions
             "breadcrumb" or "bc"               => Set(() => Breadcrumb = value),
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => Set(() => Modeline = value),
+            "timeout" or "to"                  => Set(() => Timeout = value),
             "startofline" or "sol"             => null,
             "ttyfast" or "tf"                  => null,
             _                                  => null  // silently ignore unknown bool options
@@ -202,6 +208,7 @@ public class VimOptions
             "foldmethod" or "fdm"           => Set(() => FoldMethod = value.ToLowerInvariant()),
             "completeopt" or "cot"          => null,
             "updatetime" or "ut"            => null,
+            "timeoutlen" or "tm"            when int.TryParse(value, out var n) => Set(() => TimeoutLen = n),
             "timeoutlen" or "tm"            => null,
             "ttimeoutlen"                   => null,
             "listchars" or "lcs"            => Set(() => ListChars = value),

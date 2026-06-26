@@ -325,6 +325,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private VimStatusBar? _sharedStatusBar;
     private VimStatusBar ActiveStatusBar => _sharedStatusBar ?? StatusBar;
     private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
+    // Fires after 'timeoutlen' when a multi-key mapping (e.g. `jj`) is half-typed
+    // so the dangling prefix is flushed as literal text instead of hanging forever.
+    private readonly System.Windows.Threading.DispatcherTimer _mappingTimeout;
     // ── Insert-mode filesystem path completion (LSP-independent) ──────────────
     private List<LspCompletionItem> _pathCompletionItems = [];
     private int _pathCompletionSelection = -1;
@@ -602,6 +605,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             var cur = _engine.Cursor;
             _ = TriggerCompletionAsync(cur.Line, cur.Column);
         };
+
+        _mappingTimeout = new System.Windows.Threading.DispatcherTimer();
+        _mappingTimeout.Tick += (_, _) => FlushMappingTimeout();
 
         Focusable = true;
         KeyDown += OnKeyDown;
@@ -3241,6 +3247,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                             _imeInsertBuffer.Add(keyStr);
                             ClearImeCompositionOverlay();
                             e.Handled = true;
+                            ArmMappingTimeout();
                             return;
                         }
 
@@ -3261,6 +3268,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                                 ReplayImeKeySequence([.. _imeInsertBuffer, keyStr]);
                                 ClearImeCompositionOverlay();
                                 e.Handled = true;
+                                ArmMappingTimeout();
                                 return;
                             }
 
@@ -3302,6 +3310,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                     FlushImeInsertBuffer();
                 }
                 // Do not fall through to the ImeProcessed/Normal-mode block below.
+                ArmMappingTimeout();
                 return;
             }
 
@@ -3858,6 +3867,51 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 _lspManager.FilterCompletion(bufLine[wordStart..col]);
             }
         }
+
+        ArmMappingTimeout();
+    }
+
+    // After a key is processed, a multi-key mapping (e.g. `jj`) may be half-typed
+    // and its prefix held back — either in the engine (`_pendingMappedInput`, the
+    // IME-OFF path) or in `_imeInsertBuffer` (the IME-ON path). Arm a 'timeoutlen'
+    // timer so that if no following key arrives the prefix is emitted instead of
+    // hanging forever; the next keypress cancels and reschedules this.
+    private void ArmMappingTimeout()
+    {
+        _mappingTimeout.Stop();
+        if (!_engine.Options.Timeout)
+            return;
+        if (!_engine.HasPendingMappedInput && _imeInsertBuffer.Count == 0)
+            return;
+
+        _mappingTimeout.Interval = TimeSpan.FromMilliseconds(Math.Max(1, _engine.Options.TimeoutLen));
+        _mappingTimeout.Start();
+    }
+
+    private void FlushMappingTimeout()
+    {
+        _mappingTimeout.Stop();
+
+        // IME-ON insert path: replay the held keys to the IME so a lone prefix
+        // (e.g. "j") can still be typed/composed, or insert it as literal text
+        // when it can't be replayed.
+        if (_imeInsertBuffer.Count > 0)
+        {
+            bool canReplay = _imeInsertBuffer.All(k => k.Length == 1 && char.IsAsciiLetterOrDigit(k[0]));
+            if (canReplay)
+                ReplayImeKeySequence([.. _imeInsertBuffer]);
+            else
+                FlushImeInsertBuffer();
+            return;
+        }
+
+        var events = _engine.FlushPendingMappings();
+        if (events.Count == 0)
+            return;
+
+        ProcessVimEvents(events);
+        if (events.Any(e => e.Type == VimEventType.TextChanged))
+            _lspManager.OnTextChanged(_engine.CurrentBuffer.Text.GetText());
     }
 
     private async Task TriggerCompletionAsync(int line, int col)

@@ -352,6 +352,23 @@ public class VimEngine
         return events;
     }
 
+    // True when a multi-key mapping (e.g. `jj`) is half-typed and the engine is
+    // holding the prefix waiting for the next key. The host arms a 'timeoutlen'
+    // timer while this is set so a dangling prefix is eventually emitted as
+    // literal text (Vim's 'timeout' behaviour) instead of being swallowed.
+    public bool HasPendingMappedInput => _pendingMappedInput.Count > 0;
+
+    // Flush a half-typed mapping prefix as literal input. Called by the host
+    // when the 'timeoutlen' timer fires with no further key. No-op if nothing
+    // is pending.
+    public IReadOnlyList<VimEvent> FlushPendingMappings()
+    {
+        var events = new List<VimEvent>();
+        if (_pendingMappedInput.Count > 0)
+            FlushPendingMappedInput(events);
+        return events;
+    }
+
     private void ProcessStroke(VimKeyStroke stroke, List<VimEvent> events, bool allowMapping)
     {
         // Single decision point for the Vim-disabled (plain editor) state. Every
