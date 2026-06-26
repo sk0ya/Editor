@@ -1273,7 +1273,7 @@ public class VimEngineTests
     {
         var engine = CreateEngine("hello");
         var events = engine.ProcessKey("l", ctrl: true, shift: false, alt: false);
-        Assert.True(events.Any(e => e.Type == VimEventType.StatusMessage));
+        Assert.Contains(events, e => e.Type == VimEventType.StatusMessage);
     }
 
     [Fact]
@@ -1281,7 +1281,7 @@ public class VimEngineTests
     {
         var engine = CreateEngine("hello");
         var events = engine.ProcessKey("]", ctrl: true, shift: false, alt: false);
-        Assert.True(events.Any(e => e.Type == VimEventType.GoToDefinitionRequested));
+        Assert.Contains(events, e => e.Type == VimEventType.GoToDefinitionRequested);
     }
 
     [Fact]
