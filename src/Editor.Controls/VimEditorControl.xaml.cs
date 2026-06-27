@@ -568,6 +568,39 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
     }
 
+    private static int _warmedUp;
+
+    /// <summary>
+    /// Primes the JIT for the most expensive part of constructing a <see cref="VimEditorControl"/>:
+    /// the <c>.vimrc</c> parsing path (<see cref="VimConfig.LoadDefault"/>), which JIT-compiles a
+    /// large amount of map/key-notation parsing code (~280&#160;ms one-time) the first time it runs.
+    /// Because the JIT is process-wide, doing this early — ideally on a background thread while the
+    /// host window initializes — means the first real editor construction hits the already-warm path
+    /// (~1&#160;ms) instead of blocking the UI thread.
+    /// </summary>
+    /// <remarks>
+    /// Idempotent and thread-safe; the work runs at most once per process. Call it as early as
+    /// possible (e.g. from <c>Application.OnStartup</c>). The returned <see cref="Task"/> completes
+    /// when warm-up finishes; awaiting it is optional — fire-and-forget is the intended usage.
+    /// </remarks>
+    public static Task WarmUpAsync()
+    {
+        if (Interlocked.Exchange(ref _warmedUp, 1) != 0)
+            return Task.CompletedTask;
+
+        return Task.Run(static () =>
+        {
+            try
+            {
+                // Touch the heavy parsing path and engine construction so their methods are JITted
+                // off the UI thread. The instances are discarded — this only primes the JIT.
+                var config = VimConfig.LoadDefault();
+                _ = new VimEngine(config);
+            }
+            catch { /* warm-up only; ignore failures */ }
+        });
+    }
+
     public VimEditorControl()
         : this(null)
     {
