@@ -180,6 +180,15 @@ public partial class EditorCanvas : FrameworkElement
     public double TotalContentWidth => _contentWidth;
     public double ViewportHeight => RenderSize.Height;
     public double ViewportWidth => RenderSize.Width;
+
+    // The overlay scrollbars sit at the bottom/right edges. When a bar is shown it
+    // occupies ScrollbarSize px that text must not scroll under, otherwise the last
+    // line / rightmost column ends up hidden behind the bar. These give the height/
+    // width actually usable for text, so scroll clamping keeps content clear of the bars.
+    private bool HorizontalBarPresent => _showScrollbar && !_wrapLines && TotalContentWidth > RenderSize.Width + 1;
+    private bool VerticalBarPresent => _showScrollbar && TotalContentHeight > RenderSize.Height + 1;
+    private double UsableViewportHeight => Math.Max(0, RenderSize.Height - (HorizontalBarPresent ? ScrollbarSize : 0));
+    private double UsableViewportWidth => Math.Max(0, RenderSize.Width - (VerticalBarPresent ? ScrollbarSize : 0));
     public double VerticalOffset => _scrollOffsetY;
     public double HorizontalOffset => _scrollOffsetX;
     public bool WrapLines
@@ -554,10 +563,10 @@ public partial class EditorCanvas : FrameworkElement
 
     public void ScrollTo(double offsetY, double offsetX = 0)
     {
-        double maxOffsetY = Math.Max(0, TotalContentHeight - RenderSize.Height);
+        double maxOffsetY = Math.Max(0, TotalContentHeight - UsableViewportHeight);
         double maxOffsetX = _wrapLines
             ? 0
-            : Math.Max(0, TotalContentWidth - RenderSize.Width);
+            : Math.Max(0, TotalContentWidth - UsableViewportWidth);
         _scrollOffsetY = Math.Clamp(offsetY, 0, maxOffsetY);
         _scrollOffsetX = _wrapLines ? 0 : Math.Clamp(offsetX, 0, maxOffsetX);
         ScrollChanged?.Invoke(_scrollOffsetY, _scrollOffsetX);
@@ -664,10 +673,10 @@ public partial class EditorCanvas : FrameworkElement
 
     private void ClampScrollOffsets(bool raiseScrollChanged)
     {
-        double maxOffsetY = Math.Max(0, TotalContentHeight - RenderSize.Height);
+        double maxOffsetY = Math.Max(0, TotalContentHeight - UsableViewportHeight);
         double maxOffsetX = _wrapLines
             ? 0
-            : Math.Max(0, TotalContentWidth - RenderSize.Width);
+            : Math.Max(0, TotalContentWidth - UsableViewportWidth);
 
         double newOffsetY = Math.Clamp(_scrollOffsetY, 0, maxOffsetY);
         double newOffsetX = _wrapLines ? 0 : Math.Clamp(_scrollOffsetX, 0, maxOffsetX);
@@ -2592,7 +2601,7 @@ public partial class EditorCanvas : FrameworkElement
         if (_lineHeight == 0) return;
 
         double cursorY = GetCursorVisualLine() * _lineHeight;
-        double viewHeight = RenderSize.Height;
+        double viewHeight = UsableViewportHeight;
         double margin = _scrollOff * _lineHeight;
 
         if (cursorY < _scrollOffsetY + margin)
@@ -2607,7 +2616,7 @@ public partial class EditorCanvas : FrameworkElement
         else
         {
             var (_, _, _, gutterWidth) = GetGutterMetrics();
-            double viewportWidth = Math.Max(0, RenderSize.Width - gutterWidth);
+            double viewportWidth = Math.Max(0, UsableViewportWidth - gutterWidth);
             string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : string.Empty;
             int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);
             double cursorX = GetVisualX(line, cursorCol);
@@ -2623,10 +2632,10 @@ public partial class EditorCanvas : FrameworkElement
             }
         }
 
-        double maxOffsetY = Math.Max(0, TotalContentHeight - RenderSize.Height);
+        double maxOffsetY = Math.Max(0, TotalContentHeight - UsableViewportHeight);
         double maxOffsetX = _wrapLines
             ? 0
-            : Math.Max(0, TotalContentWidth - RenderSize.Width);
+            : Math.Max(0, TotalContentWidth - UsableViewportWidth);
         _scrollOffsetY = Math.Clamp(_scrollOffsetY, 0, maxOffsetY);
         _scrollOffsetX = _wrapLines ? 0 : Math.Clamp(_scrollOffsetX, 0, maxOffsetX);
         ScrollChanged?.Invoke(_scrollOffsetY, _scrollOffsetX);
