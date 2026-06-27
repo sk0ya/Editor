@@ -9,9 +9,8 @@
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
-    <IsPackable>true</IsPackable>
-    <PackageId>sk0ya.Editor.Controls</PackageId>
-    <Version>1.0.28</Version>
+    <IsPackable>false</IsPackable>
+    <Version>1.0.29</Version>
     <Authors>shigekazukoya</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>

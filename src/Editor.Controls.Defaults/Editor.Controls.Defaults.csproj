@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\Editor.Controls\Editor.Controls.csproj" />
-    <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" />
+    <ProjectReference Include="..\Editor.Controls\Editor.Controls.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" PrivateAssets="all" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -11,13 +11,22 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
-    <PackageId>sk0ya.Editor.Controls.Defaults</PackageId>
-    <Version>1.0.28</Version>
+    <PackageId>sk0ya.Editor.Controls</PackageId>
+    <Version>1.0.29</Version>
     <Authors>shigekazukoya</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>
-    <Description>Default Git and LSP integrations for the Editor WPF control.</Description>
-    <PackageTags>editor;wpf;vim;lsp;git</PackageTags>
+    <Description>WPF Vim-like editor control with built-in Git and LSP integrations. Bundles the core engine, the WPF control, and the default Git/LSP integrations in a single package.</Description>
+    <PackageTags>editor;wpf;vim;text-editor;lsp;git</PackageTags>
+    <!-- Bundle the referenced project DLLs (Core, Controls) into this single package -->
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeReferencedProjectDlls</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>
+
+  <Target Name="IncludeReferencedProjectDlls">
+    <ItemGroup>
+      <BuildOutputInPackage Include="$(OutputPath)Editor.Core.dll" />
+      <BuildOutputInPackage Include="$(OutputPath)Editor.Controls.dll" />
+    </ItemGroup>
+  </Target>
 
 </Project>
