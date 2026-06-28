@@ -845,6 +845,7 @@ public partial class EditorCanvas : FrameworkElement
             }
 
             _isDragging = true;
+            ClearDataTipHover();
             // Don't fire MouseDragging when dragging in minimap area
             if (!(_showMinimap && point.X >= RenderSize.Width - MinimapWidth))
             {
@@ -858,6 +859,7 @@ public partial class EditorCanvas : FrameworkElement
         if (_showScrollbar && IsOverScrollbar(point))
         {
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+            ClearDataTipHover();
             Cursor = System.Windows.Input.Cursors.Arrow;
             return;
         }
@@ -866,6 +868,7 @@ public partial class EditorCanvas : FrameworkElement
         if (_showMinimap && point.X >= RenderSize.Width - MinimapWidth)
         {
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+            ClearDataTipHover();
             Cursor = System.Windows.Input.Cursors.Arrow;
             return;
         }
@@ -878,12 +881,14 @@ public partial class EditorCanvas : FrameworkElement
             int bufferLine = HitTestGutterLine(point);
             Cursor = bufferLine >= 0 ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
             SetHoveredBreakpointLine(bufferLine);
+            ClearDataTipHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
         }
         else if (_showLineNumbers && point.X >= bpColW + lineNumWidth2 && point.X < gutterWidth2)
         {
             // Hovering in fold column
             SetHoveredBreakpointLine(-1);
+            ClearDataTipHover();
             int bufferLine = HitTestGutterLine(point);
             bool onFold = bufferLine >= 0 && (_closedFoldStarts.Contains(bufferLine) || _openFoldStarts.Contains(bufferLine));
             Cursor = onFold ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
@@ -895,6 +900,7 @@ public partial class EditorCanvas : FrameworkElement
         {
             // Hovering in line number area
             SetHoveredBreakpointLine(-1);
+            ClearDataTipHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
             Cursor = System.Windows.Input.Cursors.Arrow;
         }
@@ -902,6 +908,9 @@ public partial class EditorCanvas : FrameworkElement
         {
             SetHoveredBreakpointLine(-1);
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+
+            // Debug DataTip: while stopped, hovering an identifier asks the host to evaluate it.
+            UpdateDataTipHover(point);
 
             // Ctrl+hover over a link shows a hand cursor as a clickability cue
             bool ctrlDown = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0;
@@ -936,6 +945,7 @@ public partial class EditorCanvas : FrameworkElement
     {
         base.OnMouseLeave(e);
         if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+        ClearDataTipHover();
         Cursor = System.Windows.Input.Cursors.IBeam;
     }
 

@@ -660,6 +660,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.FoldGutterClicked += OnFoldGutterClicked;
         Canvas.BreakpointToggled += OnCanvasBreakpointToggled;
+        Canvas.DataTipHoverChanged += OnCanvasDataTipHoverChanged;
+        Canvas.DataTipHoverEnded += OnCanvasDataTipHoverEnded;
         Canvas.LinkClicked += OnCanvasLinkClicked;
         Canvas.FileLinkClicked += OnCanvasFileLinkClicked;
 
@@ -668,6 +670,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         {
             SyncViewportState();
             UpdateViewportDecorations();
+            HideDataTip();
             ViewportScrolled?.Invoke(this, EventArgs.Empty);
         };
         Canvas.SizeChanged += (_, _) =>
@@ -3135,6 +3138,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Any key dismisses an open debug DataTip (it tracks the mouse-hovered value).
+        if (_dataTipPopup is { IsOpen: true }) HideDataTip();
+
         // Reset the "Vim already handled this key" flag at the start of EVERY key.
         // OnKeyDown also resets it, but OnKeyDown does NOT fire for Key.ImeProcessed
         // keys — so when a Normal/Visual-mode IME key is handled here (which sets the
