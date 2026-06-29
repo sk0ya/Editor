@@ -2063,6 +2063,16 @@ public partial class EditorCanvas : FrameworkElement
         {
             // Entire line highlighted
         }
+        else if (sel.Type == SelectionType.Block)
+        {
+            // Rectangular selection: the same column span on every line in range.
+            int leftCol = Math.Min(sel.Start.Column, sel.End.Column);
+            int rightCol = Math.Max(sel.Start.Column, sel.End.Column);
+            int startCol = Math.Min(leftCol, lineText.Length);
+            int endCol = Math.Min(rightCol + 1, lineText.Length);
+            selLeft = textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX;
+            selWidth = GetVisualX(lineText, endCol) - GetVisualX(lineText, startCol);
+        }
         else
         {
             int startCol = line == start.Line ? start.Column : 0;
