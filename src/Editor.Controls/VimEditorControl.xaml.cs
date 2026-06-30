@@ -1871,7 +1871,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             ActiveStatusBar.UpdateStatus($"Could not reload \"{filePath}\" (file is locked)");
             return;
         }
-        var detectedEnc = Editor.Core.Buffer.VimBuffer.DetectEncodingFromBom(bytes);
+        var detectedEnc = Editor.Core.Buffer.VimBuffer.DetectEncoding(bytes);
         var enc = Editor.Core.Buffer.VimBuffer.GetEncoding(detectedEnc);
         var bomLen = Editor.Core.Buffer.VimBuffer.GetBomLength(bytes, enc);
         var text = enc.GetString(bytes, bomLen, bytes.Length - bomLen);

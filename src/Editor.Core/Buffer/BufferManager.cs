@@ -29,6 +29,13 @@ public class VimBuffer
     /// <summary>Display title for a virtual document (shown instead of a file name).</summary>
     public string? DisplayName { get; set; }
 
+    static VimBuffer()
+    {
+        // Shift-JIS / EUC-JP live in the legacy code-pages provider, which .NET does not load
+        // by default. Register it once so GetEncoding("shift-jis"/"euc-jp") resolves.
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+    }
+
     private static int _nextId = 1;
     public VimBuffer() => Id = _nextId++;
     public VimBuffer(string filePath, string? preferredEncoding = null) : this()
@@ -37,10 +44,11 @@ public class VimBuffer
         if (File.Exists(filePath))
         {
             var bytes = File.ReadAllBytes(filePath);
-            var detectedEncoding = DetectEncodingFromBom(bytes);
-            FileEncoding = detectedEncoding == "utf-8" && !string.IsNullOrWhiteSpace(preferredEncoding)
+            // An explicit caller-supplied encoding wins only when the file carries no BOM;
+            // otherwise auto-detect (BOM, then UTF-8/Shift-JIS/EUC-JP content analysis).
+            FileEncoding = DetectEncodingFromBom(bytes) == "utf-8" && !string.IsNullOrWhiteSpace(preferredEncoding)
                 ? preferredEncoding
-                : detectedEncoding;
+                : DetectEncoding(bytes);
             // UTF-16 text legitimately contains NUL bytes, so only run the NUL-byte scan when the
             // BOM did not already identify the file as a known (UTF-16) text encoding.
             bool isUtf16 = FileEncoding is "utf-16" or "utf-16le" or "utf-16be";
@@ -85,6 +93,115 @@ public class VimBuffer
         if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
             return "utf-8-bom";
         return "utf-8";
+    }
+
+    /// <summary>
+    /// Detect the encoding name of a file's raw bytes. A BOM wins if present; otherwise the
+    /// content is analysed so that BOM-less Japanese files (Shift-JIS / EUC-JP) are recognised
+    /// instead of being silently mis-decoded as UTF-8. Falls back to "utf-8" when the bytes are
+    /// pure ASCII, valid UTF-8, or no encoding is plausible.
+    /// </summary>
+    public static string DetectEncoding(byte[] bytes)
+    {
+        var bom = DetectEncodingFromBom(bytes);
+        if (bom != "utf-8") return bom;
+
+        int scan = Math.Min(bytes.Length, 65536);
+
+        // Pure ASCII (no high bytes) is decoded identically by every candidate; treat as utf-8.
+        bool hasHighByte = false;
+        for (int i = 0; i < scan; i++)
+            if (bytes[i] >= 0x80) { hasHighByte = true; break; }
+        if (!hasHighByte) return "utf-8";
+
+        // Well-formed UTF-8 multibyte content is decisive — SJIS/EUC byte patterns almost never
+        // satisfy the UTF-8 continuation rules, so a clean pass means the file really is UTF-8.
+        if (IsValidUtf8(bytes, scan)) return "utf-8";
+
+        int sjis = ScoreShiftJis(bytes, scan);
+        int euc  = ScoreEucJp(bytes, scan);
+        if (sjis < 0 && euc < 0) return "utf-8"; // neither is plausible — leave the default
+        if (euc < 0) return "shift-jis";
+        if (sjis < 0) return "euc-jp";
+        return euc > sjis ? "euc-jp" : "shift-jis";
+    }
+
+    /// <summary>True when the first <paramref name="scan"/> bytes form valid UTF-8 containing at
+    /// least one multibyte sequence (a trailing sequence truncated by the scan window is ignored).</summary>
+    private static bool IsValidUtf8(byte[] bytes, int scan)
+    {
+        int i = 0;
+        bool sawMultibyte = false;
+        while (i < scan)
+        {
+            byte b = bytes[i];
+            if (b < 0x80) { i++; continue; }
+
+            int trail;
+            if ((b & 0xE0) == 0xC0) { if (b < 0xC2) return false; trail = 1; } // reject overlong
+            else if ((b & 0xF0) == 0xE0) trail = 2;
+            else if ((b & 0xF8) == 0xF0) { if (b > 0xF4) return false; trail = 3; }
+            else return false;
+
+            for (int k = 1; k <= trail; k++)
+            {
+                if (i + k >= scan) return sawMultibyte;          // truncated at window edge
+                if ((bytes[i + k] & 0xC0) != 0x80) return false; // bad continuation byte
+            }
+            sawMultibyte = true;
+            i += trail + 1;
+        }
+        return sawMultibyte;
+    }
+
+    /// <summary>Count plausible Shift-JIS double-byte characters; returns -1 if an invalid byte
+    /// sequence disqualifies the encoding.</summary>
+    private static int ScoreShiftJis(byte[] bytes, int scan)
+    {
+        int i = 0, count = 0;
+        while (i < scan)
+        {
+            byte b = bytes[i];
+            if (b < 0x80) { i++; continue; }
+            if (b is >= 0xA1 and <= 0xDF) { i++; continue; } // half-width katakana (single byte)
+            bool lead = b is >= 0x81 and <= 0x9F or >= 0xE0 and <= 0xFC;
+            if (!lead) return -1;
+            if (i + 1 >= scan) break;
+            byte t = bytes[i + 1];
+            if (t is >= 0x40 and <= 0x7E or >= 0x80 and <= 0xFC) { count++; i += 2; }
+            else return -1;
+        }
+        return count;
+    }
+
+    /// <summary>Count plausible EUC-JP double/triple-byte characters; returns -1 if an invalid
+    /// byte sequence disqualifies the encoding.</summary>
+    private static int ScoreEucJp(byte[] bytes, int scan)
+    {
+        int i = 0, count = 0;
+        while (i < scan)
+        {
+            byte b = bytes[i];
+            if (b < 0x80) { i++; continue; }
+            if (b == 0x8E) // half-width katakana: 0x8E + 0xA1..0xDF
+            {
+                if (i + 1 >= scan) break;
+                if (bytes[i + 1] is >= 0xA1 and <= 0xDF) { count++; i += 2; } else return -1;
+            }
+            else if (b == 0x8F) // JIS X 0212: 0x8F + two 0xA1..0xFE bytes
+            {
+                if (i + 2 >= scan) break;
+                if (bytes[i + 1] is >= 0xA1 and <= 0xFE && bytes[i + 2] is >= 0xA1 and <= 0xFE)
+                    { count++; i += 3; } else return -1;
+            }
+            else if (b is >= 0xA1 and <= 0xFE)
+            {
+                if (i + 1 >= scan) break;
+                if (bytes[i + 1] is >= 0xA1 and <= 0xFE) { count++; i += 2; } else return -1;
+            }
+            else return -1;
+        }
+        return count;
     }
 
     public static int GetBomLength(byte[] bytes, Encoding enc)

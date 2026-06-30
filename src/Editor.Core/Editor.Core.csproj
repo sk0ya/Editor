@@ -14,4 +14,9 @@
     <PackageTags>editor;vim;text-editor;core</PackageTags>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Provides legacy code pages (Shift-JIS / EUC-JP) which .NET does not ship by default. -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.0" />
+  </ItemGroup>
+
 </Project>
