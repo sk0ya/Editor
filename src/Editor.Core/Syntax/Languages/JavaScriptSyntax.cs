@@ -156,8 +156,7 @@ public class JavaScriptSyntax : ISyntaxLanguage
                     i++;
                 var word = line[start..i];
                 var kind = Keywords.Contains(word) ? TokenKind.Keyword
-                    : char.IsUpper(word[0]) ? TokenKind.Type
-                    : TokenKind.Identifier;
+                    : SyntaxHeuristics.ClassifyIdentifier(line, start, i);
                 tokens.Add(new SyntaxToken(start, i - start, kind));
                 continue;
             }

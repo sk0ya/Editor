@@ -357,7 +357,7 @@ public partial class EditorCanvas : FrameworkElement
         "class" or "struct" or "enum"
             or "interface" or "type"
             or "typeParameter"               => Theme.TokenType,
-        "function" or "method"               => Theme.TokenIdentifier,
+        "function" or "method"               => Theme.TokenFunction,
         "keyword" or "modifier"              => Theme.TokenKeyword,
         "string" or "regexp"                 => Theme.TokenString,
         "number"                             => Theme.TokenNumber,
