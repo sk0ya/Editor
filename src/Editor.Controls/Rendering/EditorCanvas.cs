@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Media;
 using Editor.Controls.Git;
 using Editor.Controls.Themes;
+using Editor.Core.Editing;
 using Editor.Core.Engine;
 using Editor.Core.Lsp;
 using Editor.Core.Models;
@@ -119,6 +120,9 @@ public partial class EditorCanvas : FrameworkElement
     // Git
     private Dictionary<int, GitLineState> _gitDiff = [];
     private Dictionary<int, string> _blameAnnotations = [];
+
+    // Changed-since-last-save gutter (independent of git; tracks the on-disk baseline)
+    private Dictionary<int, Editor.Core.Editing.SaveLineState> _saveDiff = [];
 
     // Inlay hints — raw list plus a line-keyed lookup rebuilt on SetInlayHints
     private IReadOnlyList<InlayHint> _inlayHints = [];
@@ -294,6 +298,14 @@ public partial class EditorCanvas : FrameworkElement
     }
 
     public Dictionary<int, GitLineState>? GetGitDiff() => _gitDiff;
+
+    /// <summary>Sets the per-line changed-since-save state for the change bar drawn at the
+    /// right edge of the gutter (flush against the text).</summary>
+    public void SetSaveDiff(Dictionary<int, Editor.Core.Editing.SaveLineState> diff)
+    {
+        _saveDiff = diff;
+        InvalidateVisual();
+    }
 
     public void SetInlayHints(IReadOnlyList<InlayHint> hints)
     {
@@ -1202,6 +1214,32 @@ public partial class EditorCanvas : FrameworkElement
                         if (gitBrush != null)
                             dc.DrawRectangle(gitBrush, null, new Rect(0, y, 3, _lineHeight));
                     }
+                }
+            }
+
+            // Changed-since-save change bar — flush against the text at the right edge of the
+            // gutter, so it reads as a property of the code line (distinct from the git bar,
+            // which sits at the far-left edge). Shown even when line numbers are hidden.
+            if (drawNumberAndFold && gutterWidth > 0
+                && _saveDiff.TryGetValue(l, out var saveState) && saveState != SaveLineState.None)
+            {
+                var saveBrush = saveState switch
+                {
+                    SaveLineState.Added    => Theme.GitAdded,
+                    SaveLineState.Modified => Theme.GitModified,
+                    SaveLineState.Deleted  => Theme.GitDeleted,
+                    _                      => null
+                };
+                if (saveBrush != null)
+                {
+                    const double saveBarW = 2;
+                    double saveBarX = gutterWidth - saveBarW;
+                    // Deletions removed lines above this one (the line itself is unchanged),
+                    // so mark it with a short notch at the top rather than a full-height bar.
+                    double barH = saveState == SaveLineState.Deleted
+                        ? Math.Min(_lineHeight, _lineHeight / 3 + 1)
+                        : _lineHeight;
+                    dc.DrawRectangle(saveBrush, null, new Rect(saveBarX, y, saveBarW, barH));
                 }
             }
 

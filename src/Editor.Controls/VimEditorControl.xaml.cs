@@ -342,6 +342,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private int _lspSelectionRangeIndex = -1;
     private CursorPosition? _lspSelectionRangeOrigin;
 
+    // ─── Breadcrumb fallback (non-LSP) symbol cache, keyed by buffer + text version ───
+    private IReadOnlyList<DocumentSymbol> _fallbackSymbols = [];
+    private long _fallbackSymbolsVersion = -1;
+    private VimBuffer? _fallbackSymbolsBuffer;
+    // Identity of the segments currently rendered, to skip rebuilding the bar when unchanged.
+    private string _lastBreadcrumbKey = "\0";
+
     // ─── Multi-cursor ───
     private readonly List<(int Line, int Col)> _extraCursors = [];
     private bool _multiCursorMode = false;
@@ -689,6 +696,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection, _lspManager.CompletionScrollOffset);
         Canvas.SetSignatureHelp(_lspManager.CurrentSignatureHelp);
         Canvas.SetCodeActions(_lspManager.CurrentCodeActions, _lspManager.CodeActionsSelection, _lspManager.CodeActionsScrollOffset);
+        // Document symbols arrive asynchronously after a file opens; refresh the breadcrumb
+        // bar so it populates without waiting for the next cursor move.
+        if (_engine.Options.Breadcrumb)
+            RefreshBreadcrumbBar();
     }
 
     private void OnLspStatusMessage(string msg)
@@ -703,12 +714,119 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void OnLspBreadcrumbChanged(string breadcrumb)
     {
-        // Only show breadcrumb when the option is enabled
-        if (!_engine.Options.Breadcrumb) return;
-        // Show current symbol path in the status area (only when non-empty, to avoid
-        // wiping real status messages when the cursor is outside any symbol range)
-        if (!string.IsNullOrEmpty(breadcrumb))
-            ActiveStatusBar.UpdateStatus(breadcrumb);
+        // The breadcrumb is rendered as a clickable bar above the editor. The string
+        // payload only tells us the path changed; we re-query the segments (with jump
+        // positions) for the current cursor and rebuild the bar.
+        RefreshBreadcrumbBar();
+    }
+
+    /// <summary>Rebuilds the breadcrumb bar from the symbol path at the current cursor.
+    /// Collapses the bar when the feature is off or no symbol contains the cursor.</summary>
+    private void RefreshBreadcrumbBar()
+    {
+        if (!_engine.Options.Breadcrumb)
+        {
+            BreadcrumbBar.Visibility = Visibility.Collapsed;
+            _lastBreadcrumbKey = "\0"; // force a rebuild when re-enabled
+            return;
+        }
+
+        var cur = _engine.Cursor;
+        var segments = _lspManager.GetBreadcrumbSegments(cur.Line, cur.Column);
+        if (segments.Count == 0)
+        {
+            // No LSP symbols (server absent or still loading): fall back to a heuristic
+            // extractor so the breadcrumb works without a language server.
+            segments = Editor.Core.Lsp.BreadcrumbBuilder.GetSegments(GetFallbackSymbols(), cur.Line, cur.Column);
+        }
+        BuildBreadcrumbBar(segments);
+    }
+
+    /// <summary>Heuristic document symbols for the breadcrumb fallback, recomputed only when the
+    /// buffer text version changes (re-parsing the whole file on every cursor move would be wasteful).</summary>
+    private IReadOnlyList<DocumentSymbol> GetFallbackSymbols()
+    {
+        var buf = _engine.CurrentBuffer;
+        long v = buf.Text.Version;
+        if (!ReferenceEquals(_fallbackSymbolsBuffer, buf) || _fallbackSymbolsVersion != v)
+        {
+            _fallbackSymbolsBuffer = buf;
+            _fallbackSymbolsVersion = v;
+            _fallbackSymbols = Editor.Core.Navigation.DocumentSymbolExtractor.Extract(GetCachedLines(buf), buf.FilePath);
+        }
+        return _fallbackSymbols;
+    }
+
+    private void BuildBreadcrumbBar(IReadOnlyList<BreadcrumbSegment> segments)
+    {
+        // Skip the rebuild when the rendered path is unchanged (cursor moving within the
+        // same symbol fires this on every move).
+        var key = segments.Count == 0
+            ? ""
+            : string.Join("|", segments.Select(s => $"{s.Name}{s.Line}{s.Column}"));
+        if (key == _lastBreadcrumbKey) return;
+        _lastBreadcrumbKey = key;
+
+        BreadcrumbPanel.Children.Clear();
+
+        if (segments.Count == 0)
+        {
+            BreadcrumbBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var mono = new System.Windows.Media.FontFamily("Consolas");
+
+        // Symbol path only (no leading file-name label — the outermost symbol is usually
+        // named like the file, which otherwise reads as "file › file").
+        for (int i = 0; i < segments.Count; i++)
+        {
+            if (i > 0) BreadcrumbPanel.Children.Add(MakeBreadcrumbSeparator(mono));
+            BreadcrumbPanel.Children.Add(MakeBreadcrumbButton(segments[i], mono));
+        }
+
+        BreadcrumbBar.Visibility = Visibility.Visible;
+    }
+
+    private TextBlock MakeBreadcrumbSeparator(System.Windows.Media.FontFamily mono) => new()
+    {
+        Text = "›",
+        FontFamily = mono,
+        FontSize = 12,
+        Foreground = _theme.LineNumberFg,
+        VerticalAlignment = VerticalAlignment.Center,
+        Margin = new Thickness(2, 0, 2, 0)
+    };
+
+    // A clickable label (plain TextBlock — no Button chrome) for one breadcrumb segment.
+    private TextBlock MakeBreadcrumbButton(BreadcrumbSegment seg, System.Windows.Media.FontFamily mono)
+    {
+        var tb = new TextBlock
+        {
+            Text = seg.Name,
+            Tag = seg,
+            FontFamily = mono,
+            FontSize = 12,
+            Foreground = _theme.Foreground,
+            Padding = new Thickness(3, 0, 3, 0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = seg.Kind.ToString()
+        };
+        tb.MouseLeftButtonUp += BreadcrumbSegment_Click;
+        // Subtle hover affordance.
+        tb.MouseEnter += (_, _) => tb.Foreground = _theme.LinkColor;
+        tb.MouseLeave += (_, _) => tb.Foreground = _theme.Foreground;
+        return tb;
+    }
+
+    private void BreadcrumbSegment_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: BreadcrumbSegment seg })
+        {
+            NavigateTo(seg.Line, seg.Column);
+            Canvas.Focus();
+        }
     }
 
     private void OnLspInlayHintsChanged(IReadOnlyList<InlayHint> hints)
@@ -792,14 +910,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         if (!_engine.Options.Breadcrumb)
         {
-            // Clear any breadcrumb text from the status bar when disabled
             _lspManager.ClearBreadcrumb();
+            BreadcrumbBar.Visibility = Visibility.Collapsed;
+            _lastBreadcrumbKey = "\0"; // force a rebuild when re-enabled
         }
         else
         {
-            // Immediately show breadcrumb for current cursor position when enabled
+            // Immediately populate the bar for the current cursor position when enabled.
             var cur = _engine.Cursor;
             _lspManager.UpdateBreadcrumb(cur.Line, cur.Column);
+            RefreshBreadcrumbBar();
         }
     }
 
@@ -1828,6 +1948,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         _suppressFileWatcher = false;
+        RefreshSaveDiff();
         if (!string.Equals(_saveStartedFilePath, currentPath, StringComparison.OrdinalIgnoreCase))
             _ = RefreshGitDiffAsync();
         else
@@ -1903,6 +2024,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (documentId != null && _engine.CurrentBuffer.DocumentId != documentId)
             return;
         _engine.CurrentBuffer.Text.MarkSaved();
+        RefreshSaveDiff();
         SyncStatusBar();
     }
 
@@ -2421,6 +2543,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         StatusBar.Theme = _theme;
         if (_sharedStatusBar != null) _sharedStatusBar.Theme = _theme;
         Background = _theme.Background;
+        BreadcrumbBar.Background = _theme.LineNumberBg;
+        BreadcrumbBar.BorderBrush = _theme.IndentGuideBrush;
+        RefreshBreadcrumbBar();
         Canvas.InvalidateVisual();
     }
 
@@ -5351,7 +5476,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                         else
                         {
                             if (_engine.Options.Breadcrumb)
+                            {
                                 _lspManager.UpdateBreadcrumb(ce.Position.Line, ce.Position.Column);
+                                RefreshBreadcrumbBar(); // also covers the non-LSP fallback (no LSP event fires)
+                            }
                             // Request document highlights for the symbol under cursor (Normal mode)
                             var uri = _lspManager.CurrentUri;
                             if (uri != null)
@@ -5621,6 +5749,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Canvas.SetScrollbar(!_minimalChrome && _engine.Options.Scrollbar);
             Canvas.SetMinimap(!_minimalChrome && _engine.Options.Minimap);
             Canvas.SetColorPreview(_engine.Options.ColorPreview);
+            Canvas.SetSaveDiff(Editor.Core.Editing.SaveDiff.Compute(buf.Text.SavedLines, lines));
 
             UpdateViewportDecorations();
             UpdateSearchHighlights(_engine.SearchPattern);
@@ -5631,6 +5760,17 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         SyncStatusBar();
+
+        if (_engine.Options.Breadcrumb)
+            RefreshBreadcrumbBar();
+    }
+
+    /// <summary>Recomputes the changed-since-save gutter against the buffer's saved baseline.
+    /// Saving updates the baseline without firing a text-change, so call this after a save.</summary>
+    private void RefreshSaveDiff()
+    {
+        var buf = _engine.CurrentBuffer;
+        Canvas.SetSaveDiff(Editor.Core.Editing.SaveDiff.Compute(buf.Text.SavedLines, GetCachedLines(buf)));
     }
 
     private string[] GetCachedLines(VimBuffer buffer)

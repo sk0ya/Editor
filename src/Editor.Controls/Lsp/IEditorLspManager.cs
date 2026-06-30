@@ -51,6 +51,7 @@ public interface IEditorLspManager : IDisposable
     IReadOnlyList<DocumentSymbol> GetDocumentSymbols();
     Task<IReadOnlyList<DocumentSymbol>> RequestDocumentSymbolsAsync();
     string? GetBreadcrumb(int line, int col);
+    IReadOnlyList<BreadcrumbSegment> GetBreadcrumbSegments(int line, int col);
     void UpdateBreadcrumb(int line, int col);
     void ClearBreadcrumb();
     Task<IReadOnlyList<LspSymbolInformation>> GetWorkspaceSymbolsAsync(string query, bool isClass, CancellationToken ct = default);

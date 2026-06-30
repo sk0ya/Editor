@@ -24,6 +24,10 @@ public sealed class LspManager : IEditorLspManager
     // Set after didOpen so that the first publishDiagnostics triggers a fold range retry.
     // (Some servers are not ready to answer foldingRange immediately after didOpen.)
     private volatile string? _pendingFoldRangeUri;
+    // Same idea for documentSymbol: csharp-ls silently drops the request sent before the
+    // solution finishes loading, so the first file's symbols (and thus the breadcrumb) stay
+    // empty until a publishDiagnostics-triggered retry. Cleared once symbols come back non-empty.
+    private volatile string? _pendingSymbolUri;
 
     // State visible to the UI (always accessed on dispatcher thread)
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
@@ -133,6 +137,7 @@ public sealed class LspManager : IEditorLspManager
         _lastBreadcrumb = "";
         _documentReady = false;
         _pendingFoldRangeUri = null;
+        _pendingSymbolUri = null;
         _symbolDebounce?.Dispose();
         _symbolDebounce = null;
         _semanticTokenDebounce?.Dispose();
@@ -202,6 +207,9 @@ public sealed class LspManager : IEditorLspManager
         {
             _documentReady = true; // already open from a previous visit
             _ = RequestFoldingRangesInternalAsync(client!, uri);
+            // _documentSymbols was cleared above; re-fetch for the breadcrumb.
+            _pendingSymbolUri = uri;
+            _ = RefreshDocumentSymbolsUntilReadyAsync(client!, uri);
         }
 
         StateChanged?.Invoke();
@@ -242,6 +250,23 @@ public sealed class LspManager : IEditorLspManager
         }, null, SymbolDebounceMs, Timeout.Infinite);
     }
 
+    /// <summary>
+    /// Fetches document symbols, retrying with a delay until they come back non-empty or the file
+    /// changes. csharp-ls answers documentSymbol with null until its solution finishes loading
+    /// (seconds after didOpen) and does not proactively re-send, so a one-shot request loses the
+    /// breadcrumb for the first file opened. Bounded so genuinely symbol-less files stop quickly.
+    /// </summary>
+    private async Task RefreshDocumentSymbolsUntilReadyAsync(LspClient client, string uri)
+    {
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            if (_pendingSymbolUri != uri || _currentUri != uri || !client.IsRunning) return;
+            await RefreshDocumentSymbolsAsync(client, uri); // clears _pendingSymbolUri on non-empty
+            if (_pendingSymbolUri != uri) return;           // got symbols (or file switched)
+            await Task.Delay(1500);
+        }
+    }
+
     private async Task RefreshDocumentSymbolsAsync(LspClient client, string uri)
     {
         try
@@ -251,6 +276,11 @@ public sealed class LspManager : IEditorLspManager
             {
                 if (_currentUri != uri) return;
                 _documentSymbols = symbols;
+                // Stop retrying once the server actually returned symbols.
+                if (symbols.Count > 0 && _pendingSymbolUri == uri) _pendingSymbolUri = null;
+                // Notify so views depending on symbols (e.g. the breadcrumb bar) refresh
+                // once they load, instead of waiting for the next cursor move.
+                StateChanged?.Invoke();
             });
         }
         catch { }
@@ -464,32 +494,17 @@ public sealed class LspManager : IEditorLspManager
     /// </summary>
     public string? GetBreadcrumb(int line, int col)
     {
-        if (_documentSymbols.Count == 0) return null;
-        var path = new List<string>();
-        FindSymbolPath(_documentSymbols, line, col, path);
-        return path.Count > 0 ? string.Join(" > ", path) : null;
+        var segs = GetBreadcrumbSegments(line, col);
+        return segs.Count > 0 ? string.Join(" > ", segs.Select(s => s.Name)) : null;
     }
 
-    private static bool FindSymbolPath(IReadOnlyList<DocumentSymbol> symbols, int line, int col, List<string> path)
-    {
-        foreach (var sym in symbols)
-        {
-            if (!ContainsPosition(sym.Range, line, col)) continue;
-            path.Add(sym.Name);
-            if (sym.Children != null && sym.Children.Length > 0)
-                FindSymbolPath(sym.Children, line, col, path);
-            return true;
-        }
-        return false;
-    }
-
-    private static bool ContainsPosition(LspRange range, int line, int col)
-    {
-        if (line < range.Start.Line || line > range.End.Line) return false;
-        if (line == range.Start.Line && col < range.Start.Character) return false;
-        if (line == range.End.Line && col > range.End.Character) return false;
-        return true;
-    }
+    /// <summary>
+    /// Returns the symbol path from the outermost enclosing symbol down to the innermost one
+    /// containing the cursor (see <see cref="BreadcrumbBuilder"/>). Empty when no symbol
+    /// contains the cursor.
+    /// </summary>
+    public IReadOnlyList<BreadcrumbSegment> GetBreadcrumbSegments(int line, int col)
+        => BreadcrumbBuilder.GetSegments(_documentSymbols, line, col);
 
     /// <summary>
     /// Update breadcrumb for the current cursor position.
@@ -715,7 +730,8 @@ public sealed class LspManager : IEditorLspManager
             // immediately after didOpen and will return an empty list.
             await RequestFoldingRangesInternalAsync(client, uri);
             _pendingFoldRangeUri = uri;
-            _ = RefreshDocumentSymbolsAsync(client, uri);
+            _pendingSymbolUri = uri;
+            _ = RefreshDocumentSymbolsUntilReadyAsync(client, uri);
             // Refresh inlay hints if enabled
             if (_inlayHintsEnabled)
                 _ = RequestInlayHintsInternalAsync(client, uri, 0, int.MaxValue);
@@ -850,6 +866,12 @@ public sealed class LspManager : IEditorLspManager
             _pendingFoldRangeUri = null;
             _ = RequestFoldingRangesInternalAsync(_currentClient, e.Uri);
         }
+
+        // Retry documentSymbol once the server has analyzed the file (its initial answer,
+        // sent before the solution loaded, was silently dropped). Stays pending until the
+        // result is non-empty so a too-early diagnostics push doesn't give up prematurely.
+        if (e.Uri == _pendingSymbolUri && _currentClient?.IsRunning == true)
+            _ = RefreshDocumentSymbolsAsync(_currentClient, e.Uri);
 
         _dispatcher.InvokeAsync(() =>
         {

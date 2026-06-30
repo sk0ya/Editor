@@ -258,3 +258,7 @@ public record LspSymbolInformation(
     SymbolKind Kind,
     LspLocation Location,
     string? ContainerName = null);
+
+// One clickable element of the breadcrumb bar: a symbol along the path from the
+// document root to the cursor, plus the position to jump to when clicked.
+public record BreadcrumbSegment(string Name, SymbolKind Kind, int Line, int Column);

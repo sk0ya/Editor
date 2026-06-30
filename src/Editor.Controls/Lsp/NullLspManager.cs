@@ -97,6 +97,8 @@ internal sealed class NullLspManager : IEditorLspManager
 
     public string? GetBreadcrumb(int line, int col) => null;
 
+    public IReadOnlyList<BreadcrumbSegment> GetBreadcrumbSegments(int line, int col) => [];
+
     public void UpdateBreadcrumb(int line, int col)
     {
     }

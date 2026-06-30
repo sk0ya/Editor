@@ -68,8 +68,8 @@ public class VimOptions
     // LSP Semantic Tokens
     public bool SemanticTokens { get; set; } = false;
 
-    // LSP Breadcrumb (symbol path in status bar)
-    public bool Breadcrumb { get; set; } = false;
+    // LSP Breadcrumb (symbol path shown in a clickable bar above the editor)
+    public bool Breadcrumb { get; set; } = true;
 
     // Folding
     public string FoldMethod { get; set; } = "manual"; // manual, indent, marker, syntax

@@ -86,16 +86,31 @@
 
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
+
+        <!-- Breadcrumb bar (symbol path from cursor; collapsed unless `set breadcrumb`) -->
+        <Border x:Name="BreadcrumbBar" Grid.Row="0"
+                Visibility="Collapsed"
+                Background="#21222C"
+                BorderBrush="#191A21"
+                BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="BreadcrumbPanel" Orientation="Horizontal"
+                            Margin="6,2"/>
+            </ScrollViewer>
+        </Border>
+
         <!-- Editor area (EditorCanvas manages its own scrolling internally) -->
-        <rendering:EditorCanvas x:Name="Canvas" Grid.Row="0"
+        <rendering:EditorCanvas x:Name="Canvas" Grid.Row="1"
                                 HorizontalAlignment="Stretch"
                                 VerticalAlignment="Stretch"
                                 ClipToBounds="True"/>
 
         <!-- Status bar -->
-        <local:VimStatusBar x:Name="StatusBar" Grid.Row="1"/>
+        <local:VimStatusBar x:Name="StatusBar" Grid.Row="2"/>
     </Grid>
 </UserControl>

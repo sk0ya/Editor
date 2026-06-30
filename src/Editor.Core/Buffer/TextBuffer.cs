@@ -6,14 +6,33 @@ public class TextBuffer
 {
     private List<string> _lines;
     private bool _modified;
+    // Snapshot of the line contents as of the last load/save. Used to compute the
+    // "changed since last save" gutter (see Editor.Core.Editing.SaveDiff), which is
+    // independent of git (it tracks the on-disk baseline, not HEAD).
+    private string[] _savedSnapshot;
 
-    public TextBuffer() => _lines = [""];
+    public TextBuffer()
+    {
+        _lines = [""];
+        _savedSnapshot = [.. _lines];
+    }
 
-    public TextBuffer(string text) => _lines = SplitLines(text);
+    public TextBuffer(string text)
+    {
+        _lines = SplitLines(text);
+        _savedSnapshot = [.. _lines];
+    }
 
     public int LineCount => _lines.Count;
     public bool IsModified => _modified;
     public long Version { get; private set; }
+
+    /// <summary>
+    /// The line contents as of the last load (<see cref="SetText"/>) or save
+    /// (<see cref="MarkSaved"/>). Compared against the current lines to render the
+    /// changed-since-save gutter.
+    /// </summary>
+    public IReadOnlyList<string> SavedLines => _savedSnapshot;
 
     public string GetLine(int index)
     {
@@ -29,6 +48,7 @@ public class TextBuffer
     {
         _lines = SplitLines(text);
         _modified = false;
+        _savedSnapshot = [.. _lines];
         Version++;
     }
 
@@ -246,7 +266,11 @@ public class TextBuffer
         MarkModified();
     }
 
-    public void MarkSaved() => _modified = false;
+    public void MarkSaved()
+    {
+        _modified = false;
+        _savedSnapshot = [.. _lines];
+    }
 
     private bool EnsureLine(int line)
     {
