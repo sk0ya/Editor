@@ -3046,8 +3046,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             if (docMgr.CreateContext(clientId, 0, store, out var ctx, out _) < 0 || ctx == null)
                 return false;
 
-            if (docMgr.Push(ctx) < 0)
+            var contextSource = (Editor.Controls.Ime.ITfSourceTs)ctx;
+            var compositionSinkIid = Editor.Controls.Ime.TsfConst.IID_ITfContextOwnerCompositionSink;
+            if (contextSource.AdviseSink(ref compositionSinkIid, store, out uint compositionCookie) < 0)
                 return false;
+
+            if (docMgr.Push(ctx) < 0)
+            {
+                _ = contextSource.UnadviseSink(compositionCookie);
+                return false;
+            }
 
             // Bind our document manager to the window so the IME composes into our store,
             // then focus it explicitly for the current keyboard-focus state.
@@ -3058,8 +3066,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             _tsfStoreDocMgr = docMgr;
             _tsfStorePrevDocMgr = prevDocMgr;
             _tsfStoreContext = ctx;
-            _tsfStoreContextSource = (Editor.Controls.Ime.ITfSourceTs)ctx;
-            _tsfStoreCompositionCookie = TF_INVALID_COOKIE;
+            _tsfStoreContextSource = contextSource;
+            _tsfStoreCompositionCookie = compositionCookie;
             _customTextStore = store;
             _customTextStoreActive = true;
             EnsureTsfTextEditSink();

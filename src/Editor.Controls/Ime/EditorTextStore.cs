@@ -29,9 +29,18 @@ internal sealed class EditorTextStore : ITextStoreACP, ITfContextOwnerCompositio
 
     private ITextStoreACPSink? _sink;
     private uint _lockType;          // 0 | TS_LF_READ | TS_LF_READWRITE bits
+    private uint _pendingLockType;   // one coalesced asynchronous request; write wins
     private bool _composing;
+    private int _pendingResetOldLength;
+    private bool _resetNotificationScheduled;
+    private readonly Action<Action> _schedule;
 
-    public EditorTextStore(IEditorTextStoreHost host) => _host = host;
+    public EditorTextStore(IEditorTextStoreHost host, Action<Action>? schedule = null)
+    {
+        _host = host;
+        _schedule = schedule ?? (action =>
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(action));
+    }
 
     private static int Clamp(int v, int lo, int hi) => v < lo ? lo : (v > hi ? hi : v);
 
@@ -49,10 +58,28 @@ internal sealed class EditorTextStore : ITextStoreACP, ITfContextOwnerCompositio
         int old = _text.Length;
         _text.Clear();
         _selStart = _selEnd = 0;
-        if (old == 0 || _lockType != 0) return;
+        if (old == 0) return;
+
+        // OnEndComposition can run from inside OnLockGranted. TSF explicitly forbids
+        // change notifications while it owns the document lock, so report the reset
+        // after the current input callback has unwound. Coalesce resets because TSF
+        // needs only the largest old ACP extent before the now-empty document.
+        _pendingResetOldLength = Math.Max(_pendingResetOldLength, old);
+        if (_resetNotificationScheduled) return;
+        _resetNotificationScheduled = true;
+        _schedule(FlushResetNotification);
+    }
+
+    private void FlushResetNotification()
+    {
+        _resetNotificationScheduled = false;
+        int old = _pendingResetOldLength;
+        _pendingResetOldLength = 0;
+        if (old == 0 || _sink == null) return;
+
         var tc = new TS_TEXTCHANGE { acpStart = 0, acpOldEnd = old, acpNewEnd = 0 };
-        try { _sink?.OnTextChange(0, ref tc); } catch { }
-        try { _sink?.OnSelectionChange(); } catch { }
+        try { _sink.OnTextChange(0, ref tc); } catch { }
+        try { _sink.OnSelectionChange(); } catch { }
     }
 
     // ─────────────── ITextStoreACP ───────────────
@@ -76,17 +103,39 @@ internal sealed class EditorTextStore : ITextStoreACP, ITfContextOwnerCompositio
         phrSession = TsfHr.E_FAIL;
         if (_sink == null) return TsfHr.E_FAIL;
 
-        // We never hold a foreign lock, so grant synchronously. A reentrant request
-        // (the sink asks for another lock while one is held) is rejected.
+        uint requestedType = dwLockFlags & TsfConst.TS_LF_READWRITE;
+
+        // A read lock may be upgraded by a reentrant asynchronous write request.
+        // Rejecting that request loses the IME edit which opened/updated conversion UI.
         if (_lockType != 0)
         {
-            phrSession = TsfHr.TS_E_SYNCHRONOUS;
+            if ((dwLockFlags & TsfConst.TS_LF_SYNC) != 0)
+            {
+                phrSession = TsfHr.TS_E_SYNCHRONOUS;
+                return TsfHr.S_OK;
+            }
+
+            if (requestedType == TsfConst.TS_LF_READWRITE
+                || _pendingLockType == 0)
+                _pendingLockType = requestedType;
+            phrSession = TsfHr.TS_S_ASYNC;
             return TsfHr.S_OK;
         }
 
-        _lockType = dwLockFlags & TsfConst.TS_LF_READWRITE;
-        try { phrSession = _sink.OnLockGranted(dwLockFlags); }
+        _lockType = requestedType;
+        try { phrSession = _sink.OnLockGranted(requestedType); }
         finally { _lockType = 0; }
+
+        // TSF needs only one callback for queued requests. If any request asked for
+        // write access, the coalesced callback is promoted to read/write.
+        while (_pendingLockType != 0 && _sink != null)
+        {
+            uint pending = _pendingLockType;
+            _pendingLockType = 0;
+            _lockType = pending;
+            try { _ = _sink.OnLockGranted(pending); }
+            finally { _lockType = 0; }
+        }
         return TsfHr.S_OK;
     }
 

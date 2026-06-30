@@ -4,6 +4,10 @@
     <ProjectReference Include="..\Editor.Core\Editor.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Editor.Controls.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net9.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
