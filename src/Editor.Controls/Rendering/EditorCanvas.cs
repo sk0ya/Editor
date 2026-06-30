@@ -337,8 +337,10 @@ public partial class EditorCanvas : FrameworkElement
         _semanticTokensByLine = [];
         foreach (var tok in tokens)
         {
-            var brush = SemanticTokenTypeToBrush(tok.TokenType);
-            if (brush is null) continue;
+            // null brush = the server classified this token (variable/parameter/property) but we
+            // render it in the default foreground. Store it as an explicit Foreground override so
+            // that, when merged with regex tokens, it wins over heuristic guesses (e.g. PascalCase→Type).
+            var brush = SemanticTokenTypeToBrush(tok.TokenType) ?? Theme.Foreground;
             if (!_semanticTokensByLine.TryGetValue(tok.Line, out var list))
                 _semanticTokensByLine[tok.Line] = list = [];
             list.Add((tok.StartChar, tok.Length, brush));
@@ -2174,18 +2176,8 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
-        // Semantic tokens take priority over regex-based syntax tokens when present for this line.
-        // The list is pre-sorted by StartChar at SetSemanticTokens time.
-        if (_semanticTokensByLine.TryGetValue(lineIndex, out var semTokens) && semTokens.Count > 0)
-        {
-            DrawLineTextWithSegments(dc, lineText, y, textLeft,
-                semTokens.Select(t => (t.StartChar, t.Length, (Brush?)t.Brush)));
-            return;
-        }
-
-        _tokensByLine.TryGetValue(lineIndex, out var tokens);
-
-        if (tokens == null || tokens.Length == 0)
+        var segments = BuildColorSegments(lineIndex, lineText.Length);
+        if (segments == null)
         {
             // No syntax — draw entire line in default color
             var ft = FormatText(lineText, Theme.Foreground);
@@ -2193,9 +2185,57 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
-        // Draw segments with colors
-        DrawLineTextWithSegments(dc, lineText, y, textLeft,
-            tokens.Select(t => (t.StartColumn, t.Length, (Brush?)Theme.GetTokenBrush(t.Kind))));
+        DrawLineTextWithSegments(dc, lineText, y, textLeft, segments);
+    }
+
+    /// <summary>
+    /// Builds the colored segments for a line by layering LSP semantic tokens on top of the
+    /// regex-based syntax tokens. Regex tokens form the base layer (so keywords/strings/comments
+    /// keep their color even when the server only emits semantic tokens for identifiers/types);
+    /// semantic tokens override wherever they exist. Returns null if the line has no coloring.
+    /// </summary>
+    private List<(int StartCol, int Length, Brush? Brush)>? BuildColorSegments(int lineIndex, int lineLength)
+    {
+        _semanticTokensByLine.TryGetValue(lineIndex, out var semTokens);
+        _tokensByLine.TryGetValue(lineIndex, out var regexTokens);
+        bool hasSem = semTokens is { Count: > 0 };
+        bool hasRegex = regexTokens is { Length: > 0 };
+
+        if (!hasSem && !hasRegex) return null;
+
+        if (hasSem && !hasRegex)
+            return semTokens!.Select(t => (t.StartChar, t.Length, (Brush?)t.Brush)).ToList();
+
+        if (!hasSem && hasRegex)
+            return regexTokens!.Select(t => (t.StartColumn, t.Length, (Brush?)Theme.GetTokenBrush(t.Kind))).ToList();
+
+        // Both present: merge per-character (regex base, semantic overlay), then coalesce runs.
+        if (lineLength <= 0) return null;
+        var brushes = new Brush?[lineLength];
+        var has = new bool[lineLength];
+        foreach (var t in regexTokens!)
+        {
+            var b = Theme.GetTokenBrush(t.Kind);
+            for (int c = t.StartColumn; c < t.StartColumn + t.Length && c < lineLength; c++)
+            { if (c >= 0) { brushes[c] = b; has[c] = true; } }
+        }
+        foreach (var (sc, ln, br) in semTokens!)
+        {
+            for (int c = sc; c < sc + ln && c < lineLength; c++)
+            { if (c >= 0) { brushes[c] = br; has[c] = true; } }
+        }
+
+        var segs = new List<(int StartCol, int Length, Brush? Brush)>();
+        int i = 0;
+        while (i < lineLength)
+        {
+            if (!has[i]) { i++; continue; }
+            int start = i;
+            var brush = brushes[i];
+            while (i < lineLength && has[i] && ReferenceEquals(brushes[i], brush)) i++;
+            segs.Add((start, i - start, brush));
+        }
+        return segs;
     }
 
     /// <summary>
@@ -2334,16 +2374,8 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
-        IEnumerable<(int StartCol, int Length, Brush? Brush)> segments = [];
-
-        if (_semanticTokensByLine.TryGetValue(lineIndex, out var semTokens) && semTokens.Count > 0)
-        {
-            segments = semTokens.Select(t => (t.StartChar, t.Length, (Brush?)t.Brush));
-        }
-        else if (_tokensByLine.TryGetValue(lineIndex, out var tokens) && tokens.Length > 0)
-        {
-            segments = tokens.Select(t => (t.StartColumn, t.Length, (Brush?)Theme.GetTokenBrush(t.Kind)));
-        }
+        IEnumerable<(int StartCol, int Length, Brush? Brush)> segments =
+            BuildColorSegments(lineIndex, lineText.Length) ?? [];
 
         DrawLineTextWithSegments(dc, merged, y, textLeft,
             ShiftSegmentsForImeComposition(segments, lineText.Length, cursorCol, _imeCompositionText.Length));

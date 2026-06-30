@@ -118,7 +118,9 @@ public class PythonSyntax : ISyntaxLanguage
                 while (i < len && (char.IsLetterOrDigit(line[i]) || line[i] == '_'))
                     i++;
                 var word = line[start..i];
-                var kind = Keywords.Contains(word) ? TokenKind.Keyword : TokenKind.Identifier;
+                var kind = Keywords.Contains(word) ? TokenKind.Keyword
+                    : char.IsUpper(word[0]) ? TokenKind.Type
+                    : TokenKind.Identifier;
                 tokens.Add(new SyntaxToken(start, word.Length, kind));
                 continue;
             }
