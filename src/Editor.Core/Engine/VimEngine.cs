@@ -3718,41 +3718,29 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
         var lineNo = _cursor.Line;
 
-        bool IsWordChar(char ch) => bigWord ? !char.IsWhiteSpace(ch) : MotionEngine.IsWordChar(ch);
+        // For a WORD (iW/aW) every non-blank char shares one class; otherwise use the
+        // 3-class Vim rule (whitespace / punctuation / keyword). An inner word is the
+        // maximal run of the class under the cursor — this is what makes `iw` on a lone
+        // symbol (e.g. ☑) select the symbol rather than skipping to the next word.
+        int ClassOf(char ch) => bigWord
+            ? (char.IsWhiteSpace(ch) ? 0 : 1)
+            : MotionEngine.CharClass(ch);
 
-        (int Line, int Start, int End)? FindWordAtOrAfter(int startLine, int startCol)
+        // The next contiguous class-run starting at or after (line, col). Whitespace
+        // runs are returned as their own units (Cls == 0); a bare line break is treated
+        // as a run boundary and skipped (words never cross it as a single run).
+        (int Line, int Start, int End, int Cls)? NextRunAfter(int startLine, int startCol)
         {
             for (int line = startLine; line < buf.LineCount; line++)
             {
                 var text = buf.GetLine(line);
                 int col = line == startLine ? Math.Clamp(startCol, 0, text.Length) : 0;
-                while (col < text.Length && !IsWordChar(text[col])) col++;
                 if (col >= text.Length) continue;
 
+                int cls = ClassOf(text[col]);
                 int end = col;
-                while (end + 1 < text.Length && IsWordChar(text[end + 1])) end++;
-                return (line, col, end);
-            }
-
-            return null;
-        }
-
-        (int Line, int Start, int End)? FindWordAtOrBefore(int startLine, int startCol)
-        {
-            for (int line = startLine; line >= 0; line--)
-            {
-                var text = buf.GetLine(line);
-                if (text.Length == 0) continue;
-
-                int col = line == startLine ? Math.Clamp(startCol, 0, text.Length - 1) : text.Length - 1;
-                while (col >= 0 && !IsWordChar(text[col])) col--;
-                if (col < 0) continue;
-
-                int start = col;
-                while (start > 0 && IsWordChar(text[start - 1])) start--;
-                int end = col;
-                while (end + 1 < text.Length && IsWordChar(text[end + 1])) end++;
-                return (line, start, end);
+                while (end + 1 < text.Length && ClassOf(text[end + 1]) == cls) end++;
+                return (line, col, end, cls);
             }
 
             return null;
@@ -3763,39 +3751,74 @@ public class VimEngine
             return null;
 
         int cursorCol = Math.Clamp(_cursor.Column, 0, Math.Max(0, currentLine.Length - 1));
-        var firstWord = IsWordChar(currentLine[cursorCol])
-            ? FindWordAtOrBefore(lineNo, cursorCol)
-            : FindWordAtOrAfter(lineNo, cursorCol) ?? FindWordAtOrBefore(lineNo, cursorCol);
-        if (firstWord == null)
-            return null;
 
-        int startLine = firstWord.Value.Line;
-        int start = firstWord.Value.Start;
-        int endLine = firstWord.Value.Line;
-        int end = firstWord.Value.End;
+        // Primary object: the run of characters sharing the cursor character's class
+        // (whitespace, keyword, or punctuation), all within the current line.
+        int cursorClass = ClassOf(currentLine[cursorCol]);
+        int startLine = lineNo;
+        int endLine = lineNo;
+        int start = cursorCol;
+        int end = cursorCol;
+        while (start > 0 && ClassOf(currentLine[start - 1]) == cursorClass) start--;
+        while (end + 1 < currentLine.Length && ClassOf(currentLine[end + 1]) == cursorClass) end++;
 
-        for (int i = 1; i < count; i++)
+        if (!around)
         {
-            var nextWord = FindWordAtOrAfter(endLine, end + 1);
-            if (nextWord == null)
-                break;
-
-            endLine = nextWord.Value.Line;
-            end = nextWord.Value.End;
+            // iw: select exactly `count` consecutive class-runs (whitespace runs count too),
+            // starting with the run under the cursor. `d3iw` on "foo bar baz" → "foo bar".
+            for (int i = 1; i < count; i++)
+            {
+                var next = NextRunAfter(endLine, end + 1);
+                if (next == null) break;
+                endLine = next.Value.Line;
+                end = next.Value.End;
+            }
+            return (new CursorPosition(startLine, start), new CursorPosition(endLine, end));
         }
 
-        if (around)
+        // aw: `count` "words" (non-whitespace runs), including any whitespace runs between
+        // them, plus trailing whitespace after the last word — or, if there is none,
+        // leading whitespace before the first word.
+        if (cursorClass == 0)
         {
-            var line = buf.GetLine(endLine);
-            int trailingEnd = end;
-            while (trailingEnd + 1 < line.Length && char.IsWhiteSpace(line[trailingEnd + 1])) trailingEnd++;
-            if (trailingEnd > end)
-                end = trailingEnd;
-            else if (startLine == endLine)
+            // Cursor on whitespace: the leading whitespace run is already selected; append
+            // `count` following words (with whitespace between them).
+            int wordsLeft = count;
+            int line = endLine, col = end + 1;
+            while (wordsLeft > 0)
             {
-                line = buf.GetLine(startLine);
-                while (start > 0 && char.IsWhiteSpace(line[start - 1])) start--;
+                var r = NextRunAfter(line, col);
+                if (r == null) break;
+                endLine = r.Value.Line; end = r.Value.End;
+                line = r.Value.Line; col = r.Value.End + 1;
+                if (r.Value.Cls != 0) wordsLeft--;
             }
+            return (new CursorPosition(startLine, start), new CursorPosition(endLine, end));
+        }
+
+        // Cursor on a word: the primary run is word #1; extend over the remaining words.
+        {
+            int wordsLeft = count - 1;
+            int line = endLine, col = end + 1;
+            while (wordsLeft > 0)
+            {
+                var r = NextRunAfter(line, col);
+                if (r == null) break;
+                endLine = r.Value.Line; end = r.Value.End;
+                line = r.Value.Line; col = r.Value.End + 1;
+                if (r.Value.Cls != 0) wordsLeft--;
+            }
+        }
+
+        var lastLine = buf.GetLine(endLine);
+        int trailingEnd = end;
+        while (trailingEnd + 1 < lastLine.Length && char.IsWhiteSpace(lastLine[trailingEnd + 1])) trailingEnd++;
+        if (trailingEnd > end)
+            end = trailingEnd;
+        else if (startLine == endLine)
+        {
+            var firstLine = buf.GetLine(startLine);
+            while (start > 0 && char.IsWhiteSpace(firstLine[start - 1])) start--;
         }
 
         return (new CursorPosition(startLine, start), new CursorPosition(endLine, end));

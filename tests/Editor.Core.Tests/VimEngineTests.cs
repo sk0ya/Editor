@@ -1126,14 +1126,15 @@ public class VimEngineTests
         engine.ProcessKey("i");
         engine.ProcessKey("w");
 
+        // Vim: 3iw = word + whitespace + word = "foo bar" (cols 0..6).
         Assert.Equal(VimMode.Visual, engine.Mode);
         Assert.True(engine.Selection.HasValue);
         Assert.Equal(new CursorPosition(0, 0), engine.Selection.Value.NormalizedStart);
-        Assert.Equal(new CursorPosition(0, 10), engine.Selection.Value.NormalizedEnd);
+        Assert.Equal(new CursorPosition(0, 6), engine.Selection.Value.NormalizedEnd);
     }
 
     [Fact]
-    public void Visual_CountIW_SelectsAcrossLineBreak()
+    public void Visual_CountIW_StaysWithinLine()
     {
         var engine = CreateEngine("foo bar\nbaz qux");
 
@@ -1142,10 +1143,11 @@ public class VimEngineTests
         engine.ProcessKey("i");
         engine.ProcessKey("w");
 
+        // Vim: 3iw = "foo bar"; the line break is not crossed as a single run.
         Assert.Equal(VimMode.Visual, engine.Mode);
         Assert.True(engine.Selection.HasValue);
         Assert.Equal(new CursorPosition(0, 0), engine.Selection.Value.NormalizedStart);
-        Assert.Equal(new CursorPosition(1, 2), engine.Selection.Value.NormalizedEnd);
+        Assert.Equal(new CursorPosition(0, 6), engine.Selection.Value.NormalizedEnd);
     }
 
     [Fact]
@@ -1174,11 +1176,12 @@ public class VimEngineTests
         engine.ProcessKey("i");
         engine.ProcessKey("w");
 
-        Assert.Equal(" qux", engine.CurrentBuffer.Text.GetText());
+        // Vim: 3iw = word + whitespace + word = "foo bar".
+        Assert.Equal(" baz qux", engine.CurrentBuffer.Text.GetText());
     }
 
     [Fact]
-    public void D3iw_DeletesMultipleInnerWordsAcrossLineBreak()
+    public void D3iw_DeletesWordWhitespaceWordWithinLine()
     {
         var engine = CreateEngine("foo bar\nbaz qux");
 
@@ -1187,7 +1190,98 @@ public class VimEngineTests
         engine.ProcessKey("i");
         engine.ProcessKey("w");
 
-        Assert.Equal(" qux", engine.CurrentBuffer.Text.GetText());
+        // Vim: 3iw stays on the first line (foo + space + bar); the line break is not crossed.
+        Assert.Equal("\nbaz qux", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void D2aw_DeletesTwoWordsWithTrailingWhitespace()
+    {
+        var engine = CreateEngine("foo bar baz");
+
+        engine.ProcessKey("d");
+        engine.ProcessKey("2");
+        engine.ProcessKey("a");
+        engine.ProcessKey("w");
+
+        // Vim: 2aw = "foo bar " (two words + trailing whitespace).
+        Assert.Equal("baz", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Daw_DeletesWordAndTrailingWhitespace()
+    {
+        var engine = CreateEngine("foo bar baz");
+
+        engine.ProcessKey("d");
+        engine.ProcessKey("a");
+        engine.ProcessKey("w");
+
+        Assert.Equal("bar baz", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Diw_OnSymbol_DeletesSymbolNotNextWord()
+    {
+        // Cursor on ☑ (a symbol, not a word char): diw must select the symbol run,
+        // not skip forward to the next word.
+        var engine = CreateEngine("☑ task");
+
+        engine.ProcessKey("d");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+
+        Assert.Equal(" task", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Diw_OnConsecutiveSymbols_DeletesWholeSymbolRun()
+    {
+        var engine = CreateEngine("-> foo");
+
+        engine.ProcessKey("d");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+
+        Assert.Equal(" foo", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Diw_OnWhitespace_DeletesWhitespaceRun()
+    {
+        var engine = CreateEngine("foo   bar");
+
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        engine.ProcessKey("l"); // cursor on first space
+        engine.ProcessKey("d");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+
+        Assert.Equal("foobar", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void E_StopsAtEndOfSymbolRun_NotWhitespace()
+    {
+        // "a! b": from 'a', e lands on '!' (end of the symbol word), not the space after it.
+        var engine = CreateEngine("a! b");
+
+        engine.ProcessKey("e");
+
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void B_StopsAtStartOfSymbolRun_NotWhitespace()
+    {
+        // "foo !!!": from end of the symbol run, b lands on the first '!', not the space.
+        var engine = CreateEngine("foo !!!");
+        engine.ProcessKey("$"); // last '!'
+
+        engine.ProcessKey("b");
+
+        Assert.Equal(4, engine.Cursor.Column);
     }
 
     [Fact]

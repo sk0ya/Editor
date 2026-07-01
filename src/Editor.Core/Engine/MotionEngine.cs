@@ -347,8 +347,8 @@ public class MotionEngine
             }
             else
             {
-                bool inWord = IsWordChar(line[col]);
-                while (col > 0 && IsWordChar(line[col - 1]) == inWord) col--;
+                int cls = CharClass(line[col]);
+                while (col > 0 && CharClass(line[col - 1]) == cls) col--;
             }
 
             pos = pos with { Column = col };
@@ -377,8 +377,8 @@ public class MotionEngine
                 while (col < line.Length - 1 && !char.IsWhiteSpace(line[col + 1])) col++;
             else
             {
-                bool inWord = IsWordChar(line[col]);
-                while (col < line.Length - 1 && IsWordChar(line[col + 1]) == inWord) col++;
+                int cls = CharClass(line[col]);
+                while (col < line.Length - 1 && CharClass(line[col + 1]) == cls) col++;
             }
 
             pos = pos with { Column = Math.Min(col, line.Length - 1) };
@@ -661,6 +661,15 @@ public class MotionEngine
         new(new CursorPosition(Math.Min(_buffer.LineCount - 1, cursor.Line + 10), 0), MotionType.Linewise);
 
     public static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    /// <summary>
+    /// Vim character class used for word-boundary decisions: 0 = whitespace,
+    /// 1 = punctuation/symbol (non-blank, non-keyword), 2 = keyword (word char).
+    /// A "word" is a maximal run of a single class; adjacent runs of different
+    /// classes (e.g. a symbol next to whitespace) are separate words.
+    /// </summary>
+    public static int CharClass(char c) =>
+        char.IsWhiteSpace(c) ? 0 : (IsWordChar(c) ? 2 : 1);
 
     public CursorPosition FindChar(CursorPosition cursor, char target, bool forward, bool before, int count = 1)
     {
