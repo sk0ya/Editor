@@ -226,19 +226,12 @@ public class VimEngine
         RunAutocmds("FileType", GetFileTypeNames(path));
     }
 
-    public void SetText(string text)
-    {
-        _bufferManager.Current.Text.SetText(text);
-        _cursor = CursorPosition.Zero;
-        _syntaxEngine.Invalidate();
-    }
-
     /// <summary>
-    /// Replace the whole buffer while keeping the caret on the same line/column as best it can,
-    /// clamping to the new buffer's bounds. Used by document formatting so the cursor doesn't jump
-    /// back to the top of the file after a reformat.
+    /// Replace the whole buffer, keeping the caret on the same line/column as best it can,
+    /// clamping to the new buffer's bounds. Callers that want the caret at the top of a fresh
+    /// document (e.g. opening a new file) should set the cursor explicitly afterward.
     /// </summary>
-    public void SetTextPreservingCursor(string text)
+    public void SetText(string text)
     {
         var old = _cursor;
         _bufferManager.Current.Text.SetText(text);

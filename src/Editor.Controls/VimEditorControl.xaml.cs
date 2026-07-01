@@ -1999,6 +1999,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         var id = Guid.NewGuid().ToString("N");
         var buf = _engine.CurrentBuffer;
         _engine.SetText(content);
+        _engine.SetCursorPosition(CursorPosition.Zero);
         buf.FilePath = null;
         buf.Text.MarkSaved();
         buf.Undo.Clear();
@@ -4586,7 +4587,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (edits.Count > 0)
         {
             var formatted = ApplyTextEdits(original, edits);
-            _engine.SetTextPreservingCursor(formatted);
+            _engine.SetText(formatted);
             UpdateAll();
             _lspManager.OnTextChanged(formatted);
             ActiveStatusBar.UpdateStatus("Format: document formatted");
@@ -4630,7 +4631,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             ActiveStatusBar.UpdateStatus($"Format: no changes — {def.Executable}{where}");
             return;
         }
-        _engine.SetTextPreservingCursor(formatted);
+        _engine.SetText(formatted);
         UpdateAll();
         _lspManager.OnTextChanged(formatted);
         ActiveStatusBar.UpdateStatus($"Format: formatted with {def.Executable}{where}");
