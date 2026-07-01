@@ -3046,14 +3046,26 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             if (docMgr.CreateContext(clientId, 0, store, out var ctx, out _) < 0 || ctx == null)
                 return false;
 
+            // ITfContextOwnerCompositionSink lets the store learn when composition ends
+            // (used to clear stale text/candidates instead of leaving them behind). It's an
+            // enhancement on top of the core text store, not a requirement for it: some TIPs
+            // fail this particular AdviseSink, and that failure must not take down the whole
+            // custom TSF text store — doing so silently falls back to the legacy IMM path,
+            // which shows the editor's own candidate UI instead of the TIP's native one.
             var contextSource = (Editor.Controls.Ime.ITfSourceTs)ctx;
-            var compositionSinkIid = Editor.Controls.Ime.TsfConst.IID_ITfContextOwnerCompositionSink;
-            if (contextSource.AdviseSink(ref compositionSinkIid, store, out uint compositionCookie) < 0)
-                return false;
+            uint compositionCookie = TF_INVALID_COOKIE;
+            try
+            {
+                var compositionSinkIid = Editor.Controls.Ime.TsfConst.IID_ITfContextOwnerCompositionSink;
+                if (contextSource.AdviseSink(ref compositionSinkIid, store, out uint cookie) >= 0)
+                    compositionCookie = cookie;
+            }
+            catch { /* composition-end notification is best-effort */ }
 
             if (docMgr.Push(ctx) < 0)
             {
-                _ = contextSource.UnadviseSink(compositionCookie);
+                if (compositionCookie != TF_INVALID_COOKIE)
+                    _ = contextSource.UnadviseSink(compositionCookie);
                 return false;
             }
 
