@@ -201,6 +201,19 @@ public partial class EditorCanvas : FrameworkElement
     private bool VerticalBarPresent => _showScrollbar && TotalContentHeight > RenderSize.Height + 1;
     private double UsableViewportHeight => Math.Max(0, RenderSize.Height - (HorizontalBarPresent ? ScrollbarSize : 0));
     private double UsableViewportWidth => Math.Max(0, RenderSize.Width - (VerticalBarPresent ? ScrollbarSize : 0));
+
+    // Allows scrolling past the last line (like Vim's `~` lines) so the last line can
+    // still be moved all the way to the top of the viewport. Without this, `zz` on the
+    // last line can't center it once the file end is already at the viewport bottom.
+    private double MaxScrollOffsetY
+    {
+        get
+        {
+            double natural = TotalContentHeight - UsableViewportHeight;
+            return natural <= 0 ? 0 : TotalContentHeight - _lineHeight;
+        }
+    }
+
     public double VerticalOffset => _scrollOffsetY;
     public double HorizontalOffset => _scrollOffsetX;
     public bool WrapLines
@@ -606,7 +619,7 @@ public partial class EditorCanvas : FrameworkElement
 
     public void ScrollTo(double offsetY, double offsetX = 0)
     {
-        double maxOffsetY = Math.Max(0, TotalContentHeight - UsableViewportHeight);
+        double maxOffsetY = MaxScrollOffsetY;
         double maxOffsetX = _wrapLines
             ? 0
             : Math.Max(0, TotalContentWidth - UsableViewportWidth);
@@ -717,7 +730,7 @@ public partial class EditorCanvas : FrameworkElement
 
     private void ClampScrollOffsets(bool raiseScrollChanged)
     {
-        double maxOffsetY = Math.Max(0, TotalContentHeight - UsableViewportHeight);
+        double maxOffsetY = MaxScrollOffsetY;
         double maxOffsetX = _wrapLines
             ? 0
             : Math.Max(0, TotalContentWidth - UsableViewportWidth);
@@ -1499,7 +1512,7 @@ public partial class EditorCanvas : FrameworkElement
         if (l.NeedVert)
         {
             l.VertThumbH = Math.Min(l.VertTrackH, Math.Max(ScrollbarThumbMinSize, l.VertTrackH * viewH / totalH));
-            l.VertMaxOff = totalH - viewH;
+            l.VertMaxOff = MaxScrollOffsetY;
             l.VertThumbY = l.VertMaxOff > 0 ? (l.VertTrackH - l.VertThumbH) * (_scrollOffsetY / l.VertMaxOff) : 0;
         }
         if (l.NeedHoriz)
@@ -2894,7 +2907,7 @@ public partial class EditorCanvas : FrameworkElement
             }
         }
 
-        double maxOffsetY = Math.Max(0, TotalContentHeight - UsableViewportHeight);
+        double maxOffsetY = MaxScrollOffsetY;
         double maxOffsetX = _wrapLines
             ? 0
             : Math.Max(0, TotalContentWidth - UsableViewportWidth);
