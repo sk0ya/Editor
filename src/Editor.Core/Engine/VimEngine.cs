@@ -58,6 +58,8 @@ public class VimEngine
     private bool _discardingUnsupportedVisualTextObj;
     private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
     private bool _awaitingBlockReplace;   // Visual Block r — waiting for the replacement character
+    private bool _awaitingVisualRegister; // Visual mode " — waiting for the register name
+    private char? _visualPendingRegister; // Register selected via " for the next visual operator
     private bool _visualBlockToLineEnd;   // Ctrl+V $ — selected lines extend to their own EOL
     private int _visualBlockLineEndStartColumn;
     private bool _pendingInsertReturn;    // Ctrl+O in Insert mode — return to Insert after one Normal command
@@ -903,12 +905,12 @@ public class VimEngine
                 case "d":
                     SetRepeatChange(cmd);
                     Snapshot();
-                    DeleteLines(_cursor.Line, endLine, events);
+                    DeleteLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
                     return;
                 case "c":
                     BeginInsertRepeat(cmd);
                     Snapshot();
-                    DeleteLines(_cursor.Line, endLine, events);
+                    DeleteLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
                     EnterInsertMode(false, events);
                     return;
                 case "y": YankLines(_cursor.Line, endLine, cmd.Register ?? '"', events); return;
@@ -1331,37 +1333,37 @@ public class VimEngine
                 SetRepeatChange(cmd);
                 // Delete [count] chars from cursor position
                 var xEnd = _cursor with { Column = Math.Min(_cursor.Column + count - 1, Math.Max(0, buf.GetLineLength(_cursor.Line) - 1)) };
-                ExecuteDelete(_cursor, xEnd, false, events);
+                ExecuteDelete(_cursor, xEnd, false, events, cmd.Register ?? '"');
                 break;
             case "X":
                 SetRepeatChange(cmd);
                 // Delete [count] chars before cursor
                 var xStart = motion.MoveLeft(_cursor, count);
-                if (xStart.Column < _cursor.Column) ExecuteDelete(xStart, _cursor with { Column = _cursor.Column - 1 }, false, events);
+                if (xStart.Column < _cursor.Column) ExecuteDelete(xStart, _cursor with { Column = _cursor.Column - 1 }, false, events, cmd.Register ?? '"');
                 break;
             case "s":
                 BeginInsertRepeat(cmd);
                 var sStart = _cursor;
-                ExecuteDelete(_cursor, motion.MoveRight(_cursor, count), false, events);
+                ExecuteDelete(_cursor, motion.MoveRight(_cursor, count), false, events, cmd.Register ?? '"');
                 _cursor = _bufferManager.Current.Text.ClampCursor(sStart, true);
                 EmitCursor(events);
                 EnterInsertMode(false, events);
                 break;
             case "S":
                 BeginInsertRepeat(cmd);
-                DeleteLines(_cursor.Line, _cursor.Line, events);
+                DeleteLines(_cursor.Line, _cursor.Line, events, cmd.Register ?? '"');
                 EnterInsertMode(false, events);
                 break;
             case "D":
                 SetRepeatChange(cmd);
                 var eol = GetLineLength() - 1;
-                if (eol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = eol }, false, events);
+                if (eol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = eol }, false, events, cmd.Register ?? '"');
                 break;
             case "C":
                 BeginInsertRepeat(cmd);
                 var cStart = _cursor;
                 var ceol = GetLineLength() - 1;
-                if (ceol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = ceol }, false, events);
+                if (ceol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = ceol }, false, events, cmd.Register ?? '"');
                 _cursor = _bufferManager.Current.Text.ClampCursor(cStart, true);
                 EmitCursor(events);
                 EnterInsertMode(false, events);
@@ -1598,15 +1600,14 @@ public class VimEngine
         switch (op)
         {
             case "d":
-                if (linewise) DeleteLines(start.Line, end.Line, events);
-                else { YankRange(register, start, end, false); ExecuteDelete(start, end, false, events); }
+                if (linewise) DeleteLines(start.Line, end.Line, events, register);
+                else ExecuteDelete(start, end, false, events, register);
                 break;
             case "c":
-                if (linewise) { DeleteLines(start.Line, end.Line, events); EnterInsertMode(false, events); }
+                if (linewise) { DeleteLines(start.Line, end.Line, events, register); EnterInsertMode(false, events); }
                 else
                 {
-                    YankRange(register, start, end, false);
-                    ExecuteDelete(start, end, false, events);
+                    ExecuteDelete(start, end, false, events, register);
                     _cursor = _bufferManager.Current.Text.ClampCursor(start, true);
                     EmitCursor(events);
                     EnterInsertMode(false, events);
@@ -2306,6 +2307,20 @@ public class VimEngine
             return;
         }
 
+        // Register prefix: "x selects register x for the next visual operator.
+        if (_awaitingVisualRegister && !ctrl)
+        {
+            _awaitingVisualRegister = false;
+            if (key.Length == 1)
+                _visualPendingRegister = key[0];
+            return;
+        }
+        if (key == "\"" && !ctrl)
+        {
+            _awaitingVisualRegister = true;
+            return;
+        }
+
         if (ctrl)
         {
             if (key == "[")
@@ -2455,27 +2470,28 @@ public class VimEngine
             case "X":
             case "D":
                 _commandParser.Reset();
-                ExecuteVisualDelete('"', events);
+                ExecuteVisualDelete(ConsumeVisualRegister(), events);
                 return;
             case "y":
                 _commandParser.Reset();
-                ExecuteVisualYank('"', events);
+                ExecuteVisualYank(ConsumeVisualRegister(), events);
                 return;
             case "p":
             case "P":
                 _commandParser.Reset();
-                ExecuteVisualPaste('"', events);
+                ExecuteVisualPaste(ConsumeVisualRegister(), events);
                 return;
             case "c":
             case "C":
             case "s":
             case "S":
                 _commandParser.Reset();
+                var changeRegister = ConsumeVisualRegister();
                 if (_mode == VimMode.VisualBlock)
-                    BeginVisualBlockChange('"', events);
+                    BeginVisualBlockChange(changeRegister, events);
                 else
                 {
-                    ExecuteVisualDelete('"', events);
+                    ExecuteVisualDelete(changeRegister, events);
                     EnterInsertMode(false, events);
                 }
                 return;
@@ -3247,6 +3263,8 @@ public class VimEngine
         _awaitingVisualTextObj = '\0';
         _awaitingVisualTextObjCount = 1;
         _discardingUnsupportedVisualTextObj = false;
+        _awaitingVisualRegister = false;
+        _visualPendingRegister = null;
         _lastVisualStart = _visualStart;
         _lastVisualEnd = _cursor;
         _lastVisualMode = _mode;
@@ -4067,17 +4085,21 @@ public class VimEngine
         return ln[..i];
     }
 
-    private void ExecuteDelete(CursorPosition from, CursorPosition to, bool linewise, List<VimEvent> events)
+    private void ExecuteDelete(CursorPosition from, CursorPosition to, bool linewise, List<VimEvent> events, char register = '"')
     {
         Snapshot();
         var buf = _bufferManager.Current.Text;
-        YankRange('"', from, to, linewise);
 
         if (linewise)
         {
-            DeleteLines(from.Line, to.Line, events);
+            DeleteLines(from.Line, to.Line, events, register);
             return;
         }
+
+        // The blackhole register "_ discards the deleted text without touching
+        // the unnamed/yank registers.
+        if (register != '_')
+            YankRange(register, from, to, linewise);
 
         if (from.Line == to.Line)
         {
@@ -4097,10 +4119,11 @@ public class VimEngine
         EmitText(events);
     }
 
-    private void DeleteLines(int start, int end, List<VimEvent> events)
+    private void DeleteLines(int start, int end, List<VimEvent> events, char register = '"')
     {
         var buf = _bufferManager.Current.Text;
-        YankLines(start, end, '"', events);
+        if (register != '_')
+            YankLines(start, end, register, events);
         CurrentBuffer.Folds.OnLinesDeleted(start, end);
         buf.DeleteLines(start, end);
         _cursor = buf.ClampCursor(new CursorPosition(start, 0));
@@ -5482,6 +5505,16 @@ public class VimEngine
         }
     }
 
+    // Returns the register selected via a visual-mode " prefix (default ") and
+    // clears the pending selection so it applies only to the next operator.
+    private char ConsumeVisualRegister()
+    {
+        var register = _visualPendingRegister ?? '"';
+        _visualPendingRegister = null;
+        _awaitingVisualRegister = false;
+        return register;
+    }
+
     private void ExecuteVisualDelete(char register, List<VimEvent> events)
     {
         if (_selection == null) { ExitVisualMode(events); return; }
@@ -5491,7 +5524,8 @@ public class VimEngine
             var (startLine, _, _, _) = GetBlockBounds(sel);
             var leftColumn = GetBlockLeftColumn(sel);
             Snapshot();
-            YankBlock(register, sel);
+            if (register != '_')
+                YankBlock(register, sel);
             DeleteBlock(sel);
             _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn));
             EmitText(events);
@@ -5505,7 +5539,8 @@ public class VimEngine
 
         if (_mode == VimMode.VisualLine)
         {
-            YankLines(start.Line, end.Line, register, events);
+            if (register != '_')
+                YankLines(start.Line, end.Line, register, events);
             CurrentBuffer.Folds.OnLinesDeleted(start.Line, end.Line);
             _bufferManager.Current.Text.DeleteLines(start.Line, end.Line);
             _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(start.Line, 0));
@@ -5513,8 +5548,7 @@ public class VimEngine
         }
         else
         {
-            YankRange(register, start, end, false);
-            ExecuteDelete(start, end, false, events);
+            ExecuteDelete(start, end, false, events, register);
         }
         ExitVisualMode(events);
     }

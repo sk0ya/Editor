@@ -258,6 +258,13 @@ public class VimConfig
         if (string.IsNullOrEmpty(line) || line.StartsWith('"'))
             return "";
 
+        // Map commands take their {rhs} literally to the end of the line — Vim
+        // does not treat a trailing `"` as a comment there. Stripping it would
+        // eat register specs like the RHS of `nnoremap x "_x`, silently dropping
+        // the mapping. Leave these lines untouched.
+        if (IsLiteralRhsCommand(line))
+            return line;
+
         // Remove inline comments: only strip " when preceded by whitespace
         // (avoids cutting strings like let mapleader="\<Space>")
         char quote = '\0';
@@ -308,6 +315,25 @@ public class VimConfig
         }
 
         return line;
+    }
+
+    private static readonly string[] LiteralRhsPrefixes =
+    [
+        "nnoremap ", "nmap ", "inoremap ", "imap ", "vnoremap ", "vmap ",
+        "xnoremap ", "xmap ", "snoremap ", "smap ", "onoremap ", "omap ",
+        "tnoremap ", "tmap ", "cnoremap ", "cmap ", "lnoremap ", "lmap ",
+        "noremap ", "map ", "noremap! ", "map! ",
+    ];
+
+    private static bool IsLiteralRhsCommand(string line)
+    {
+        foreach (var prefix in LiteralRhsPrefixes)
+        {
+            if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsInlineCommentQuote(string line, int quoteIndex)

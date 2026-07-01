@@ -4758,4 +4758,70 @@ public class VimEngineTests
         engine.ProcessKey("Tab", false, false, false);
         Assert.Equal("- item  ", engine.CurrentBuffer.Text.GetText());
     }
+
+    private static VimConfig ConfigFrom(params string[] lines)
+    {
+        var config = new VimConfig();
+        config.ParseLines(lines);
+        return config;
+    }
+
+    [Fact]
+    public void Vimrc_NnoremapWithBlackholeRegisterRhs_IsParsed()
+    {
+        // Regression: the `"` in the RHS `"_x` was mistaken for an inline comment
+        // and the whole mapping was dropped.
+        var config = ConfigFrom("nnoremap x \"_x");
+        Assert.True(config.NormalMaps.TryGetValue("x", out var rhs));
+        Assert.Equal("\"_x", rhs);
+    }
+
+    [Fact]
+    public void Vimrc_NnoremapXToBlackhole_DoesNotClobberUnnamedRegister()
+    {
+        var config = ConfigFrom("nnoremap x \"_x");
+        var engine = CreateEngine("abc", config);
+
+        engine.ProcessKey("y"); // start yank
+        engine.ProcessKey("l"); // yl — yank char 'a' into unnamed register
+        engine.ProcessKey("$"); // cursor on 'c'
+        engine.ProcessKey("x"); // mapped to "_x — delete 'c' into blackhole
+        Assert.Equal("ab", engine.CurrentBuffer.Text.GetText());
+
+        engine.ProcessKey("p"); // paste unnamed register — should still be 'a'
+        Assert.Equal("aba", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Vimrc_NnoremapYToYankEol_YanksToEndOfLine()
+    {
+        var config = ConfigFrom("nnoremap Y y$");
+        var engine = CreateEngine("hello world", config);
+
+        engine.ProcessKey("Y", false, true); // mapped to y$ — yank whole line from col 0
+        engine.ProcessKey("$"); // move to end
+        engine.ProcessKey("p"); // paste after last char
+        Assert.Equal("hello worldhello world", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Vimrc_VnoremapPToBlackholeDelete_DoesNotClobberRegister()
+    {
+        var config = ConfigFrom("vnoremap p \"_dp");
+        var engine = CreateEngine("foo bar", config);
+
+        // Yank "foo" into the unnamed register.
+        engine.ProcessKey("v");
+        engine.ProcessKey("l");
+        engine.ProcessKey("l"); // select "foo"
+        engine.ProcessKey("y");
+
+        // Select "bar" and paste over it via the mapped `p` ("_dp).
+        engine.ProcessKey("$"); // cursor on last char 'r'
+        engine.ProcessKey("v");
+        engine.ProcessKey("h");
+        engine.ProcessKey("h"); // select "bar"
+        engine.ProcessKey("p"); // replace "bar" with unnamed ("foo") without clobbering
+        Assert.Equal("foo foo", engine.CurrentBuffer.Text.GetText());
+    }
 }
