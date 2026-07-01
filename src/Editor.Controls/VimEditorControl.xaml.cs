@@ -4574,7 +4574,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (edits.Count > 0)
         {
             var formatted = ApplyTextEdits(original, edits);
-            _engine.SetText(formatted);
+            _engine.SetTextPreservingCursor(formatted);
             UpdateAll();
             _lspManager.OnTextChanged(formatted);
             ActiveStatusBar.UpdateStatus("Format: document formatted");
@@ -4618,7 +4618,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             ActiveStatusBar.UpdateStatus($"Format: no changes — {def.Executable}{where}");
             return;
         }
-        _engine.SetText(formatted);
+        _engine.SetTextPreservingCursor(formatted);
         UpdateAll();
         _lspManager.OnTextChanged(formatted);
         ActiveStatusBar.UpdateStatus($"Format: formatted with {def.Executable}{where}");

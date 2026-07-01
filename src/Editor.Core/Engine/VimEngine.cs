@@ -233,6 +233,26 @@ public class VimEngine
         _syntaxEngine.Invalidate();
     }
 
+    /// <summary>
+    /// Replace the whole buffer while keeping the caret on the same line/column as best it can,
+    /// clamping to the new buffer's bounds. Used by document formatting so the cursor doesn't jump
+    /// back to the top of the file after a reformat.
+    /// </summary>
+    public void SetTextPreservingCursor(string text)
+    {
+        var old = _cursor;
+        _bufferManager.Current.Text.SetText(text);
+        _syntaxEngine.Invalidate();
+
+        var buf = CurrentBuffer.Text;
+        int line = Math.Clamp(old.Line, 0, buf.LineCount - 1);
+        int lineLen = buf.GetLine(line).Length;
+        int maxCol = _mode == VimMode.Insert ? lineLen : Math.Max(0, lineLen - 1);
+        int col = Math.Clamp(old.Column, 0, maxCol);
+        _cursor = new CursorPosition(line, col);
+        _preferredColumn = col;
+    }
+
     // Move cursor to an arbitrary position (used for mouse click).
     public IReadOnlyList<VimEvent> SetCursorPosition(CursorPosition pos)
     {
