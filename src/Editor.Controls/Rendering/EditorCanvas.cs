@@ -83,6 +83,14 @@ public partial class EditorCanvas : FrameworkElement
     private readonly HashSet<string> _pathChecking = [];
     private string? _documentDirectory;
     private double _contentWidth;
+
+    // Markdown table column alignment (rendering-only — never mutates buffer text). Maps
+    // buffer line -> (buffer column -> pixel width override), stretching the gap before each
+    // '|' so columns line up even when cell content has mixed-width (e.g. Japanese) characters.
+    private bool _markdownTableAlignEnabled;
+    private Dictionary<int, Dictionary<int, double>> _tableColumnOverrides = [];
+    private Dictionary<int, double>? _activeLineOverrides;
+
     // Folds
     private int[] _visibleLineMap = [];
     private HashSet<int> _closedFoldStarts = [];   // buffer lines with closed fold (▶)
@@ -216,8 +224,28 @@ public partial class EditorCanvas : FrameworkElement
         _charWidthCache.Clear();
         _maxLineWidthCacheLines = null; // char widths changed — invalidate cached extent
         MeasureChar();
+        RecomputeTableOverrides();
         RebuildVisualLayout();
         InvalidateVisual();
+    }
+
+    /// <summary>
+    /// When true (set by the host for .md/.markdown files), GFM table rows are visually
+    /// realigned on render — the gap before each '|' is stretched so columns line up even when
+    /// cells mix half-width and full-width (e.g. Japanese) characters. The buffer text itself is
+    /// never modified.
+    /// </summary>
+    public bool MarkdownTableAlignEnabled
+    {
+        get => _markdownTableAlignEnabled;
+        set
+        {
+            if (_markdownTableAlignEnabled == value) return;
+            _markdownTableAlignEnabled = value;
+            RecomputeTableOverrides();
+            RebuildVisualLayout();
+            InvalidateVisual();
+        }
     }
 
     /// <summary>
@@ -249,6 +277,7 @@ public partial class EditorCanvas : FrameworkElement
 
         _lines = lines.Length > 0 ? lines : [""];
         _lineNumberWidth = Math.Max(3, _lines.Length.ToString().Length);
+        RecomputeTableOverrides();
         RebuildVisualLayout();
         InvalidateVisual();
     }
@@ -614,6 +643,7 @@ public partial class EditorCanvas : FrameworkElement
         {
             int safeLine = Math.Clamp(lineIndex, 0, Math.Max(0, _lines.Length - 1));
             string lineText = safeLine < _lines.Length ? _lines[safeLine] : string.Empty;
+            SetActiveLine(safeLine);
 
             if (!_wrapLines || lineText.Length == 0 || availableTextWidth <= 1)
             {
@@ -1042,6 +1072,9 @@ public partial class EditorCanvas : FrameworkElement
 
         if (_wrapLines)
         {
+            // segmentText is a substring, so its indices don't match the absolute buffer columns
+            // that table overrides are keyed by — skip overrides here rather than mis-apply them.
+            _activeLineOverrides = null;
             int segStart = Math.Min(segment.StartColumn, hitLine.Length);
             int segEnd = Math.Min(GetSegmentEndColumn(visualLine), hitLine.Length);
             int segLength = Math.Max(0, segEnd - segStart);
@@ -1052,6 +1085,7 @@ public partial class EditorCanvas : FrameworkElement
             return (line, colWrapped);
         }
 
+        SetActiveLine(line);
         int col = VisualXToCol(hitLine, visualX);
         int maxCol = Math.Max(0, hitLine.Length - 1);
         col = Math.Clamp(col, 0, maxCol);
@@ -1134,9 +1168,11 @@ public partial class EditorCanvas : FrameworkElement
             double y = vi * _lineHeight - _scrollOffsetY;
             if (y + _lineHeight < 0 || y > contentBottom) continue;
 
-            var lineText = _substitutePreviewLines.TryGetValue(l, out var previewLine)
-                ? previewLine
-                : l < _lines.Length ? _lines[l] : "";
+            bool isPreviewLine = _substitutePreviewLines.TryGetValue(l, out var previewLine);
+            string lineText = isPreviewLine ? previewLine! : l < _lines.Length ? _lines[l] : "";
+            // Preview text (from :s) doesn't share column positions with the real buffer line,
+            // so table overrides (keyed by real-buffer columns) must not be applied to it.
+            SetActiveLine(isPreviewLine ? -1 : l);
             _scrollOffsetX = _wrapLines ? GetVisualX(lineText, segment.StartColumn) : baseOffsetX;
             bool drawNumberAndFold = !_wrapLines || !segment.IsContinuation;
 
@@ -2075,7 +2111,7 @@ public partial class EditorCanvas : FrameworkElement
             if (col < lineText.Length && lineText[col] is '(' or ')' or '[' or ']' or '{' or '}')
             {
                 double x = textLeft + GetVisualX(lineText, col) - _scrollOffsetX;
-                double w = CharW(lineText[col]);
+                double w = CharW(lineText[col], col);
                 dc.DrawRectangle(Theme.MatchingBracketBackground, null, new Rect(x, y, w, _lineHeight));
             }
         }
@@ -2085,7 +2121,7 @@ public partial class EditorCanvas : FrameworkElement
 
         int matchCol = bracketMatch.Value.col;
         double mx = textLeft + GetVisualX(lineText, matchCol) - _scrollOffsetX;
-        double mw = CharW(lineText[matchCol]);
+        double mw = CharW(lineText[matchCol], matchCol);
         dc.DrawRectangle(Theme.MatchingBracketBackground, null, new Rect(mx, y, mw, _lineHeight));
     }
 
@@ -2180,8 +2216,7 @@ public partial class EditorCanvas : FrameworkElement
         if (segments == null)
         {
             // No syntax — draw entire line in default color
-            var ft = FormatText(lineText, Theme.Foreground);
-            dc.DrawText(ft, new Point(textLeft - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+            DrawTextRun(dc, lineText, 0, lineText.Length, textLeft, y, Theme.Foreground);
             return;
         }
 
@@ -2251,31 +2286,57 @@ public partial class EditorCanvas : FrameworkElement
         {
             // Gap before segment in default color
             if (startCol > pos)
-            {
-                var gap = lineText[pos..Math.Min(startCol, lineText.Length)];
-                if (gap.Length > 0)
-                {
-                    var ft = FormatText(gap, Theme.Foreground);
-                    dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, pos) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
-                }
-            }
+                DrawTextRun(dc, lineText, pos, Math.Min(startCol, lineText.Length), textLeft, y, Theme.Foreground);
+
             // Segment text
             int end = Math.Min(startCol + length, lineText.Length);
             if (startCol < end)
-            {
-                var segText = lineText[startCol..end];
-                var segBrush = brush ?? Theme.Foreground;
-                var ft = FormatText(segText, segBrush);
-                dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
-            }
+                DrawTextRun(dc, lineText, startCol, end, textLeft, y, brush ?? Theme.Foreground);
+
             pos = Math.Max(pos, startCol + length);
         }
         // Remaining text
         if (pos < lineText.Length)
+            DrawTextRun(dc, lineText, pos, lineText.Length, textLeft, y, Theme.Foreground);
+    }
+
+    /// <summary>
+    /// Draws lineText[startCol..endCol) in a single color. A run of plain text is normally drawn
+    /// as one FormattedText call, which lays out its own characters using the font's natural
+    /// advances — a per-character width override (see <see cref="_activeLineOverrides"/>, used for
+    /// markdown table column alignment) has no visible effect unless the run is split there, since
+    /// otherwise the override only feeds coordinate math that this draw call never consults. So
+    /// when overrides are active, split into sub-runs at each overridden column: the overridden
+    /// character is drawn alone (at its natural size) and the next run starts at the stretched
+    /// GetVisualX position, producing the visible gap.
+    /// </summary>
+    private void DrawTextRun(DrawingContext dc, string lineText, int startCol, int endCol, double textLeft, double y, Brush brush)
+    {
+        if (startCol >= endCol) return;
+
+        if (_activeLineOverrides == null || _activeLineOverrides.Count == 0)
         {
-            var rem = lineText[pos..];
-            var ft = FormatText(rem, Theme.Foreground);
-            dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, pos) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+            var ft = FormatText(lineText[startCol..endCol], brush);
+            dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+            return;
+        }
+
+        int runStart = startCol;
+        for (int col = startCol; col < endCol; col++)
+        {
+            if (!_activeLineOverrides.ContainsKey(col)) continue;
+            int runEnd = col + 1;
+            if (runEnd > runStart)
+            {
+                var ft = FormatText(lineText[runStart..runEnd], brush);
+                dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, runStart) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+            }
+            runStart = runEnd;
+        }
+        if (runStart < endCol)
+        {
+            var ft = FormatText(lineText[runStart..endCol], brush);
+            dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, runStart) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
         }
     }
 
@@ -2332,7 +2393,7 @@ public partial class EditorCanvas : FrameworkElement
         {
             char c = lineText[i];
             double px = textLeft + x - _scrollOffsetX;
-            double charW = CharW(c);
+            double charW = CharW(c, i);
 
             if (c == '\t' && tabFt != null)
             {
@@ -2366,6 +2427,11 @@ public partial class EditorCanvas : FrameworkElement
         int cursorCol = Math.Clamp(_cursor.Column, 0, lineText.Length);
         string merged = lineText.Insert(cursorCol, _imeCompositionText);
         if (string.IsNullOrEmpty(merged)) return;
+
+        // `merged` splices composition text into the line, shifting every column after the
+        // cursor — table overrides are keyed by real-buffer columns, so they'd land on the
+        // wrong characters here. Skip them while composing; realignment resumes on commit.
+        _activeLineOverrides = null;
 
         if (_substitutePreviewLines.ContainsKey(lineIndex))
         {
@@ -2418,7 +2484,7 @@ public partial class EditorCanvas : FrameworkElement
         double cursorX = textLeft + GetVisualX(lineText, _cursor.Column) - _scrollOffsetX;
         double cursorY = y;
 
-        double cursorW = _cursor.Column < lineText.Length ? CharW(lineText[_cursor.Column]) : _charWidth;
+        double cursorW = _cursor.Column < lineText.Length ? CharW(lineText[_cursor.Column], _cursor.Column) : _charWidth;
 
         if (_mode is VimMode.Insert or VimMode.Replace)
             DrawImeCompositionUnderline(dc, cursorX, cursorY);
@@ -2474,7 +2540,7 @@ public partial class EditorCanvas : FrameworkElement
         {
             if (ecLine != line) continue;
             double cx = textLeft + GetVisualX(lineText, ecCol) - _scrollOffsetX;
-            double cw = ecCol < lineText.Length ? CharW(lineText[ecCol]) : _charWidth;
+            double cw = ecCol < lineText.Length ? CharW(lineText[ecCol], ecCol) : _charWidth;
 
             if (_mode == VimMode.Insert || _mode == VimMode.Command ||
                 _mode == VimMode.SearchForward || _mode == VimMode.SearchBackward)
@@ -2607,6 +2673,7 @@ public partial class EditorCanvas : FrameworkElement
         int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);
         int cursorVisualLine = GetCursorVisualLine();
         var segment = GetVisualSegment(cursorVisualLine);
+        SetActiveLine(_cursor.Line);
         double lineOffsetX = _wrapLines ? GetVisualX(line, segment.StartColumn) : _scrollOffsetX;
         double x = gutterWidth + GetVisualX(line, cursorCol) - lineOffsetX;
         double y = cursorVisualLine * _lineHeight - _scrollOffsetY;
@@ -2629,13 +2696,30 @@ public partial class EditorCanvas : FrameworkElement
         return w;
     }
 
+    /// <summary>
+    /// Width of the character at <paramref name="col"/> in the line currently set via
+    /// <see cref="SetActiveLine"/> — honors the markdown table column-alignment override for
+    /// that column when one is active, otherwise falls back to the plain measured width.
+    /// </summary>
+    private double CharW(char c, int col)
+    {
+        if (_activeLineOverrides != null && _activeLineOverrides.TryGetValue(col, out double w)) return w;
+        return CharW(c);
+    }
+
+    /// <summary>Must be called before any GetVisualX/VisualXToCol/CharW(char,int) use for a given buffer line.</summary>
+    private void SetActiveLine(int lineIndex) =>
+        _activeLineOverrides = _tableColumnOverrides.Count > 0 && _tableColumnOverrides.TryGetValue(lineIndex, out var ov)
+            ? ov
+            : null;
+
     /// <summary>Visual X offset (in pixels) for character index <paramref name="col"/> in <paramref name="line"/>.</summary>
     private double GetVisualX(string line, int col)
     {
         double x = 0;
         int limit = Math.Min(col, line.Length);
         for (int i = 0; i < limit; i++)
-            x += CharW(line[i]);
+            x += CharW(line[i], i);
         return x;
     }
 
@@ -2645,11 +2729,98 @@ public partial class EditorCanvas : FrameworkElement
         double x = 0;
         for (int i = 0; i < line.Length; i++)
         {
-            double w = CharW(line[i]);
+            double w = CharW(line[i], i);
             if (x + w / 2 >= visualX) return i;
             x += w;
         }
         return line.Length;
+    }
+
+    /// <summary>
+    /// Recomputes the markdown table column-alignment overrides for the current <see cref="_lines"/>.
+    /// Cheap no-op when the feature is off or there's no table in the document.
+    /// </summary>
+    private void RecomputeTableOverrides()
+    {
+        if (!_markdownTableAlignEnabled)
+        {
+            _tableColumnOverrides = [];
+            return;
+        }
+        MeasureChar();
+        _tableColumnOverrides = ComputeTableColumnOverrides(_lines);
+    }
+
+    /// <summary>
+    /// For every detected GFM table block, measures each column's widest already-authored span
+    /// (real font metrics, so it adapts to full-width characters) and records, per row, how much
+    /// extra width the gap before that row's closing '|' needs so every row's pipes land at the
+    /// same X. The target is the widest existing span rather than content+fixed-padding, because
+    /// formatters like prettier pad cells by character *count* — a full-width cell can already
+    /// render wider than a same-char-count half-width cell, and only ever needs stretching, never
+    /// shrinking, to match. A row whose span is already the widest in its column gets no override.
+    /// </summary>
+    private Dictionary<int, Dictionary<int, double>> ComputeTableColumnOverrides(string[] lines)
+    {
+        var result = new Dictionary<int, Dictionary<int, double>>();
+        if (lines.Length == 0) return result;
+
+        var blocks = Editor.Core.Editing.MarkdownTableLayout.FindBlocks(lines);
+        if (blocks.Count == 0) return result;
+
+        foreach (var block in blocks)
+        {
+            int rowCount = block.EndLine - block.StartLine + 1;
+            var rowSpans = new List<Editor.Core.Editing.MarkdownTableLayout.CellSpan>[rowCount];
+            int colCount = 0;
+
+            for (int r = 0; r < rowCount; r++)
+            {
+                rowSpans[r] = Editor.Core.Editing.MarkdownTableLayout.SplitCellSpans(lines[block.StartLine + r]);
+                colCount = Math.Max(colCount, rowSpans[r].Count);
+            }
+            if (colCount == 0) continue;
+
+            var colWidth = new double[colCount];
+            for (int r = 0; r < rowCount; r++)
+            {
+                string line = lines[block.StartLine + r];
+                var spans = rowSpans[r];
+                for (int c = 0; c < spans.Count; c++)
+                {
+                    double spanWidth = 0;
+                    for (int i = spans[c].Start; i < spans[c].End; i++) spanWidth += CharW(line[i]);
+                    if (spanWidth > colWidth[c]) colWidth[c] = spanWidth;
+                }
+            }
+
+            for (int r = 0; r < rowCount; r++)
+            {
+                int lineIndex = block.StartLine + r;
+                string line = lines[lineIndex];
+                var spans = rowSpans[r];
+                for (int c = 0; c < spans.Count; c++)
+                {
+                    var span = spans[c];
+                    if (span.End >= line.Length || line[span.End] != '|') continue; // no closing pipe to align
+
+                    double spanWidth = 0;
+                    for (int i = span.Start; i < span.End; i++) spanWidth += CharW(line[i]);
+
+                    double extra = colWidth[c] - spanWidth;
+                    if (extra <= 0.5) continue;
+
+                    int widenCol = span.End > span.Start ? span.End - 1 : span.End;
+                    double baseWidth = CharW(line[widenCol]);
+
+                    if (!result.TryGetValue(lineIndex, out var perLine))
+                        result[lineIndex] = perLine = [];
+                    perLine[widenCol] = baseWidth + extra;
+                }
+            }
+        }
+
+        return result;
     }
 
     private double GetDpi()
@@ -2709,8 +2880,9 @@ public partial class EditorCanvas : FrameworkElement
             double viewportWidth = Math.Max(0, UsableViewportWidth - gutterWidth);
             string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : string.Empty;
             int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);
+            SetActiveLine(_cursor.Line);
             double cursorX = GetVisualX(line, cursorCol);
-            double cursorW = cursorCol < line.Length ? CharW(line[cursorCol]) : _charWidth;
+            double cursorW = cursorCol < line.Length ? CharW(line[cursorCol], cursorCol) : _charWidth;
             double marginX = 4 * _charWidth;
 
             if (viewportWidth > 0)

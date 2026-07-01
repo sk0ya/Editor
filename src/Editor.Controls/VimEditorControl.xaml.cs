@@ -5746,6 +5746,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.BeginBatch();
         try
         {
+            var ext = buf.FilePath is { Length: > 0 } filePathForExt ? System.IO.Path.GetExtension(filePathForExt) : "";
+            Canvas.MarkdownTableAlignEnabled = ext.Equals(".md", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".markdown", StringComparison.OrdinalIgnoreCase);
+
             Canvas.SetLines(lines);
             Canvas.DocumentDirectory = buf.FilePath is { Length: > 0 } fp
                 ? System.IO.Path.GetDirectoryName(fp)
