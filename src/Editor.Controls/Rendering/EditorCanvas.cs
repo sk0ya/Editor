@@ -128,6 +128,8 @@ public partial class EditorCanvas : FrameworkElement
     // Git
     private Dictionary<int, GitLineState> _gitDiff = [];
     private Dictionary<int, string> _blameAnnotations = [];
+    private double _blameColWidth;     // 0 = blame margin hidden (no annotations)
+    private int _hoveredBlameLine = -1;
 
     // Changed-since-last-save gutter (independent of git; tracks the on-disk baseline)
     private Dictionary<int, Editor.Core.Editing.SaveLineState> _saveDiff = [];
@@ -162,6 +164,7 @@ public partial class EditorCanvas : FrameworkElement
     public event Action<int, int>? MouseDragging;      // (line, col) during drag
     public event Action? MouseDragEnded;
     public event Action<int>? FoldGutterClicked;       // (bufferLine) fold indicator clicked
+    public event Action<int, string>? BlameClicked;    // (bufferLine, annotation) blame margin clicked
     public event Action<string>? LinkClicked;          // (url) Ctrl+clicked on a detected URL
     public event Action<string>? FileLinkClicked;      // (absolutePath) Ctrl+clicked on a detected file path
 
@@ -365,7 +368,27 @@ public partial class EditorCanvas : FrameworkElement
     public void SetBlameAnnotations(Dictionary<int, string>? annotations)
     {
         _blameAnnotations = annotations ?? [];
+        _hoveredBlameLine = -1;
+        _blameColWidth = ComputeBlameColumnWidth();
+        // カラムの分だけ本文幅が変わる（折り返し幅・可視桁数に影響）ので、再描画に加えて再レイアウトも要求する。
+        InvalidateArrange();
         InvalidateVisual();
+    }
+
+    /// <summary>blame 左カラムの幅（px）。最長の注釈テキスト幅＋左右パディング。注釈なしなら 0（カラム非表示）。</summary>
+    private double ComputeBlameColumnWidth()
+    {
+        if (_blameAnnotations.Count == 0) return 0;
+        MeasureChar();
+        double max = 0;
+        foreach (var text in _blameAnnotations.Values)
+        {
+            double w = 0;
+            foreach (var ch in text.AsSpan().Trim())
+                w += CharW(ch);
+            if (w > max) max = w;
+        }
+        return max + 12; // 左 6px + 右 6px（保存差分バーと重ならない余白）
     }
 
     public void SetDocumentHighlights(IReadOnlyList<DocumentHighlight>? highlights)
@@ -724,7 +747,8 @@ public partial class EditorCanvas : FrameworkElement
         int bpColWidth = _breakpointsEnabled ? (int)Math.Max(14.0, _charWidth + 2) : 0;
         int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
         double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
-        int gutterWidth = (int)(bpColWidth + lineNumWidth + foldColWidth);
+        // blame 左カラム（:Gblame 有効時のみ幅 > 0）はフォールド列とコードの間＝ガター最右に確保する。
+        int gutterWidth = (int)(bpColWidth + lineNumWidth + foldColWidth + _blameColWidth);
         return (bpColWidth, lineNumWidth, foldColWidth, gutterWidth);
     }
 
@@ -838,6 +862,16 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
+        // Blame margin click (right edge of gutter) — report the line's commit annotation to the host.
+        if (_blameColWidth > 0 && point.X >= gutterWidth - _blameColWidth && point.X < gutterWidth)
+        {
+            int bufferLine = HitTestGutterLine(point);
+            if (bufferLine >= 0 && _blameAnnotations.TryGetValue(bufferLine, out var blame))
+                BlameClicked?.Invoke(bufferLine, blame);
+            e.Handled = true;
+            return;
+        }
+
         if (_showLineNumbers && point.X < gutterWidth)
         {
             // Fold column click — check for fold indicator
@@ -930,8 +964,19 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
-        // Update fold/breakpoint hover state
+        // Update fold/breakpoint/blame hover state
         var (bpColW, lineNumWidth2, _, gutterWidth2) = GetGutterMetrics();
+
+        // blame 左カラムのホバー行（注釈のある行だけ）。領域外へ出たら解除して再描画する。
+        int blameHover = -1;
+        if (_blameColWidth > 0 && point.X >= gutterWidth2 - _blameColWidth && point.X < gutterWidth2)
+        {
+            int blameLine = HitTestGutterLine(point);
+            if (blameLine >= 0 && _blameAnnotations.ContainsKey(blameLine))
+                blameHover = blameLine;
+        }
+        if (blameHover != _hoveredBlameLine) { _hoveredBlameLine = blameHover; InvalidateVisual(); }
+
         if (_breakpointsEnabled && bpColW > 0 && point.X < bpColW)
         {
             // Hovering in breakpoint column — show a faint placeholder dot and a hand cursor.
@@ -940,6 +985,16 @@ public partial class EditorCanvas : FrameworkElement
             SetHoveredBreakpointLine(bufferLine);
             ClearDataTipHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+        }
+        else if (_blameColWidth > 0 && point.X >= gutterWidth2 - _blameColWidth && point.X < gutterWidth2)
+        {
+            // Hovering in blame margin — hand cursor over an annotated (clickable) line.
+            SetHoveredBreakpointLine(-1);
+            ClearDataTipHover();
+            if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+            Cursor = blameHover >= 0
+                ? System.Windows.Input.Cursors.Hand
+                : System.Windows.Input.Cursors.Arrow;
         }
         else if (_showLineNumbers && point.X >= bpColW + lineNumWidth2 && point.X < gutterWidth2)
         {
@@ -1002,6 +1057,7 @@ public partial class EditorCanvas : FrameworkElement
     {
         base.OnMouseLeave(e);
         if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+        if (_hoveredBlameLine >= 0) { _hoveredBlameLine = -1; InvalidateVisual(); }
         ClearDataTipHover();
         Cursor = System.Windows.Input.Cursors.IBeam;
     }
@@ -1298,6 +1354,10 @@ public partial class EditorCanvas : FrameworkElement
             if (_breakpointsEnabled && drawNumberAndFold && bpColWidth > 0)
                 DrawBreakpointGlyph(dc, l, y, bpColWidth);
 
+            // Git blame margin (between the fold column and the code)
+            if (_blameColWidth > 0)
+                DrawBlameMargin(dc, l, y, gutterWidth - _blameColWidth, drawNumberAndFold);
+
             dc.PushClip(new RectangleGeometry(new Rect(textLeft, y, Math.Max(0, size.Width - textLeft), _lineHeight)));
 
             // Selection highlight
@@ -1321,9 +1381,6 @@ public partial class EditorCanvas : FrameworkElement
 
             // Invisible character markers (set list)
             DrawListChars(dc, lineText, y, textLeft);
-
-            // Git blame annotation (virtual text at end of line)
-            DrawBlameAnnotation(dc, l, lineText, y, textLeft);
 
             // LSP inlay hints (inline ghost text)
             DrawInlayHints(dc, l, lineText, y, textLeft);
@@ -1641,14 +1698,21 @@ public partial class EditorCanvas : FrameworkElement
             dc.DrawRectangle(brush, null, new Rect(textLeft, y, width, _lineHeight));
     }
 
-    private void DrawBlameAnnotation(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft)
-    {
-        if (_blameAnnotations.Count == 0) return;
-        if (!_blameAnnotations.TryGetValue(lineIndex, out var blame)) return;
+    private static readonly SolidColorBrush s_blameHoverBg =
+        Freeze(new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)));
 
-        double lineWidth = string.IsNullOrEmpty(lineText) ? 0 : GetVisualX(lineText, lineText.Length);
-        var ft = FormatText(blame, Theme.LineNumberFg);
-        dc.DrawText(ft, new Point(textLeft + lineWidth - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+    /// <summary>blame 左カラムの1行分を描く（背景は折り返し継続行にも、注釈テキストは先頭セグメントだけ）。
+    /// ホバー中の行はハイライト＋前景色でクリックできることを示す。</summary>
+    private void DrawBlameMargin(DrawingContext dc, int lineIndex, double y, double x, bool drawText)
+    {
+        dc.DrawRectangle(Theme.LineNumberBg, null, new Rect(x, y, _blameColWidth, _lineHeight));
+        if (!drawText || !_blameAnnotations.TryGetValue(lineIndex, out var blame)) return;
+
+        bool hovered = lineIndex == _hoveredBlameLine;
+        if (hovered)
+            dc.DrawRectangle(s_blameHoverBg, null, new Rect(x, y, _blameColWidth, _lineHeight));
+        var ft = FormatText(blame.Trim(), hovered ? Theme.Foreground : Theme.LineNumberFg);
+        dc.DrawText(ft, new Point(x + 6, y + (_lineHeight - ft.Height) / 2));
     }
 
     private static readonly SolidColorBrush s_inlayHintBg =

@@ -442,6 +442,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     public event EventHandler<string>? QuickfixReplaceRequested;
     public event EventHandler<GitOutputRequestedEventArgs>? GitOutputRequested;
     public event EventHandler<GitCommitRequestedEventArgs>? GitCommitRequested;
+    /// <summary>blame 左カラム（:Gblame 表示中）の行がクリックされた。ホストはコミット差分の表示等に使う。</summary>
+    public event EventHandler<Git.BlameCommitClickedEventArgs>? BlameCommitClicked;
     public event EventHandler<LinkClickedEventArgs>? LinkClicked;
     public event EventHandler<FileLinkClickedEventArgs>? FileLinkClicked;
     public event EventHandler<WindowNavRequestedEventArgs>? WindowNavRequested;
@@ -666,6 +668,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.MouseDragging += OnCanvasMouseDragging;
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.FoldGutterClicked += OnFoldGutterClicked;
+        Canvas.BlameClicked += (line, annotation) =>
+            BlameCommitClicked?.Invoke(this, new Git.BlameCommitClickedEventArgs(line, annotation));
         Canvas.BreakpointToggled += OnCanvasBreakpointToggled;
         Canvas.DataTipHoverChanged += OnCanvasDataTipHoverChanged;
         Canvas.DataTipHoverEnded += OnCanvasDataTipHoverEnded;
