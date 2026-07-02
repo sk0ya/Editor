@@ -4918,4 +4918,69 @@ public class VimEngineTests
         engine.ProcessKey("p"); // replace "bar" with unnamed ("foo") without clobbering
         Assert.Equal("foo foo", engine.CurrentBuffer.Text.GetText());
     }
+
+    // ── ExecuteExCommand (programmatic ex commands) ────────────────────────
+
+    [Fact]
+    public void ExecuteExCommand_FiresEvent_InNormalMode()
+    {
+        var engine = CreateEngine("hello");
+        var events = engine.ExecuteExCommand("Gblame");
+        Assert.Contains(events, e => e.Type == VimEventType.GitBlameRequested);
+        Assert.Equal("hello", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void ExecuteExCommand_FiresEvent_InInsertMode_WithoutInsertingText()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("i");
+
+        var events = engine.ExecuteExCommand("Gblame");
+
+        Assert.Contains(events, e => e.Type == VimEventType.GitBlameRequested);
+        Assert.Equal("hello", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Insert, engine.Mode); // モードは変えない
+    }
+
+    [Fact]
+    public void ExecuteExCommand_FiresEvent_WhenVimDisabled_WithoutInsertingText()
+    {
+        var engine = CreateEngine("hello");
+        engine.SetVimEnabled(false);
+
+        var events = engine.ExecuteExCommand("Gblame");
+
+        Assert.Contains(events, e => e.Type == VimEventType.GitBlameRequested);
+        Assert.Equal("hello", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void ExecuteExCommand_ToleratesLeadingColon()
+    {
+        var engine = CreateEngine("hello");
+        var events = engine.ExecuteExCommand(":Gblame");
+        Assert.Contains(events, e => e.Type == VimEventType.GitBlameRequested);
+    }
+
+    [Fact]
+    public void ExecuteExCommand_RunsTextModifyingCommand_WithUndo()
+    {
+        var engine = CreateEngine("one\ntwo\nthree");
+
+        engine.ExecuteExCommand("%s/two/TWO/");
+        Assert.Equal("one\nTWO\nthree", engine.CurrentBuffer.Text.GetText());
+
+        engine.ProcessKey("u"); // undo が効く（スナップショットが取られている）
+        Assert.Equal("one\ntwo\nthree", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void ExecuteExCommand_EmptyOrNull_ReturnsNoEvents()
+    {
+        var engine = CreateEngine("hello");
+        Assert.Empty(engine.ExecuteExCommand(""));
+        Assert.Empty(engine.ExecuteExCommand(":"));
+        Assert.Empty(engine.ExecuteExCommand(null!));
+    }
 }

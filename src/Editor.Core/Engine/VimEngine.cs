@@ -304,6 +304,24 @@ public class VimEngine
     }
 
     /// <summary>
+    /// Executes an ex command line (e.g. "Gblame", "w", "1,5d") directly, without
+    /// synthesizing ':' keystrokes. Unlike feeding keys through <see cref="ProcessKey"/>,
+    /// this works in any mode (including Insert) and also while <see cref="VimEnabled"/>
+    /// is false, so hosts can drive ex commands programmatically (menu items, toolbar
+    /// buttons) without the keys being inserted into the buffer as text. A leading ':'
+    /// is tolerated. The command is not added to the command-line history, and the
+    /// current mode is preserved. Returns the events the host should process.
+    /// </summary>
+    public IReadOnlyList<VimEvent> ExecuteExCommand(string cmdLine)
+    {
+        var events = new List<VimEvent>();
+        cmdLine = (cmdLine ?? "").TrimStart(':').Trim();
+        if (cmdLine.Length == 0) return events;
+        ExecuteExCommand(cmdLine, events);
+        return events;
+    }
+
+    /// <summary>
     /// Enables or disables Vim key handling. When disabled, the engine drops into
     /// a plain insert (non-modal) state where keys insert text like an ordinary
     /// editor and Escape no longer leaves insert mode. When re-enabled, the engine

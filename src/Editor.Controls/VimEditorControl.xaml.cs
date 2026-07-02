@@ -2364,18 +2364,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         UpdateAll();
     }
 
+    /// <summary>
+    /// Executes an ex command (without the leading ':') programmatically, e.g.
+    /// <c>ExecuteCommand("Gblame")</c>. The command runs directly through the ex
+    /// processor, so it works in any mode (including Insert) and also when
+    /// <see cref="VimEnabled"/> is false — synthesizing the keystrokes instead
+    /// would insert the text into the buffer in those states.
+    /// </summary>
     public void ExecuteCommand(string exCommand)
-    {
-        var events = _engine.ProcessKey(":");
-        ProcessVimEvents(events);
-        foreach (var ch in exCommand)
-        {
-            events = _engine.ProcessKey(ch.ToString());
-            ProcessVimEvents(events);
-        }
-        events = _engine.ProcessKey("Return");
-        ProcessVimEvents(events);
-    }
+        => ProcessVimEvents(_engine.ExecuteExCommand(exCommand));
 
     // ── Split / tab window APIs ────────────────────────────────────────────
     // These raise the same events that the corresponding Vim commands
