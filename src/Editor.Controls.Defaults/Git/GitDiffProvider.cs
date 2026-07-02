@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Editor.Controls.Git;
@@ -152,16 +153,14 @@ public partial class GitDiffProvider : IEditorGitService
         return (true, string.IsNullOrWhiteSpace(output) ? "Hunk unstaged" : output);
     }
 
-    public Dictionary<int, string> GetBlameAnnotations(string filePath)
+    public Dictionary<int, EditorBlameLine> GetBlameLines(string filePath)
     {
-        var result = new Dictionary<int, string>();
-        if (!TryGetFileWorkDir(filePath, out var workDir)) return result;
+        if (!TryGetFileWorkDir(filePath, out var workDir)) return [];
 
         var output = RunGit(workDir, ["blame", "--porcelain", filePath]);
-        if (string.IsNullOrEmpty(output)) return result;
+        if (string.IsNullOrEmpty(output)) return [];
 
-        ParsePorcelainBlame(output, result);
-        return result;
+        return ParsePorcelainBlame(output);
     }
 
     /// <summary>
@@ -215,6 +214,10 @@ public partial class GitDiffProvider : IEditorGitService
                 WorkingDirectory = workDir,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // git はコミットメッセージ等を UTF-8 で出力する。未指定だとコンソール既定
+                // （日本語 Windows では cp932）で読んでしまい blame の summary 等が文字化けする。
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
@@ -251,6 +254,11 @@ public partial class GitDiffProvider : IEditorGitService
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // 出力を UTF-8 で読む（RunGit と同じ理由）＋パッチの入力も UTF-8（BOM なし）で渡す。
+                // 既定（cp932）だと日本語を含むパッチのバイト列が壊れて apply が失敗する。
+                StandardInputEncoding = new UTF8Encoding(false),
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
@@ -449,12 +457,28 @@ public partial class GitDiffProvider : IEditorGitService
         FlushDeleted();
     }
 
-    private static void ParsePorcelainBlame(string blameOutput, Dictionary<int, string> result)
+    // コミットメタの可変ホルダー。porcelain はコミット情報（author 等）を最初の出現時にしか出力しない
+    // ので、ハッシュ→メタでキャッシュし、2回目以降の行にも同じ情報を割り当てる。
+    private sealed class BlameCommitMeta
     {
+        public string Author = "";
+        public string Date = "";
+        public string Summary = "";
+    }
+
+    /// <summary>
+    /// `git blame --porcelain` の出力を行→コミット情報に変換する（0始まり行）。各行はヘッダ
+    /// 「&lt;40桁hash&gt; &lt;元行&gt; &lt;結果行&gt; [&lt;行数&gt;]」＋（コミット初出時のみ）author/summary 等の
+    /// メタ行＋タブ始まりの本文行から成る。未コミット行（hash が全て 0）は含めない。
+    /// </summary>
+    internal static Dictionary<int, EditorBlameLine> ParsePorcelainBlame(string blameOutput)
+    {
+        var result = new Dictionary<int, EditorBlameLine>();
+        var metas = new Dictionary<string, BlameCommitMeta>();
         string? currentHash = null;
-        string? currentAuthor = null;
-        string? currentDate = null;
+        BlameCommitMeta? currentMeta = null;
         int resultLine = -1;
+        int origLine = 0;
 
         foreach (var line in blameOutput.Split('\n'))
         {
@@ -464,28 +488,36 @@ public partial class GitDiffProvider : IEditorGitService
             {
                 // Entry header: <40-char hash> <orig-lineno> <result-lineno> [<count>]
                 var parts = line.Split(' ');
-                currentHash = parts[0][..Math.Min(7, parts[0].Length)];
+                currentHash = parts[0];
+                origLine = parts.Length > 1 && int.TryParse(parts[1], out int ol) ? ol : 0;
                 resultLine = parts.Length > 2 && int.TryParse(parts[2], out int rl) ? rl - 1 : -1;
-                currentAuthor = null;
-                currentDate = null;
+                if (!metas.TryGetValue(currentHash, out currentMeta))
+                    metas[currentHash] = currentMeta = new BlameCommitMeta();
             }
-            else if (line.StartsWith("author "))
+            else if (line.StartsWith("author ") && currentMeta != null)
             {
-                currentAuthor = line[7..].Trim();
+                currentMeta.Author = line[7..].Trim();
             }
-            else if (line.StartsWith("author-time "))
+            else if (line.StartsWith("author-time ") && currentMeta != null)
             {
                 if (long.TryParse(line[12..], out long ts))
-                    currentDate = DateTimeOffset.FromUnixTimeSeconds(ts).LocalDateTime.ToString("yyyy-MM-dd");
+                    currentMeta.Date = DateTimeOffset.FromUnixTimeSeconds(ts).LocalDateTime.ToString("yyyy-MM-dd");
             }
-            else if (line[0] == '\t' && currentHash != null && currentAuthor != null
-                     && currentDate != null && resultLine >= 0)
+            else if (line.StartsWith("summary ") && currentMeta != null)
+            {
+                currentMeta.Summary = line[8..].Trim();
+            }
+            else if (line[0] == '\t' && currentHash != null && currentMeta != null && resultLine >= 0)
             {
                 // Skip uncommitted lines (hash = all zeros)
                 bool notCommitted = currentHash.All(c => c == '0');
                 if (!notCommitted)
-                    result[resultLine] = $"  {currentHash} ({currentAuthor}, {currentDate})";
+                    result[resultLine] = new EditorBlameLine(
+                        currentHash[..Math.Min(7, currentHash.Length)],
+                        currentMeta.Author, currentMeta.Date, currentMeta.Summary, origLine);
             }
         }
+
+        return result;
     }
 }

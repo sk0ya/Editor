@@ -668,8 +668,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.MouseDragging += OnCanvasMouseDragging;
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
         Canvas.FoldGutterClicked += OnFoldGutterClicked;
-        Canvas.BlameClicked += (line, annotation) =>
-            BlameCommitClicked?.Invoke(this, new Git.BlameCommitClickedEventArgs(line, annotation));
+        Canvas.BlameClicked += (line, blame) =>
+            BlameCommitClicked?.Invoke(this, new Git.BlameCommitClickedEventArgs(line, blame));
         Canvas.BreakpointToggled += OnCanvasBreakpointToggled;
         Canvas.DataTipHoverChanged += OnCanvasDataTipHoverChanged;
         Canvas.DataTipHoverEnded += OnCanvasDataTipHoverEnded;
@@ -2168,8 +2168,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         if (_blameActive)
         {
-            var blame = await Task.Run(() => _gitProvider.GetBlameAnnotations(filePath));
-            Canvas.SetBlameAnnotations(blame);
+            var blame = await Task.Run(() => _gitProvider.GetBlameLines(filePath));
+            Canvas.SetBlameLines(blame);
         }
     }
 
@@ -2178,7 +2178,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _blameActive = !_blameActive;
         if (!_blameActive)
         {
-            Canvas.SetBlameAnnotations(null);
+            Canvas.SetBlameLines(null);
             ActiveStatusBar.UpdateStatus("Git blame: off");
             return;
         }
@@ -2192,12 +2192,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         ActiveStatusBar.UpdateStatus("Git blame: loading...");
-        var annotations = await Task.Run(() => _gitProvider.GetBlameAnnotations(filePath));
+        var blame = await Task.Run(() => _gitProvider.GetBlameLines(filePath));
         if (_blameActive)
         {
-            Canvas.SetBlameAnnotations(annotations);
-            ActiveStatusBar.UpdateStatus(annotations.Count > 0
-                ? $"Git blame: {annotations.Count} lines annotated"
+            Canvas.SetBlameLines(blame);
+            ActiveStatusBar.UpdateStatus(blame.Count > 0
+                ? $"Git blame: {blame.Count} lines annotated"
                 : "Git blame: no blame data (file not committed?)");
         }
     }

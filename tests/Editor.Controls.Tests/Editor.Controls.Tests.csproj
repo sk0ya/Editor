@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Editor.Controls\Editor.Controls.csproj" />
+    <ProjectReference Include="..\..\src\Editor.Controls.Defaults\Editor.Controls.Defaults.csproj" />
   </ItemGroup>
 
 </Project>

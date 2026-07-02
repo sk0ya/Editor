@@ -80,10 +80,11 @@ public partial class EditorCanvas
         if (_breakpointsEnabled) InvalidateVisual();
     }
 
-    /// <summary>ブレークポイント列（左端）に、その行のブレークポイント／ホバー候補の薄赤丸／実行中行の琥珀矢印を描く。</summary>
-    private void DrawBreakpointGlyph(DrawingContext dc, int line, double y, int bpColWidth)
+    /// <summary>ブレークポイント列（blame 非表示時は左端、表示時はその右）に、その行のブレークポイント／
+    /// ホバー候補の薄赤丸／実行中行の琥珀矢印を描く。<paramref name="x"/> は列の左端。</summary>
+    private void DrawBreakpointGlyph(DrawingContext dc, int line, double y, double x, int bpColWidth)
     {
-        double cx = bpColWidth / 2.0;
+        double cx = x + bpColWidth / 2.0;
         double cy = y + _lineHeight / 2.0;
         double r = Math.Max(3.0, Math.Min(bpColWidth, _lineHeight) / 2.0 - 3.0);
 
