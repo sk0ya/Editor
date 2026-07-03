@@ -1278,6 +1278,7 @@ public class ExCommandProcessor
 
         var regex = TryBuildRegex(pattern, ignoreCase, out var patternError);
         if (regex == null) return new ExResult(false, patternError);
+        AddSearchHistory(pattern);
 
         var buf = _bufferManager.Current.Text;
         int count = 0;

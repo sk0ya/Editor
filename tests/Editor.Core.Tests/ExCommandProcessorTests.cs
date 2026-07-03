@@ -1483,6 +1483,25 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void Substitute_EmptyPattern_ReusesPreviousSubstitutePattern()
+    {
+        // :s/pattern/.../ itself updates the "last search pattern", so a later :s//
+        // (with no intervening /search<CR>) must reuse it too.
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("foo bar\nbaz foo");
+
+        var first = processor.Execute("s/foo/one/", CursorPosition.Zero);
+        Assert.True(first.Success);
+
+        var second = processor.Execute("s//two/", new CursorPosition(1, 0));
+
+        Assert.True(second.Success);
+        var lines = buffers.Current.Text.GetText().Split('\n');
+        Assert.Equal("one bar", lines[0]);
+        Assert.Equal("baz two", lines[1]);
+    }
+
+    [Fact]
     public void Substitute_EmptyPattern_NoPriorSearch_ReturnsError()
     {
         var (processor, buffers) = CreateProcessor();

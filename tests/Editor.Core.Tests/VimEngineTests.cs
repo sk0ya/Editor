@@ -5286,6 +5286,57 @@ public class VimEngineTests
         }
     }
 
+    [Fact]
+    public void CtrlO_DoesNotFireInsertEnterOrInsertLeaveAutocmds()
+    {
+        // Real Vim's i_CTRL-O never fires InsertLeave/InsertEnter for the temporary
+        // one-command round trip back to Normal mode — the user never conceptually
+        // left Insert mode.
+        var path = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        File.WriteAllText(path, "hello world\n");
+        try
+        {
+            var config = new VimConfig();
+            config.ParseCommand("autocmd InsertEnter *.cs set tabstop=9");
+            config.ParseCommand("autocmd InsertLeave *.cs set shiftwidth=7");
+            var engine = CreateEngine(config: config);
+            engine.LoadFile(path);
+
+            engine.ProcessKey("i");
+            Assert.Equal(9, config.Options.TabStop); // genuine InsertEnter fired
+
+            config.Options.TabStop = 4;
+            config.Options.ShiftWidth = 4;
+
+            engine.ProcessKey("o", true, false, false); // Ctrl+O
+            engine.ProcessKey("l"); // one Normal-mode motion, then auto-return to Insert
+
+            Assert.Equal(VimMode.Insert, engine.Mode);
+            Assert.Equal(4, config.Options.TabStop);    // InsertEnter must not re-fire
+            Assert.Equal(4, config.Options.ShiftWidth); // InsertLeave must not fire
+
+            engine.ProcessKey("Escape"); // genuine InsertLeave
+            Assert.Equal(7, config.Options.ShiftWidth);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void HtmlTagAutoClose_FiresOnTsxDespiteCStyleCommentAssistAlsoClaimingTheExtension()
+    {
+        // .tsx is claimed by both CStyleCommentEditAssist (comment continuation) and
+        // HtmlTagEditAssist (tag auto-close). EditAssistRegistry must try every applicable
+        // assist per-hook rather than committing to whichever one Resolve() finds first.
+        var engine = CreateEngine();
+        engine.CurrentBuffer.FilePath = "Component.tsx";
+        engine.ProcessKey("i");
+        foreach (var ch in "<div")
+            engine.ProcessKey(ch.ToString());
+        engine.ProcessKey(">");
+
+        Assert.Equal("<div></div>", engine.CurrentBuffer.Text.GetText());
+    }
+
     // ── Numbered delete-register ring ("1-"9) and small-delete register ("-) ──
 
     [Fact]

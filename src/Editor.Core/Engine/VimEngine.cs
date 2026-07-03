@@ -820,7 +820,7 @@ public class VimEngine
         if (!_pendingInsertReturn) return;
         _pendingInsertReturn = false;
         if (_mode == VimMode.Normal)
-            ChangeMode(VimMode.Insert, events);
+            ChangeMode(VimMode.Insert, events, suppressInsertAutocmd: true);
     }
 
     private void HandleNormalCtrl(string key, List<VimEvent> events)
@@ -1856,7 +1856,7 @@ public class VimEngine
                 case "h": DeleteCharBack(events); return;
                 case "o": // Ctrl+O — execute one Normal command then return to Insert
                     _pendingInsertReturn = true;
-                    ChangeMode(VimMode.Normal, events);
+                    ChangeMode(VimMode.Normal, events, suppressInsertAutocmd: true);
                     return;
                 case "j": InsertNewline(events); return;
                 case "m": InsertNewline(events); return;
@@ -2015,16 +2015,12 @@ public class VimEngine
 
                     if (_mode == VimMode.Insert)
                     {
-                        var charAssist = _editAssists.Resolve(_bufferManager.Current.FilePath);
-                        if (charAssist != null)
+                        var charResult = _editAssists.OnChar(MakeEditContext(), key[0]);
+                        if (charResult.Handled)
                         {
-                            var charResult = charAssist.OnChar(MakeEditContext(), key[0]);
-                            if (charResult.Handled)
-                            {
-                                _cursor = charResult.Cursor;
-                                EmitText(events);
-                                break;
-                            }
+                            _cursor = charResult.Cursor;
+                            EmitText(events);
+                            break;
                         }
                     }
 
@@ -2128,17 +2124,16 @@ public class VimEngine
                 InsertNewline(events);
                 return;
             case "Tab":
-                if (_editAssists.Resolve(_bufferManager.Current.FilePath) is { } tabAssist)
                 {
                     BeginPlainEdit();
-                    var tabResult = tabAssist.OnTab(MakeEditContext(), shift);
+                    var tabResult = _editAssists.OnTab(MakeEditContext(), shift);
                     if (tabResult.Handled)
                     {
                         _cursor = tabResult.Cursor;
                         EmitText(events);
                         return;
                     }
-                    // Assist declined — fall through to default tab handling.
+                    // No assist handled it — fall through to default tab handling.
                 }
                 if (shift) return; // Shift+Tab with no edit-assist is a no-op
                 BeginPlainEdit();
@@ -3404,7 +3399,11 @@ public class VimEngine
         EmitCmdLine(events);
     }
 
-    private void ChangeMode(VimMode newMode, List<VimEvent> events)
+    // suppressInsertAutocmd: true for the two internal mode flips that implement Ctrl+O
+    // (temporarily drop to Normal for one command, then return to Insert) — real Vim's
+    // i_CTRL-O never fires InsertLeave/InsertEnter for that round trip since the user
+    // never conceptually left Insert mode.
+    private void ChangeMode(VimMode newMode, List<VimEvent> events, bool suppressInsertAutocmd = false)
     {
         var oldMode = _mode;
         _pendingMappedInput.Clear();
@@ -3418,7 +3417,7 @@ public class VimEngine
 
         bool wasInsertLike = oldMode is VimMode.Insert or VimMode.Replace;
         bool isInsertLike = newMode is VimMode.Insert or VimMode.Replace;
-        if (_bufferManager.Current.FilePath is { } path)
+        if (!suppressInsertAutocmd && _bufferManager.Current.FilePath is { } path)
         {
             if (!wasInsertLike && isInsertLike)
                 RunAutocmds("InsertEnter", path);
@@ -4175,7 +4174,7 @@ public class VimEngine
     {
         Snapshot();
         var buf = _bufferManager.Current.Text;
-        var indent = _editAssists.Resolve(_bufferManager.Current.FilePath)?.OpenLinePrefix(MakeEditContext(), above: false)
+        var indent = _editAssists.OpenLinePrefix(MakeEditContext(), above: false)
                      ?? GetAutoIndent(buf, _cursor.Line);
         CurrentBuffer.Folds.OnLinesInserted(_cursor.Line, 1);
         buf.InsertLines(_cursor.Line, [indent]);
@@ -4187,7 +4186,7 @@ public class VimEngine
     {
         Snapshot();
         var buf = _bufferManager.Current.Text;
-        var indent = _editAssists.Resolve(_bufferManager.Current.FilePath)?.OpenLinePrefix(MakeEditContext(), above: true)
+        var indent = _editAssists.OpenLinePrefix(MakeEditContext(), above: true)
                      ?? GetAutoIndent(buf, _cursor.Line);
         CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, 1);
         buf.InsertLineAbove(_cursor.Line, indent);
@@ -6089,9 +6088,7 @@ public class VimEngine
     // Lets a filetype edit-assist handle Tab/Shift+Tab. Returns true (and emits) when handled.
     private bool TryEditAssistTab(bool shift, List<VimEvent> events)
     {
-        var assist = _editAssists.Resolve(_bufferManager.Current.FilePath);
-        if (assist == null) return false;
-        var result = assist.OnTab(MakeEditContext(), shift);
+        var result = _editAssists.OnTab(MakeEditContext(), shift);
         if (!result.Handled) return false;
         _cursor = result.Cursor;
         EmitText(events);
@@ -6103,16 +6100,12 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
 
         // Let a filetype edit-assist (e.g. Markdown list continuation) handle Enter first.
-        var assist = _editAssists.Resolve(_bufferManager.Current.FilePath);
-        if (assist != null)
+        var enterResult = _editAssists.OnEnter(MakeEditContext());
+        if (enterResult.Handled)
         {
-            var result = assist.OnEnter(MakeEditContext());
-            if (result.Handled)
-            {
-                _cursor = result.Cursor;
-                EmitText(events);
-                return;
-            }
+            _cursor = enterResult.Cursor;
+            EmitText(events);
+            return;
         }
 
         var indent = !_config.Options.Paste && _config.Options.AutoIndent ? GetAutoIndent(buf, _cursor.Line) : "";
