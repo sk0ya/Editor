@@ -1982,6 +1982,21 @@ public class VimEngine
                         }
                     }
 
+                    if (_mode == VimMode.Insert)
+                    {
+                        var charAssist = _editAssists.Resolve(_bufferManager.Current.FilePath);
+                        if (charAssist != null)
+                        {
+                            var charResult = charAssist.OnChar(MakeEditContext(), key[0]);
+                            if (charResult.Handled)
+                            {
+                                _cursor = charResult.Cursor;
+                                EmitText(events);
+                                break;
+                            }
+                        }
+                    }
+
                     if (_mode == VimMode.Replace)
                     {
                         if (_cursor.Column < buf.GetLineLength(_cursor.Line))

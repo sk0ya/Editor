@@ -11,6 +11,7 @@ public sealed class EditAssistRegistry
     {
         new MarkdownEditAssist(),
         new CStyleCommentEditAssist(),
+        new HtmlTagEditAssist(),
     };
 
     /// <summary>Process-wide default registry used by <c>VimEngine</c>.</summary>

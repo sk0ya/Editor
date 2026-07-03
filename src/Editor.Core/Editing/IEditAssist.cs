@@ -63,6 +63,13 @@ public interface IEditAssist
     /// or <c>null</c> to fall back to plain auto-indent. <paramref name="above"/> is true for <c>O</c>.
     /// </summary>
     string? OpenLinePrefix(EditContext ctx, bool above);
+
+    /// <summary>
+    /// Handle a printable character being typed (e.g. auto-closing a tag on <c>&gt;</c>).
+    /// The assist is responsible for inserting <paramref name="typed"/> itself when handled.
+    /// Return <see cref="EditResult.NotHandled"/> to let the engine insert the character normally.
+    /// </summary>
+    EditResult OnChar(EditContext ctx, char typed);
 }
 
 /// <summary>Convenience base that declines every hook; override only what you need.</summary>
@@ -72,4 +79,5 @@ public abstract class EditAssistBase : IEditAssist
     public virtual EditResult OnEnter(EditContext ctx) => EditResult.NotHandled;
     public virtual EditResult OnTab(EditContext ctx, bool shift) => EditResult.NotHandled;
     public virtual string? OpenLinePrefix(EditContext ctx, bool above) => null;
+    public virtual EditResult OnChar(EditContext ctx, char typed) => EditResult.NotHandled;
 }
