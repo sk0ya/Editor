@@ -5081,6 +5081,115 @@ public class VimEngineTests
         finally { File.Delete(path); }
     }
 
+    // ── InsertEnter / InsertLeave / BufNewFile / BufLeave autocmds ──
+
+    [Fact]
+    public void InsertEnter_RunsAutocmdOnEnteringInsertMode()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        File.WriteAllText(path, "class C {}\n");
+        try
+        {
+            var config = new VimConfig();
+            config.ParseCommand("autocmd InsertEnter *.cs set tabstop=9");
+            var engine = CreateEngine(config: config);
+            engine.LoadFile(path);
+
+            Assert.NotEqual(9, config.Options.TabStop);
+
+            engine.ProcessKey("i");
+
+            Assert.Equal(9, config.Options.TabStop);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void InsertLeave_RunsAutocmdOnLeavingInsertMode()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        File.WriteAllText(path, "class C {}\n");
+        try
+        {
+            var config = new VimConfig();
+            config.ParseCommand("autocmd InsertLeave *.cs set shiftwidth=7");
+            var engine = CreateEngine(config: config);
+            engine.LoadFile(path);
+            engine.ProcessKey("i");
+
+            Assert.NotEqual(7, config.Options.ShiftWidth);
+
+            engine.ProcessKey("Escape");
+
+            Assert.Equal(7, config.Options.ShiftWidth);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void LoadFile_RunsBufNewFileAndSkipsBufReadPostForNonexistentPath()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        // Intentionally not created on disk.
+        var config = new VimConfig();
+        config.ParseCommand("autocmd BufNewFile *.cs set tabstop=9");
+        config.ParseCommand("autocmd BufReadPost *.cs set shiftwidth=7");
+        var engine = CreateEngine(config: config);
+
+        engine.LoadFile(path);
+
+        Assert.Equal(9, config.Options.TabStop);
+        Assert.NotEqual(7, config.Options.ShiftWidth);
+    }
+
+    [Fact]
+    public void LoadFile_RunsBufReadPostAndSkipsBufNewFileForExistingPath()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        File.WriteAllText(path, "class C {}\n");
+        try
+        {
+            var config = new VimConfig();
+            config.ParseCommand("autocmd BufNewFile *.cs set tabstop=9");
+            config.ParseCommand("autocmd BufReadPost *.cs set shiftwidth=7");
+            var engine = CreateEngine(config: config);
+
+            engine.LoadFile(path);
+
+            Assert.NotEqual(9, config.Options.TabStop);
+            Assert.Equal(7, config.Options.ShiftWidth);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void LoadFile_RunsBufLeaveForOutgoingBufferWhenSwitchingFiles()
+    {
+        var pathA = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        var pathB = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        File.WriteAllText(pathA, "class A {}\n");
+        File.WriteAllText(pathB, "class B {}\n");
+        try
+        {
+            var config = new VimConfig();
+            config.ParseCommand("autocmd BufLeave *.cs set tabstop=9");
+            var engine = CreateEngine(config: config);
+
+            // No previous buffer had a file path, so BufLeave has nothing to fire for yet.
+            engine.LoadFile(pathA);
+            Assert.NotEqual(9, config.Options.TabStop);
+
+            // Switching from A to B leaves A, matching the *.cs pattern.
+            engine.LoadFile(pathB);
+            Assert.Equal(9, config.Options.TabStop);
+        }
+        finally
+        {
+            File.Delete(pathA);
+            File.Delete(pathB);
+        }
+    }
+
     // ── Numbered delete-register ring ("1-"9) and small-delete register ("-) ──
 
     [Fact]

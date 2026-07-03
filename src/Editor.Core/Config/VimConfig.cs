@@ -1014,9 +1014,13 @@ public class VimConfig
         "BufRead",
         "BufReadPost",
         "BufEnter",
+        "BufLeave",
+        "BufNewFile",
         "BufWritePre",
         "BufWritePost",
         "FileType",
+        "InsertEnter",
+        "InsertLeave",
     };
 
     private bool TryParseMapCommand(string cmd, out Dictionary<string, string>? dict, out string? rest)
