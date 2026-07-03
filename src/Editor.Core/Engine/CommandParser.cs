@@ -174,6 +174,8 @@ public class CommandParser
                 'v' => Finalize(count, null, "gv"),
                 'i' => Finalize(count, null, "gi"),
                 'J' => Finalize(count, null, "gJ"),
+                'p' => Finalize(count, null, "gp"),
+                'P' => Finalize(count, null, "gP"),
                 ';' => Finalize(count, null, "g;"),
                 ',' => Finalize(count, null, "g,"),
                 'n' => Finalize(count, null, "gn"),
