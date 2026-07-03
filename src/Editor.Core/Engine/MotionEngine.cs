@@ -10,8 +10,17 @@ public record struct Motion(CursorPosition Target, MotionType Type, bool Linewis
 public class MotionEngine
 {
     private readonly TextBuffer _buffer;
+    private int _viewportTopLine = 0;       // First visible buffer line in the viewport
+    private int _viewportVisibleLines = 25; // Number of lines visible in the viewport
 
     public MotionEngine(TextBuffer buffer) => _buffer = buffer;
+
+    /// <summary>Sets the viewport state so H/M/L motions target the correct visible lines.</summary>
+    public void SetViewport(int topLine, int visibleLines)
+    {
+        _viewportTopLine = Math.Max(0, topLine);
+        _viewportVisibleLines = Math.Max(1, visibleLines);
+    }
 
     public Motion? Calculate(string motion, CursorPosition cursor, int count = 1)
     {
@@ -37,9 +46,9 @@ public class MotionEngine
             "(" => SentenceBackward(cursor, count),
             ")" => SentenceForward(cursor, count),
             "%" => MatchBracket(cursor),
-            "H" => ScreenTop(cursor),
-            "M" => ScreenMiddle(cursor),
-            "L" => ScreenBottom(cursor),
+            "H" => ScreenTop(count),
+            "M" => ScreenMiddle(),
+            "L" => ScreenBottom(count),
             "g_" => LastNonBlank(cursor),
             "[[" => SectionBackward(cursor, count, openBrace: true),
             "]]" => SectionForward(cursor, count, openBrace: true),
@@ -653,12 +662,28 @@ public class MotionEngine
         return null;
     }
 
-    private Motion ScreenTop(CursorPosition cursor) =>
-        new(new CursorPosition(Math.Max(0, cursor.Line - 10), 0), MotionType.Linewise);
-    private Motion ScreenMiddle(CursorPosition cursor) =>
-        new(cursor, MotionType.Linewise);
-    private Motion ScreenBottom(CursorPosition cursor) =>
-        new(new CursorPosition(Math.Min(_buffer.LineCount - 1, cursor.Line + 10), 0), MotionType.Linewise);
+    // Mirrors VimEngine.ScreenPosition — H/M/L target lines relative to the actual
+    // viewport (set via SetViewport), not a fixed offset from the cursor.
+    private Motion ScreenTop(int count) =>
+        new(ScreenPosition(Math.Max(0, count - 1)), MotionType.Linewise);
+    private Motion ScreenMiddle() =>
+        new(ScreenPosition(_viewportVisibleLines / 2), MotionType.Linewise);
+    private Motion ScreenBottom(int count) =>
+        new(ScreenPosition(Math.Max(0, _viewportVisibleLines - count)), MotionType.Linewise);
+
+    private CursorPosition ScreenPosition(int offsetFromTop)
+    {
+        var line = Math.Clamp(_viewportTopLine + offsetFromTop, 0, _buffer.LineCount - 1);
+        return new CursorPosition(line, GetFirstNonBlankColumn(line));
+    }
+
+    private int GetFirstNonBlankColumn(int line)
+    {
+        var text = _buffer.GetLine(line);
+        int col = 0;
+        while (col < text.Length && char.IsWhiteSpace(text[col])) col++;
+        return col;
+    }
 
     public static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 

@@ -1410,6 +1410,14 @@ public class VimEngine
                 SetRepeatChange(cmd);
                 PasteBefore(cmd.Register ?? '"', events);
                 break;
+            case "gp":
+                SetRepeatChange(cmd);
+                PasteAfter(cmd.Register ?? '"', events, cursorAfterPaste: true);
+                break;
+            case "gP":
+                SetRepeatChange(cmd);
+                PasteBefore(cmd.Register ?? '"', events, cursorAfterPaste: true);
+                break;
             case "]p":
                 SetRepeatChange(cmd);
                 ExecuteIndentedPaste(after: true, cmd.Register ?? '"', events);
@@ -1508,6 +1516,7 @@ public class VimEngine
     {
         var buf = _bufferManager.Current.Text;
         var motion = new MotionEngine(buf);
+        motion.SetViewport(_viewportTopLine, _viewportVisibleLines);
 
         // Text objects
         if (cmd.Motion?.Length == 2 && (cmd.Motion[0] is 'i' or 'a'))
@@ -4232,7 +4241,9 @@ public class VimEngine
         EmitStatus(events, $"{lines.Length} line(s) yanked");
     }
 
-    private void PasteAfter(char register, List<VimEvent> events)
+    // cursorAfterPaste implements gp/gP: leave the cursor just past the inserted text
+    // instead of on its last character (Vim's gp/gP semantics).
+    private void PasteAfter(char register, List<VimEvent> events, bool cursorAfterPaste = false)
     {
         Snapshot();
         var reg = _registerManager.Get(register);
@@ -4240,17 +4251,19 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
 
         if (reg.Type == RegisterType.Line)
-            InsertLinewisePaste(reg.GetLines(), after: true);
+            InsertLinewisePaste(reg.GetLines(), after: true, cursorAfterBlock: cursorAfterPaste);
         else
         {
             var col = Math.Min(_cursor.Column + 1, buf.GetLineLength(_cursor.Line));
             var end = InsertCharacterwiseText(buf, _cursor.Line, col, reg.Text);
-            _cursor = CursorOnLastInsertedChar(new CursorPosition(_cursor.Line, col), end);
+            _cursor = cursorAfterPaste
+                ? buf.ClampCursor(end)
+                : CursorOnLastInsertedChar(new CursorPosition(_cursor.Line, col), end);
         }
         EmitText(events);
     }
 
-    private void PasteBefore(char register, List<VimEvent> events)
+    private void PasteBefore(char register, List<VimEvent> events, bool cursorAfterPaste = false)
     {
         Snapshot();
         var reg = _registerManager.Get(register);
@@ -4258,31 +4271,39 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
 
         if (reg.Type == RegisterType.Line)
-            InsertLinewisePaste(reg.GetLines(), after: false);
+            InsertLinewisePaste(reg.GetLines(), after: false, cursorAfterBlock: cursorAfterPaste);
         else
         {
             var start = _cursor;
             var end = InsertCharacterwiseText(buf, start.Line, start.Column, reg.Text);
-            _cursor = CursorOnLastInsertedChar(start, end);
+            _cursor = cursorAfterPaste
+                ? buf.ClampCursor(end)
+                : CursorOnLastInsertedChar(start, end);
         }
         EmitText(events);
     }
 
-    // Shared linewise insertion for p/P/]p/[p — does not call Snapshot or EmitText.
-    private void InsertLinewisePaste(string[] lines, bool after)
+    // Shared linewise insertion for p/P/]p/[p/gp/gP — does not call Snapshot or EmitText.
+    // cursorAfterBlock places the cursor on the first line after the pasted block (gp/gP)
+    // instead of on the first pasted line (p/P).
+    private void InsertLinewisePaste(string[] lines, bool after, bool cursorAfterBlock = false)
     {
         var buf = _bufferManager.Current.Text;
         if (after)
         {
             CurrentBuffer.Folds.OnLinesInserted(_cursor.Line, lines.Length);
             buf.InsertLines(_cursor.Line, lines);
-            _cursor = new CursorPosition(_cursor.Line + 1, 0);
+            _cursor = cursorAfterBlock
+                ? buf.ClampCursor(new CursorPosition(_cursor.Line + 1 + lines.Length, 0))
+                : new CursorPosition(_cursor.Line + 1, 0);
         }
         else
         {
             CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, lines.Length);
             buf.InsertLines(_cursor.Line - 1, lines);
-            _cursor = new CursorPosition(_cursor.Line, 0);
+            _cursor = cursorAfterBlock
+                ? buf.ClampCursor(new CursorPosition(_cursor.Line + lines.Length, 0))
+                : new CursorPosition(_cursor.Line, 0);
         }
     }
 

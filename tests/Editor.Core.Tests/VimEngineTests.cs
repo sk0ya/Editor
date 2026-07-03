@@ -657,6 +657,54 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void Gp_LinewisePaste_CursorLandsOnLineAfterPastedBlock()
+    {
+        var engine = CreateEngine("hello\nworld");
+        engine.ProcessKey("y");
+        engine.ProcessKey("y");
+        engine.ProcessKey("g");
+        engine.ProcessKey("p");
+
+        // Same text as YY_YanksLine_ThenP_Pastes, but the cursor lands one line further
+        // down — past the pasted block instead of on its first line.
+        Assert.Equal("hello\nhello\nworld", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(new CursorPosition(2, 0), engine.Cursor);
+    }
+
+    [Fact]
+    public void GP_LinewisePaste_CursorLandsOnLineAfterPastedBlock()
+    {
+        var engine = CreateEngine("one\ntwo\nthree");
+
+        engine.ProcessKey("V");
+        engine.ProcessKey("j");
+        engine.ProcessKey("y");
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+        engine.ProcessKey("g");
+        engine.ProcessKey("P");
+
+        Assert.Equal("one\ntwo\none\ntwo\nthree", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(new CursorPosition(4, 0), engine.Cursor);
+    }
+
+    [Fact]
+    public void Gp_CharacterwisePaste_CursorLandsAfterInsertedText()
+    {
+        var engine = CreateEngine("foo bar");
+        engine.ProcessKey("y");
+        engine.ProcessKey("i");
+        engine.ProcessKey("w");
+        engine.ProcessKey("g");
+        engine.ProcessKey("p");
+
+        // Contrast with plain "p", which would leave the cursor on the last inserted
+        // character (column 3) instead of the character right after it.
+        Assert.Equal("ffoooo bar", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(new CursorPosition(0, 4), engine.Cursor);
+    }
+
+    [Fact]
     public void Undo_RestoresText()
     {
         var engine = CreateEngine("hello");
@@ -3576,6 +3624,54 @@ public class VimEngineTests
         // L — bottom of viewport = line 2 + 5 - 1 = line 6
         engine.ProcessKey("L");
         Assert.Equal(6, engine.Cursor.Line);
+    }
+
+    [Fact]
+    public void DH_DeletesFromViewportTopToCursor()
+    {
+        // 10 lines, viewport top=2 showing 5 lines (lines 2-6)
+        var engine = CreateEngine("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9");
+        engine.SetViewportState(topLine: 2, visibleLines: 5);
+        for (int i = 0; i < 5; i++) engine.ProcessKey("j");
+        Assert.Equal(5, engine.Cursor.Line);
+
+        // H targets viewport top (line 2), so dH deletes lines 2..5 — NOT a fixed
+        // cursor-relative ±10 window.
+        engine.ProcessKey("d");
+        engine.ProcessKey("H");
+
+        Assert.Equal("l0\nl1\nl6\nl7\nl8\nl9", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void DL_DeletesFromCursorToViewportBottom()
+    {
+        var engine = CreateEngine("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9");
+        engine.SetViewportState(topLine: 2, visibleLines: 5);
+
+        // L targets viewport bottom (line 2 + 5 - 1 = 6), so dL from line 0 deletes lines 0..6.
+        engine.ProcessKey("d");
+        engine.ProcessKey("L");
+
+        Assert.Equal("l7\nl8\nl9", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void YM_YanksLinewiseToViewportMiddle()
+    {
+        var engine = CreateEngine("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9");
+        engine.SetViewportState(topLine: 2, visibleLines: 5);
+
+        // M targets viewport middle (2 + 5/2 = 4), so yM from line 0 yanks lines 0..4.
+        engine.ProcessKey("y");
+        engine.ProcessKey("M");
+
+        engine.ProcessKey("G");
+        engine.ProcessKey("p");
+
+        Assert.Equal(
+            "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl0\nl1\nl2\nl3\nl4",
+            engine.CurrentBuffer.Text.GetText());
     }
 
     // ── Insert mode Ctrl tests ───────────────────────────────────────────
