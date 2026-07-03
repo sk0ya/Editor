@@ -1401,6 +1401,126 @@ public class ExCommandProcessorTests
         Assert.Equal("E471: Argument required", result.Message);
     }
 
+    // ── mark-based ranges ('<,'>, 'a,'b, etc.) ──────────────────────────────
+
+    private static (ExCommandProcessor Processor, BufferManager Buffers, MarkManager Marks, RegisterManager Registers)
+        CreateProcessorWithMarksAndRegisters()
+    {
+        var buffers = new BufferManager();
+        var options = new VimOptions();
+        var marks = new MarkManager();
+        var registers = new RegisterManager(options);
+        return (new ExCommandProcessor(buffers, options, marks, registerManager: registers), buffers, marks, registers);
+    }
+
+    [Fact]
+    public void MarkRange_AngleMarks_YanksLinesBetweenMarks()
+    {
+        var (processor, buffers, marks, registers) = CreateProcessorWithMarksAndRegisters();
+        buffers.Current.Text.SetText("one\ntwo\nthree\nfour");
+        marks.SetMark('<', new CursorPosition(0, 0));
+        marks.SetMark('>', new CursorPosition(2, 0));
+
+        var result = processor.Execute("'<,'>yank a", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var reg = registers.Get('a');
+        Assert.Equal("one\ntwo\nthree", reg.Text);
+    }
+
+    [Fact]
+    public void MarkRange_NamedMarks_SubstitutesWithinRange()
+    {
+        var (processor, buffers, marks, _) = CreateProcessorWithMarksAndRegisters();
+        buffers.Current.Text.SetText("x1\nx2\nx3\nx4");
+        marks.SetMark('a', new CursorPosition(1, 0));
+        marks.SetMark('b', new CursorPosition(2, 0));
+
+        var result = processor.Execute("'a,'bs/x/y/", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var lines = buffers.Current.Text.GetText().Split('\n');
+        Assert.Equal("x1", lines[0]);   // outside range — untouched
+        Assert.Equal("y2", lines[1]);
+        Assert.Equal("y3", lines[2]);
+        Assert.Equal("x4", lines[3]);   // outside range — untouched
+    }
+
+    [Fact]
+    public void MarkRange_UndefinedMarks_FallsBackToCursorLineWithoutCrashing()
+    {
+        var (processor, buffers, _, registers) = CreateProcessorWithMarksAndRegisters();
+        buffers.Current.Text.SetText("one\ntwo\nthree");
+
+        // 'z and 'q were never set — should not throw, and should fall back to the
+        // caller's default range (the cursor line) rather than resolving garbage indices.
+        var exception = Record.Exception(() =>
+            processor.Execute("'z,'qyank a", new CursorPosition(1, 0)));
+
+        Assert.Null(exception);
+        var reg = registers.Get('a');
+        Assert.Equal("two", reg.Text);
+    }
+
+    // ── :s//pattern reuse ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Substitute_EmptyPattern_ReusesLastSearchPattern()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("foo bar\nbaz foo\nqux");
+
+        // Simulates the effect of a completed "/foo<CR>" search.
+        processor.AddSearchHistory("foo");
+
+        var result = processor.Execute("%s//replaced/", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var lines = buffers.Current.Text.GetText().Split('\n');
+        Assert.Equal("replaced bar", lines[0]);
+        Assert.Equal("baz replaced", lines[1]);
+        Assert.Equal("qux", lines[2]);
+    }
+
+    [Fact]
+    public void Substitute_EmptyPattern_NoPriorSearch_ReturnsError()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("foo bar");
+
+        var result = processor.Execute("s//replaced/", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Equal("E35: No previous regular expression", result.Message);
+        Assert.Equal("foo bar", buffers.Current.Text.GetText());
+    }
+
+    // ── :sort u ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SortU_RemovesDuplicateLinesAfterSorting()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("banana\napple\nbanana\napple\ncherry");
+
+        var result = processor.Execute("sort u", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("apple\nbanana\ncherry", buffers.Current.Text.GetText());
+    }
+
+    [Fact]
+    public void Sort_WithoutUniqueFlag_KeepsDuplicateLines()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("banana\napple\nbanana\napple\ncherry");
+
+        var result = processor.Execute("sort", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal("apple\napple\nbanana\nbanana\ncherry", buffers.Current.Text.GetText());
+    }
+
     // ── :unmap / :nunmap / :iunmap / :vunmap tests ───────────────────────────
 
     private static ExCommandProcessor CreateProcessorWithMaps(

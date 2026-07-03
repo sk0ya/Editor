@@ -6252,7 +6252,7 @@ public class VimEngine
         // Resolve line range
         var buf = CurrentBuffer.Text;
         int startLine = _cursor.Line, endLine = _cursor.Line;
-        ExCommandProcessor.ResolveRange(range, _cursor, buf.LineCount, ref startLine, ref endLine);
+        _exProcessor.ResolveRange(range, _cursor, buf.LineCount, ref startLine, ref endLine);
         startLine = Math.Clamp(startLine, 0, buf.LineCount - 1);
         endLine = Math.Clamp(endLine, 0, buf.LineCount - 1);
 

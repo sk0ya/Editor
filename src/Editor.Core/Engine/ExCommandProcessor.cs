@@ -81,18 +81,7 @@ public class ExCommandProcessor
         if (string.IsNullOrEmpty(cmd))
             return new Dictionary<int, string>();
 
-        string range = "";
-        int cmdStart = 0;
-        if (cmd.StartsWith('%')) { range = "%"; cmdStart = 1; }
-        else if (cmd.StartsWith('.')) { range = "."; cmdStart = 1; }
-        else if (char.IsDigit(cmd[0]))
-        {
-            int end = 0;
-            while (end < cmd.Length && (char.IsDigit(cmd[end]) || cmd[end] == ','))
-                end++;
-            range = cmd[..end];
-            cmdStart = end;
-        }
+        TryScanRangePrefix(cmd, out var range, out var cmdStart);
 
         cmd = cmd[cmdStart..].Trim();
         if (cmd.Length < 3 || cmd[0] != 's' || cmd[1] is not ('/' or '!'))
@@ -100,10 +89,14 @@ public class ExCommandProcessor
 
         char sep = cmd[1];
         var parts = cmd[2..].Split(sep);
-        if (parts.Length < 2 || string.IsNullOrEmpty(parts[0]))
+        if (parts.Length < 2)
             return new Dictionary<int, string>();
 
         string pattern = parts[0];
+        if (string.IsNullOrEmpty(pattern))
+            pattern = _searchHistory.Count > 0 ? _searchHistory[0] : "";
+        if (string.IsNullOrEmpty(pattern))
+            return new Dictionary<int, string>();
         string replacement = parts.Length > 1 ? parts[1] : "";
         string flags = parts.Length > 2 ? parts[2] : "";
 
@@ -201,19 +194,9 @@ public class ExCommandProcessor
         var cmd = cmdLine.Trim();
         if (string.IsNullOrEmpty(cmd)) return new ExResult(true);
 
-        // Range prefix: %, number, .
-        string range = "";
-        int cmdStart = 0;
-        if (cmd.StartsWith('%')) { range = "%"; cmdStart = 1; }
-        else if (cmd.StartsWith('.')) { range = "."; cmdStart = 1; }
-        else if (char.IsDigit(cmd[0]))
-        {
-            int end = 0;
-            while (end < cmd.Length && (char.IsDigit(cmd[end]) || cmd[end] == ','))
-                end++;
-            range = cmd[..end];
-            cmdStart = end;
-        }
+        // Range prefix: %, number, ., or a mark reference ('x), and combinations
+        // thereof separated by a comma (e.g. '<,'>  'a,'b  'a,5  .,'b).
+        TryScanRangePrefix(cmd, out string range, out int cmdStart);
 
         cmd = cmd[cmdStart..].Trim();
 
@@ -1108,7 +1091,54 @@ public class ExCommandProcessor
         catch (Exception ex) { error = $"Invalid pattern: {ex.Message}"; return null; }
     }
 
-    internal static void ResolveRange(string range, CursorPosition cursor, int lineCount, ref int startLine, ref int endLine)
+    // Scans a leading range prefix off `cmd`: %, ., a digit run, or a mark reference ('x),
+    // optionally followed by a comma and a second address of the same kinds
+    // (e.g. '<,'>  'a,'b  'a,5  .,'b). Returns false (range="", cmdStart=0) when `cmd`
+    // doesn't start with a range at all, matching the previous no-range behaviour.
+    private static bool TryScanRangePrefix(string cmd, out string range, out int cmdStart)
+    {
+        range = "";
+        cmdStart = 0;
+        if (cmd.Length == 0) return false;
+
+        if (cmd[0] == '%') { range = "%"; cmdStart = 1; return true; }
+
+        int pos = 0;
+        if (!TryScanRangeAddress(cmd, ref pos))
+            return false;
+
+        if (pos < cmd.Length && cmd[pos] == ',')
+        {
+            int afterComma = pos + 1;
+            if (TryScanRangeAddress(cmd, ref afterComma))
+                pos = afterComma;
+        }
+
+        range = cmd[..pos];
+        cmdStart = pos;
+        return true;
+    }
+
+    // Scans a single range address (., a digit run, or 'x) starting at pos, advancing pos past it.
+    private static bool TryScanRangeAddress(string cmd, ref int pos)
+    {
+        if (pos >= cmd.Length) return false;
+        char c = cmd[pos];
+        if (c == '.') { pos++; return true; }
+        if (c == '\'' && pos + 1 < cmd.Length && (char.IsLetter(cmd[pos + 1]) || cmd[pos + 1] is '<' or '>'))
+        {
+            pos += 2;
+            return true;
+        }
+        if (char.IsDigit(c))
+        {
+            while (pos < cmd.Length && char.IsDigit(cmd[pos])) pos++;
+            return true;
+        }
+        return false;
+    }
+
+    internal void ResolveRange(string range, CursorPosition cursor, int lineCount, ref int startLine, ref int endLine)
     {
         if (range == "%") { startLine = 0; endLine = lineCount - 1; }
         else if (range == "." || range == "") { startLine = endLine = cursor.Line; }
@@ -1116,12 +1146,32 @@ public class ExCommandProcessor
         {
             var parts = range.Split(',');
             if (parts.Length == 2 &&
-                int.TryParse(parts[0], out var s) &&
-                int.TryParse(parts[1], out var e))
-            { startLine = s - 1; endLine = e - 1; }
-            else if (parts.Length == 1 && int.TryParse(parts[0], out var n))
-            { startLine = endLine = n - 1; }
+                TryResolveRangeAddress(parts[0], cursor, out var s) &&
+                TryResolveRangeAddress(parts[1], cursor, out var e))
+            { startLine = s; endLine = e; }
+            else if (parts.Length == 1 && TryResolveRangeAddress(parts[0], cursor, out var n))
+            { startLine = endLine = n; }
         }
+    }
+
+    // Resolves a single range token (digit run, ., or 'x) to a 0-based line number.
+    // Returns false for an unrecognized or undefined mark, leaving the caller's
+    // existing startLine/endLine untouched (same fallback as any other unparseable range).
+    private bool TryResolveRangeAddress(string token, CursorPosition cursor, out int line)
+    {
+        token = token.Trim();
+        line = 0;
+        if (token.Length == 0) return false;
+        if (token == ".") { line = cursor.Line; return true; }
+        if (token[0] == '\'' && token.Length == 2)
+        {
+            var mark = _markManager.GetMark(token[1]);
+            if (mark == null) return false;
+            line = mark.Value.Line;
+            return true;
+        }
+        if (int.TryParse(token, out var n)) { line = n - 1; return true; }
+        return false;
     }
 
     // Returns 0-based destination line index, or -1 for "before line 0", or -2 on error.
@@ -1214,6 +1264,13 @@ public class ExCommandProcessor
         string pattern = parts[0];
         string replacement = parts.Length > 1 ? parts[1] : "";
         string flags = parts.Length > 2 ? parts[2] : "";
+
+        // An empty pattern (:s//replacement/) reuses the last search pattern —
+        // either from a previous /pattern<CR> search or a previous non-empty :s pattern.
+        if (string.IsNullOrEmpty(pattern))
+            pattern = _searchHistory.Count > 0 ? _searchHistory[0] : "";
+        if (string.IsNullOrEmpty(pattern))
+            return new ExResult(false, "E35: No previous regular expression");
 
         bool global = flags.Contains('g');
         bool ignoreCase = flags.Contains('i') || (!flags.Contains('I') && _options.IgnoreCase);
@@ -2229,14 +2286,15 @@ public class ExCommandProcessor
         bool reverse = arg.StartsWith('!');
         if (reverse) arg = arg[1..].TrimStart();
 
-        bool ignoreCase = false, numeric = false, sortOnMatch = false;
-        while (arg.Length > 0 && arg[0] is 'i' or 'n' or 'r')
+        bool ignoreCase = false, numeric = false, sortOnMatch = false, unique = false;
+        while (arg.Length > 0 && arg[0] is 'i' or 'n' or 'r' or 'u')
         {
             switch (arg[0])
             {
                 case 'i': ignoreCase = true; break;
                 case 'n': numeric = true; break;
                 case 'r': sortOnMatch = true; break;
+                case 'u': unique = true; break;
             }
             arg = arg[1..].TrimStart();
         }
@@ -2270,10 +2328,11 @@ public class ExCommandProcessor
             return sortOnMatch ? m.Value : line[(m.Index + m.Length)..];
         }
 
+        long NumKey(string line) { var m = NumericSortRegex.Match(SortKey(line)); return m.Success ? long.Parse(m.Value) : 0L; }
+
         string[] result;
         if (numeric)
         {
-            long NumKey(string line) { var m = NumericSortRegex.Match(SortKey(line)); return m.Success ? long.Parse(m.Value) : 0L; }
             result = reverse
                 ? [.. lines.OrderByDescending(NumKey)]
                 : [.. lines.OrderBy(NumKey)];
@@ -2286,8 +2345,26 @@ public class ExCommandProcessor
                 : [.. lines.OrderBy(SortKey, comparer)];
         }
 
+        if (unique)
+        {
+            var keyComparer = ignoreCase && !numeric ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var deduped = new List<string>(result.Length);
+            string? prevKey = null;
+            for (int i = 0; i < result.Length; i++)
+            {
+                var key = numeric ? NumKey(result[i]).ToString() : SortKey(result[i]);
+                if (i > 0 && keyComparer.Equals(key, prevKey))
+                    continue;
+                deduped.Add(result[i]);
+                prevKey = key;
+            }
+            result = [.. deduped];
+        }
+
         for (int i = 0; i < result.Length; i++)
             buf.ReplaceLine(startLine + i, result[i]);
+        if (result.Length < lines.Length)
+            buf.DeleteLines(startLine + result.Length, endLine);
 
         return new ExResult(true, $"{result.Length} line(s) sorted", TextModified: true);
     }
