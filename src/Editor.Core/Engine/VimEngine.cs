@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using Editor.Core.Buffer;
 using Editor.Core.Config;
 using Editor.Core.Editing;
@@ -83,6 +84,7 @@ public class VimEngine
 
     private CursorPosition _insertStart;
     private CursorPosition _lastInsertPos;
+    private StringBuilder? _insertedText; // literal text typed in the current Insert/Replace session, flushed to the "." register on exit
     private CursorPosition _lastVisualStart;
     private CursorPosition _lastVisualEnd;
     private VimMode _lastVisualMode = VimMode.Visual;
@@ -221,6 +223,7 @@ public class VimEngine
         editorConfig.TryGetFileEncoding(out var preferredEncoding);
         _bufferManager.OpenFile(path, preferredEncoding);
         _cursor = CursorPosition.Zero;
+        _registerManager.SetCurrentFileName(_bufferManager.Current.FilePath); // "%" register — current buffer's path
         _syntaxEngine.DetectLanguage(path);
         _syntaxEngine.Invalidate();
         _bufferManager.Current.Undo.Clear();
@@ -1936,6 +1939,7 @@ public class VimEngine
             case "Return":
                 TryExpandAbbreviation(buf, events);
                 InsertNewline(events);
+                _insertedText?.Append('\n');
                 break;
             case "Left":
                 var ml = new MotionEngine(buf);
@@ -1964,17 +1968,21 @@ public class VimEngine
                     var spaces = new string(' ', _config.Options.TabStop);
                     buf.InsertText(_cursor.Line, _cursor.Column, spaces);
                     _cursor = _cursor with { Column = _cursor.Column + spaces.Length };
+                    _insertedText?.Append(spaces);
                 }
                 else
                 {
                     buf.InsertChar(_cursor.Line, _cursor.Column, '\t');
                     _cursor = _cursor with { Column = _cursor.Column + 1 };
+                    _insertedText?.Append('\t');
                 }
                 EmitText(events);
                 break;
             default:
                 if (key.Length == 1)
                 {
+                    _insertedText?.Append(key[0]);
+
                     if (_config.Options.Pairs && !_config.Options.Paste && _mode == VimMode.Insert)
                     {
                         char ch = key[0];
@@ -3290,12 +3298,14 @@ public class VimEngine
     {
         Snapshot();
         _insertStart = _cursor;
+        _insertedText = new StringBuilder();
         ChangeMode(VimMode.Insert, events);
     }
 
     private void EnterReplaceMode(List<VimEvent> events)
     {
         Snapshot();
+        _insertedText = new StringBuilder();
         ChangeMode(VimMode.Replace, events);
     }
 
@@ -3306,6 +3316,10 @@ public class VimEngine
         if (_cursor.Column > 0 && _cursor.Column >= buf.GetLineLength(_cursor.Line))
             _cursor = _cursor with { Column = Math.Max(0, _cursor.Column - 1) };
         _lastInsertPos = _cursor;
+        // "." register: the literal text typed during this Insert/Replace session (approximate —
+        // does not retroactively account for Backspace, mirroring dot-repeat's own tolerance).
+        _registerManager.SetLastInserted(_insertedText?.ToString() ?? "");
+        _insertedText = null;
         _blockInsertState = null;
         _awaitingInsertRegister = false;
         _awaitingExprRegister = false;
@@ -5629,6 +5643,7 @@ public class VimEngine
 
     private void ExecuteExCommand(string cmdLine, List<VimEvent> events)
     {
+        _registerManager.SetLastCommand(cmdLine); // ":" register — last executed Ex command line
         if (TryExecuteConfigCommand(cmdLine, out var msg, out var err, out var optChanged))
         {
             if (err != null) EmitStatus(events, "E: " + err);
@@ -5640,6 +5655,7 @@ public class VimEngine
         var preLines = CurrentBuffer.Text.Snapshot();
         var preCursor = _cursor;
         var result = _exProcessor.Execute(cmdLine, _cursor);
+        _registerManager.SetCurrentFileName(_bufferManager.Current.FilePath); // "%" — reflect buffer switches (:bn/:bp/:b/:bd)
         if (!result.Success) EmitStatus(events, "E: " + result.Message);
         else if (result.Message != null) EmitStatus(events, result.Message);
         if (result.BufferRestored)
