@@ -5126,4 +5126,63 @@ public class VimEngineTests
         engine.ProcessKey("\""); engine.ProcessKey("1"); engine.ProcessKey("p");
         Assert.Equal("beta\nalpha", engine.CurrentBuffer.Text.GetText());
     }
+
+    // ─── Read-only registers: ".", ":", "%" ───
+
+    [Fact]
+    public void DotRegister_HoldsLastInsertedText_AfterExitingInsertMode()
+    {
+        var engine = CreateEngine("");
+        engine.ProcessKey("i");
+        engine.ProcessKey("a"); engine.ProcessKey("b"); engine.ProcessKey("c");
+        engine.ProcessKey("Escape");
+
+        // ".p pastes the literal text typed during the insert session after the cursor.
+        engine.ProcessKey("\""); engine.ProcessKey("."); engine.ProcessKey("p");
+        Assert.Equal("abcabc", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void DotRegister_IsNotUserWritable()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("y"); engine.ProcessKey("y"); // yank into unnamed register
+        engine.ProcessKey("\""); engine.ProcessKey("."); engine.ProcessKey("p"); // "." never accepts a yank
+
+        // No insert session ever happened, so "." is still empty — the yank above must not
+        // have landed in it, and the paste is a no-op.
+        Assert.Equal("hello", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void ColonRegister_HoldsLastExecutedExCommand()
+    {
+        var engine = CreateEngine("x");
+        engine.ExecuteExCommand("noh");
+
+        // ":p pastes the last Ex command line (without the leading ':') after the cursor.
+        engine.ProcessKey("\""); engine.ProcessKey(":"); engine.ProcessKey("p");
+        Assert.Equal("xnoh", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void PercentRegister_HoldsCurrentFileName_AfterLoadFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "editor-percent-register-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(path, "x");
+
+        try
+        {
+            var engine = new VimEngine(new VimConfig());
+            engine.LoadFile(path);
+
+            // "%p pastes the current buffer's file path after the cursor.
+            engine.ProcessKey("\""); engine.ProcessKey("%"); engine.ProcessKey("p");
+            Assert.Equal("x" + path, engine.CurrentBuffer.Text.GetText());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

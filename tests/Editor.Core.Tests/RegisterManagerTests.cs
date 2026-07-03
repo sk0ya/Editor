@@ -107,4 +107,82 @@ public class RegisterManagerTests
         Assert.Equal("yanked", mgr.Get('0').Text);
         Assert.Equal("deleted", mgr.Get('1').Text);
     }
+
+    // ─── Read-only registers: ".", ":", "%" ───
+
+    [Fact]
+    public void Set_DotColonPercent_AreIgnored()
+    {
+        var mgr = new RegisterManager();
+        mgr.Set('.', new Register("hacked", RegisterType.Character));
+        mgr.Set(':', new Register("hacked", RegisterType.Character));
+        mgr.Set('%', new Register("hacked", RegisterType.Character));
+
+        Assert.True(mgr.Get('.').IsEmpty);
+        Assert.True(mgr.Get(':').IsEmpty);
+        Assert.True(mgr.Get('%').IsEmpty);
+    }
+
+    [Fact]
+    public void SetYank_DotColonPercent_AreIgnored()
+    {
+        var mgr = new RegisterManager();
+        mgr.SetYank('.', new Register("hacked", RegisterType.Character));
+        mgr.SetYank(':', new Register("hacked", RegisterType.Character));
+        mgr.SetYank('%', new Register("hacked", RegisterType.Character));
+
+        Assert.True(mgr.Get('.').IsEmpty);
+        Assert.True(mgr.Get(':').IsEmpty);
+        Assert.True(mgr.Get('%').IsEmpty);
+    }
+
+    [Fact]
+    public void SetDelete_DotColonPercent_AreIgnored()
+    {
+        var mgr = new RegisterManager();
+        mgr.SetDelete('.', new Register("hacked", RegisterType.Character));
+        mgr.SetDelete(':', new Register("hacked", RegisterType.Character));
+        mgr.SetDelete('%', new Register("hacked", RegisterType.Character));
+
+        Assert.True(mgr.Get('.').IsEmpty);
+        Assert.True(mgr.Get(':').IsEmpty);
+        Assert.True(mgr.Get('%').IsEmpty);
+    }
+
+    [Fact]
+    public void SetLastInserted_RoundTripsThroughGet()
+    {
+        var mgr = new RegisterManager();
+        mgr.SetLastInserted("hello");
+
+        Assert.Equal("hello", mgr.Get('.').Text);
+    }
+
+    [Fact]
+    public void SetLastCommand_RoundTripsThroughGet()
+    {
+        var mgr = new RegisterManager();
+        mgr.SetLastCommand("wq");
+
+        Assert.Equal("wq", mgr.Get(':').Text);
+    }
+
+    [Fact]
+    public void SetCurrentFileName_RoundTripsThroughGet()
+    {
+        var mgr = new RegisterManager();
+        mgr.SetCurrentFileName(@"C:\notes.txt");
+
+        Assert.Equal(@"C:\notes.txt", mgr.Get('%').Text);
+    }
+
+    [Fact]
+    public void SetCurrentFileName_NullOrEmpty_StoresEmptyRegister()
+    {
+        var mgr = new RegisterManager();
+        mgr.SetCurrentFileName(@"C:\notes.txt");
+        mgr.SetCurrentFileName(null);
+
+        Assert.True(mgr.Get('%').IsEmpty);
+    }
 }

@@ -56,6 +56,8 @@ public class RegisterManager
 
         if (name == '_') return; // blackhole
 
+        if (name == '.' || name == ':' || name == '%') return; // read-only registers; see SetLastInserted/SetLastCommand/SetCurrentFileName
+
         _registers[name] = register;
         _unnamed = register;
     }
@@ -113,6 +115,28 @@ public class RegisterManager
         if (cb.Contains("unnamed", StringComparison.OrdinalIgnoreCase))
             try { _clipboard?.SetText(register.Text); } catch { }
     }
+
+    /// <summary>
+    /// Stores the literal text typed during the most recently finished Insert-mode session into
+    /// the read-only "." register. Bypasses the guard in <see cref="Set"/>; only <see cref="Engine.VimEngine"/>
+    /// should call this — it is never reachable from a user-supplied register name.
+    /// </summary>
+    public void SetLastInserted(string text) =>
+        _registers['.'] = string.IsNullOrEmpty(text) ? Register.Empty : new Register(text, RegisterType.Character);
+
+    /// <summary>
+    /// Stores the most recently executed Ex command line (without the leading ':') into the
+    /// read-only ":" register. Bypasses the guard in <see cref="Set"/>.
+    /// </summary>
+    public void SetLastCommand(string cmd) =>
+        _registers[':'] = string.IsNullOrEmpty(cmd) ? Register.Empty : new Register(cmd, RegisterType.Character);
+
+    /// <summary>
+    /// Stores the current buffer's file path into the read-only "%" register. Bypasses the guard
+    /// in <see cref="Set"/>. A null/empty path (e.g. an unnamed buffer) stores an empty register.
+    /// </summary>
+    public void SetCurrentFileName(string? path) =>
+        _registers['%'] = string.IsNullOrEmpty(path) ? Register.Empty : new Register(path, RegisterType.Character);
 
     public Register Get(char name)
     {
