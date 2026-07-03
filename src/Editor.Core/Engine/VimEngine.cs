@@ -209,7 +209,14 @@ public class VimEngine
 
     public void LoadFile(string path)
     {
-        RunAutocmds("BufReadPre", path);
+        if (_bufferManager.Current.FilePath is { } outgoingPath)
+            RunAutocmds("BufLeave", outgoingPath);
+
+        // Real Vim skips BufReadPre/BufRead/BufReadPost for a path that doesn't exist yet and
+        // fires BufNewFile instead; BufEnter/FileType still fire normally either way.
+        bool isNewFile = !File.Exists(path);
+        if (!isNewFile)
+            RunAutocmds("BufReadPre", path);
         var editorConfig = EditorConfig.LoadForFile(path);
         editorConfig.TryGetFileEncoding(out var preferredEncoding);
         _bufferManager.OpenFile(path, preferredEncoding);
@@ -222,8 +229,15 @@ public class VimEngine
         _config.Options.FileEncoding = _bufferManager.Current.FileEncoding;
         editorConfig.ApplyTo(_config.Options, _bufferManager.Current);
         _config.ApplyModelines(_bufferManager.Current);
-        RunAutocmds("BufRead", path);
-        RunAutocmds("BufReadPost", path);
+        if (isNewFile)
+        {
+            RunAutocmds("BufNewFile", path);
+        }
+        else
+        {
+            RunAutocmds("BufRead", path);
+            RunAutocmds("BufReadPost", path);
+        }
         RunAutocmds("BufEnter", path);
         RunAutocmds("FileType", GetFileTypeNames(path));
     }
@@ -3378,6 +3392,7 @@ public class VimEngine
 
     private void ChangeMode(VimMode newMode, List<VimEvent> events)
     {
+        var oldMode = _mode;
         _pendingMappedInput.Clear();
         if (newMode != VimMode.VisualBlock)
         {
@@ -3386,6 +3401,16 @@ public class VimEngine
         }
         _mode = newMode;
         events.Add(VimEvent.ModeChanged(newMode));
+
+        bool wasInsertLike = oldMode is VimMode.Insert or VimMode.Replace;
+        bool isInsertLike = newMode is VimMode.Insert or VimMode.Replace;
+        if (_bufferManager.Current.FilePath is { } path)
+        {
+            if (!wasInsertLike && isInsertLike)
+                RunAutocmds("InsertEnter", path);
+            else if (wasInsertLike && !isInsertLike)
+                RunAutocmds("InsertLeave", path);
+        }
     }
 
     private void MoveCursor(CursorPosition pos, List<VimEvent> events)
