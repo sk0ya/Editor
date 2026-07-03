@@ -4983,4 +4983,147 @@ public class VimEngineTests
         Assert.Empty(engine.ExecuteExCommand(":"));
         Assert.Empty(engine.ExecuteExCommand(null!));
     }
+
+    // ── gc/gcc: block-comment toggle for languages with no line-comment syntax ──
+
+    [Fact]
+    public void Gcc_TogglesBlockComment_ForCssFile()
+    {
+        var engine = CreateEngine(".foo { color: red; }");
+        engine.Syntax.SetLanguage("CSS");
+
+        engine.ProcessKey("g");
+        engine.ProcessKey("c");
+        engine.ProcessKey("c");
+
+        Assert.Equal("/* .foo { color: red; } */", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Gcc_TogglesBlockComment_OffAgain_ForCssFile()
+    {
+        var engine = CreateEngine(".foo { color: red; }");
+        engine.Syntax.SetLanguage("CSS");
+
+        engine.ProcessKey("g"); engine.ProcessKey("c"); engine.ProcessKey("c");
+        engine.ProcessKey("g"); engine.ProcessKey("c"); engine.ProcessKey("c");
+
+        Assert.Equal(".foo { color: red; }", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Gcc_TogglesBlockComment_ForXmlFile_UsingHtmlCommentStyle()
+    {
+        var engine = CreateEngine("<div>hi</div>");
+        engine.Syntax.SetLanguage("XML");
+
+        engine.ProcessKey("g"); engine.ProcessKey("c"); engine.ProcessKey("c");
+
+        Assert.Equal("<!-- <div>hi</div> -->", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void Gcc_NoCommentSyntaxForFileType_EmitsStatusAndLeavesTextUnchanged()
+    {
+        var engine = CreateEngine("{\"a\": 1}");
+        engine.Syntax.SetLanguage("JSON");
+
+        var events = engine.ProcessKey("g");
+        events = engine.ProcessKey("c");
+        events = engine.ProcessKey("c");
+
+        Assert.Equal("{\"a\": 1}", engine.CurrentBuffer.Text.GetText());
+        Assert.Contains(events, e => e.Type == VimEventType.StatusMessage);
+    }
+
+    // ── BufWritePre / BufWritePost autocmds ──
+
+    [Fact]
+    public void Save_RunsBufWritePreAndBufWritePostAutocmds()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        File.WriteAllText(path, "class C {}\n");
+        try
+        {
+            var config = new VimConfig();
+            config.ParseCommand("autocmd BufWritePre *.cs set tabstop=9");
+            config.ParseCommand("autocmd BufWritePost *.cs set shiftwidth=7");
+            var engine = CreateEngine(config: config);
+            engine.LoadFile(path);
+
+            Assert.NotEqual(9, config.Options.TabStop);
+            Assert.NotEqual(7, config.Options.ShiftWidth);
+
+            engine.CurrentBuffer.Save();
+
+            Assert.Equal(9, config.Options.TabStop);
+            Assert.Equal(7, config.Options.ShiftWidth);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Save_BufWriteAutocmd_DoesNotFireForNonMatchingExtension()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"editor-autocmd-{Guid.NewGuid():N}.cs");
+        File.WriteAllText(path, "class C {}\n");
+        try
+        {
+            var config = new VimConfig();
+            config.ParseCommand("autocmd BufWritePre *.md set tabstop=9");
+            var engine = CreateEngine(config: config);
+            engine.LoadFile(path);
+
+            engine.CurrentBuffer.Save();
+
+            Assert.NotEqual(9, config.Options.TabStop);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // ── Numbered delete-register ring ("1-"9) and small-delete register ("-) ──
+
+    [Fact]
+    public void Dd_ThenNumberedRegisterPaste_RecoversPriorDeletes()
+    {
+        var engine = CreateEngine("alpha\nbeta\ngamma");
+
+        engine.ProcessKey("d"); engine.ProcessKey("d"); // deletes "alpha", shifts into "1
+        engine.ProcessKey("d"); engine.ProcessKey("d"); // deletes "beta" (now first line), shifts "alpha"->"2, "beta"->"1
+
+        // "1p pastes the most recent delete ("beta") below the current line.
+        engine.ProcessKey("\""); engine.ProcessKey("1"); engine.ProcessKey("p");
+        Assert.Equal("gamma\nbeta", engine.CurrentBuffer.Text.GetText());
+
+        // "2p pastes the older delete ("alpha").
+        engine.ProcessKey("u"); // undo the "1p paste
+        engine.ProcessKey("\""); engine.ProcessKey("2"); engine.ProcessKey("p");
+        Assert.Equal("gamma\nalpha", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void SmallCharDelete_GoesToMinusRegister_NotNumberedRegister1()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("x"); // deletes 'h' — a small, single-line delete
+
+        // The small delete must not land in "1 (only linewise/multi-line deletes do).
+        engine.ProcessKey("\""); engine.ProcessKey("1"); engine.ProcessKey("p");
+        Assert.Equal("ello", engine.CurrentBuffer.Text.GetText()); // unchanged: "1 was empty, paste is a no-op
+
+        engine.ProcessKey("\""); engine.ProcessKey("-"); engine.ProcessKey("p");
+        Assert.Equal("ehllo", engine.CurrentBuffer.Text.GetText()); // "- held the deleted 'h'
+    }
+
+    [Fact]
+    public void Yank_DoesNotPopulateNumberedDeleteRegister()
+    {
+        var engine = CreateEngine("alpha\nbeta");
+        engine.ProcessKey("d"); engine.ProcessKey("d"); // "1 now holds "alpha"
+
+        engine.ProcessKey("y"); engine.ProcessKey("y"); // yank "beta" — must not touch "1
+
+        engine.ProcessKey("\""); engine.ProcessKey("1"); engine.ProcessKey("p");
+        Assert.Equal("beta\nalpha", engine.CurrentBuffer.Text.GetText());
+    }
 }

@@ -1014,6 +1014,8 @@ public class VimConfig
         "BufRead",
         "BufReadPost",
         "BufEnter",
+        "BufWritePre",
+        "BufWritePost",
         "FileType",
     };
 

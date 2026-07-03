@@ -74,6 +74,46 @@ public class RegisterManager
         }
     }
 
+    /// <summary>
+    /// Records a delete/change operation's text. An explicit register name behaves exactly like
+    /// <see cref="Set"/>; otherwise (unnamed delete) the text always updates the unnamed register
+    /// and additionally lands in the numbered-register ring, mirroring Vim: linewise, blockwise, or
+    /// multi-line deletes shift into "1 (pushing "1-"8 down into "2-"9, dropping the oldest), while
+    /// single-line characterwise deletes go to the small-delete register "- instead (Vim never treats
+    /// a blockwise delete as "small", even a single-line/single-column one), leaving the ring alone.
+    /// </summary>
+    public void SetDelete(char name, Register register)
+    {
+        if (name != '"' && name != '\0')
+        {
+            Set(name, register);
+            return;
+        }
+
+        bool isSmallDelete = register.Type == RegisterType.Character && !register.Text.Contains('\n');
+        if (isSmallDelete)
+        {
+            _registers['-'] = register;
+        }
+        else
+        {
+            for (char c = '9'; c > '1'; c--)
+            {
+                if (_registers.TryGetValue((char)(c - 1), out var prev))
+                    _registers[c] = prev;
+                else
+                    _registers.Remove(c);
+            }
+            _registers['1'] = register;
+        }
+
+        _unnamed = register;
+
+        var cb = _options?.Clipboard ?? "";
+        if (cb.Contains("unnamed", StringComparison.OrdinalIgnoreCase))
+            try { _clipboard?.SetText(register.Text); } catch { }
+    }
+
     public Register Get(char name)
     {
         if (name == '"' || name == '\0')

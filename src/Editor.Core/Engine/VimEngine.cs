@@ -182,6 +182,8 @@ public class VimEngine
     {
         _config = config ?? new VimConfig();
         _bufferManager = new BufferManager();
+        _bufferManager.BufferWillWrite += (_, path) => RunAutocmds("BufWritePre", path);
+        _bufferManager.BufferDidWrite += (_, path) => RunAutocmds("BufWritePost", path);
         _registerManager = new RegisterManager(_config.Options);
         _markManager = new MarkManager();
         _macroManager = new MacroManager();
@@ -3541,7 +3543,7 @@ public class VimEngine
         var leftColumn = GetBlockLeftColumn(sel);
 
         Snapshot();
-        YankBlock(register, sel);
+        YankBlock(register, sel, isDelete: true);
         DeleteBlock(sel);
         _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn), insertMode: true);
         EmitText(events);
@@ -4153,7 +4155,7 @@ public class VimEngine
         // The blackhole register "_ discards the deleted text without touching
         // the unnamed/yank registers.
         if (register != '_')
-            YankRange(register, from, to, linewise);
+            YankRange(register, from, to, linewise, isDelete: true);
 
         if (from.Line == to.Line)
         {
@@ -4177,14 +4179,14 @@ public class VimEngine
     {
         var buf = _bufferManager.Current.Text;
         if (register != '_')
-            YankLines(start, end, register, events);
+            YankLines(start, end, register, events, isDelete: true);
         CurrentBuffer.Folds.OnLinesDeleted(start, end);
         buf.DeleteLines(start, end);
         _cursor = buf.ClampCursor(new CursorPosition(start, 0));
         EmitText(events);
     }
 
-    private void YankRange(char register, CursorPosition from, CursorPosition to, bool linewise)
+    private void YankRange(char register, CursorPosition from, CursorPosition to, bool linewise, bool isDelete = false)
     {
         var buf = _bufferManager.Current.Text;
         string text;
@@ -4199,15 +4201,19 @@ public class VimEngine
             sb.Append('\n').Append(buf.GetLine(to.Line)[..Math.Min(to.Column + 1, buf.GetLineLength(to.Line))]);
             text = sb.ToString();
         }
-        _registerManager.SetYank(register, new Register(text, linewise ? RegisterType.Line : RegisterType.Character));
+        var reg = new Register(text, linewise ? RegisterType.Line : RegisterType.Character);
+        if (isDelete) _registerManager.SetDelete(register, reg);
+        else _registerManager.SetYank(register, reg);
     }
 
-    private void YankLines(int start, int end, char register, List<VimEvent> events)
+    private void YankLines(int start, int end, char register, List<VimEvent> events, bool isDelete = false)
     {
         var buf = _bufferManager.Current.Text;
         var lines = buf.GetLines(start, end);
         var text = string.Join("\n", lines);
-        _registerManager.SetYank(register, new Register(text, RegisterType.Line));
+        var reg = new Register(text, RegisterType.Line);
+        if (isDelete) _registerManager.SetDelete(register, reg);
+        else _registerManager.SetYank(register, reg);
         EmitStatus(events, $"{lines.Length} line(s) yanked");
     }
 
@@ -5009,14 +5015,27 @@ public class VimEngine
     private void ToggleCommentLines(int startLine, int endLine, List<VimEvent> events)
     {
         var prefix = _syntaxEngine.GetCommentPrefix();
-        if (prefix == null)
+        if (prefix != null)
+        {
+            Snapshot();
+            ToggleLineCommentLines(startLine, endLine, prefix, events);
+            return;
+        }
+
+        var block = _syntaxEngine.GetBlockComment();
+        if (block == null)
         {
             EmitStatus(events, "No comment prefix for this file type");
             return;
         }
 
-        var buf = _bufferManager.Current.Text;
         Snapshot();
+        ToggleBlockCommentLines(startLine, endLine, block.Value.Prefix, block.Value.Suffix, events);
+    }
+
+    private void ToggleLineCommentLines(int startLine, int endLine, string prefix, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
 
         // Collect line data and detect if ALL non-empty lines are already commented
         int count = endLine - startLine + 1;
@@ -5047,6 +5066,50 @@ public class VimEngine
                 // Add comment prefix; skip blank lines
                 if (trimmed.Length == 0) continue;
                 buf.ReplaceLine(startLine + i, raw[..indent] + prefix + " " + trimmed);
+            }
+        }
+
+        EmitText(events);
+    }
+
+    // Per-line block-comment toggle (used by languages with no line-comment syntax, e.g.
+    // CSS's /* */ or XML/Markdown's <!-- -->): each non-empty line is individually wrapped
+    // in open/close delimiters, mirroring the line-comment toggle's per-line semantics.
+    private void ToggleBlockCommentLines(int startLine, int endLine, string open, string close, List<VimEvent> events)
+    {
+        var buf = _bufferManager.Current.Text;
+
+        bool IsWrapped(string trimmed) =>
+            trimmed.Length >= open.Length + close.Length &&
+            trimmed.StartsWith(open) && trimmed.EndsWith(close);
+
+        int count = endLine - startLine + 1;
+        var lines = new (string Raw, string Trimmed, int Indent)[count];
+        bool allCommented = true;
+        for (int i = 0; i < count; i++)
+        {
+            var raw = buf.GetLine(startLine + i);
+            var trimmed = raw.TrimStart();
+            lines[i] = (raw, trimmed, raw.Length - trimmed.Length);
+            if (trimmed.Length > 0 && !IsWrapped(trimmed))
+                allCommented = false;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            var (raw, trimmed, indent) = lines[i];
+            if (allCommented)
+            {
+                if (!IsWrapped(trimmed)) continue;
+                string inner = trimmed[open.Length..^close.Length];
+                if (inner.StartsWith(" ")) inner = inner[1..];
+                if (inner.EndsWith(" ")) inner = inner[..^1];
+                buf.ReplaceLine(startLine + i, raw[..indent] + inner);
+            }
+            else
+            {
+                if (trimmed.Length == 0) continue;
+                buf.ReplaceLine(startLine + i, raw[..indent] + open + " " + trimmed + " " + close);
             }
         }
 
@@ -5579,7 +5642,7 @@ public class VimEngine
             var leftColumn = GetBlockLeftColumn(sel);
             Snapshot();
             if (register != '_')
-                YankBlock(register, sel);
+                YankBlock(register, sel, isDelete: true);
             DeleteBlock(sel);
             _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn));
             EmitText(events);
@@ -5594,7 +5657,7 @@ public class VimEngine
         if (_mode == VimMode.VisualLine)
         {
             if (register != '_')
-                YankLines(start.Line, end.Line, register, events);
+                YankLines(start.Line, end.Line, register, events, isDelete: true);
             CurrentBuffer.Folds.OnLinesDeleted(start.Line, end.Line);
             _bufferManager.Current.Text.DeleteLines(start.Line, end.Line);
             _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(start.Line, 0));
@@ -5634,7 +5697,7 @@ public class VimEngine
         {
             var (blockStartLine, _, _, _) = GetBlockBounds(sel);
             var leftColumn = GetBlockLeftColumn(sel);
-            YankBlock('"', sel);
+            YankBlock('"', sel, isDelete: true);
             DeleteBlock(sel);
             _cursor = buf.ClampCursor(new CursorPosition(blockStartLine, leftColumn));
             if (regType == RegisterType.Line)
@@ -5653,7 +5716,7 @@ public class VimEngine
         if (mode == VimMode.VisualLine)
         {
             var deleted = buf.GetLines(start.Line, end.Line);
-            _registerManager.SetYank('"', new Register(string.Join("\n", deleted), RegisterType.Line));
+            _registerManager.SetDelete('"', new Register(string.Join("\n", deleted), RegisterType.Line));
 
             string[] newLines = regType == RegisterType.Line ? regLines : regText.Split('\n');
             bool deletedAll = start.Line == 0 && end.Line >= buf.LineCount - 1;
@@ -5680,7 +5743,7 @@ public class VimEngine
         }
 
         // Characterwise visual selection.
-        YankRange('"', start, end, false);
+        YankRange('"', start, end, false, isDelete: true);
         if (start.Line == end.Line)
             buf.DeleteRange(start.Line, start.Column, Math.Min(end.Column + 1, buf.GetLineLength(start.Line)));
         else
@@ -5749,7 +5812,7 @@ public class VimEngine
         }
     }
 
-    private void YankBlock(char register, Selection selection)
+    private void YankBlock(char register, Selection selection, bool isDelete = false)
     {
         var buf = _bufferManager.Current.Text;
         var lines = new List<string>();
@@ -5766,7 +5829,9 @@ public class VimEngine
             lines.Add(text[range.StartColumn..endExclusive]);
         }
 
-        _registerManager.SetYank(register, new Register(string.Join("\n", lines), RegisterType.Block));
+        var reg = new Register(string.Join("\n", lines), RegisterType.Block);
+        if (isDelete) _registerManager.SetDelete(register, reg);
+        else _registerManager.SetYank(register, reg);
     }
 
     private void ExecuteVisualIndent(bool indent, List<VimEvent> events)

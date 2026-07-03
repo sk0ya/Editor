@@ -5,6 +5,8 @@ public class CssSyntax : ISyntaxLanguage
     public string Name => "CSS";
     public string[] Extensions => [".css", ".scss", ".less"];
     public string? LineCommentPrefix => null; // CSS uses /* */ block comments
+    public string? BlockCommentPrefix => "/*";
+    public string? BlockCommentSuffix => "*/";
 
     public LineTokens[] Tokenize(string[] lines)
     {

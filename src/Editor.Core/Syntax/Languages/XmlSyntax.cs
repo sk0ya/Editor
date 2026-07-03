@@ -5,6 +5,8 @@ public class XmlSyntax : ISyntaxLanguage
     public string Name => "XML";
     public string[] Extensions => [".xml", ".xaml", ".html", ".htm", ".svg", ".csproj", ".sln"];
     public string? LineCommentPrefix => null; // XML uses <!-- --> block comments
+    public string? BlockCommentPrefix => "<!--";
+    public string? BlockCommentSuffix => "-->";
 
     public LineTokens[] Tokenize(string[] lines)
     {

@@ -7,6 +7,13 @@ public interface ISyntaxLanguage
     string Name { get; }
     string[] Extensions { get; }
     string? LineCommentPrefix { get; }
+
+    /// <summary>Opening delimiter of this language's block comment (e.g. "/*", "&lt;!--"), or null if none.</summary>
+    string? BlockCommentPrefix => null;
+
+    /// <summary>Closing delimiter of this language's block comment (e.g. "*/", "--&gt;"), or null if none.</summary>
+    string? BlockCommentSuffix => null;
+
     LineTokens[] Tokenize(string[] lines);
 }
 
@@ -112,6 +119,15 @@ public class SyntaxEngine
     }
 
     public string? GetCommentPrefix() => _currentLanguage?.LineCommentPrefix;
+
+    /// <summary>Returns the current language's block-comment delimiters, or null if it has none.</summary>
+    public (string Prefix, string Suffix)? GetBlockComment()
+    {
+        var prefix = _currentLanguage?.BlockCommentPrefix;
+        var suffix = _currentLanguage?.BlockCommentSuffix;
+        if (prefix == null || suffix == null) return null;
+        return (prefix, suffix);
+    }
 
     private static bool RequiresFullDocumentContext(ISyntaxLanguage language) =>
         language.Name is "C#"

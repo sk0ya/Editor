@@ -239,6 +239,12 @@ public class VimBuffer
         return "unix";
     }
 
+    /// <summary>Fired synchronously just before the buffer's content is written to disk.</summary>
+    public event Action<string>? BeforeWrite;
+
+    /// <summary>Fired synchronously just after the buffer's content has been written to disk.</summary>
+    public event Action<string>? AfterWrite;
+
     public void Save(string? path = null)
     {
         // Binary files are never decoded into the buffer, so writing the placeholder text back
@@ -246,6 +252,7 @@ public class VimBuffer
         if (IsBinary)
             throw new InvalidOperationException("E21: Cannot write a binary file (read-only).");
         path ??= FilePath ?? throw new InvalidOperationException("No file path specified.");
+        BeforeWrite?.Invoke(path);
         FilePath = path;
         // GetText() joins lines with \n; replace with the desired line ending.
         var text = Text.GetText();
@@ -257,6 +264,7 @@ public class VimBuffer
         };
         File.WriteAllText(path, content, GetEncoding(FileEncoding));
         Text.MarkSaved();
+        AfterWrite?.Invoke(path);
     }
 }
 
@@ -270,14 +278,20 @@ public class BufferManager
     public VimBuffer Current => _buffers[_currentIndex];
     public int CurrentIndex => _currentIndex;
 
+    /// <summary>Fired synchronously just before any buffer's content is written to disk (drives the <c>BufWritePre</c> autocmd).</summary>
+    public event Action<VimBuffer, string>? BufferWillWrite;
+
+    /// <summary>Fired synchronously just after any buffer's content has been written to disk (drives the <c>BufWritePost</c> autocmd).</summary>
+    public event Action<VimBuffer, string>? BufferDidWrite;
+
     public BufferManager()
     {
-        _buffers.Add(new VimBuffer());
+        _buffers.Add(Track(new VimBuffer()));
     }
 
     public VimBuffer NewBuffer()
     {
-        var buf = new VimBuffer();
+        var buf = Track(new VimBuffer());
         _buffers.Add(buf);
         SwitchTo(_buffers.Count - 1);
         return buf;
@@ -291,9 +305,16 @@ public class BufferManager
             SwitchTo(existingIndex);
             return _buffers[existingIndex];
         }
-        var buf = new VimBuffer(path, preferredEncoding);
+        var buf = Track(new VimBuffer(path, preferredEncoding));
         _buffers.Add(buf);
         SwitchTo(_buffers.Count - 1);
+        return buf;
+    }
+
+    private VimBuffer Track(VimBuffer buf)
+    {
+        buf.BeforeWrite += path => BufferWillWrite?.Invoke(buf, path);
+        buf.AfterWrite += path => BufferDidWrite?.Invoke(buf, path);
         return buf;
     }
 

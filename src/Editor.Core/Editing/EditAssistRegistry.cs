@@ -10,6 +10,7 @@ public sealed class EditAssistRegistry
     private readonly List<IEditAssist> _assists = new()
     {
         new MarkdownEditAssist(),
+        new CStyleCommentEditAssist(),
     };
 
     /// <summary>Process-wide default registry used by <c>VimEngine</c>.</summary>
