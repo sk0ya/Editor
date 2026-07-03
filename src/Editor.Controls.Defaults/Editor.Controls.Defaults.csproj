@@ -16,7 +16,7 @@
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
     <PackageId>sk0ya.Editor.Controls</PackageId>
-    <Version>1.0.40</Version>
+    <Version>1.0.41</Version>
     <Authors>shigekazukoya</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>
