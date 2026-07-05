@@ -5880,6 +5880,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.ScrollTo(maxOffset * Math.Clamp(ratio, 0.0, 1.0), Canvas.HorizontalOffset);
     }
 
+    /// <summary>
+    /// Scrolls the viewport so the current cursor line sits at the top of the view,
+    /// exactly like Vim's <c>zt</c>. A host pane (e.g. a code-outline / "go to symbol"
+    /// jump) calls this right after <see cref="NavigateTo"/> to land the target line at
+    /// the top instead of merely being scrolled into view. No-op until the canvas has a
+    /// measured line height (guarded inside <c>AlignViewport</c>).
+    /// </summary>
+    public void ScrollCursorToTop() => AlignViewport(ViewportAlign.Top);
+
     private void AlignViewport(ViewportAlign align)
     {
         if (Canvas.LineHeight <= 0) return;
