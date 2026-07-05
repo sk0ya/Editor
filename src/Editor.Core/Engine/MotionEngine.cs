@@ -1,4 +1,5 @@
 using Editor.Core.Buffer;
+using Editor.Core.Matchit;
 using Editor.Core.Models;
 
 namespace Editor.Core.Engine;
@@ -10,10 +11,15 @@ public record struct Motion(CursorPosition Target, MotionType Type, bool Linewis
 public class MotionEngine
 {
     private readonly TextBuffer _buffer;
+    private readonly string? _filePath;
     private int _viewportTopLine = 0;       // First visible buffer line in the viewport
     private int _viewportVisibleLines = 25; // Number of lines visible in the viewport
 
-    public MotionEngine(TextBuffer buffer) => _buffer = buffer;
+    public MotionEngine(TextBuffer buffer, string? filePath = null)
+    {
+        _buffer = buffer;
+        _filePath = filePath;
+    }
 
     /// <summary>Sets the viewport state so H/M/L motions target the correct visible lines.</summary>
     public void SetViewport(int topLine, int visibleLines)
@@ -632,11 +638,11 @@ public class MotionEngine
     private Motion? MatchBracket(CursorPosition cursor)
     {
         var line = _buffer.GetLine(cursor.Line);
-        if (cursor.Column >= line.Length) return null;
+        if (cursor.Column >= line.Length) return MatchKeywordOrTag(cursor);
 
         char ch = line[cursor.Column];
         char? open = ch switch { '(' => '(', '[' => '[', '{' => '{', ')' => '(', ']' => '[', '}' => '{', _ => null };
-        if (open == null) return null;
+        if (open == null) return MatchKeywordOrTag(cursor);
 
         char close = open switch { '(' => ')', '[' => ']', '{' => '}', _ => ' ' };
         bool forward = ch == open;
@@ -659,6 +665,23 @@ public class MotionEngine
             }
             l += forward ? 1 : -1;
         }
+        return null;
+    }
+
+    // matchit-style fallback: keyword chains (if/elseif/else/end, #if/#elif/#else/#endif, ...)
+    // and HTML/XML tag matching, tried in that order once bracket matching declines.
+    private Motion? MatchKeywordOrTag(CursorPosition cursor)
+    {
+        var language = MatchitRegistry.Resolve(_filePath);
+        if (language != null)
+        {
+            var chainMatch = KeywordChainMatcher.Match(_buffer, language, cursor);
+            if (chainMatch != null) return chainMatch;
+        }
+
+        if (TagMatcher.IsMarkupExtension(_filePath))
+            return TagMatcher.Match(_buffer, cursor);
+
         return null;
     }
 

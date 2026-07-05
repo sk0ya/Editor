@@ -708,6 +708,15 @@ public class ExCommandProcessor
         if (cmd == "undolist")
             return new ExResult(true, _bufferManager.Current.Undo.FormatUndoList());
 
+        // :undo — single undo step (like normal-mode `u`); :undo {N} — jump to change N
+        // (searches the current undo stack, the current redo stack, then archived branches).
+        if (cmd == "undo" || cmd.StartsWith("undo "))
+        {
+            var space = cmd.IndexOf(' ');
+            var argument = space >= 0 ? cmd[(space + 1)..].Trim() : "";
+            return ExecuteUndoCommand(argument, cursor);
+        }
+
         // :earlier {N}[s|m|h] / :later {N}[s|m|h]
         if (cmd == "earlier" || cmd.StartsWith("earlier ") ||
             cmd == "later"   || cmd.StartsWith("later "))
@@ -1025,6 +1034,34 @@ public class ExCommandProcessor
         }
 
         return new ExResult(false, $"Not supported in :global: {subCmd}");
+    }
+
+    private ExResult ExecuteUndoCommand(string argument, CursorPosition cursor)
+    {
+        var vbuf = _bufferManager.Current;
+
+        if (string.IsNullOrWhiteSpace(argument))
+        {
+            var state = vbuf.Undo.Undo(vbuf.Text, cursor);
+            if (state == null) return new ExResult(true, "Already at oldest change");
+            return new ExResult(true, "1 change undone", RestoredCursor: state.Cursor, BufferRestored: true);
+        }
+
+        if (!int.TryParse(argument, out var changeNumber) || changeNumber < 0)
+            return new ExResult(false, "Invalid argument");
+
+        var result = vbuf.Undo.JumpToChangeNumber(changeNumber, vbuf.Text, cursor);
+        if (result == null)
+            return new ExResult(false, $"E830: Undo number {changeNumber} not found");
+
+        if (result.Count == 0)
+            return new ExResult(true, "Already at oldest change");
+
+        return new ExResult(
+            true,
+            $"Change {changeNumber}",
+            RestoredCursor: result.State?.Cursor,
+            BufferRestored: true);
     }
 
     private ExResult ExecuteUndoTraversal(string verb, string argument, CursorPosition cursor)
@@ -2511,7 +2548,7 @@ public class ExCommandProcessor
         "terms", "termnext", "termprev", "termselect", "termclose", "termclose!",
         "mksession", "source",
         "scriptnames", "script",
-        "undolist", "earlier", "later",
+        "undolist", "undo", "earlier", "later",
         "retab",
     ];
 

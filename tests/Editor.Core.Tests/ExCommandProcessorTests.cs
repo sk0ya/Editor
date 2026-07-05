@@ -1689,4 +1689,75 @@ public class ExCommandProcessorTests
         Assert.Contains("i  jk", result.Message);
         Assert.Contains("v  \\y", result.Message);
     }
+
+    [Fact]
+    public void Undo_BareCommand_UndoesSingleChange()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("one");
+        buffers.Current.Undo.Snapshot(buffers.Current.Text, CursorPosition.Zero);
+        buffers.Current.Text.SetText("one two");
+
+        var result = processor.Execute("undo", new CursorPosition(0, 7));
+
+        Assert.True(result.Success);
+        Assert.True(result.BufferRestored);
+        Assert.Equal("one", buffers.Current.Text.GetText());
+        Assert.Equal("1 change undone", result.Message);
+    }
+
+    [Fact]
+    public void Undo_BareCommand_AtOldestChange_ReportsMessageWithoutRestoring()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("undo", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.False(result.BufferRestored);
+        Assert.Equal("Already at oldest change", result.Message);
+    }
+
+    [Fact]
+    public void Undo_WithChangeNumber_JumpsToThatChange()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("one");
+        buffers.Current.Undo.Snapshot(buffers.Current.Text, CursorPosition.Zero); // change 1: "one"
+        buffers.Current.Text.SetText("one two");
+        buffers.Current.Undo.Snapshot(buffers.Current.Text, new CursorPosition(0, 7)); // change 2: "one two"
+        buffers.Current.Text.SetText("one two three");
+
+        var result = processor.Execute("undo 1", new CursorPosition(0, 13));
+
+        Assert.True(result.Success);
+        Assert.True(result.BufferRestored);
+        Assert.Equal("one", buffers.Current.Text.GetText());
+    }
+
+    [Fact]
+    public void Undo_WithUnknownChangeNumber_ReturnsFailure()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("one");
+        buffers.Current.Undo.Snapshot(buffers.Current.Text, CursorPosition.Zero);
+        buffers.Current.Text.SetText("one two");
+
+        var result = processor.Execute("undo 999", new CursorPosition(0, 7));
+
+        Assert.False(result.Success);
+        Assert.False(result.BufferRestored);
+    }
+
+    [Fact]
+    public void Undo_WithChangeNumberZero_OnFreshBuffer_ReportsNoChangeInsteadOfFakeSuccess()
+    {
+        var (processor, _) = CreateProcessor();
+
+        var result = processor.Execute("undo 0", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.False(result.BufferRestored);
+        Assert.Equal("Already at oldest change", result.Message);
+    }
 }

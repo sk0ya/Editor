@@ -732,7 +732,7 @@ public class VimEngine
     private void HandleNormal(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf);
+        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
 
         // Ctrl+W two-key window prefix
         if (_ctrlWPending)
@@ -826,7 +826,7 @@ public class VimEngine
     private void HandleNormalCtrl(string key, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf);
+        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
 
         switch (key.ToLower())
         {
@@ -943,7 +943,7 @@ public class VimEngine
         if (CommandMutatesBuffer(cmd) && BlockedReadOnly(events)) return;
 
         var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf);
+        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
         int count = cmd.Count;
 
         // Double-operator: dd, cc, yy, >>, << (linewise on current line(s))
@@ -1253,7 +1253,7 @@ public class VimEngine
             case "[{": case "]}": case "[(": case "])":
             {
                 bool isSection = cmd.Motion is "[[" or "]]" or "[]" or "][";
-                var m = new MotionEngine(buf).Calculate(cmd.Motion, _cursor, count);
+                var m = new MotionEngine(buf, _bufferManager.Current.FilePath).Calculate(cmd.Motion, _cursor, count);
                 if (m.HasValue && m.Value.Target != _cursor)
                 {
                     if (isSection) _markManager.AddJump(_cursor);
@@ -1532,7 +1532,7 @@ public class VimEngine
     private void ExecuteOperatorMotion(ParsedCommand cmd, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf);
+        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
         motion.SetViewport(_viewportTopLine, _viewportVisibleLines);
 
         // Text objects
@@ -1942,21 +1942,21 @@ public class VimEngine
                 _insertedText?.Append('\n');
                 break;
             case "Left":
-                var ml = new MotionEngine(buf);
+                var ml = new MotionEngine(buf, _bufferManager.Current.FilePath);
                 _cursor = ml.MoveLeft(_cursor);
                 EmitCursor(events);
                 break;
             case "Right":
-                var mr = new MotionEngine(buf);
+                var mr = new MotionEngine(buf, _bufferManager.Current.FilePath);
                 _cursor = mr.MoveRight(_cursor, 1, true);
                 EmitCursor(events);
                 break;
             case "Up":
-                _cursor = new MotionEngine(buf).MoveUp(_cursor);
+                _cursor = new MotionEngine(buf, _bufferManager.Current.FilePath).MoveUp(_cursor);
                 EmitCursor(events);
                 break;
             case "Down":
-                _cursor = new MotionEngine(buf).MoveDown(_cursor);
+                _cursor = new MotionEngine(buf, _bufferManager.Current.FilePath).MoveDown(_cursor);
                 EmitCursor(events);
                 break;
             case "Tab":
@@ -2088,8 +2088,8 @@ public class VimEngine
         {
             // Cursor movement: with Shift it extends the selection, otherwise it
             // ends the current edit run and drops any selection.
-            case "Left":  PlainMoveCaret(new MotionEngine(buf).MoveLeft(_cursor), shift, events); return;
-            case "Right": PlainMoveCaret(new MotionEngine(buf).MoveRight(_cursor, 1, true), shift, events); return;
+            case "Left":  PlainMoveCaret(new MotionEngine(buf, _bufferManager.Current.FilePath).MoveLeft(_cursor), shift, events); return;
+            case "Right": PlainMoveCaret(new MotionEngine(buf, _bufferManager.Current.FilePath).MoveRight(_cursor, 1, true), shift, events); return;
             case "Up":    PlainMoveVertical(-1, shift, events); return;
             case "Down":  PlainMoveVertical(1, shift, events); return;
             case "Home":  PlainMoveCaret(_cursor with { Column = 0 }, shift, events); return;
@@ -2658,7 +2658,7 @@ public class VimEngine
         if (cmd.Operator != null) return false;
 
         var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf);
+        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
         int count = Math.Max(1, cmd.Count);
         if (_mode == VimMode.VisualBlock && cmd.Motion != "$" && !PreservesVisualBlockLineEnd(cmd.Motion))
             _visualBlockToLineEnd = false;
@@ -2848,9 +2848,9 @@ public class VimEngine
             case "[M": MethodJump(false, true,  count, events); return true;
             case "]M": MethodJump(true,  true,  count, events); return true;
             case "[[": case "]]": case "[]": case "][":
-            { var sm = new MotionEngine(_bufferManager.Current.Text).Calculate(cmd.Motion, _cursor, count); if (sm.HasValue && sm.Value.Target != _cursor) _cursor = sm.Value.Target; return true; }
+            { var sm = new MotionEngine(_bufferManager.Current.Text, _bufferManager.Current.FilePath).Calculate(cmd.Motion, _cursor, count); if (sm.HasValue && sm.Value.Target != _cursor) _cursor = sm.Value.Target; return true; }
             case "[{": case "]}": case "[(": case "])":
-            { var bm = new MotionEngine(_bufferManager.Current.Text).Calculate(cmd.Motion, _cursor, count); if (bm.HasValue && bm.Value.Target != _cursor) _cursor = bm.Value.Target; return true; }
+            { var bm = new MotionEngine(_bufferManager.Current.Text, _bufferManager.Current.FilePath).Calculate(cmd.Motion, _cursor, count); if (bm.HasValue && bm.Value.Target != _cursor) _cursor = bm.Value.Target; return true; }
             case "zd": CurrentBuffer.Folds.DeleteFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
             case "zD": CurrentBuffer.Folds.DeleteFoldsAt(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
             case "zE": CurrentBuffer.Folds.Clear(); events.Add(VimEvent.FoldsChanged()); return false;
@@ -5583,7 +5583,7 @@ public class VimEngine
     private void RepeatFind(bool reverse, List<VimEvent> events)
     {
         if (_commandParser.LastFindChar == null) return;
-        var motion = new MotionEngine(_bufferManager.Current.Text);
+        var motion = new MotionEngine(_bufferManager.Current.Text, _bufferManager.Current.FilePath);
         bool fwd = reverse ? !_commandParser.LastFindForward : _commandParser.LastFindForward;
         var pos = motion.FindChar(_cursor, _commandParser.LastFindChar.Value, fwd, _commandParser.LastFindBefore);
         MoveCursor(pos, events);
