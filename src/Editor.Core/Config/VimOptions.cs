@@ -37,6 +37,10 @@ public class VimOptions
     public bool Spell { get; set; } = false;
     public string ListChars { get; set; } = "tab:→ ,trail:·,eol:¶";
 
+    // Highlight full-width (ideographic) spaces and trailing whitespace — both are easy to
+    // miss visually and a common source of bugs. On by default.
+    public bool HighlightWhitespace { get; set; } = true;
+
     // Column guide
     public int ColorColumn { get; set; } = 0;
 
@@ -159,6 +163,7 @@ public class VimOptions
             "lazyredraw" or "lz"               => null,
             "list"                             => Set(() => List = value),
             "spell"                            => Set(() => Spell = value),
+            "highlightwhitespace" or "hlws"    => Set(() => HighlightWhitespace = value),
             "paste"                            => Set(() => Paste = value),
             "scrollbar"                        => Set(() => Scrollbar = value),
             "indentguides" or "ig"             => Set(() => IndentGuides = value),

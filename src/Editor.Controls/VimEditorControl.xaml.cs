@@ -5776,6 +5776,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Canvas.SetMinimap(!_minimalChrome && _engine.Options.Minimap);
             Canvas.SetColorPreview(_engine.Options.ColorPreview);
             Canvas.SetSaveDiff(Editor.Core.Editing.SaveDiff.Compute(buf.Text.SavedLines, lines));
+            Canvas.SetWhitespaceIssues(_engine.Options.HighlightWhitespace
+                ? Editor.Core.Editing.WhitespaceIssueDetector.Detect(lines)
+                : []);
 
             UpdateViewportDecorations();
             UpdateSearchHighlights(_engine.SearchPattern);

@@ -563,6 +563,15 @@ public partial class EditorCanvas : FrameworkElement
         InvalidateVisual();
     }
 
+    // Full-width space / trailing whitespace markers: line → list of issues (see 'highlightwhitespace')
+    private Dictionary<int, List<WhitespaceIssue>> _whitespaceIssues = [];
+
+    public void SetWhitespaceIssues(Dictionary<int, List<WhitespaceIssue>> issues)
+    {
+        _whitespaceIssues = issues;
+        InvalidateVisual();
+    }
+
     public void SetCompletionItems(IReadOnlyList<LspCompletionItem> items, int selection, int scrollOffset = 0)
     {
         _completionItems = items;
@@ -1416,6 +1425,9 @@ public partial class EditorCanvas : FrameworkElement
             // Document highlights (LSP)
             DrawDocumentHighlights(dc, l, y, textLeft, lineText);
 
+            // Full-width space / trailing whitespace markers
+            DrawWhitespaceIssues(dc, l, y, textLeft, lineText);
+
             // Matching bracket highlight
             DrawMatchingBrackets(dc, l, y, textLeft, lineText, bracketMatch);
 
@@ -2268,6 +2280,20 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         return null;
+    }
+
+    private void DrawWhitespaceIssues(DrawingContext dc, int line, double y, double textLeft, string lineText)
+    {
+        if (!_whitespaceIssues.TryGetValue(line, out var issues)) return;
+        foreach (var issue in issues)
+        {
+            var brush = issue.Kind == WhitespaceIssueKind.FullWidthSpace
+                ? Theme.FullWidthSpaceBackground
+                : Theme.TrailingWhitespaceBackground;
+            double hLeft  = textLeft + GetVisualX(lineText, issue.Start) - _scrollOffsetX;
+            double hWidth = GetVisualX(lineText, issue.End) - GetVisualX(lineText, issue.Start);
+            dc.DrawRectangle(brush, null, new Rect(hLeft, y, Math.Max(0, hWidth), _lineHeight));
+        }
     }
 
     private void DrawMatchingBrackets(DrawingContext dc, int line, double y, double textLeft, string lineText,

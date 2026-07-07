@@ -39,6 +39,11 @@ public class EditorTheme
     // Listchars color
     public Brush ListCharBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x60));
 
+    // Whitespace issue highlights ('highlightwhitespace' option): full-width (ideographic)
+    // spaces and trailing whitespace, both easy to miss visually.
+    public Brush FullWidthSpaceBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xA5, 0x00));
+    public Brush TrailingWhitespaceBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0x30, 0x30));
+
     // Indent guide lines
     public Brush IndentGuideBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x4A));
 
@@ -124,6 +129,8 @@ public class EditorTheme
         GitModified = new SolidColorBrush(Color.FromRgb(0xFF, 0xB8, 0x6C)),
         GitDeleted  = new SolidColorBrush(Color.FromRgb(0xFF, 0x55, 0x55)),
         ListCharBrush = new SolidColorBrush(Color.FromRgb(0x44, 0x47, 0x5A)),
+        FullWidthSpaceBackground = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xB8, 0x6C)),
+        TrailingWhitespaceBackground = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0x55, 0x55)),
         ColorColumnBrush = new SolidColorBrush(Color.FromRgb(0x3D, 0x3D, 0x50)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x4F, 0x7A)),
         IndentGuideBrush = new SolidColorBrush(Color.FromRgb(0x3A, 0x3C, 0x4E)),
@@ -173,6 +180,8 @@ public class EditorTheme
         GitModified         = new SolidColorBrush(Color.FromRgb(0xEB, 0xCB, 0x8B)),
         GitDeleted          = new SolidColorBrush(Color.FromRgb(0xBF, 0x61, 0x6A)),
         ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x43, 0x4C, 0x5E)),
+        FullWidthSpaceBackground = new SolidColorBrush(Color.FromArgb(0x50, 0xEB, 0xCB, 0x8B)),
+        TrailingWhitespaceBackground = new SolidColorBrush(Color.FromArgb(0x50, 0xBF, 0x61, 0x6A)),
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x3B, 0x42, 0x52)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4C, 0x60, 0x80)),
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x38, 0x3F, 0x4D)),
@@ -220,6 +229,8 @@ public class EditorTheme
         GitModified         = new SolidColorBrush(Color.FromRgb(0xE0, 0xAF, 0x68)),
         GitDeleted          = new SolidColorBrush(Color.FromRgb(0xF7, 0x76, 0x8E)),
         ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x28, 0x3B, 0x4D)),
+        FullWidthSpaceBackground = new SolidColorBrush(Color.FromArgb(0x50, 0xE0, 0xAF, 0x68)),
+        TrailingWhitespaceBackground = new SolidColorBrush(Color.FromArgb(0x50, 0xF7, 0x76, 0x8E)),
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x1F, 0x20, 0x35)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x36, 0x4A, 0x82)),
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x25, 0x27, 0x38)),
@@ -267,6 +278,8 @@ public class EditorTheme
         GitModified         = new SolidColorBrush(Color.FromRgb(0xD1, 0x9A, 0x66)),
         GitDeleted          = new SolidColorBrush(Color.FromRgb(0xE0, 0x6C, 0x75)),
         ListCharBrush       = new SolidColorBrush(Color.FromRgb(0x3E, 0x44, 0x50)),
+        FullWidthSpaceBackground = new SolidColorBrush(Color.FromArgb(0x50, 0xD1, 0x9A, 0x66)),
+        TrailingWhitespaceBackground = new SolidColorBrush(Color.FromArgb(0x50, 0xE0, 0x6C, 0x75)),
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x2C, 0x31, 0x3A)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x3E, 0x52, 0x7A)),
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x42)),
