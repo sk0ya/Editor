@@ -1952,11 +1952,11 @@ public class VimEngine
                 EmitCursor(events);
                 break;
             case "Up":
-                _cursor = new MotionEngine(buf, _bufferManager.Current.FilePath).MoveUp(_cursor);
+                _cursor = new MotionEngine(buf, _bufferManager.Current.FilePath).MoveUp(_cursor, insertMode: true);
                 EmitCursor(events);
                 break;
             case "Down":
-                _cursor = new MotionEngine(buf, _bufferManager.Current.FilePath).MoveDown(_cursor);
+                _cursor = new MotionEngine(buf, _bufferManager.Current.FilePath).MoveDown(_cursor, insertMode: true);
                 EmitCursor(events);
                 break;
             case "Tab":

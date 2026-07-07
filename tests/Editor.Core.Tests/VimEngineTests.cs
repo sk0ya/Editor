@@ -586,6 +586,27 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void ArrowUpDown_InInsertMode_AllowEndOfLineColumn()
+    {
+        // Line above is exactly as long as the cursor's column (e.g. after splitting
+        // a line with Enter, leaving only the indent behind). In Insert mode the
+        // caret may rest one past the last character, so Up/Down must not clamp to
+        // lineLength - 1 like Normal mode does, or the caret lands one column short.
+        var engine = CreateEngine("  \n  x");
+        engine.ProcessKey("j");
+        engine.ProcessKey("l");
+        engine.ProcessKey("l");
+        engine.ProcessKey("i");
+        Assert.Equal(new CursorPosition(1, 2), engine.Cursor);
+
+        engine.ProcessKey("Up");
+        Assert.Equal(new CursorPosition(0, 2), engine.Cursor);
+
+        engine.ProcessKey("Down");
+        Assert.Equal(new CursorPosition(1, 2), engine.Cursor);
+    }
+
+    [Fact]
     public void DD_DeletesLine()
     {
         var engine = CreateEngine("line1\nline2\nline3");

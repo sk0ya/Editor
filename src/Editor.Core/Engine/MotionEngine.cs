@@ -198,17 +198,19 @@ public class MotionEngine
         return cursor with { Column = col };
     }
 
-    public CursorPosition MoveDown(CursorPosition cursor, int count = 1)
+    public CursorPosition MoveDown(CursorPosition cursor, int count = 1, bool insertMode = false)
     {
         var line = Math.Min(_buffer.LineCount - 1, cursor.Line + count);
-        var col = Math.Min(cursor.Column, Math.Max(0, _buffer.GetLineLength(line) - 1));
+        var maxCol = insertMode ? _buffer.GetLineLength(line) : Math.Max(0, _buffer.GetLineLength(line) - 1);
+        var col = Math.Min(cursor.Column, maxCol);
         return new CursorPosition(line, col);
     }
 
-    public CursorPosition MoveUp(CursorPosition cursor, int count = 1)
+    public CursorPosition MoveUp(CursorPosition cursor, int count = 1, bool insertMode = false)
     {
         var line = Math.Max(0, cursor.Line - count);
-        var col = Math.Min(cursor.Column, Math.Max(0, _buffer.GetLineLength(line) - 1));
+        var maxCol = insertMode ? _buffer.GetLineLength(line) : Math.Max(0, _buffer.GetLineLength(line) - 1);
+        var col = Math.Min(cursor.Column, maxCol);
         return new CursorPosition(line, col);
     }
 
