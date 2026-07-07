@@ -2548,6 +2548,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         BreadcrumbBar.Background = _theme.LineNumberBg;
         BreadcrumbBar.BorderBrush = _theme.IndentGuideBrush;
         RefreshBreadcrumbBar();
+        ApplyFindReplaceBarTheme();
         Canvas.InvalidateVisual();
     }
 
@@ -3309,6 +3310,32 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         // Handle keys that WPF normally consumes (Tab, etc.)
         var mode = _engine.Mode;
+
+        // Ctrl+F / Ctrl+H — open (or refocus) the VSCode-style Find/Replace bar.
+        // Handled at the very top so it works in every Vim mode and independently of
+        // VimEnabled. Skipped mid Ctrl+X Ctrl+F path-completion cycling, where Ctrl+F
+        // instead advances to the next candidate (see the ctrlXMode handling below).
+        bool ctrlDown = (e.KeyboardDevice.Modifiers & ModifierKeys.Control) != 0;
+        if (ctrlDown && actualKey == Key.F && !(_pathCompletionVisible && mode == VimMode.Insert))
+        {
+            ShowFindReplace(_findBarVisible && ReplaceRow.Visibility == Visibility.Visible);
+            _keyDownHandledByVim = true;
+            e.Handled = true;
+            return;
+        }
+        if (ctrlDown && actualKey == Key.H)
+        {
+            ShowFindReplace(withReplace: true);
+            _keyDownHandledByVim = true;
+            e.Handled = true;
+            return;
+        }
+
+        // While the Find/Replace bar's own text boxes have focus, let WPF (and their
+        // dedicated PreviewKeyDown handlers) process the key instead of routing it
+        // through Vim.
+        if (_findBarVisible && (FindSearchBox.IsKeyboardFocusWithin || FindReplaceBox.IsKeyboardFocusWithin))
+            return;
 
         // Ctrl+Space → completion. Handled here (not only OnKeyDown) so it also works
         // while the IME is active, where the key arrives as Key.ImeProcessed and

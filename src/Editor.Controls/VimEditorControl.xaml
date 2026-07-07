@@ -82,6 +82,57 @@
             <Setter Property="Margin" Value="5,3"/>
         </Style>
 
+        <!-- Find/Replace bar: icon button with a rounded hover highlight. The base
+             Background (TemplateBinding) carries the theme-driven "checked/normal" fill
+             set in code (see ApplyFindReplaceBarTheme / FindCaseBtn_Click); a separate
+             overlay layer shows a fixed translucent hover highlight on top of it, so the
+             two states never fight over the same property. -->
+        <Style x:Key="FindBarIconButton" TargetType="ButtonBase">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ButtonBase">
+                        <Grid>
+                            <Border Background="{TemplateBinding Background}" CornerRadius="5"/>
+                            <Border x:Name="Hover" Background="#22FFFFFF" CornerRadius="5" Opacity="0"/>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Hover" Property="Opacity" Value="1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Find/Replace bar: pill-shaped action button (Replace / Replace All). -->
+        <Style x:Key="FindBarActionButton" TargetType="Button">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Border Background="{TemplateBinding Background}" CornerRadius="13"/>
+                            <Border x:Name="Hover" Background="#22FFFFFF" CornerRadius="13" Opacity="0"/>
+                            <ContentPresenter Margin="12,0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Hover" Property="Opacity" Value="1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </UserControl.Resources>
 
     <Grid>
@@ -109,6 +160,66 @@
                                 HorizontalAlignment="Stretch"
                                 VerticalAlignment="Stretch"
                                 ClipToBounds="True"/>
+
+        <!-- Find/Replace bar (VSCode-style; Ctrl+F / Ctrl+H, works regardless of Vim mode).
+             All colors are applied in code from the active EditorTheme — see
+             ApplyFindReplaceBarTheme in VimEditorControl.FindReplace.cs. -->
+        <Border x:Name="FindReplaceBar" Grid.Row="1"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,10,20,0" Padding="8,7"
+                BorderThickness="1"
+                CornerRadius="8"
+                Visibility="Collapsed"
+                Panel.ZIndex="100">
+            <Border.Effect>
+                <DropShadowEffect Color="Black" Opacity="0.45" BlurRadius="16" ShadowDepth="3" Direction="270"/>
+            </Border.Effect>
+            <StackPanel Orientation="Vertical" MinWidth="368">
+                <StackPanel Orientation="Horizontal">
+                    <ToggleButton x:Name="FindReplaceToggleBtn" Content="&#9656;" Style="{StaticResource FindBarIconButton}"
+                                  Width="20" Height="26"
+                                  ToolTip="Toggle Replace"
+                                  Click="FindReplaceToggleBtn_Click"/>
+                    <Border x:Name="FindSearchBoxBorder" Width="204" Height="26" CornerRadius="6" BorderThickness="1" Margin="2,0,0,0">
+                        <TextBox x:Name="FindSearchBox" Background="Transparent" BorderThickness="0"
+                                 FontFamily="Consolas" FontSize="13" Padding="8,2"
+                                 VerticalContentAlignment="Center"
+                                 TextChanged="FindSearchBox_TextChanged"
+                                 PreviewKeyDown="FindSearchBox_PreviewKeyDown"/>
+                    </Border>
+                    <TextBlock x:Name="FindMatchCountText" Text="No results"
+                               FontFamily="Consolas" FontSize="11" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Margin="8,0" MinWidth="66"/>
+                    <Button x:Name="FindPrevBtn" Content="&#9650;" Style="{StaticResource FindBarIconButton}"
+                            Width="26" Height="26" ToolTip="Previous match (Shift+Enter)"
+                            Click="FindPrevBtn_Click"/>
+                    <Button x:Name="FindNextBtn" Content="&#9660;" Style="{StaticResource FindBarIconButton}"
+                            Width="26" Height="26" ToolTip="Next match (Enter)"
+                            Click="FindNextBtn_Click"/>
+                    <ToggleButton x:Name="FindCaseBtn" Content="Aa" Style="{StaticResource FindBarIconButton}"
+                                  Width="26" Height="26" ToolTip="Match Case" Margin="4,0,0,0"
+                                  Click="FindCaseBtn_Click"/>
+                    <Button x:Name="FindCloseBtn" Content="&#10005;" Style="{StaticResource FindBarIconButton}"
+                            Width="26" Height="26" ToolTip="Close (Esc)" Margin="4,0,0,0"
+                            Click="FindCloseBtn_Click"/>
+                </StackPanel>
+                <StackPanel x:Name="ReplaceRow" Orientation="Horizontal" Visibility="Collapsed" Margin="0,6,0,0">
+                    <Border Width="20"/>
+                    <Border x:Name="FindReplaceBoxBorder" Width="204" Height="26" CornerRadius="6" BorderThickness="1" Margin="2,0,0,0">
+                        <TextBox x:Name="FindReplaceBox" Background="Transparent" BorderThickness="0"
+                                 FontFamily="Consolas" FontSize="13" Padding="8,2"
+                                 VerticalContentAlignment="Center"
+                                 PreviewKeyDown="FindReplaceBox_PreviewKeyDown"/>
+                    </Border>
+                    <Button x:Name="ReplaceOneBtn" Content="Replace" Height="26" Margin="8,0,0,0"
+                            Style="{StaticResource FindBarActionButton}"
+                            Click="ReplaceOneBtn_Click"/>
+                    <Button x:Name="ReplaceAllBtn" Content="Replace All" Height="26" Margin="8,0,0,0"
+                            Style="{StaticResource FindBarActionButton}"
+                            Click="ReplaceAllBtn_Click"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
 
         <!-- Status bar -->
         <local:VimStatusBar x:Name="StatusBar" Grid.Row="2"/>
