@@ -32,6 +32,7 @@ public class VimEngine
     private readonly RepeatTracker _repeatTracker;
     private readonly SearchOps _searchOps;
     private readonly KeywordCompletionOps _kwCompletionOps;
+    private readonly BlockInsertOps _blockInsertOps;
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
@@ -90,11 +91,8 @@ public class VimEngine
     private CursorPosition _lastVisualStart;
     private CursorPosition _lastVisualEnd;
     private VimMode _lastVisualMode = VimMode.Visual;
-    private BlockInsertState? _blockInsertState;
     private readonly List<VimKeyStroke> _pendingMappedInput = [];
     private int _autocmdDepth;
-
-    private sealed record BlockInsertState(int StartLine, int EndLine, int Column, IReadOnlyDictionary<int, int> LineColumns);
 
     public VimMode Mode => _mode;
 
@@ -196,6 +194,8 @@ public class VimEngine
             (pos, events) => MoveCursor(pos, events), EmitStatus);
         _kwCompletionOps = new KeywordCompletionOps(_bufferManager,
             (events, cursor) => { _cursor = cursor; EmitText(events); }, EmitStatus);
+        _blockInsertOps = new BlockInsertOps(_bufferManager, _config.Options,
+            (events, cursor) => { _cursor = cursor; EmitText(events); });
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -1789,7 +1789,7 @@ public class VimEngine
             return;
         }
 
-        if (!ctrl && _mode == VimMode.Insert && HandleBlockInsertKey(key, events))
+        if (!ctrl && _mode == VimMode.Insert && _blockInsertOps.TryHandleKey(key, ref _cursor, events))
             return;
 
         switch (key)
@@ -3107,7 +3107,7 @@ public class VimEngine
         // does not retroactively account for Backspace, mirroring dot-repeat's own tolerance).
         _registerManager.SetLastInserted(_insertedText?.ToString() ?? "");
         _insertedText = null;
-        _blockInsertState = null;
+        _blockInsertOps.Clear();
         _awaitingInsertRegister = false;
         _awaitingExprRegister = false;
         _exprBuffer = "";
@@ -3233,69 +3233,6 @@ public class VimEngine
         events.Add(VimEvent.SelectionChanged(_selection));
     }
 
-    private bool HandleBlockInsertKey(string key, List<VimEvent> events)
-    {
-        if (_blockInsertState == null) return false;
-        var state = _blockInsertState;
-        var buf = _bufferManager.Current.Text;
-        int Offset() => Math.Max(0, _cursor.Column - state.Column);
-        int EditColumn(int line)
-        {
-            var baseColumn = state.LineColumns.TryGetValue(line, out var col) ? col : state.Column;
-            return Math.Min(baseColumn + Offset(), buf.GetLineLength(line));
-        }
-
-        switch (key)
-        {
-            case "Back":
-                if (_cursor.Column <= state.Column)
-                    return true;
-                for (int line = state.StartLine; line <= state.EndLine; line++)
-                {
-                    var lineLen = buf.GetLineLength(line);
-                    var baseColumn = state.LineColumns.TryGetValue(line, out var col) ? col : state.Column;
-                    var deleteCol = Math.Min(baseColumn + Offset() - 1, lineLen - 1);
-                    if (deleteCol >= baseColumn && deleteCol >= 0)
-                        buf.DeleteChar(line, deleteCol);
-                }
-                _cursor = _cursor with { Column = _cursor.Column - 1 };
-                EmitText(events);
-                return true;
-            case "Delete":
-                for (int line = state.StartLine; line <= state.EndLine; line++)
-                {
-                    var deleteCol = EditColumn(line);
-                    if (deleteCol < buf.GetLineLength(line))
-                        buf.DeleteChar(line, deleteCol);
-                }
-                EmitText(events);
-                return true;
-            case "Tab":
-                var insert = _config.Options.ExpandTab
-                    ? new string(' ', _config.Options.TabStop)
-                    : "\t";
-                for (int line = state.StartLine; line <= state.EndLine; line++)
-                {
-                    buf.InsertText(line, EditColumn(line), insert);
-                }
-                _cursor = _cursor with { Column = _cursor.Column + insert.Length };
-                EmitText(events);
-                return true;
-            default:
-                if (key.Length == 1)
-                {
-                    for (int line = state.StartLine; line <= state.EndLine; line++)
-                    {
-                        buf.InsertChar(line, EditColumn(line), key[0]);
-                    }
-                    _cursor = _cursor with { Column = _cursor.Column + 1 };
-                    EmitText(events);
-                    return true;
-                }
-                return false;
-        }
-    }
-
     private static (int StartLine, int EndLine, int LeftColumn, int RightColumn) GetBlockBounds(Selection selection)
         => BlockRangeCalculator.GetBounds(selection);
 
@@ -3344,7 +3281,7 @@ public class VimEngine
         _selection = null;
         events.Add(VimEvent.SelectionChanged(null));
         var column = lineColumns.TryGetValue(startLine, out var startColumn) ? startColumn : 0;
-        _blockInsertState = new BlockInsertState(startLine, endLine, column, lineColumns);
+        _blockInsertOps.Begin(startLine, endLine, column, lineColumns);
         _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, column), insertMode: true);
         EnterInsertMode(false, events);
         EmitCursor(events);
@@ -3365,11 +3302,7 @@ public class VimEngine
 
         _selection = null;
         events.Add(VimEvent.SelectionChanged(null));
-        _blockInsertState = new BlockInsertState(
-            startLine,
-            endLine,
-            _cursor.Column,
-            BuildBlockEditColumns(startLine, endLine, leftColumn));
+        _blockInsertOps.Begin(startLine, endLine, _cursor.Column, BuildBlockEditColumns(startLine, endLine, leftColumn));
         EnterInsertMode(false, events);
     }
 
