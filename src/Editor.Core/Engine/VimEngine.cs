@@ -30,6 +30,7 @@ public class VimEngine
     private readonly ClipboardEditOps _clipboardOps;
     private readonly TextTransformOps _textTransform;
     private readonly RepeatTracker _repeatTracker;
+    private readonly SearchOps _searchOps;
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
@@ -52,9 +53,6 @@ public class VimEngine
     private string _statusMsg = "";
     private string[] _completions = [];     // Tab completion candidates
     private int _completionIndex = -1;      // Currently selected completion (-1 = none)
-    private string _searchPattern = "";
-    private bool _searchForward = true;
-    private CursorPosition _preSearchCursor;
 
     private char? _pendingReplaceChar;
     private bool _awaitingMark;
@@ -113,7 +111,7 @@ public class VimEngine
     public CursorPosition Cursor => _cursor;
     public Selection? Selection => _selection;
     public string CommandLine => _cmdLine;
-    public string SearchPattern => _searchPattern;
+    public string SearchPattern => _searchOps.Pattern;
     public string StatusMessage => _statusMsg;
     public VimOptions Options => _config.Options;
     public VimConfig Config => _config;
@@ -197,6 +195,8 @@ public class VimEngine
             EmitText, (events, cursor) => { _cursor = cursor; EmitText(events); }, EmitCursor, EmitStatus,
             (pos, events) => MoveCursor(pos, events));
         _repeatTracker = new RepeatTracker(_registerManager, ExecuteNormalCommand, ProcessKeyInternal, ProcessStroke);
+        _searchOps = new SearchOps(_bufferManager, _markManager, _config.Options, _commandParser,
+            (pos, events) => MoveCursor(pos, events), EmitStatus);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -1175,7 +1175,7 @@ public class VimEngine
                     break;
                 }
                 bool gnForward = cmd.Motion == "gn";
-                var gnMatch = FindGnMatch(gnForward);
+                var gnMatch = _searchOps.FindGnMatch(_cursor, gnForward);
                 if (gnMatch.HasValue)
                 {
                     _visualStart = gnMatch.Value.Start;
@@ -1240,12 +1240,12 @@ public class VimEngine
             case "H": MoveCursor(ScreenPosition(Math.Max(0, count - 1)), events); break;
             case "M": MoveCursor(ScreenPosition(_viewportVisibleLines / 2), events); break;
             case "L": MoveCursor(ScreenPosition(Math.Max(0, _viewportVisibleLines - count)), events); break;
-            case ";": RepeatFind(false, events); break;
-            case ",": RepeatFind(true, events); break;
-            case "n": SearchNext(true, events); break;
-            case "N": SearchNext(false, events); break;
-            case "*": SearchWordUnderCursor(true, events); break;
-            case "#": SearchWordUnderCursor(false, events); break;
+            case ";": _searchOps.RepeatFind(_cursor, false, events); break;
+            case ",": _searchOps.RepeatFind(_cursor, true, events); break;
+            case "n": _searchOps.SearchNext(_cursor, true, events); break;
+            case "N": _searchOps.SearchNext(_cursor, false, events); break;
+            case "*": _searchOps.SearchWordUnderCursor(_cursor, true, events); break;
+            case "#": _searchOps.SearchWordUnderCursor(_cursor, false, events); break;
             case "zz": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Center)); break;
             case "zt": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Top)); break;
             case "zb": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Bottom)); break;
@@ -1438,7 +1438,7 @@ public class VimEngine
         // gn/gN — select next/prev search match, then apply operator
         if (cmd.Motion is "gn" or "gN")
         {
-            var gnMatch = FindGnMatch(cmd.Motion == "gn");
+            var gnMatch = _searchOps.FindGnMatch(_cursor, cmd.Motion == "gn");
             if (gnMatch == null) return;
             if (cmd.Operator == "c") _repeatTracker.BeginInsertRepeat(cmd);
             else if (cmd.Operator is "d" or "<" or ">" or "=") _repeatTracker.SetRepeatChange(cmd);
@@ -2678,37 +2678,37 @@ public class VimEngine
                 return true;
             case ";":
                 for (int i = 0; i < count; i++)
-                    RepeatFind(false, events);
+                    _searchOps.RepeatFind(_cursor, false, events);
                 return true;
             case ",":
                 for (int i = 0; i < count; i++)
-                    RepeatFind(true, events);
+                    _searchOps.RepeatFind(_cursor, true, events);
                 return true;
             case "n":
                 for (int i = 0; i < count; i++)
-                    SearchNext(true, events);
+                    _searchOps.SearchNext(_cursor, true, events);
                 return true;
             case "N":
                 for (int i = 0; i < count; i++)
-                    SearchNext(false, events);
+                    _searchOps.SearchNext(_cursor, false, events);
                 return true;
             case "gn":
             {
-                var gnm = FindGnMatch(true);
+                var gnm = _searchOps.FindGnMatch(_cursor, true);
                 if (gnm.HasValue) _cursor = gnm.Value.End;
                 return true;
             }
             case "gN":
             {
-                var gnm = FindGnMatch(false);
+                var gnm = _searchOps.FindGnMatch(_cursor, false);
                 if (gnm.HasValue) _cursor = gnm.Value.Start;
                 return true;
             }
             case "*":
-                SearchWordUnderCursor(true, events);
+                _searchOps.SearchWordUnderCursor(_cursor, true, events);
                 return true;
             case "#":
-                SearchWordUnderCursor(false, events);
+                _searchOps.SearchWordUnderCursor(_cursor, false, events);
                 return true;
             case "f":
             case "F":
@@ -2791,16 +2791,14 @@ public class VimEngine
                 _cmdLine = "";
                 if (isSearch)
                 {
-                    MoveCursor(_preSearchCursor, events);
+                    MoveCursor(_searchOps.PreSearchCursor, events);
                     // Restore highlights for the previous confirmed pattern (or clear)
-                    if (!string.IsNullOrEmpty(_searchPattern) && _config.Options.HlSearch)
+                    if (!string.IsNullOrEmpty(_searchOps.Pattern) && _config.Options.HlSearch)
                     {
                         var buf2 = _bufferManager.Current.Text;
-                        var ic2 = _config.Options.SmartCase
-                            ? !_searchPattern.Any(char.IsUpper)
-                            : _config.Options.IgnoreCase;
-                        var all2 = buf2.FindAll(_searchPattern, ic2);
-                        events.Add(VimEvent.SearchChanged(_searchPattern, all2.Count));
+                        var ic2 = _searchOps.GetIgnoreCase(_searchOps.Pattern);
+                        var all2 = buf2.FindAll(_searchOps.Pattern, ic2);
+                        events.Add(VimEvent.SearchChanged(_searchOps.Pattern, all2.Count));
                     }
                     else
                     {
@@ -2821,14 +2819,14 @@ public class VimEngine
                     {
                         if (isSearch)
                         {
-                            MoveCursor(_preSearchCursor, events);
+                            MoveCursor(_searchOps.PreSearchCursor, events);
                             events.Add(VimEvent.SearchChanged("", 0));
                         }
                         ChangeMode(VimMode.Normal, events);
                     }
                     else if (isSearch && _config.Options.IncrSearch)
                     {
-                        DoIncrSearch(events);
+                        _searchOps.DoIncrSearch(_cmdLine, _mode == VimMode.SearchForward, events);
                     }
                 }
                 else ChangeMode(VimMode.Normal, events);
@@ -2838,7 +2836,7 @@ public class VimEngine
                 if (isSearch)
                 {
                     var sprev = _exProcessor.SearchHistoryPrev();
-                    if (sprev != null) { _cmdLine = sprev; if (_config.Options.IncrSearch) DoIncrSearch(events); EmitCmdLine(events); }
+                    if (sprev != null) { _cmdLine = sprev; if (_config.Options.IncrSearch) _searchOps.DoIncrSearch(_cmdLine, _mode == VimMode.SearchForward, events); EmitCmdLine(events); }
                 }
                 else
                 {
@@ -2850,7 +2848,7 @@ public class VimEngine
                 if (isSearch)
                 {
                     var snext = _exProcessor.SearchHistoryNext();
-                    if (snext != null) { _cmdLine = snext; if (_config.Options.IncrSearch) DoIncrSearch(events); EmitCmdLine(events); }
+                    if (snext != null) { _cmdLine = snext; if (_config.Options.IncrSearch) _searchOps.DoIncrSearch(_cmdLine, _mode == VimMode.SearchForward, events); EmitCmdLine(events); }
                 }
                 else
                 {
@@ -2863,7 +2861,7 @@ public class VimEngine
                 {
                     _cmdLine += key;
                     if (isSearch && _config.Options.IncrSearch)
-                        DoIncrSearch(events);
+                        _searchOps.DoIncrSearch(_cmdLine, _mode == VimMode.SearchForward, events);
                 }
                 EmitCmdLine(events);
                 break;
@@ -2909,14 +2907,14 @@ public class VimEngine
         }
         else // Search
         {
-            _searchPattern = _cmdLine;
-            _searchForward = _mode == VimMode.SearchForward;
+            _searchOps.Pattern = _cmdLine;
+            _searchOps.Forward = _mode == VimMode.SearchForward;
             if (!string.IsNullOrEmpty(_cmdLine))
                 _exProcessor.AddSearchHistory(_cmdLine);
             _cmdLine = "";
-            _cursor = _preSearchCursor; // search from where we started, not incsearch preview pos
+            _cursor = _searchOps.PreSearchCursor; // search from where we started, not incsearch preview pos
             ChangeMode(VimMode.Normal, events);
-            DoSearch(_searchForward, events);
+            _searchOps.DoSearch(_cursor, _searchOps.Forward, events);
         }
         EmitCmdLine(events);
     }
@@ -3059,9 +3057,6 @@ public class VimEngine
         };
     }
 
-    private bool GetSearchIgnoreCase(string pattern) =>
-        _config.Options.SmartCase ? !pattern.Any(char.IsUpper) : _config.Options.IgnoreCase;
-
     /// <summary>
     /// Sets the active search pattern as if the user had searched for it, so all
     /// matches get highlighted (honouring <c>hlsearch</c>/<c>ignorecase</c>/<c>smartcase</c>),
@@ -3074,105 +3069,18 @@ public class VimEngine
     public IReadOnlyList<VimEvent> SetSearchHighlight(string pattern)
     {
         var events = new List<VimEvent>();
-        _searchPattern = pattern ?? "";
-        if (!string.IsNullOrEmpty(_searchPattern) && _config.Options.HlSearch)
+        _searchOps.Pattern = pattern ?? "";
+        if (!string.IsNullOrEmpty(_searchOps.Pattern) && _config.Options.HlSearch)
         {
-            var ignoreCase = GetSearchIgnoreCase(_searchPattern);
-            var all = _bufferManager.Current.Text.FindAll(_searchPattern, ignoreCase);
-            events.Add(VimEvent.SearchChanged(_searchPattern, all.Count));
+            var ignoreCase = _searchOps.GetIgnoreCase(_searchOps.Pattern);
+            var all = _bufferManager.Current.Text.FindAll(_searchOps.Pattern, ignoreCase);
+            events.Add(VimEvent.SearchChanged(_searchOps.Pattern, all.Count));
         }
         else
         {
-            events.Add(VimEvent.SearchChanged(_searchPattern, 0));
+            events.Add(VimEvent.SearchChanged(_searchOps.Pattern, 0));
         }
         return events;
-    }
-
-    private void DoSearch(bool forward, List<VimEvent> events)
-    {
-        if (string.IsNullOrEmpty(_searchPattern)) return;
-        var buf = _bufferManager.Current.Text;
-        var ignoreCase = GetSearchIgnoreCase(_searchPattern);
-
-        var found = buf.FindNext(_searchPattern, _cursor, forward, ignoreCase, _config.Options.WrapScan);
-        if (found.HasValue)
-        {
-            _markManager.AddJump(_cursor);
-            _markManager.SetMark('\'', _cursor);
-            MoveCursor(found.Value, events);
-            var all = buf.FindAll(_searchPattern, ignoreCase);
-            events.Add(VimEvent.SearchChanged(_searchPattern, all.Count));
-        }
-        else
-        {
-            var msg = _config.Options.WrapScan
-                ? $"Pattern not found: {_searchPattern}"
-                : $"Search hit {(forward ? "BOTTOM" : "TOP")}, continuing at {(forward ? "TOP" : "BOTTOM")} not done (no wrapscan)";
-            EmitStatus(events, msg);
-        }
-    }
-
-    private void DoIncrSearch(List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        if (string.IsNullOrEmpty(_cmdLine))
-        {
-            MoveCursor(_preSearchCursor, events);
-            events.Add(VimEvent.SearchChanged("", 0));
-            return;
-        }
-        var ignoreCase = GetSearchIgnoreCase(_cmdLine);
-        var found = buf.FindNext(_cmdLine, _preSearchCursor, _mode == VimMode.SearchForward, ignoreCase);
-        MoveCursor(found ?? _preSearchCursor, events);
-        var all = buf.FindAll(_cmdLine, ignoreCase);
-        events.Add(VimEvent.SearchChanged(_cmdLine, all.Count));
-    }
-
-    private (CursorPosition Start, CursorPosition End)? FindGnMatch(bool forward)
-    {
-        if (string.IsNullOrEmpty(_searchPattern)) return null;
-        var buf = _bufferManager.Current.Text;
-        var ignoreCase = GetSearchIgnoreCase(_searchPattern);
-
-        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
-        if (forward)
-        {
-            // If cursor is at the start of a match, select that match directly.
-            var curLine = buf.GetLine(_cursor.Line);
-            if (_cursor.Column + _searchPattern.Length <= curLine.Length)
-            {
-                var onMatchIdx = curLine.IndexOf(_searchPattern, _cursor.Column, comparison);
-                if (onMatchIdx == _cursor.Column)
-                {
-                    var matchEnd = new CursorPosition(_cursor.Line, _cursor.Column + _searchPattern.Length - 1);
-                    return (_cursor, buf.ClampCursor(matchEnd));
-                }
-            }
-            // FindNext skips current column (+1 internally), so pass column - 1 to find matches starting at cursor.Column
-            var searchFrom = new CursorPosition(_cursor.Line, Math.Max(0, _cursor.Column - 1));
-            var found = buf.FindNext(_searchPattern, searchFrom, true, ignoreCase, _config.Options.WrapScan);
-            if (!found.HasValue) return null;
-            var start = found.Value;
-            var end = new CursorPosition(start.Line, start.Column + _searchPattern.Length - 1);
-            return (start, buf.ClampCursor(end));
-        }
-        else
-        {
-            // Backward: search from a position shifted right by (patternLength - 1) so that a match
-            // whose end is at or before _cursor is discovered (FindNext backward uses LastIndexOf with
-            // startIndex = endCol - 1, which limits matches to those starting at ≤ endCol - 1).
-            // We want matches starting at ≤ _cursor.Column, so we need endCol - 1 ≥ _cursor.Column,
-            // i.e. endCol ≥ _cursor.Column + 1, i.e. pass column = _cursor.Column + patternLength - 1.
-            var curLineLen = buf.GetLine(_cursor.Line).Length;
-            int shiftedCol = Math.Min(_cursor.Column + _searchPattern.Length - 1, curLineLen);
-            var searchFrom = new CursorPosition(_cursor.Line, shiftedCol);
-            var found = buf.FindNext(_searchPattern, searchFrom, false, ignoreCase, _config.Options.WrapScan);
-            if (!found.HasValue) return null;
-            var start = found.Value;
-            var end = new CursorPosition(start.Line, start.Column + _searchPattern.Length - 1);
-            return (start, buf.ClampCursor(end));
-        }
     }
 
     // ─────────────── HELPERS ───────────────
@@ -3281,8 +3189,8 @@ public class VimEngine
     private void EnterSearchMode(bool forward, List<VimEvent> events)
     {
         _cmdLine = "";
-        _searchForward = forward;
-        _preSearchCursor = _cursor;
+        _searchOps.Forward = forward;
+        _searchOps.PreSearchCursor = _cursor;
         ChangeMode(forward ? VimMode.SearchForward : VimMode.SearchBackward, events);
         EmitCmdLine(events);
     }
@@ -3944,36 +3852,6 @@ public class VimEngine
 
         // Tell the UI to scroll by delta lines.
         events.Add(VimEvent.ScrollLinesRequested(delta));
-    }
-
-    private void RepeatFind(bool reverse, List<VimEvent> events)
-    {
-        if (_commandParser.LastFindChar == null) return;
-        var motion = new MotionEngine(_bufferManager.Current.Text, _bufferManager.Current.FilePath);
-        bool fwd = reverse ? !_commandParser.LastFindForward : _commandParser.LastFindForward;
-        var pos = motion.FindChar(_cursor, _commandParser.LastFindChar.Value, fwd, _commandParser.LastFindBefore);
-        MoveCursor(pos, events);
-    }
-
-    private void SearchNext(bool sameDir, List<VimEvent> events)
-    {
-        var forward = sameDir ? _searchForward : !_searchForward;
-        DoSearch(forward, events);
-    }
-
-    private void SearchWordUnderCursor(bool forward, List<VimEvent> events)
-    {
-        var line = _bufferManager.Current.Text.GetLine(_cursor.Line);
-        int start = _cursor.Column;
-        while (start > 0 && MotionEngine.IsWordChar(line[start - 1])) start--;
-        int end = _cursor.Column;
-        while (end < line.Length && MotionEngine.IsWordChar(line[end])) end++;
-        if (end > start)
-        {
-            _searchPattern = line[start..end];
-            _searchForward = forward;
-            DoSearch(forward, events);
-        }
     }
 
     private CursorPosition ParagraphBackward()
