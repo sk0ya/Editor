@@ -3395,55 +3395,19 @@ public class VimEngine
     }
 
     private static (int StartLine, int EndLine, int LeftColumn, int RightColumn) GetBlockBounds(Selection selection)
-    {
-        var startLine = Math.Min(selection.Start.Line, selection.End.Line);
-        var endLine = Math.Max(selection.Start.Line, selection.End.Line);
-        var leftColumn = Math.Min(selection.Start.Column, selection.End.Column);
-        var rightColumn = Math.Max(selection.Start.Column, selection.End.Column);
-        return (startLine, endLine, leftColumn, rightColumn);
-    }
-
-    private readonly record struct BlockLineRange(int Line, int StartColumn, int EndColumn);
+        => BlockRangeCalculator.GetBounds(selection);
 
     private int GetBlockLeftColumn(Selection selection)
-    {
-        return _visualBlockToLineEnd
-            ? _visualBlockLineEndStartColumn
-            : Math.Min(selection.Start.Column, selection.End.Column);
-    }
+        => BlockRangeCalculator.GetLeftColumn(selection, _visualBlockToLineEnd, _visualBlockLineEndStartColumn);
 
     private IEnumerable<BlockLineRange> GetBlockLineRanges(Selection selection)
-    {
-        var buf = _bufferManager.Current.Text;
-        var (startLine, endLine, leftColumn, rightColumn) = GetBlockBounds(selection);
-        if (_visualBlockToLineEnd)
-            leftColumn = _visualBlockLineEndStartColumn;
-
-        for (int line = startLine; line <= endLine; line++)
-        {
-            var lineEnd = buf.GetLineLength(line) - 1;
-            var endColumn = _visualBlockToLineEnd ? lineEnd : rightColumn;
-            yield return new BlockLineRange(line, leftColumn, endColumn);
-        }
-    }
+        => BlockRangeCalculator.GetLineRanges(selection, _bufferManager.Current.Text, _visualBlockToLineEnd, _visualBlockLineEndStartColumn);
 
     private Dictionary<int, int> BuildBlockEditColumns(int startLine, int endLine, int column)
-    {
-        var buf = _bufferManager.Current.Text;
-        var columns = new Dictionary<int, int>();
-        for (int line = startLine; line <= endLine; line++)
-            columns[line] = Math.Min(column, buf.GetLineLength(line));
-        return columns;
-    }
+        => BlockRangeCalculator.BuildEditColumns(_bufferManager.Current.Text, startLine, endLine, column);
 
     private Dictionary<int, int> BuildBlockAppendToLineEndColumns(int startLine, int endLine)
-    {
-        var buf = _bufferManager.Current.Text;
-        var columns = new Dictionary<int, int>();
-        for (int line = startLine; line <= endLine; line++)
-            columns[line] = buf.GetLineLength(line);
-        return columns;
-    }
+        => BlockRangeCalculator.BuildAppendToLineEndColumns(_bufferManager.Current.Text, startLine, endLine);
 
     private void BeginVisualBlockInsert(List<VimEvent> events)
     {
