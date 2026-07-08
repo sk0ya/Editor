@@ -5,7 +5,7 @@
 | Phase | 対象 | 状態 |
 |---|---|---|
 | 1 | ExCommandProcessor → ドメイン別ハンドラクラス | ✅ 完了 |
-| 2 | VimEngine → 関心事別ハンドラクラス | 未着手 |
+| 2 | VimEngine → 関心事別ハンドラクラス | ✅ 完了(縮小スコープ) |
 | 3 | VimEditorControl → マネージャクラス抽出 | 未着手 |
 | 4 | EditorCanvas → レンダラークラス抽出 | 未着手 |
 | 5 | VimEditorControl → PopupKeyNavigator | 未着手 |
@@ -57,21 +57,29 @@
 
 ---
 
-## Phase 2 — VimEngine: `ExecuteNormalCommand`のswitchを関心事別ハンドラクラスへ委譲
+## Phase 2 — VimEngine: `ExecuteNormalCommand`のswitchを関心事別ハンドラクラスへ委譲 ✅(縮小スコープ)
 
 **目的:** 最大の神オブジェクト(6,397行)の中核である~490行のswitchを分割。`ProcessKey → HandleNormal → CommandParser.Feed → ExecuteNormalCommand`のディスパッチ契約は変えない。
-**対象ファイル:** `src/Editor.Core/Engine/VimEngine.cs`(fields/ctor/`ProcessKey`/`HandleNormal`/switch自体は残す)、新規クラス(`src/Editor.Core/Engine/Commands/`配下、`MotionEngine`と同じ「必要な協力者だけをctorで受け取るステートレス/軽量ステートフルなヘルパー」の流儀):
-- `ModeTransitionCommands`(i/I/a/A/o/O/R/v/V)
-- `FoldCommands`(za/zo/zc/zf/zj/zk/zd/zE/zn/zN + bracket系)
-- `EditingCommands`(x/X/s/S/D/C/Y/p/P + surround前処理 cs/ds/ys)
-- `SearchNavCommands`(n/N/*/#/;/,)
-- `FileNavCommands`(gf/gx)
-- `LspTriggerCommands`(gd/gr/ga/gch/gct — 既に隣接しており最も簡単、最初のサブステップに適する)
 
-各クラスは`TextBuffer`/`FoldManager`/`RegisterManager`など必要なものだけをctor引数に取り、`VimEngine`がフィールドとして所有する。`VimEngine`のswitchはそのまま残り、各`case`本体を`_foldCommands.Execute(cmd, cursor, events)`のような1行の委譲に置き換える(単一ディスパッチ点を維持)。
-**パターン:** Phase 1と同じ委譲抽出を、小さいサブステップ単位(lsp-trigger → folds → mode-transitions → editing → search → file-nav)でコミットを分ける。
-**リスク:** 中低。行数・テストカバレッジ最大なのでリグレッションを早期検知しやすいが、他コードへの依存が最も広いので小さいコミット単位で進める。
-**検証:** サブステップごとに `dotnet test tests/Editor.Core.Tests/` フル実行、`--filter "FullyQualifiedName~CommandParserTests"`も併せて確認。手動確認不要。
+**結果:** 当初計画した6クラスのうち、実際に自己完結していた3クラスのみ抽出して完了とした(理由は下記「スコープ縮小の経緯」を参照)。`src/Editor.Core/Engine/Commands/` 配下に:
+- `LspTriggerCommands`(gd/gr/ga/gch/gct) — 一行イベント発火のみ、依存なし
+- `FoldCommands`(za/zo/zc/zM/zR/zf/zj/zk/[z/]z/zd/zD/zE/zn/zN) — `BufferManager`経由で`FoldManager`を操作し、カーソル適用は`Result`(DirectCursor/MoveCursor/FoldDisabled)を介してVimEngine側の2つの既存適用経路(直接クランプ vs `MoveCursor`)にそのまま接続
+- `FileNavCommands`(gf/gx) — パス抽出(`ExtractFilePathUnderCursor`)ごと完全移動、他に呼び出し元なし
+
+各クラスは`BufferManager`など必要な協力者だけをctorで受け取り、`VimEngine`がフィールドとして所有。`ExecuteNormalCommand`のswitchはそのまま残り、対象`case`本体を`_xxxCommands.TryHandle(...)`という数行の委譲に置き換えた。
+
+### スコープ縮小の経緯
+
+計画時点では`ModeTransitionCommands`(i/I/a/A/o/O/R/v/V)・`EditingCommands`(x/X/s/S/D/C/Y/p/P)・`SearchNavCommands`(n/N/*/#/;/,)も同じ要領で抽出する想定だったが、実装に着手して判明した実態は次の通り:
+
+- これらのswitch本体は既に`EnterInsertMode`/`ExecuteDelete`/`DoSearch`等、**VimEngine内の広く共有された private メソッドへの1〜4行の薄い委譲**でしかない。
+- その実体側(`EnterInsertMode`, `EnterVisualMode`, `BeginInsertRepeat`, `ExecuteDelete`, `PasteAfter/Before`, `DeleteLines`, `SetRepeatChange`(31箇所!), `DoSearch`, `_searchPattern`/`_searchForward`等)は、ノーマルモードのswitch以外にも演算子+モーション処理・dot-repeat再生・ビジュアルモード・検索モードUIなど**10〜30箇所から再利用**されている神クラス内共有ロジックであり、`FoldManager`のような独立したサブシステムを持たない。
+
+つまり、この3つは「switchの委譲だけ動かす」か「実体ごと動かす」の二択になり、前者はVimEngine.csの行数もカップリングも実質改善しない見せかけの抽出、後者は10〜30箇所の呼び出し元を書き換える必要があり、計画が想定した「中低」リスクを大きく超える(Phase 1のExCommandProcessorとは異なり、VimEngineのswitchケースは独立したドメインの寄せ集めではなく、共有状態機械への窓口が大半を占めていたため)。
+
+この判断はユーザーに確認の上、**この3クラスは対象外としてPhase 2を完了とする**ことで合意した。ビッグバン書き換え回避・小さく安全なコミット単位という本計画の大方針そのものに従った結果である。
+
+**検証:** サブステップごとに `dotnet test tests/Editor.Core.Tests/` フル実行(全1051件グリーン)。手動確認不要。
 
 ---
 
