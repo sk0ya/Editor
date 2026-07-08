@@ -9,6 +9,7 @@ using Editor.Core.Models;
 using Editor.Core.Registers;
 using Editor.Core.Spell;
 using Editor.Core.Syntax;
+using Editor.Core.Engine.Ops;
 using Editor.Core;
 
 namespace Editor.Core.Engine;
@@ -26,6 +27,7 @@ public class VimEngine
     private readonly Commands.LspTriggerCommands _lspTriggerCommands = new();
     private readonly Commands.FoldCommands _foldCommands;
     private readonly Commands.FileNavCommands _fileNavCommands;
+    private readonly ClipboardEditOps _clipboardOps;
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
@@ -198,6 +200,8 @@ public class VimEngine
             _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames, _config.Functions);
         _foldCommands = new Commands.FoldCommands(_bufferManager);
         _fileNavCommands = new Commands.FileNavCommands(_bufferManager);
+        _clipboardOps = new ClipboardEditOps(_bufferManager, _registerManager, Snapshot,
+            (events, cursor) => { _cursor = cursor; EmitText(events); }, EmitStatus);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -960,15 +964,15 @@ public class VimEngine
                 case "d":
                     SetRepeatChange(cmd);
                     Snapshot();
-                    DeleteLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
+                    _cursor = _clipboardOps.DeleteLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
                     return;
                 case "c":
                     BeginInsertRepeat(cmd);
                     Snapshot();
-                    DeleteLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
+                    _cursor = _clipboardOps.DeleteLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
                     EnterInsertMode(false, events);
                     return;
-                case "y": YankLines(_cursor.Line, endLine, cmd.Register ?? '"', events); return;
+                case "y": _clipboardOps.YankLines(_cursor.Line, endLine, cmd.Register ?? '"', events); return;
                 case ">":
                     SetRepeatChange(cmd);
                     IndentRange(_cursor.Line, endLine, true, events);
@@ -1268,65 +1272,65 @@ public class VimEngine
                 SetRepeatChange(cmd);
                 // Delete [count] chars from cursor position
                 var xEnd = _cursor with { Column = Math.Min(_cursor.Column + count - 1, Math.Max(0, buf.GetLineLength(_cursor.Line) - 1)) };
-                ExecuteDelete(_cursor, xEnd, false, events, cmd.Register ?? '"');
+                _cursor = _clipboardOps.ExecuteDelete(_cursor, xEnd, false, events, cmd.Register ?? '"');
                 break;
             case "X":
                 SetRepeatChange(cmd);
                 // Delete [count] chars before cursor
                 var xStart = motion.MoveLeft(_cursor, count);
-                if (xStart.Column < _cursor.Column) ExecuteDelete(xStart, _cursor with { Column = _cursor.Column - 1 }, false, events, cmd.Register ?? '"');
+                if (xStart.Column < _cursor.Column) _cursor = _clipboardOps.ExecuteDelete(xStart, _cursor with { Column = _cursor.Column - 1 }, false, events, cmd.Register ?? '"');
                 break;
             case "s":
                 BeginInsertRepeat(cmd);
                 var sStart = _cursor;
-                ExecuteDelete(_cursor, motion.MoveRight(_cursor, count), false, events, cmd.Register ?? '"');
+                _cursor = _clipboardOps.ExecuteDelete(_cursor, motion.MoveRight(_cursor, count), false, events, cmd.Register ?? '"');
                 _cursor = _bufferManager.Current.Text.ClampCursor(sStart, true);
                 EmitCursor(events);
                 EnterInsertMode(false, events);
                 break;
             case "S":
                 BeginInsertRepeat(cmd);
-                DeleteLines(_cursor.Line, _cursor.Line, events, cmd.Register ?? '"');
+                _cursor = _clipboardOps.DeleteLines(_cursor.Line, _cursor.Line, events, cmd.Register ?? '"');
                 EnterInsertMode(false, events);
                 break;
             case "D":
                 SetRepeatChange(cmd);
                 var eol = GetLineLength() - 1;
-                if (eol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = eol }, false, events, cmd.Register ?? '"');
+                if (eol >= _cursor.Column) _cursor = _clipboardOps.ExecuteDelete(_cursor, _cursor with { Column = eol }, false, events, cmd.Register ?? '"');
                 break;
             case "C":
                 BeginInsertRepeat(cmd);
                 var cStart = _cursor;
                 var ceol = GetLineLength() - 1;
-                if (ceol >= _cursor.Column) ExecuteDelete(_cursor, _cursor with { Column = ceol }, false, events, cmd.Register ?? '"');
+                if (ceol >= _cursor.Column) _cursor = _clipboardOps.ExecuteDelete(_cursor, _cursor with { Column = ceol }, false, events, cmd.Register ?? '"');
                 _cursor = _bufferManager.Current.Text.ClampCursor(cStart, true);
                 EmitCursor(events);
                 EnterInsertMode(false, events);
                 break;
-            case "Y": YankLines(_cursor.Line, _cursor.Line + count - 1, cmd.Register ?? '"', events); break;
+            case "Y": _clipboardOps.YankLines(_cursor.Line, _cursor.Line + count - 1, cmd.Register ?? '"', events); break;
             case "p":
                 SetRepeatChange(cmd);
-                PasteAfter(cmd.Register ?? '"', events);
+                _cursor = _clipboardOps.PasteAfter(_cursor, cmd.Register ?? '"', events);
                 break;
             case "P":
                 SetRepeatChange(cmd);
-                PasteBefore(cmd.Register ?? '"', events);
+                _cursor = _clipboardOps.PasteBefore(_cursor, cmd.Register ?? '"', events);
                 break;
             case "gp":
                 SetRepeatChange(cmd);
-                PasteAfter(cmd.Register ?? '"', events, cursorAfterPaste: true);
+                _cursor = _clipboardOps.PasteAfter(_cursor, cmd.Register ?? '"', events, cursorAfterPaste: true);
                 break;
             case "gP":
                 SetRepeatChange(cmd);
-                PasteBefore(cmd.Register ?? '"', events, cursorAfterPaste: true);
+                _cursor = _clipboardOps.PasteBefore(_cursor, cmd.Register ?? '"', events, cursorAfterPaste: true);
                 break;
             case "]p":
                 SetRepeatChange(cmd);
-                ExecuteIndentedPaste(after: true, cmd.Register ?? '"', events);
+                _cursor = _clipboardOps.ExecuteIndentedPaste(_cursor, after: true, cmd.Register ?? '"', _config.Options.TabStop, events);
                 break;
             case "[p":
                 SetRepeatChange(cmd);
-                ExecuteIndentedPaste(after: false, cmd.Register ?? '"', events);
+                _cursor = _clipboardOps.ExecuteIndentedPaste(_cursor, after: false, cmd.Register ?? '"', _config.Options.TabStop, events);
                 break;
             case "u": ExecuteUndo(events); break;
             case "U": ExecuteUndo(events); break;
@@ -1544,22 +1548,22 @@ public class VimEngine
         switch (op)
         {
             case "d":
-                if (linewise) DeleteLines(start.Line, end.Line, events, register);
-                else ExecuteDelete(start, end, false, events, register);
+                if (linewise) _cursor = _clipboardOps.DeleteLines(start.Line, end.Line, events, register);
+                else _cursor = _clipboardOps.ExecuteDelete(start, end, false, events, register);
                 break;
             case "c":
-                if (linewise) { DeleteLines(start.Line, end.Line, events, register); EnterInsertMode(false, events); }
+                if (linewise) { _cursor = _clipboardOps.DeleteLines(start.Line, end.Line, events, register); EnterInsertMode(false, events); }
                 else
                 {
-                    ExecuteDelete(start, end, false, events, register);
+                    _cursor = _clipboardOps.ExecuteDelete(start, end, false, events, register);
                     _cursor = _bufferManager.Current.Text.ClampCursor(start, true);
                     EmitCursor(events);
                     EnterInsertMode(false, events);
                 }
                 break;
             case "y":
-                if (linewise) YankLines(start.Line, end.Line, register, events);
-                else YankRange(register, start, end, false);
+                if (linewise) _clipboardOps.YankLines(start.Line, end.Line, register, events);
+                else _clipboardOps.YankRange(register, start, end, false);
                 MoveCursor(start, events);
                 EmitStatus(events, linewise ? $"{end.Line - start.Line + 1} lines yanked" : "yanked");
                 break;
@@ -1749,7 +1753,7 @@ public class VimEngine
                     SelectAllVisualLine(events);
                     return;
                 case "c": // Ctrl+C = Copy current line to clipboard
-                    YankLines(_cursor.Line, _cursor.Line, '+', events);
+                    _clipboardOps.YankLines(_cursor.Line, _cursor.Line, '+', events);
                     return;
                 case "v": // Ctrl+V = Paste from clipboard
                     PasteAtCursorInsertMode(events);
@@ -2196,7 +2200,7 @@ public class VimEngine
         events.Add(VimEvent.SelectionChanged(null));
         var prevSuppress = _suppressSnapshot;
         _suppressSnapshot = true; // BeginPlainEdit already snapshotted this run
-        ExecuteDelete(range.start, range.endCell, false, events);
+        _cursor = _clipboardOps.ExecuteDelete(range.start, range.endCell, false, events);
         _suppressSnapshot = prevSuppress;
         _cursor = _bufferManager.Current.Text.ClampCursor(range.start, insertMode: true);
         EmitCursor(events);
@@ -2205,7 +2209,7 @@ public class VimEngine
     private void CopyPlainSelectionToClipboard()
     {
         if (PlainSelectionRange() is not { } range) return;
-        YankRange('+', range.start, range.endCell, false);
+        _clipboardOps.YankRange('+', range.start, range.endCell, false);
     }
 
     // Copy with no selection: yank the whole current line plus its trailing newline
@@ -3456,8 +3460,8 @@ public class VimEngine
         var leftColumn = GetBlockLeftColumn(sel);
 
         Snapshot();
-        YankBlock(register, sel, isDelete: true);
-        DeleteBlock(sel);
+        _clipboardOps.YankBlock(register, sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, isDelete: true);
+        _clipboardOps.DeleteBlock(sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn);
         _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn), insertMode: true);
         EmitText(events);
 
@@ -3586,258 +3590,6 @@ public class VimEngine
         int i = 0;
         while (i < ln.Length && char.IsWhiteSpace(ln[i])) i++;
         return ln[..i];
-    }
-
-    private void ExecuteDelete(CursorPosition from, CursorPosition to, bool linewise, List<VimEvent> events, char register = '"')
-    {
-        Snapshot();
-        var buf = _bufferManager.Current.Text;
-
-        if (linewise)
-        {
-            DeleteLines(from.Line, to.Line, events, register);
-            return;
-        }
-
-        // The blackhole register "_ discards the deleted text without touching
-        // the unnamed/yank registers.
-        if (register != '_')
-            YankRange(register, from, to, linewise, isDelete: true);
-
-        if (from.Line == to.Line)
-        {
-            buf.DeleteRange(from.Line, from.Column, to.Column + 1);
-            _cursor = buf.ClampCursor(from);
-        }
-        else
-        {
-            // Multi-line delete
-            buf.DeleteRange(from.Line, from.Column, buf.GetLineLength(from.Line));
-            buf.DeleteRange(to.Line, 0, to.Column + 1);
-            for (int l = to.Line - 1; l > from.Line; l--)
-                buf.DeleteLines(l, l);
-            buf.JoinLines(from.Line);
-            _cursor = buf.ClampCursor(from);
-        }
-        EmitText(events);
-    }
-
-    private void DeleteLines(int start, int end, List<VimEvent> events, char register = '"')
-    {
-        var buf = _bufferManager.Current.Text;
-        if (register != '_')
-            YankLines(start, end, register, events, isDelete: true);
-        CurrentBuffer.Folds.OnLinesDeleted(start, end);
-        buf.DeleteLines(start, end);
-        _cursor = buf.ClampCursor(new CursorPosition(start, 0));
-        EmitText(events);
-    }
-
-    private void YankRange(char register, CursorPosition from, CursorPosition to, bool linewise, bool isDelete = false)
-    {
-        var buf = _bufferManager.Current.Text;
-        string text;
-        if (from.Line == to.Line)
-            text = buf.GetLine(from.Line)[from.Column..(Math.Min(to.Column + 1, buf.GetLineLength(from.Line)))];
-        else
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.Append(buf.GetLine(from.Line)[from.Column..]);
-            for (int l = from.Line + 1; l < to.Line; l++)
-                sb.Append('\n').Append(buf.GetLine(l));
-            sb.Append('\n').Append(buf.GetLine(to.Line)[..Math.Min(to.Column + 1, buf.GetLineLength(to.Line))]);
-            text = sb.ToString();
-        }
-        var reg = new Register(text, linewise ? RegisterType.Line : RegisterType.Character);
-        if (isDelete) _registerManager.SetDelete(register, reg);
-        else _registerManager.SetYank(register, reg);
-    }
-
-    private void YankLines(int start, int end, char register, List<VimEvent> events, bool isDelete = false)
-    {
-        var buf = _bufferManager.Current.Text;
-        var lines = buf.GetLines(start, end);
-        var text = string.Join("\n", lines);
-        var reg = new Register(text, RegisterType.Line);
-        if (isDelete) _registerManager.SetDelete(register, reg);
-        else _registerManager.SetYank(register, reg);
-        EmitStatus(events, $"{lines.Length} line(s) yanked");
-    }
-
-    // cursorAfterPaste implements gp/gP: leave the cursor just past the inserted text
-    // instead of on its last character (Vim's gp/gP semantics).
-    private void PasteAfter(char register, List<VimEvent> events, bool cursorAfterPaste = false)
-    {
-        Snapshot();
-        var reg = _registerManager.Get(register);
-        if (reg.IsEmpty) return;
-        var buf = _bufferManager.Current.Text;
-
-        if (reg.Type == RegisterType.Line)
-            InsertLinewisePaste(reg.GetLines(), after: true, cursorAfterBlock: cursorAfterPaste);
-        else
-        {
-            var col = Math.Min(_cursor.Column + 1, buf.GetLineLength(_cursor.Line));
-            var end = InsertCharacterwiseText(buf, _cursor.Line, col, reg.Text);
-            _cursor = cursorAfterPaste
-                ? buf.ClampCursor(end)
-                : CursorOnLastInsertedChar(new CursorPosition(_cursor.Line, col), end);
-        }
-        EmitText(events);
-    }
-
-    private void PasteBefore(char register, List<VimEvent> events, bool cursorAfterPaste = false)
-    {
-        Snapshot();
-        var reg = _registerManager.Get(register);
-        if (reg.IsEmpty) return;
-        var buf = _bufferManager.Current.Text;
-
-        if (reg.Type == RegisterType.Line)
-            InsertLinewisePaste(reg.GetLines(), after: false, cursorAfterBlock: cursorAfterPaste);
-        else
-        {
-            var start = _cursor;
-            var end = InsertCharacterwiseText(buf, start.Line, start.Column, reg.Text);
-            _cursor = cursorAfterPaste
-                ? buf.ClampCursor(end)
-                : CursorOnLastInsertedChar(start, end);
-        }
-        EmitText(events);
-    }
-
-    // Shared linewise insertion for p/P/]p/[p/gp/gP — does not call Snapshot or EmitText.
-    // cursorAfterBlock places the cursor on the first line after the pasted block (gp/gP)
-    // instead of on the first pasted line (p/P).
-    private void InsertLinewisePaste(string[] lines, bool after, bool cursorAfterBlock = false)
-    {
-        var buf = _bufferManager.Current.Text;
-        if (after)
-        {
-            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line, lines.Length);
-            buf.InsertLines(_cursor.Line, lines);
-            _cursor = cursorAfterBlock
-                ? buf.ClampCursor(new CursorPosition(_cursor.Line + 1 + lines.Length, 0))
-                : new CursorPosition(_cursor.Line + 1, 0);
-        }
-        else
-        {
-            CurrentBuffer.Folds.OnLinesInserted(_cursor.Line - 1, lines.Length);
-            buf.InsertLines(_cursor.Line - 1, lines);
-            _cursor = cursorAfterBlock
-                ? buf.ClampCursor(new CursorPosition(_cursor.Line + lines.Length, 0))
-                : new CursorPosition(_cursor.Line, 0);
-        }
-    }
-
-    private CursorPosition InsertCharacterwiseText(TextBuffer buf, int line, int col, string text)
-    {
-        var normalized = text.Replace("\r\n", "\n").Replace("\r", "\n");
-        var parts = normalized.Split('\n');
-        buf.InsertText(line, col, normalized);
-        if (parts.Length > 1)
-            CurrentBuffer.Folds.OnLinesInserted(line, parts.Length - 1);
-        return parts.Length == 1
-            ? new CursorPosition(line, col + parts[0].Length)
-            : new CursorPosition(line + parts.Length - 1, parts[^1].Length);
-    }
-
-    private CursorPosition CursorOnLastInsertedChar(CursorPosition start, CursorPosition insertionEnd)
-    {
-        var buf = _bufferManager.Current.Text;
-        if (insertionEnd.Column > 0)
-            return buf.ClampCursor(insertionEnd with { Column = insertionEnd.Column - 1 });
-        if (insertionEnd.Line > start.Line)
-            return buf.ClampCursor(new CursorPosition(insertionEnd.Line - 1, int.MaxValue));
-        return buf.ClampCursor(start);
-    }
-
-    /// <summary>
-    /// Implements ]p (after=true) and [p (after=false): paste with indent adjusted to match current line.
-    /// Only applies indent adjustment for linewise registers; character registers fall back to normal paste.
-    /// </summary>
-    private void ExecuteIndentedPaste(bool after, char register, List<VimEvent> events)
-    {
-        Snapshot();
-        var reg = _registerManager.Get(register);
-        if (reg.IsEmpty) return;
-        var buf = _bufferManager.Current.Text;
-
-        if (reg.Type == RegisterType.Line)
-        {
-            var lines = reg.GetLines();
-            int tabStop = _config.Options.TabStop;
-
-            // Minimum indent among non-empty lines in the register
-            int minIndent = int.MaxValue;
-            foreach (var line in lines)
-            {
-                if (line.Length == 0) continue;
-                int ind = CountIndentSpaces(line, tabStop);
-                if (ind < minIndent) minIndent = ind;
-            }
-            if (minIndent == int.MaxValue) minIndent = 0;
-
-            int delta = CountIndentSpaces(buf.GetLine(_cursor.Line), tabStop) - minIndent;
-
-            string[] adjusted = new string[lines.Length];
-            for (int i = 0; i < lines.Length; i++)
-                adjusted[i] = ApplyIndentDelta(lines[i], delta, tabStop);
-
-            InsertLinewisePaste(adjusted, after);
-        }
-        else
-        {
-            // Character register: fall back to normal paste (no indent adjustment)
-            if (after)
-            {
-                var col = Math.Min(_cursor.Column + 1, buf.GetLineLength(_cursor.Line));
-                var end = InsertCharacterwiseText(buf, _cursor.Line, col, reg.Text);
-                _cursor = CursorOnLastInsertedChar(new CursorPosition(_cursor.Line, col), end);
-            }
-            else
-            {
-                var start = _cursor;
-                var end = InsertCharacterwiseText(buf, start.Line, start.Column, reg.Text);
-                _cursor = CursorOnLastInsertedChar(start, end);
-            }
-        }
-        EmitText(events);
-    }
-
-    /// <summary>Returns the number of leading spaces in a line, expanding tabs using tabStop.</summary>
-    private static int CountIndentSpaces(string line, int tabStop)
-    {
-        int spaces = 0;
-        foreach (char c in line)
-        {
-            if (c == ' ') spaces++;
-            else if (c == '\t') spaces += tabStop - (spaces % tabStop);
-            else break;
-        }
-        return spaces;
-    }
-
-    /// <summary>
-    /// Adjusts the leading indent of a line by <paramref name="delta"/> spaces.
-    /// Positive delta adds spaces; negative delta removes them (clamped to 0).
-    /// Preserves the original tab/space style of the line's existing indent.
-    /// </summary>
-    private static string ApplyIndentDelta(string line, int delta, int tabStop)
-    {
-        if (line.Length == 0) return line;
-
-        // Count leading whitespace characters
-        int ws = 0;
-        while (ws < line.Length && (line[ws] == ' ' || line[ws] == '\t'))
-            ws++;
-
-        string content = line[ws..];
-        int currentSpaces = CountIndentSpaces(line[..ws], tabStop);
-        int newSpaces = Math.Max(0, currentSpaces + delta);
-
-        // Rebuild indent as spaces (simplest, consistent with Vim behaviour)
-        return new string(' ', newSpaces) + content;
     }
 
     private void SelectAllVisualLine(List<VimEvent> events)
@@ -5026,8 +4778,8 @@ public class VimEngine
             var leftColumn = GetBlockLeftColumn(sel);
             Snapshot();
             if (register != '_')
-                YankBlock(register, sel, isDelete: true);
-            DeleteBlock(sel);
+                _clipboardOps.YankBlock(register, sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, isDelete: true);
+            _clipboardOps.DeleteBlock(sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn);
             _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn));
             EmitText(events);
             ExitVisualMode(events);
@@ -5041,7 +4793,7 @@ public class VimEngine
         if (_mode == VimMode.VisualLine)
         {
             if (register != '_')
-                YankLines(start.Line, end.Line, register, events, isDelete: true);
+                _clipboardOps.YankLines(start.Line, end.Line, register, events, isDelete: true);
             CurrentBuffer.Folds.OnLinesDeleted(start.Line, end.Line);
             _bufferManager.Current.Text.DeleteLines(start.Line, end.Line);
             _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(start.Line, 0));
@@ -5049,7 +4801,7 @@ public class VimEngine
         }
         else
         {
-            ExecuteDelete(start, end, false, events, register);
+            _cursor = _clipboardOps.ExecuteDelete(start, end, false, events, register);
         }
         ExitVisualMode(events);
     }
@@ -5081,16 +4833,16 @@ public class VimEngine
         {
             var (blockStartLine, _, _, _) = GetBlockBounds(sel);
             var leftColumn = GetBlockLeftColumn(sel);
-            YankBlock('"', sel, isDelete: true);
-            DeleteBlock(sel);
+            _clipboardOps.YankBlock('"', sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, isDelete: true);
+            _clipboardOps.DeleteBlock(sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn);
             _cursor = buf.ClampCursor(new CursorPosition(blockStartLine, leftColumn));
             if (regType == RegisterType.Line)
-                InsertLinewisePaste(regLines, after: false);
+                _cursor = _clipboardOps.InsertLinewisePaste(_cursor, regLines, after: false);
             else
             {
                 var startPos = _cursor;
-                var endPos = InsertCharacterwiseText(buf, startPos.Line, startPos.Column, regText);
-                _cursor = CursorOnLastInsertedChar(startPos, endPos);
+                var endPos = _clipboardOps.InsertCharacterwiseText(buf, startPos.Line, startPos.Column, regText);
+                _cursor = ClipboardEditOps.CursorOnLastInsertedChar(buf, startPos, endPos);
             }
             EmitText(events);
             ExitVisualMode(events);
@@ -5127,7 +4879,7 @@ public class VimEngine
         }
 
         // Characterwise visual selection.
-        YankRange('"', start, end, false, isDelete: true);
+        _clipboardOps.YankRange('"', start, end, false, isDelete: true);
         if (start.Line == end.Line)
             buf.DeleteRange(start.Line, start.Column, Math.Min(end.Column + 1, buf.GetLineLength(start.Line)));
         else
@@ -5151,8 +4903,8 @@ public class VimEngine
         }
         else
         {
-            var endPos = InsertCharacterwiseText(buf, start.Line, start.Column, regText);
-            _cursor = CursorOnLastInsertedChar(start, endPos);
+            var endPos = _clipboardOps.InsertCharacterwiseText(buf, start.Line, start.Column, regText);
+            _cursor = ClipboardEditOps.CursorOnLastInsertedChar(buf, start, endPos);
         }
         EmitText(events);
         ExitVisualMode(events);
@@ -5166,7 +4918,7 @@ public class VimEngine
         {
             var (startLine, _, _, _) = GetBlockBounds(sel);
             var leftColumn = GetBlockLeftColumn(sel);
-            YankBlock(register, sel);
+            _clipboardOps.YankBlock(register, sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn);
             MoveCursor(new CursorPosition(startLine, leftColumn), events);
             ExitVisualMode(events);
             return;
@@ -5176,46 +4928,12 @@ public class VimEngine
         var end = sel.NormalizedEnd;
 
         if (_mode == VimMode.VisualLine)
-            YankLines(start.Line, end.Line, register, events);
+            _clipboardOps.YankLines(start.Line, end.Line, register, events);
         else
-            YankRange(register, start, end, false);
+            _clipboardOps.YankRange(register, start, end, false);
 
         MoveCursor(start, events);
         ExitVisualMode(events);
-    }
-
-    private void DeleteBlock(Selection selection)
-    {
-        var buf = _bufferManager.Current.Text;
-        foreach (var range in GetBlockLineRanges(selection))
-        {
-            var length = buf.GetLineLength(range.Line);
-            if (length <= range.StartColumn) continue;
-            var endExclusive = Math.Min(length, range.EndColumn + 1);
-            buf.DeleteRange(range.Line, range.StartColumn, endExclusive);
-        }
-    }
-
-    private void YankBlock(char register, Selection selection, bool isDelete = false)
-    {
-        var buf = _bufferManager.Current.Text;
-        var lines = new List<string>();
-        foreach (var range in GetBlockLineRanges(selection))
-        {
-            var text = buf.GetLine(range.Line);
-            if (text.Length <= range.StartColumn)
-            {
-                lines.Add("");
-                continue;
-            }
-
-            var endExclusive = Math.Min(text.Length, range.EndColumn + 1);
-            lines.Add(text[range.StartColumn..endExclusive]);
-        }
-
-        var reg = new Register(string.Join("\n", lines), RegisterType.Block);
-        if (isDelete) _registerManager.SetDelete(register, reg);
-        else _registerManager.SetYank(register, reg);
     }
 
     private void ExecuteVisualIndent(bool indent, List<VimEvent> events)
