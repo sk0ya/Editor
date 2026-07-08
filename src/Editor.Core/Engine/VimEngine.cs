@@ -24,6 +24,7 @@ public class VimEngine
     private readonly CommandParser _commandParser;
     private readonly VimConfig _config;
     private readonly Commands.LspTriggerCommands _lspTriggerCommands = new();
+    private readonly Commands.FoldCommands _foldCommands;
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
@@ -194,6 +195,7 @@ public class VimEngine
         _commandParser = new CommandParser();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
             _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames, _config.Functions);
+        _foldCommands = new Commands.FoldCommands(_bufferManager);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -1287,89 +1289,18 @@ public class VimEngine
             case "zz": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Center)); break;
             case "zt": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Top)); break;
             case "zb": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Bottom)); break;
-            case "za":
-                CurrentBuffer.Folds.ToggleFold(_cursor.Line);
-                _cursor = ClampCursorToVisible(_cursor);
-                EmitCursor(events);
-                events.Add(VimEvent.FoldsChanged());
-                break;
-            case "zo":
-                CurrentBuffer.Folds.OpenFold(_cursor.Line);
-                events.Add(VimEvent.FoldsChanged());
-                break;
-            case "zc":
-                CurrentBuffer.Folds.CloseFold(_cursor.Line);
-                _cursor = ClampCursorToVisible(_cursor);
-                EmitCursor(events);
-                events.Add(VimEvent.FoldsChanged());
-                break;
-            case "zM":
-                CurrentBuffer.Folds.CloseAll();
-                _cursor = ClampCursorToVisible(_cursor);
-                EmitCursor(events);
-                events.Add(VimEvent.FoldsChanged());
-                break;
-            case "zR":
-                CurrentBuffer.Folds.OpenAll();
-                events.Add(VimEvent.FoldsChanged());
-                break;
-            case "zf":
-            {
-                int foldEnd = Math.Min(CurrentBuffer.Text.LineCount - 1, _cursor.Line + count - 1);
-                if (foldEnd > _cursor.Line)
-                {
-                    CurrentBuffer.Folds.CreateFold(_cursor.Line, foldEnd);
-                    events.Add(VimEvent.FoldsChanged());
-                }
-                break;
-            }
             case "z=":
                 ShowSpellSuggestions(events);
                 break;
-            case "zj":
+            case "za": case "zo": case "zc": case "zM": case "zR": case "zf":
+            case "zj": case "zk": case "[z": case "]z": case "zd": case "zD": case "zE": case "zn": case "zN":
             {
-                int next = CurrentBuffer.Folds.NextFoldStart(_cursor.Line);
-                if (next >= 0) MoveCursor(new CursorPosition(next, 0), events);
+                _foldCommands.TryHandle(cmd.Motion, _cursor, count, events, out var foldResult);
+                if (foldResult.DirectCursor.HasValue) { _cursor = foldResult.DirectCursor.Value; EmitCursor(events); }
+                if (foldResult.MoveCursor.HasValue) MoveCursor(foldResult.MoveCursor.Value, events);
+                if (foldResult.FoldDisabled.HasValue) _foldDisabled = foldResult.FoldDisabled.Value;
                 break;
             }
-            case "zk":
-            {
-                int prev = CurrentBuffer.Folds.PrevFoldStart(_cursor.Line);
-                if (prev >= 0) MoveCursor(new CursorPosition(prev, 0), events);
-                break;
-            }
-            case "[z":
-            {
-                int start = CurrentBuffer.Folds.CurrentFoldStart(_cursor.Line);
-                if (start >= 0) MoveCursor(new CursorPosition(start, 0), events);
-                break;
-            }
-            case "]z":
-            {
-                int end = CurrentBuffer.Folds.CurrentFoldEnd(_cursor.Line);
-                if (end >= 0) MoveCursor(new CursorPosition(end, 0), events);
-                break;
-            }
-            case "zd":
-                CurrentBuffer.Folds.DeleteFold(_cursor.Line);
-                events.Add(VimEvent.FoldsChanged());
-                break;
-            case "zD":
-                CurrentBuffer.Folds.DeleteFoldsAt(_cursor.Line);
-                events.Add(VimEvent.FoldsChanged());
-                break;
-            case "zE":
-                CurrentBuffer.Folds.Clear();
-                events.Add(VimEvent.FoldsChanged());
-                break;
-            case "zn":
-                _foldDisabled = true;
-                events.Add(VimEvent.FoldsChanged());
-                break;
-            case "zN":
-                _foldDisabled = false;
-                events.Add(VimEvent.FoldsChanged());
-                break;
 
             // Editing
             case "x":
@@ -3652,17 +3583,6 @@ public class VimEngine
         EmitCursor(events);
     }
 
-    private CursorPosition ClampCursorToVisible(CursorPosition cursor)
-    {
-        var hiding = CurrentBuffer.Folds.GetHidingFold(cursor.Line);
-        if (hiding.HasValue)
-        {
-            int foldStart = hiding.Value.StartLine;
-            int maxCol = Math.Max(0, CurrentBuffer.Text.GetLineLength(foldStart) - 1);
-            return new CursorPosition(foldStart, Math.Min(cursor.Column, maxCol));
-        }
-        return cursor;
-    }
 
     private void GoToLineEnd(bool insertMode, List<VimEvent> events)
     {
