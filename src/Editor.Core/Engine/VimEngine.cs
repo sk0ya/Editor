@@ -4189,70 +4189,8 @@ public class VimEngine
 
     /// <summary>Emit Ctrl+G / g&lt;C-g&gt; file-info status message.</summary>
     private void EmitFileInfo(List<VimEvent> events, bool brief)
-    {
-        var vbuf = _bufferManager.Current;
-        var buf = vbuf.Text;
-        var totalLines = buf.LineCount;
-        var currentLine = _cursor.Line + 1;  // 1-based
-        var currentCol = _cursor.Column + 1; // 1-based
+        => EmitStatus(events, BufferInfoReporter.BuildFileInfo(_bufferManager.Current, _cursor, brief));
 
-        // File name
-        string name = vbuf.FilePath != null
-            ? System.IO.Path.GetFileName(vbuf.FilePath)
-            : "[No Name]";
-
-        // Modified flag
-        string modified = buf.IsModified ? " [Modified]" : "";
-
-        // Percent through file
-        int pct = totalLines <= 1 ? 100 : (int)Math.Round((_cursor.Line) * 100.0 / (totalLines - 1));
-        pct = Math.Clamp(pct, 0, 100);
-
-        string msg;
-        if (brief)
-        {
-            msg = $"\"{name}\"{modified} line {currentLine} of {totalLines} --{pct}%-- col {currentCol}";
-        }
-        else
-        {
-            int wordCount = CountWords(buf);
-            long byteOffset = CountBytesToCursor(buf, _cursor);
-            msg = $"Col {currentCol}, Line {currentLine} of {totalLines}{modified}, Word {wordCount}, Byte {byteOffset}";
-        }
-
-        EmitStatus(events, msg);
-    }
-
-    private static int CountWords(TextBuffer buf)
-    {
-        int words = 0;
-        for (int i = 0; i < buf.LineCount; i++)
-        {
-            var line = buf.GetLine(i);
-            bool inWord = false;
-            foreach (char c in line)
-            {
-                bool isWordChar = char.IsLetterOrDigit(c) || c == '_';
-                if (isWordChar && !inWord) { words++; inWord = true; }
-                else if (!isWordChar) inWord = false;
-            }
-        }
-        return words;
-    }
-
-    private static long CountBytesToCursor(TextBuffer buf, CursorPosition cursor)
-    {
-        long bytes = 0;
-        for (int i = 0; i < cursor.Line; i++)
-            bytes += System.Text.Encoding.UTF8.GetByteCount(buf.GetLine(i)) + 1; // +1 for newline
-        if (cursor.Line < buf.LineCount)
-        {
-            var line = buf.GetLine(cursor.Line);
-            int col = Math.Min(cursor.Column, line.Length);
-            bytes += System.Text.Encoding.UTF8.GetByteCount(line[..col]);
-        }
-        return bytes + 1; // 1-based byte offset
-    }
     private void EmitCmdLine(List<VimEvent> events)
     {
         var prefix = _mode switch { VimMode.Command => ":", VimMode.SearchForward => "/", VimMode.SearchBackward => "?", _ => "" };
