@@ -23,6 +23,7 @@ public class VimEngine
     private readonly SyntaxEngine _syntaxEngine;
     private readonly CommandParser _commandParser;
     private readonly VimConfig _config;
+    private readonly Commands.LspTriggerCommands _lspTriggerCommands = new();
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
@@ -1182,19 +1183,11 @@ public class VimEngine
                 break;
             }
             case "gd":
-                events.Add(VimEvent.GoToDefinitionRequested());
-                break;
             case "gr":
-                events.Add(VimEvent.FindReferencesRequested());
-                break;
             case "ga":
-                events.Add(VimEvent.CodeActionRequested());
-                break;
             case "gch":
-                events.Add(VimEvent.CallHierarchyRequested());
-                break;
             case "gct":
-                events.Add(VimEvent.TypeHierarchyRequested());
+                _lspTriggerCommands.TryHandle(cmd.Motion, events);
                 break;
             case "gf":
             {
