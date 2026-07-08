@@ -3258,12 +3258,12 @@ public class VimEngineTests
     }
 
     [Fact]
-    public void AutoPairs_SingleQuote_InsertsPair()
+    public void AutoPairs_SingleQuote_NoPairInsertion()
     {
         var engine = CreateEngine(config: AutoPairsConfig());
         engine.ProcessKey("i");
         engine.ProcessKey("'");
-        Assert.Equal("''", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal("'", engine.CurrentBuffer.Text.GetText());
         Assert.Equal(1, engine.Cursor.Column);
     }
 
