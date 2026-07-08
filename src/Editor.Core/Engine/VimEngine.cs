@@ -31,6 +31,7 @@ public class VimEngine
     private readonly TextTransformOps _textTransform;
     private readonly RepeatTracker _repeatTracker;
     private readonly SearchOps _searchOps;
+    private readonly KeywordCompletionOps _kwCompletionOps;
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
@@ -73,10 +74,6 @@ public class VimEngine
     private bool _awaitingExprRegister;   // Ctrl+R = in Insert mode — accumulating expression
     private string _exprBuffer = "";      // accumulated expression input
     private char? _digraphPendingChar;     // non-null = awaiting digraph input; holds first char once entered (null char = awaiting first)
-    private string[] _kwCompletions = []; // Ctrl+N/P keyword completion candidates
-    private int _kwCompletionIndex = -1;  // current completion index (-1 = prefix only)
-    private string _kwCompletionPrefix = "";
-    private int _kwCompletionApplied = 0; // length of completion text currently in buffer
     private bool _ctrlXPending;           // Ctrl+X sub-mode: waiting for F (file) or L (line)
     private char _ctrlXMode;              // 'f' = file-path, 'l' = whole-line, '\0' = keyword
     private CursorPosition _surroundStart, _surroundEnd;
@@ -197,6 +194,8 @@ public class VimEngine
         _repeatTracker = new RepeatTracker(_registerManager, ExecuteNormalCommand, ProcessKeyInternal, ProcessStroke);
         _searchOps = new SearchOps(_bufferManager, _markManager, _config.Options, _commandParser,
             (pos, events) => MoveCursor(pos, events), EmitStatus);
+        _kwCompletionOps = new KeywordCompletionOps(_bufferManager,
+            (events, cursor) => { _cursor = cursor; EmitText(events); }, EmitStatus);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -1675,7 +1674,7 @@ public class VimEngine
         {
             _ctrlXPending = false;
             _ctrlXMode = '\0';
-            CycleKeywordCompletion(key.ToLower() == "n" ? +1 : -1, events);
+            _cursor = _kwCompletionOps.CycleKeyword(_cursor, key.ToLower() == "n" ? +1 : -1, events);
             return;
         }
 
@@ -1689,19 +1688,19 @@ public class VimEngine
                 {
                     case "f": // Ctrl+X Ctrl+F — file path completion
                         _ctrlXMode = 'f';
-                        CycleFilePathCompletion(+1, events);
+                        _cursor = _kwCompletionOps.CycleFilePath(_cursor, +1, events);
                         return;
                     case "l": // Ctrl+X Ctrl+L — whole-line completion
                         _ctrlXMode = 'l';
-                        CycleLineCompletion(+1, events);
+                        _cursor = _kwCompletionOps.CycleLine(_cursor, +1, events);
                         return;
                     case "n": // Ctrl+X Ctrl+N — same as Ctrl+N
                         _ctrlXMode = '\0';
-                        CycleKeywordCompletion(+1, events);
+                        _cursor = _kwCompletionOps.CycleKeyword(_cursor, +1, events);
                         return;
                     case "p": // Ctrl+X Ctrl+P — same as Ctrl+P
                         _ctrlXMode = '\0';
-                        CycleKeywordCompletion(-1, events);
+                        _cursor = _kwCompletionOps.CycleKeyword(_cursor, -1, events);
                         return;
                 }
             }
@@ -1712,22 +1711,19 @@ public class VimEngine
         // Allow continuing an active Ctrl+X completion with just Ctrl+F or Ctrl+L
         if (ctrl && _ctrlXMode == 'f' && key.ToLower() == "f")
         {
-            CycleFilePathCompletion(+1, events);
+            _cursor = _kwCompletionOps.CycleFilePath(_cursor, +1, events);
             return;
         }
         if (ctrl && _ctrlXMode == 'l' && key.ToLower() == "l")
         {
-            CycleLineCompletion(+1, events);
+            _cursor = _kwCompletionOps.CycleLine(_cursor, +1, events);
             return;
         }
 
-        if (_kwCompletions.Length > 0)
+        if (_kwCompletionOps.HasCandidates)
         {
             _ctrlXMode = '\0';
-            _kwCompletions = [];
-            _kwCompletionIndex = -1;
-            _kwCompletionApplied = 0;
-            _kwCompletionPrefix = "";
+            _kwCompletionOps.Reset();
         }
 
         if (ctrl)
@@ -3118,10 +3114,7 @@ public class VimEngine
         _digraphPendingChar = null;
         _ctrlXPending = false;
         _ctrlXMode = '\0';
-        _kwCompletions = [];
-        _kwCompletionIndex = -1;
-        _kwCompletionApplied = 0;
-        _kwCompletionPrefix = "";
+        _kwCompletionOps.Reset();
         ChangeMode(VimMode.Normal, events);
     }
 
@@ -3521,108 +3514,6 @@ public class VimEngine
         Snapshot();
         InsertTextAtCursor(reg.Text, events);
     }
-
-    private void CycleKeywordCompletion(int dir, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        if (_kwCompletions.Length == 0)
-        {
-            // Start a new completion session: extract word prefix before cursor
-            var line = buf.GetLine(_cursor.Line);
-            int col = _cursor.Column;
-            int start = col;
-            while (start > 0 && MotionEngine.IsWordChar(line[start - 1]))
-                start--;
-            _kwCompletionPrefix = line[start..col];
-            _kwCompletions = CollectBufferKeywords(_kwCompletionPrefix);
-            _kwCompletionIndex = -1;
-            _kwCompletionApplied = _kwCompletionPrefix.Length;
-            if (_kwCompletions.Length == 0)
-            {
-                EmitStatus(events, "Pattern not found");
-                return;
-            }
-        }
-
-        ApplyKwCompletion(dir, events);
-    }
-
-    // Shared apply step for all _kwCompletions-based completion modes
-    private void ApplyKwCompletion(int dir, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        _kwCompletionIndex = dir > 0
-            ? (_kwCompletionIndex + 1) % _kwCompletions.Length
-            : (_kwCompletionIndex - 1 + _kwCompletions.Length) % _kwCompletions.Length;
-
-        var completion = _kwCompletions[_kwCompletionIndex];
-        int delStart = _cursor.Column - _kwCompletionApplied;
-        if (_kwCompletionApplied > 0)
-            buf.DeleteRange(_cursor.Line, delStart, delStart + _kwCompletionApplied - 1);
-        buf.InsertText(_cursor.Line, delStart, completion);
-        _cursor = _cursor with { Column = delStart + completion.Length };
-        _kwCompletionApplied = completion.Length;
-        EmitText(events);
-        EmitStatus(events, $"\"{completion}\"");
-    }
-
-    private string[] CollectBufferKeywords(string prefix)
-        => CompletionCollector.CollectBufferKeywords(_bufferManager, prefix);
-
-    // Ctrl+X Ctrl+F — file path completion
-    private void CycleFilePathCompletion(int dir, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        if (_kwCompletions.Length == 0)
-        {
-            // Extract the partial path before cursor (back to first space or line start)
-            var line = buf.GetLine(_cursor.Line);
-            int col = _cursor.Column;
-            int start = col;
-            while (start > 0 && line[start - 1] != ' ' && line[start - 1] != '\t')
-                start--;
-            _kwCompletionPrefix = line[start..col];
-            _kwCompletions = CollectFilePathCompletions(_kwCompletionPrefix);
-            _kwCompletionIndex = -1;
-            _kwCompletionApplied = _kwCompletionPrefix.Length;
-            if (_kwCompletions.Length == 0)
-            {
-                EmitStatus(events, "No matching files");
-                return;
-            }
-        }
-
-        ApplyKwCompletion(dir, events);
-    }
-
-    private string[] CollectFilePathCompletions(string prefix)
-        => CompletionCollector.CollectFilePathCompletions(_bufferManager, prefix);
-
-    // Ctrl+X Ctrl+L — whole-line completion
-    private void CycleLineCompletion(int dir, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        if (_kwCompletions.Length == 0)
-        {
-            // Get text from start of current line up to cursor (trimmed leading whitespace)
-            var currentLine = buf.GetLine(_cursor.Line);
-            _kwCompletionPrefix = currentLine[.._cursor.Column].TrimStart();
-            _kwCompletions = CollectLineCompletions(_kwCompletionPrefix, _cursor.Line);
-            _kwCompletionIndex = -1;
-            // Track how many chars we already have (full line content from col 0 to cursor)
-            _kwCompletionApplied = _cursor.Column;
-            if (_kwCompletions.Length == 0)
-            {
-                EmitStatus(events, "Pattern not found");
-                return;
-            }
-        }
-
-        ApplyKwCompletion(dir, events);
-    }
-
-    private string[] CollectLineCompletions(string prefix, int currentLine)
-        => CompletionCollector.CollectLineCompletions(_bufferManager, prefix, currentLine);
 
     private void InsertTextAtCursor(string rawText, List<VimEvent> events)
     {
