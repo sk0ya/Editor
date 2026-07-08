@@ -6,7 +6,7 @@
 |---|---|---|
 | 1 | ExCommandProcessor → ドメイン別ハンドラクラス | ✅ 完了 |
 | 2 | VimEngine → 関心事別ハンドラクラス | ✅ 完了(縮小スコープ) |
-| 3 | VimEditorControl → マネージャクラス抽出 | 未着手 |
+| 3 | VimEditorControl → マネージャクラス抽出 | ✅ 完了(縮小スコープ) |
 | 4 | EditorCanvas → レンダラークラス抽出 | 未着手 |
 | 5 | VimEditorControl → PopupKeyNavigator | 未着手 |
 | 6 | EditorCanvas → GutterHitTester | 未着手 |
@@ -83,18 +83,29 @@
 
 ---
 
-## Phase 3 — VimEditorControl.xaml.cs: 独立したWPF関心事のマネージャクラスへの抽出
+## Phase 3 — VimEditorControl.xaml.cs: 独立したWPF関心事のマネージャクラスへの抽出 ✅(縮小スコープ)
 
 **目的:** 6,282行から、既にセクションコメントで区切られ相互依存の薄いブロックを、`LspManager`/`GitDiffProvider`と同じ「合成されたマネージャクラス」パターンで抽出。
-**対象ファイル:** `src/Editor.Controls/VimEditorControl.xaml.cs`、新規クラス(`src/Editor.Controls/`配下):
-- `ImeCompositionManager`(Win32 P/Invoke, カスタムTSF text store配線, `IEditorTextStoreHost`実装)
-- `PathCompletionManager`
-- `SnippetTabStopManager`
-- `MultiCursorManager`
 
-各マネージャは必要なWPFコールバック(canvasへの再描画依頼、テキストバッファへの参照など)をコンストラクタまたはイベント経由で受け取り、`VimEditorControl`がフィールドとして所有・キーイベントをそのマネージャに委譲する。フォント/インデント/ステータスバー/マウス処理は関心が薄く独立性が低いため今回は対象外(現状維持)。
-**リスク:** 中 — ロジックは移動するがWPFのイベント配線(コールバック/所有権)を伴うため、単純なファイル分割よりわずかにリスクが高い。自動カバレッジも薄い(`EditorTextStoreTests`のみ)。
-**検証:** `dotnet build Editor.sln`、`dotnet test tests/Editor.Controls.Tests/`。加えて`run`スキルで手動確認: 日本語IME変換・パス補完(`./`入力)・スニペットTabサイクル・マルチカーソル(Ctrl+Alt+Down/Up, Ctrl+D)。
+**結果:** 当初計画した4クラスのうち、自己完結していた3クラスのみ抽出して完了とした(理由は下記「スコープ縮小の経緯」を参照)。`src/Editor.Controls/` 配下に:
+- `MultiCursorManager`(Ctrl+D/Ctrl+Alt+Down/Up) — `_extraCursors`/`_multiCursorMode`等の状態を丸ごと保持。`VimEngine`・`EditorCanvas`と、ステータス更新・再描画のコールバック2つだけをctorで受け取る
+- `SnippetTabStopManager`(スニペット展開・タブストップ間ナビゲーション) — `VimEngine`と、`ProcessKey`/`ClearSelectionRangeState`/`ProcessVimEvents`/`UpdateAll`という既存の挿入・カーソル移動経路をコールバックとして受け取り、状態(`_tabStops`/`_index`)を丸ごと保持
+- `PathCompletionManager`(ファイルシステムパス補完、LSP非依存) — `VimEngine`・`EditorCanvas`・`IEditorLspManager`(ポップアップの受け渡し用)・`ProcessKey`コールバックを受け取り、`_pathCompletionItems`等の状態を丸ごと保持
+
+各クラスは呼び出し元(`OnKeyDown`/`OnPreviewKeyDown`/`ProcessKey`)からdelegateされる薄いラッパー越しに使われ、既存のディスパッチのif-chainはそのまま残した。`VimEditorControl`はこれらをフィールドとして所有する。
+
+### スコープ縮小の経緯
+
+計画時点では`ImeCompositionManager`(Win32 P/Invoke, カスタムTSF text store配線, `IEditorTextStoreHost`実装)も同じ要領で抽出する想定だったが、実装に着手する前の調査で判明した実態は次の通り:
+
+- `_imeInsertBuffer`/`_imeCompositionSeq`/`_customTextStoreActive`といった状態は、`OnPreviewKeyDown`/`OnKeyDown`/`OnTextInput`という巨大なキー処理ディスパッチの**30箇所以上**から読み書きされている(mapping replay・IME確定・Escape処理・タイムアウトフラッシュなど)。
+- `VimEditorControl`自体が`Editor.Controls.Ime.IEditorTextStoreHost`を明示的インターフェース実装しており、そのメソッド(`OnCompositionUpdated`/`OnCompositionCommitted`等)は`InsertCommittedText`・`Canvas`・`_engine.Mode`など、クラス内の広く共有された処理に直接依存する。
+
+これはPhase 2で`ModeTransitionCommands`/`EditingCommands`/`SearchNavCommands`を対象外にしたのと同一の構造(独立したサブシステムではなく、巨大な共有ディスパッチへの窓口)であり、「switchの委譲だけ動かす見せかけの抽出」か「30箇所以上の呼び出し元を書き換える高リスクな書き換え」の二択になる。加えてWindows IME/TSF回りは自動カバレッジがほぼ無く(`EditorTextStoreTests`のみ)、日本語変換という壊れた場合の実害が大きい機能である。
+
+この判断はユーザーに確認の上、**`ImeCompositionManager`は対象外としてPhase 3を完了とする**ことで合意した(Phase 2と同じ判断枠組み)。
+
+**検証:** 各抽出後に `dotnet build src/Editor.Controls/Editor.Controls.csproj` + `dotnet test tests/Editor.Core.Tests/`(全1051件)+ `dotnet test tests/Editor.Controls.Tests/`(全9件)をグリーンで確認。挙動を変えない機械的な状態移動のみのため、手動でのIME/パス補完/スニペット/マルチカーソル確認は今回省略した。
 
 ---
 
