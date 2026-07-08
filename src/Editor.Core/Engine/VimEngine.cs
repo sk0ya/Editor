@@ -3309,19 +3309,8 @@ public class VimEngine
     private void ExecuteBlockReplace(char ch, List<VimEvent> events)
     {
         if (_selection == null) { ExitVisualMode(events); return; }
-        var buf = _bufferManager.Current.Text;
         Snapshot();
-        foreach (var range in GetBlockLineRanges(_selection.Value))
-        {
-            int lineLen = buf.GetLineLength(range.Line);
-            if (lineLen <= range.StartColumn) continue; // line too short, skip
-            int colEnd = Math.Min(range.EndColumn, lineLen - 1);
-            for (int col = range.StartColumn; col <= colEnd; col++)
-            {
-                buf.DeleteChar(range.Line, col);
-                buf.InsertChar(range.Line, col, ch);
-            }
-        }
+        _textTransform.ReplaceBlock(_selection.Value, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, ch);
         var (startLine, _, _, _) = GetBlockBounds(_selection.Value);
         var leftColumn = GetBlockLeftColumn(_selection.Value);
         _cursor = new CursorPosition(startLine, leftColumn);
@@ -3984,45 +3973,12 @@ public class VimEngine
     {
         if (_selection == null) { ExitVisualMode(events); return; }
         Snapshot();
-        var buf = _bufferManager.Current.Text;
         var sel = _selection.Value;
 
         if (_mode == VimMode.VisualBlock)
-        {
-            foreach (var range in GetBlockLineRanges(sel))
-            {
-                var line = buf.GetLine(range.Line);
-                if (line.Length <= range.StartColumn) continue;
-                var endCol = Math.Min(range.EndColumn, line.Length - 1);
-                for (int col = range.StartColumn; col <= endCol; col++)
-                {
-                    buf.DeleteChar(range.Line, col);
-                    buf.InsertChar(range.Line, col, replacement);
-                }
-            }
-        }
+            _textTransform.ReplaceBlock(sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, replacement);
         else
-        {
-            var start = sel.NormalizedStart;
-            var end = sel.NormalizedEnd;
-
-            for (int lineNo = start.Line; lineNo <= end.Line; lineNo++)
-            {
-                var line = buf.GetLine(lineNo);
-                if (line.Length == 0) continue;
-
-                var startCol = lineNo == start.Line ? start.Column : 0;
-                var endCol = lineNo == end.Line ? end.Column : line.Length - 1;
-                startCol = Math.Clamp(startCol, 0, Math.Max(0, line.Length - 1));
-                endCol = Math.Clamp(endCol, startCol, Math.Max(0, line.Length - 1));
-
-                for (int col = startCol; col <= endCol; col++)
-                {
-                    buf.DeleteChar(lineNo, col);
-                    buf.InsertChar(lineNo, col, replacement);
-                }
-            }
-        }
+            _textTransform.ReplaceCharwise(sel, replacement);
 
         EmitText(events);
         ExitVisualMode(events);

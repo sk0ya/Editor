@@ -250,6 +250,46 @@ public sealed class TextTransformOps(
         return cursor;
     }
 
+    public void ReplaceBlock(Selection selection, bool blockToLineEnd, int lineEndStartColumn, char ch)
+    {
+        var buf = bufferManager.Current.Text;
+        foreach (var range in BlockRangeCalculator.GetLineRanges(selection, buf, blockToLineEnd, lineEndStartColumn))
+        {
+            int lineLen = buf.GetLineLength(range.Line);
+            if (lineLen <= range.StartColumn) continue; // line too short, skip
+            int colEnd = Math.Min(range.EndColumn, lineLen - 1);
+            for (int col = range.StartColumn; col <= colEnd; col++)
+            {
+                buf.DeleteChar(range.Line, col);
+                buf.InsertChar(range.Line, col, ch);
+            }
+        }
+    }
+
+    public void ReplaceCharwise(Selection selection, char replacement)
+    {
+        var buf = bufferManager.Current.Text;
+        var start = selection.NormalizedStart;
+        var end = selection.NormalizedEnd;
+
+        for (int lineNo = start.Line; lineNo <= end.Line; lineNo++)
+        {
+            var line = buf.GetLine(lineNo);
+            if (line.Length == 0) continue;
+
+            var startCol = lineNo == start.Line ? start.Column : 0;
+            var endCol = lineNo == end.Line ? end.Column : line.Length - 1;
+            startCol = Math.Clamp(startCol, 0, Math.Max(0, line.Length - 1));
+            endCol = Math.Clamp(endCol, startCol, Math.Max(0, line.Length - 1));
+
+            for (int col = startCol; col <= endCol; col++)
+            {
+                buf.DeleteChar(lineNo, col);
+                buf.InsertChar(lineNo, col, replacement);
+            }
+        }
+    }
+
     public void ApplyBlockCaseConversion(Selection selection, bool blockToLineEnd, int lineEndStartColumn, CaseConversion mode, List<VimEvent> events)
     {
         var buf = bufferManager.Current.Text;
