@@ -330,6 +330,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private readonly System.Windows.Threading.DispatcherTimer _mappingTimeout;
     // ── Insert-mode filesystem path completion (LSP-independent) ──────────────
     private readonly PathCompletionManager _pathCompletionManager;
+    // ── Popup key navigation (Down/Up move, Tab/Return apply, Escape hide) ─────
+    private readonly PopupKeyNavigator _pathCompletionNavigator;
+    private readonly PopupKeyNavigator _completionNavigator;
+    private readonly PopupKeyNavigator _codeActionNavigator;
     private VimBuffer? _cachedLinesBuffer;
     private long _cachedLinesVersion = -1;
     private string[] _cachedLines = [];
@@ -620,6 +624,30 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _gitProvider = options.GitServiceFactory?.Invoke() ?? NullEditorGitService.Instance;
         _lspManager = options.LspManagerFactory?.Invoke(Dispatcher) ?? new NullLspManager();
         _pathCompletionManager = new PathCompletionManager(_engine, Canvas, _lspManager, ProcessKey);
+        _pathCompletionNavigator = new PopupKeyNavigator(
+            move: d => _pathCompletionManager.MoveSelection(d),
+            apply: () => { _pathCompletionManager.Insert(); _keyDownHandledByVim = true; },
+            hide: () => { _pathCompletionManager.Hide(); _keyDownHandledByVim = true; });
+        _completionNavigator = new PopupKeyNavigator(
+            move: d => _lspManager.MoveCompletionSelection(d),
+            apply: () => { InsertLspCompletion(); _keyDownHandledByVim = true; },
+            hide: () =>
+            {
+                _lspManager.HideCompletion();
+                _lspManager.HideSignatureHelp();
+                // Also exit insert mode
+                ProcessKey("Escape", false, false, false);
+            });
+        _codeActionNavigator = new PopupKeyNavigator(
+            move: d => _lspManager.MoveCodeActionsSelection(d),
+            apply: () =>
+            {
+                var acts = _lspManager.CurrentCodeActions;
+                int sel = _lspManager.CodeActionsSelection;
+                if (sel >= 0 && sel < acts.Count) ApplyCodeAction(acts[sel]);
+            },
+            hide: () => _lspManager.HideCodeActions(),
+            acceptCtrlNav: false, acceptJK: true, acceptTab: false);
         _lspManager.StateChanged += OnLspStateChanged;
         _lspManager.StatusMessage += OnLspStatusMessage;
         _lspManager.FoldingRangesChanged += OnLspFoldingRangesChanged;
@@ -3693,30 +3721,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (_pathCompletionManager.Visible && mode == VimMode.Insert && _engine.VimEnabled
             && e.Key != Key.ImeProcessed && !HasActiveImeComposition())
         {
-            if (key == Key.Down || (ctrl && key == Key.N))
+            if (_pathCompletionNavigator.TryHandle(key, ctrl))
             {
-                _pathCompletionManager.MoveSelection(1);
                 e.Handled = true;
-                return;
-            }
-            if (key == Key.Up || (ctrl && key == Key.P))
-            {
-                _pathCompletionManager.MoveSelection(-1);
-                e.Handled = true;
-                return;
-            }
-            if (key == Key.Tab || key == Key.Return)
-            {
-                _pathCompletionManager.Insert();
-                e.Handled = true;
-                _keyDownHandledByVim = true;
-                return;
-            }
-            if (key == Key.Escape)
-            {
-                _pathCompletionManager.Hide();
-                e.Handled = true;
-                _keyDownHandledByVim = true;
                 return;
             }
         }
@@ -3724,31 +3731,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (_lspManager.CompletionVisible && mode == VimMode.Insert && _engine.VimEnabled
             && e.Key != Key.ImeProcessed && !HasActiveImeComposition())
         {
-            if (key == Key.Down || (ctrl && key == Key.N))
+            if (_completionNavigator.TryHandle(key, ctrl))
             {
-                _lspManager.MoveCompletionSelection(1);
-                e.Handled = true;
-                return;
-            }
-            if (key == Key.Up || (ctrl && key == Key.P))
-            {
-                _lspManager.MoveCompletionSelection(-1);
-                e.Handled = true;
-                return;
-            }
-            if (key == Key.Tab || key == Key.Return)
-            {
-                InsertLspCompletion();
-                e.Handled = true;
-                _keyDownHandledByVim = true;
-                return;
-            }
-            if (key == Key.Escape)
-            {
-                _lspManager.HideCompletion();
-                _lspManager.HideSignatureHelp();
-                // Also exit insert mode
-                ProcessKey("Escape", false, false, false);
                 e.Handled = true;
                 return;
             }
@@ -3759,29 +3743,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (_lspManager.CodeActionsVisible && mode == VimMode.Normal
             && e.Key != Key.ImeProcessed)
         {
-            if (key == Key.J || key == Key.Down)
+            if (_codeActionNavigator.TryHandle(key, ctrl))
             {
-                _lspManager.MoveCodeActionsSelection(1);
-                e.Handled = true;
-                return;
-            }
-            if (key == Key.K || key == Key.Up)
-            {
-                _lspManager.MoveCodeActionsSelection(-1);
-                e.Handled = true;
-                return;
-            }
-            if (key == Key.Return)
-            {
-                var acts = _lspManager.CurrentCodeActions;
-                int sel = _lspManager.CodeActionsSelection;
-                if (sel >= 0 && sel < acts.Count) ApplyCodeAction(acts[sel]);
-                e.Handled = true;
-                return;
-            }
-            if (key == Key.Escape)
-            {
-                _lspManager.HideCodeActions();
                 e.Handled = true;
                 return;
             }
