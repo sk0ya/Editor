@@ -25,6 +25,75 @@ public sealed class TextTransformOps(
     Action<List<VimEvent>, string> emitStatus,
     Action<CursorPosition, List<VimEvent>> moveCursor)
 {
+    public CursorPosition DeleteWordBack(CursorPosition cursor, List<VimEvent> events)
+    {
+        var buf = bufferManager.Current.Text;
+        if (cursor.Column == 0 && cursor.Line > 0)
+        {
+            var prevLen = buf.GetLineLength(cursor.Line - 1);
+            buf.JoinLines(cursor.Line - 1);
+            cursor = new CursorPosition(cursor.Line - 1, prevLen);
+        }
+        else
+        {
+            var line = buf.GetLine(cursor.Line);
+            int col = cursor.Column - 1;
+            while (col > 0 && char.IsWhiteSpace(line[col - 1])) col--;
+            while (col > 0 && !char.IsWhiteSpace(line[col - 1])) col--;
+            buf.DeleteRange(cursor.Line, col, cursor.Column);
+            cursor = cursor with { Column = col };
+        }
+        emitTextAt(events, cursor);
+        return cursor;
+    }
+
+    public CursorPosition DeleteLineBack(CursorPosition cursor, List<VimEvent> events)
+    {
+        var buf = bufferManager.Current.Text;
+        buf.DeleteRange(cursor.Line, 0, cursor.Column);
+        cursor = cursor with { Column = 0 };
+        emitTextAt(events, cursor);
+        return cursor;
+    }
+
+    public CursorPosition DeleteCharBack(CursorPosition cursor, List<VimEvent> events)
+    {
+        var buf = bufferManager.Current.Text;
+        if (cursor.Column > 0)
+        {
+            buf.DeleteChar(cursor.Line, cursor.Column - 1);
+            cursor = cursor with { Column = cursor.Column - 1 };
+        }
+        else if (cursor.Line > 0)
+        {
+            var prevLen = buf.GetLineLength(cursor.Line - 1);
+            buf.JoinLines(cursor.Line - 1);
+            cursor = new CursorPosition(cursor.Line - 1, prevLen);
+        }
+        emitTextAt(events, cursor);
+        return cursor;
+    }
+
+    // Backspace inside leading indent composed entirely of spaces (soft tabs) removes
+    // a full tabstop's worth at once, mirroring how Tab inserts a full tabstop — so
+    // deleting indentation is symmetric with typing it.
+    public bool TryDeleteIndentBack(ref CursorPosition cursor, List<VimEvent> events)
+    {
+        if (!options.ExpandTab || options.Paste) return false;
+        int tabStop = options.TabStop;
+        if (tabStop <= 1 || cursor.Column == 0 || cursor.Column % tabStop != 0) return false;
+
+        var buf = bufferManager.Current.Text;
+        var line = buf.GetLine(cursor.Line);
+        for (int i = 0; i < cursor.Column; i++)
+            if (line[i] != ' ') return false;
+
+        buf.DeleteRange(cursor.Line, cursor.Column - tabStop, cursor.Column);
+        cursor = cursor with { Column = cursor.Column - tabStop };
+        emitTextAt(events, cursor);
+        return true;
+    }
+
     public CursorPosition ExecuteReplace(CursorPosition cursor, char ch, List<VimEvent> events)
     {
         snapshot();

@@ -1733,9 +1733,9 @@ public class VimEngine
                 case "[": // Ctrl+[
                     ExitInsertMode(events);
                     return;
-                case "w": DeleteWordBack(events); return;
-                case "u": DeleteLineBack(events); return;
-                case "h": DeleteCharBack(events); return;
+                case "w": _cursor = _textTransform.DeleteWordBack(_cursor, events); return;
+                case "u": _cursor = _textTransform.DeleteLineBack(_cursor, events); return;
+                case "h": _cursor = _textTransform.DeleteCharBack(_cursor, events); return;
                 case "o": // Ctrl+O — execute one Normal command then return to Insert
                     _pendingInsertReturn = true;
                     ChangeMode(VimMode.Normal, events, suppressInsertAutocmd: true);
@@ -1812,9 +1812,9 @@ public class VimEngine
                         break;
                     }
                 }
-                if (TryDeleteIndentBack(events))
+                if (_textTransform.TryDeleteIndentBack(ref _cursor, events))
                     break;
-                DeleteCharBack(events);
+                _cursor = _textTransform.DeleteCharBack(_cursor, events);
                 break;
             case "Delete":
                 buf.DeleteChar(_cursor.Line, _cursor.Column);
@@ -1982,7 +1982,7 @@ public class VimEngine
             case "Back":
                 BeginPlainEdit();
                 if (hasSelection) DeletePlainSelection(events);
-                else if (!TryDeleteIndentBack(events)) DeleteCharBack(events);
+                else if (!_textTransform.TryDeleteIndentBack(ref _cursor, events)) _cursor = _textTransform.DeleteCharBack(_cursor, events);
                 return;
             case "Delete":
                 if (hasSelection) { BeginPlainEdit(); DeletePlainSelection(events); return; }
@@ -4119,72 +4119,6 @@ public class VimEngine
         buf.InsertText(_cursor.Line, startCol, expansion);
         int delta = expansion.Length - word.Length;
         _cursor = _cursor with { Column = _cursor.Column + delta };
-    }
-
-    private void DeleteWordBack(List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        if (_cursor.Column == 0 && _cursor.Line > 0)
-        {
-            var prevLen = buf.GetLineLength(_cursor.Line - 1);
-            buf.JoinLines(_cursor.Line - 1);
-            _cursor = new CursorPosition(_cursor.Line - 1, prevLen);
-        }
-        else
-        {
-            var line = buf.GetLine(_cursor.Line);
-            int col = _cursor.Column - 1;
-            while (col > 0 && char.IsWhiteSpace(line[col - 1])) col--;
-            while (col > 0 && !char.IsWhiteSpace(line[col - 1])) col--;
-            buf.DeleteRange(_cursor.Line, col, _cursor.Column);
-            _cursor = _cursor with { Column = col };
-        }
-        EmitText(events);
-    }
-
-    private void DeleteLineBack(List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        buf.DeleteRange(_cursor.Line, 0, _cursor.Column);
-        _cursor = _cursor with { Column = 0 };
-        EmitText(events);
-    }
-
-    private void DeleteCharBack(List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        if (_cursor.Column > 0)
-        {
-            buf.DeleteChar(_cursor.Line, _cursor.Column - 1);
-            _cursor = _cursor with { Column = _cursor.Column - 1 };
-        }
-        else if (_cursor.Line > 0)
-        {
-            var prevLen = buf.GetLineLength(_cursor.Line - 1);
-            buf.JoinLines(_cursor.Line - 1);
-            _cursor = new CursorPosition(_cursor.Line - 1, prevLen);
-        }
-        EmitText(events);
-    }
-
-    // Backspace inside leading indent composed entirely of spaces (soft tabs) removes
-    // a full tabstop's worth at once, mirroring how Tab inserts a full tabstop — so
-    // deleting indentation is symmetric with typing it.
-    private bool TryDeleteIndentBack(List<VimEvent> events)
-    {
-        if (!_config.Options.ExpandTab || _config.Options.Paste) return false;
-        int tabStop = _config.Options.TabStop;
-        if (tabStop <= 1 || _cursor.Column == 0 || _cursor.Column % tabStop != 0) return false;
-
-        var buf = _bufferManager.Current.Text;
-        var line = buf.GetLine(_cursor.Line);
-        for (int i = 0; i < _cursor.Column; i++)
-            if (line[i] != ' ') return false;
-
-        buf.DeleteRange(_cursor.Line, _cursor.Column - tabStop, _cursor.Column);
-        _cursor = _cursor with { Column = _cursor.Column - tabStop };
-        EmitText(events);
-        return true;
     }
 
     private static char? GetAutoPairClose(char open) => open switch
