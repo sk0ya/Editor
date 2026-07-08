@@ -3371,6 +3371,69 @@ public class VimEngineTests
         Assert.Equal(")()", engine.CurrentBuffer.Text.GetText());
     }
 
+    // ─────────────── INDENT-AWARE BACKSPACE ───────────────
+
+    [Fact]
+    public void IndentBackspace_DeletesFullTabStopWorthOfSpaces()
+    {
+        var engine = CreateEngine(); // ExpandTab=true, TabStop=2 by default
+        engine.ProcessKey("i");
+        engine.ProcessKey("Tab"); // inserts 2 spaces
+        Assert.Equal("  ", engine.CurrentBuffer.Text.GetText());
+
+        engine.ProcessKey("Back");
+
+        Assert.Equal("", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void IndentBackspace_NotAlignedToTabStop_DeletesSingleSpace()
+    {
+        var config = new VimConfig();
+        config.Options.TabStop = 4;
+        var engine = CreateEngine(config: config);
+        engine.ProcessKey("i");
+        engine.ProcessKey(" ");
+        engine.ProcessKey(" ");
+        engine.ProcessKey(" "); // 3 spaces — not a multiple of tabstop 4
+        Assert.Equal("   ", engine.CurrentBuffer.Text.GetText());
+
+        engine.ProcessKey("Back");
+
+        Assert.Equal("  ", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(2, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void IndentBackspace_AfterNonWhitespaceText_DeletesSingleChar()
+    {
+        var engine = CreateEngine("ab");
+        engine.ProcessKey("A"); // append at end of line, cursor col 2
+        engine.ProcessKey(" ");
+        engine.ProcessKey(" "); // "ab  "
+        Assert.Equal("ab  ", engine.CurrentBuffer.Text.GetText());
+
+        engine.ProcessKey("Back"); // not pure indent — deletes one space only
+
+        Assert.Equal("ab ", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void IndentBackspace_NoExpandTab_DeletesSingleChar()
+    {
+        var config = new VimConfig();
+        config.Options.ExpandTab = false;
+        var engine = CreateEngine(config: config);
+        engine.ProcessKey("i");
+        engine.ProcessKey("Tab"); // inserts a literal tab char
+        Assert.Equal("\t", engine.CurrentBuffer.Text.GetText());
+
+        engine.ProcessKey("Back");
+
+        Assert.Equal("", engine.CurrentBuffer.Text.GetText());
+    }
+
     // ─── Case conversion operators ───────────────────────────────────────────
 
     [Fact]

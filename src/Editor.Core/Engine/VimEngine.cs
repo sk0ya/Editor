@@ -1930,6 +1930,8 @@ public class VimEngine
                         break;
                     }
                 }
+                if (TryDeleteIndentBack(events))
+                    break;
                 DeleteCharBack(events);
                 break;
             case "Delete":
@@ -2098,7 +2100,7 @@ public class VimEngine
             case "Back":
                 BeginPlainEdit();
                 if (hasSelection) DeletePlainSelection(events);
-                else DeleteCharBack(events);
+                else if (!TryDeleteIndentBack(events)) DeleteCharBack(events);
                 return;
             case "Delete":
                 if (hasSelection) { BeginPlainEdit(); DeletePlainSelection(events); return; }
@@ -6064,6 +6066,26 @@ public class VimEngine
             _cursor = new CursorPosition(_cursor.Line - 1, prevLen);
         }
         EmitText(events);
+    }
+
+    // Backspace inside leading indent composed entirely of spaces (soft tabs) removes
+    // a full tabstop's worth at once, mirroring how Tab inserts a full tabstop — so
+    // deleting indentation is symmetric with typing it.
+    private bool TryDeleteIndentBack(List<VimEvent> events)
+    {
+        if (!_config.Options.ExpandTab || _config.Options.Paste) return false;
+        int tabStop = _config.Options.TabStop;
+        if (tabStop <= 1 || _cursor.Column == 0 || _cursor.Column % tabStop != 0) return false;
+
+        var buf = _bufferManager.Current.Text;
+        var line = buf.GetLine(_cursor.Line);
+        for (int i = 0; i < _cursor.Column; i++)
+            if (line[i] != ' ') return false;
+
+        buf.DeleteRange(_cursor.Line, _cursor.Column - tabStop, _cursor.Column);
+        _cursor = _cursor with { Column = _cursor.Column - tabStop };
+        EmitText(events);
+        return true;
     }
 
     private static char? GetAutoPairClose(char open) => open switch
