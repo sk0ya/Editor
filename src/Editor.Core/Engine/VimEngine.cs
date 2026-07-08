@@ -29,6 +29,7 @@ public class VimEngine
     private readonly Commands.FileNavCommands _fileNavCommands;
     private readonly ClipboardEditOps _clipboardOps;
     private readonly TextTransformOps _textTransform;
+    private readonly RepeatTracker _repeatTracker;
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
@@ -94,21 +95,10 @@ public class VimEngine
     private CursorPosition _lastVisualStart;
     private CursorPosition _lastVisualEnd;
     private VimMode _lastVisualMode = VimMode.Visual;
-    private RepeatChange? _lastRepeatChange;
-    private ParsedCommand? _pendingInsertRepeatCommand;
-    private List<VimKeyStroke>? _pendingInsertRepeatKeys;
-    private List<VimKeyStroke>? _pendingVisualRepeatKeys;
-    private (char Name, Register Value)? _pendingVisualRepeatRegister;
-    private bool _isDotReplaying;
     private BlockInsertState? _blockInsertState;
     private readonly List<VimKeyStroke> _pendingMappedInput = [];
     private int _autocmdDepth;
 
-    private sealed record RepeatChange(
-        ParsedCommand? Command,
-        IReadOnlyList<VimKeyStroke> Keys,
-        IReadOnlyList<VimKeyStroke> InsertKeys,
-        (char Name, Register Value)? RegisterSnapshot);
     private sealed record BlockInsertState(int StartLine, int EndLine, int Column, IReadOnlyDictionary<int, int> LineColumns);
 
     public VimMode Mode => _mode;
@@ -206,6 +196,7 @@ public class VimEngine
         _textTransform = new TextTransformOps(_bufferManager, _syntaxEngine, _config.Options, Snapshot,
             EmitText, (events, cursor) => { _cursor = cursor; EmitText(events); }, EmitCursor, EmitStatus,
             (pos, events) => MoveCursor(pos, events));
+        _repeatTracker = new RepeatTracker(_registerManager, ExecuteNormalCommand, ProcessKeyInternal, ProcessStroke);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -460,8 +451,8 @@ public class VimEngine
 
         ProcessKeyInternal(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt, events);
         SyncSpellChecker();
-        TrackPendingInsertRepeat(stroke, modeBefore);
-        TrackPendingVisualRepeat(stroke, modeBefore, events);
+        _repeatTracker.TrackPendingInsertRepeat(stroke, modeBefore, _mode);
+        _repeatTracker.TrackPendingVisualRepeat(stroke, modeBefore, _mode, events);
     }
 
     private bool TryApplyMapping(VimKeyStroke stroke, List<VimEvent> events)
@@ -966,35 +957,35 @@ public class VimEngine
             switch (cmd.Operator)
             {
                 case "d":
-                    SetRepeatChange(cmd);
+                    _repeatTracker.SetRepeatChange(cmd);
                     Snapshot();
                     _cursor = _clipboardOps.DeleteLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
                     return;
                 case "c":
-                    BeginInsertRepeat(cmd);
+                    _repeatTracker.BeginInsertRepeat(cmd);
                     Snapshot();
                     _cursor = _clipboardOps.DeleteLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
                     EnterInsertMode(false, events);
                     return;
                 case "y": _clipboardOps.YankLines(_cursor.Line, endLine, cmd.Register ?? '"', events); return;
                 case ">":
-                    SetRepeatChange(cmd);
+                    _repeatTracker.SetRepeatChange(cmd);
                     _textTransform.IndentRange(_cursor.Line, endLine, true, events);
                     return;
                 case "<":
-                    SetRepeatChange(cmd);
+                    _repeatTracker.SetRepeatChange(cmd);
                     _textTransform.IndentRange(_cursor.Line, endLine, false, events);
                     return;
                 case "=":
-                    SetRepeatChange(cmd);
+                    _repeatTracker.SetRepeatChange(cmd);
                     AutoIndentRange(_cursor.Line, endLine, events);
                     return;
                 case "gc":
-                    SetRepeatChange(cmd);
+                    _repeatTracker.SetRepeatChange(cmd);
                     _textTransform.ToggleCommentLines(_cursor.Line, endLine, events);
                     return;
                 case "gq":
-                    SetRepeatChange(cmd);
+                    _repeatTracker.SetRepeatChange(cmd);
                     Snapshot();
                     _cursor = _textTransform.FormatText(_cursor, _cursor.Line, endLine, events);
                     return;
@@ -1007,17 +998,17 @@ public class VimEngine
                     _awaitingSurroundChar = true;
                     return;
                 case "gu":
-                    SetRepeatChange(cmd);
+                    _repeatTracker.SetRepeatChange(cmd);
                     Snapshot();
                     _textTransform.ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Lower, events);
                     return;
                 case "gU":
-                    SetRepeatChange(cmd);
+                    _repeatTracker.SetRepeatChange(cmd);
                     Snapshot();
                     _textTransform.ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Upper, events);
                     return;
                 case "g~":
-                    SetRepeatChange(cmd);
+                    _repeatTracker.SetRepeatChange(cmd);
                     Snapshot();
                     _textTransform.ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Toggle, events);
                     return;
@@ -1054,38 +1045,38 @@ public class VimEngine
         {
             // Mode transitions
             case "i":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 EnterInsertMode(false, events);
                 break;
             case "I":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 _cursor = motion.FindChar(_cursor, ' ', false, false);
                 GoToLineStart(events);
                 EnterInsertMode(false, events);
                 break;
             case "a":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 _cursor = motion.MoveRight(_cursor, 1, true);
                 EmitCursor(events);
                 EnterInsertMode(false, events);
                 break;
             case "A":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 GoToLineEnd(true, events);
                 EnterInsertMode(false, events);
                 break;
             case "o":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 OpenLineBelow(events);
                 EnterInsertMode(false, events);
                 break;
             case "O":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 OpenLineAbove(events);
                 EnterInsertMode(false, events);
                 break;
             case "R":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 EnterReplaceMode(events);
                 break;
             case "v": EnterVisualMode(VimMode.Visual, events); break;
@@ -1172,7 +1163,7 @@ public class VimEngine
                 break;
             }
             case "gJ":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _cursor = _textTransform.JoinLinesNoSpace(_cursor, count, events);
                 break;
             case "gn":
@@ -1273,19 +1264,19 @@ public class VimEngine
 
             // Editing
             case "x":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 // Delete [count] chars from cursor position
                 var xEnd = _cursor with { Column = Math.Min(_cursor.Column + count - 1, Math.Max(0, buf.GetLineLength(_cursor.Line) - 1)) };
                 _cursor = _clipboardOps.ExecuteDelete(_cursor, xEnd, false, events, cmd.Register ?? '"');
                 break;
             case "X":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 // Delete [count] chars before cursor
                 var xStart = motion.MoveLeft(_cursor, count);
                 if (xStart.Column < _cursor.Column) _cursor = _clipboardOps.ExecuteDelete(xStart, _cursor with { Column = _cursor.Column - 1 }, false, events, cmd.Register ?? '"');
                 break;
             case "s":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 var sStart = _cursor;
                 _cursor = _clipboardOps.ExecuteDelete(_cursor, motion.MoveRight(_cursor, count), false, events, cmd.Register ?? '"');
                 _cursor = _bufferManager.Current.Text.ClampCursor(sStart, true);
@@ -1293,17 +1284,17 @@ public class VimEngine
                 EnterInsertMode(false, events);
                 break;
             case "S":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 _cursor = _clipboardOps.DeleteLines(_cursor.Line, _cursor.Line, events, cmd.Register ?? '"');
                 EnterInsertMode(false, events);
                 break;
             case "D":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 var eol = GetLineLength() - 1;
                 if (eol >= _cursor.Column) _cursor = _clipboardOps.ExecuteDelete(_cursor, _cursor with { Column = eol }, false, events, cmd.Register ?? '"');
                 break;
             case "C":
-                BeginInsertRepeat(cmd);
+                _repeatTracker.BeginInsertRepeat(cmd);
                 var cStart = _cursor;
                 var ceol = GetLineLength() - 1;
                 if (ceol >= _cursor.Column) _cursor = _clipboardOps.ExecuteDelete(_cursor, _cursor with { Column = ceol }, false, events, cmd.Register ?? '"');
@@ -1313,56 +1304,56 @@ public class VimEngine
                 break;
             case "Y": _clipboardOps.YankLines(_cursor.Line, _cursor.Line + count - 1, cmd.Register ?? '"', events); break;
             case "p":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _cursor = _clipboardOps.PasteAfter(_cursor, cmd.Register ?? '"', events);
                 break;
             case "P":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _cursor = _clipboardOps.PasteBefore(_cursor, cmd.Register ?? '"', events);
                 break;
             case "gp":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _cursor = _clipboardOps.PasteAfter(_cursor, cmd.Register ?? '"', events, cursorAfterPaste: true);
                 break;
             case "gP":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _cursor = _clipboardOps.PasteBefore(_cursor, cmd.Register ?? '"', events, cursorAfterPaste: true);
                 break;
             case "]p":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _cursor = _clipboardOps.ExecuteIndentedPaste(_cursor, after: true, cmd.Register ?? '"', _config.Options.TabStop, events);
                 break;
             case "[p":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _cursor = _clipboardOps.ExecuteIndentedPaste(_cursor, after: false, cmd.Register ?? '"', _config.Options.TabStop, events);
                 break;
             case "u": ExecuteUndo(events); break;
             case "U": ExecuteUndo(events); break;
             case "\x12": ExecuteRedo(events); break;
             case "\x16": EnterVisualMode(VimMode.VisualBlock, events); break;
-            case ".": RepeatLastChange(count, events); break;
+            case ".": _repeatTracker.RepeatLastChange(count, events); break;
             case "J":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _textTransform.JoinLines(_cursor, count, events);
                 break;
             case "~":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _cursor = _textTransform.ToggleCase(_cursor, count, events);
                 break;
             case ">>":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 Snapshot();
                 _textTransform.IndentRange(_cursor.Line, _cursor.Line, true, events);
                 break;
             case "<<":
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 Snapshot();
                 _textTransform.IndentRange(_cursor.Line, _cursor.Line, false, events);
                 break;
 
             // r: replace char (needs next input)
             case var r when r?.StartsWith('r') == true && r.Length == 2:
-                SetRepeatChange(cmd);
+                _repeatTracker.SetRepeatChange(cmd);
                 _cursor = _textTransform.ExecuteReplace(_cursor, r[1], events);
                 break;
             case "r": _pendingReplaceChar = null; /* wait */ break;
@@ -1437,8 +1428,8 @@ public class VimEngine
             var range = new TextObjectEngine(buf).GetRange(cmd.Motion, _cursor, Math.Max(1, cmd.Count));
             if (range == null) return;
 
-            if (cmd.Operator == "c") BeginInsertRepeat(cmd);
-            else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
+            if (cmd.Operator == "c") _repeatTracker.BeginInsertRepeat(cmd);
+            else if (cmd.Operator is "d" or "<" or ">" or "=") _repeatTracker.SetRepeatChange(cmd);
 
             ExecuteOperator(cmd.Operator, range.Value.Start, range.Value.End, cmd.Register ?? '"', false, events);
             return;
@@ -1449,8 +1440,8 @@ public class VimEngine
         {
             var gnMatch = FindGnMatch(cmd.Motion == "gn");
             if (gnMatch == null) return;
-            if (cmd.Operator == "c") BeginInsertRepeat(cmd);
-            else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
+            if (cmd.Operator == "c") _repeatTracker.BeginInsertRepeat(cmd);
+            else if (cmd.Operator is "d" or "<" or ">" or "=") _repeatTracker.SetRepeatChange(cmd);
             ExecuteOperator(cmd.Operator!, gnMatch.Value.Start, gnMatch.Value.End, cmd.Register ?? '"', false, events);
             return;
         }
@@ -1468,8 +1459,8 @@ public class VimEngine
                 return;
             }
 
-            if (cmd.Operator == "c") BeginInsertRepeat(cmd);
-            else if (cmd.Operator is "d" or "<" or ">" or "=") SetRepeatChange(cmd);
+            if (cmd.Operator == "c") _repeatTracker.BeginInsertRepeat(cmd);
+            else if (cmd.Operator is "d" or "<" or ">" or "=") _repeatTracker.SetRepeatChange(cmd);
             ExecuteOperator(cmd.Operator, _cursor, found, cmd.Register ?? '"', false, events);
             return;
         }
@@ -1502,8 +1493,8 @@ public class VimEngine
             return;
         }
 
-        if (cmd.Operator == "c") BeginInsertRepeat(cmd);
-        else if (cmd.Operator is "d" or "<" or ">" or "=" or "gu" or "gU" or "g~") SetRepeatChange(cmd);
+        if (cmd.Operator == "c") _repeatTracker.BeginInsertRepeat(cmd);
+        else if (cmd.Operator is "d" or "<" or ">" or "=" or "gu" or "gU" or "g~") _repeatTracker.SetRepeatChange(cmd);
 
         var opFrom = _cursor;
         var opTo = mot.Value.Target;
@@ -3783,126 +3774,6 @@ public class VimEngine
         else EmitStatus(events, "Already at newest change");
     }
 
-    private void RepeatLastChange(int count, List<VimEvent> events)
-    {
-        if (_lastRepeatChange == null) return;
-
-        _isDotReplaying = true;
-        try
-        {
-            for (int i = 0; i < count; i++)
-            {
-                if (_lastRepeatChange.RegisterSnapshot is { } snapshot)
-                    _registerManager.Set(snapshot.Name, snapshot.Value);
-
-                if (_lastRepeatChange.Command.HasValue)
-                {
-                    ExecuteNormalCommand(_lastRepeatChange.Command.Value, events);
-                    foreach (var stroke in _lastRepeatChange.InsertKeys)
-                        ProcessKeyInternal(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt, events);
-                }
-                else
-                {
-                    foreach (var stroke in _lastRepeatChange.Keys)
-                        ProcessStroke(stroke, events, allowMapping: false);
-                }
-            }
-        }
-        finally
-        {
-            _isDotReplaying = false;
-        }
-    }
-
-    private void SetRepeatChange(ParsedCommand cmd)
-    {
-        if (_isDotReplaying) return;
-        _lastRepeatChange = new RepeatChange(cmd, [], [], null);
-        _pendingInsertRepeatCommand = null;
-        _pendingInsertRepeatKeys = null;
-        _pendingVisualRepeatKeys = null;
-        _pendingVisualRepeatRegister = null;
-    }
-
-    private void BeginInsertRepeat(ParsedCommand cmd)
-    {
-        if (_isDotReplaying) return;
-        _pendingInsertRepeatCommand = cmd;
-        _pendingInsertRepeatKeys = [];
-    }
-
-    private void TrackPendingInsertRepeat(VimKeyStroke stroke, VimMode modeBefore)
-    {
-        if (_isDotReplaying || _pendingInsertRepeatKeys == null) return;
-        if (modeBefore is not (VimMode.Insert or VimMode.Replace)) return;
-
-        _pendingInsertRepeatKeys.Add(stroke);
-
-        if (_mode is VimMode.Insert or VimMode.Replace) return;
-        if (_pendingInsertRepeatCommand == null) return;
-
-        _lastRepeatChange = new RepeatChange(_pendingInsertRepeatCommand.Value, [], [.. _pendingInsertRepeatKeys], null);
-        _pendingInsertRepeatCommand = null;
-        _pendingInsertRepeatKeys = null;
-    }
-
-    private void TrackPendingVisualRepeat(VimKeyStroke stroke, VimMode modeBefore, List<VimEvent> events)
-    {
-        if (_isDotReplaying) return;
-
-        var wasVisual = IsVisualMode(modeBefore);
-        var isVisual = IsVisualMode(_mode);
-        var wasInsert = modeBefore is VimMode.Insert or VimMode.Replace;
-        var isInsert = _mode is VimMode.Insert or VimMode.Replace;
-
-        if (_pendingVisualRepeatKeys == null)
-        {
-            if (modeBefore == VimMode.Normal && isVisual)
-                _pendingVisualRepeatKeys = [stroke];
-            return;
-        }
-
-        _pendingVisualRepeatKeys.Add(stroke);
-
-        if (isVisual || isInsert || IsCommandLineMode(_mode))
-            return;
-
-        if (_mode == VimMode.Normal)
-        {
-            if (wasInsert || (wasVisual && events.Any(e => e.Type == VimEventType.TextChanged)) ||
-                (IsCommandLineMode(modeBefore) && events.Any(e => e.Type == VimEventType.TextChanged)))
-            {
-                SetRepeatChange([.. _pendingVisualRepeatKeys]);
-            }
-            else if (wasVisual || IsCommandLineMode(modeBefore))
-            {
-                _pendingVisualRepeatKeys = null;
-                _pendingVisualRepeatRegister = null;
-            }
-
-            return;
-        }
-
-        _pendingVisualRepeatKeys = null;
-        _pendingVisualRepeatRegister = null;
-    }
-
-    private static bool IsVisualMode(VimMode mode) =>
-        mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock;
-
-    private static bool IsCommandLineMode(VimMode mode) =>
-        mode is VimMode.Command or VimMode.SearchForward or VimMode.SearchBackward;
-
-    private void SetRepeatChange(IReadOnlyList<VimKeyStroke> keys)
-    {
-        if (_isDotReplaying) return;
-        _lastRepeatChange = new RepeatChange(null, keys, [], _pendingVisualRepeatRegister);
-        _pendingInsertRepeatCommand = null;
-        _pendingInsertRepeatKeys = null;
-        _pendingVisualRepeatKeys = null;
-        _pendingVisualRepeatRegister = null;
-    }
-
     private void AutoIndentRange(int start, int end, List<VimEvent> events) { EmitText(events); }
 
     // Markdown list Tab indenting: in a .md/.markdown file, when the cursor line
@@ -4253,8 +4124,8 @@ public class VimEngine
         var regType = reg.Type;
         var regText = reg.Text;
         var regLines = reg.GetLines();
-        if (!_isDotReplaying)
-            _pendingVisualRepeatRegister = (register, new Register(reg.Text, reg.Type));
+        if (!_repeatTracker.IsDotReplaying)
+            _repeatTracker.PendingVisualRepeatRegister = (register, new Register(reg.Text, reg.Type));
 
         var sel = _selection.Value;
         var mode = _mode;
