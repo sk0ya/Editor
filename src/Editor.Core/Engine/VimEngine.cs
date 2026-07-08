@@ -3910,34 +3910,7 @@ public class VimEngine
     }
 
     private string[] CollectBufferKeywords(string prefix)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var result = new List<string>();
-        foreach (var vbuf in _bufferManager.Buffers)
-        {
-            for (int l = 0; l < vbuf.Text.LineCount; l++)
-            {
-                var line = vbuf.Text.GetLine(l);
-                int i = 0;
-                while (i < line.Length)
-                {
-                    if (MotionEngine.IsWordChar(line[i]))
-                    {
-                        int start = i;
-                        while (i < line.Length && MotionEngine.IsWordChar(line[i]))
-                            i++;
-                        var word = line[start..i];
-                        if (word.Length > prefix.Length &&
-                            word.StartsWith(prefix, StringComparison.Ordinal) &&
-                            seen.Add(word))
-                            result.Add(word);
-                    }
-                    else i++;
-                }
-            }
-        }
-        return [.. result];
-    }
+        => CompletionCollector.CollectBufferKeywords(_bufferManager, prefix);
 
     // Ctrl+X Ctrl+F — file path completion
     private void CycleFilePathCompletion(int dir, List<VimEvent> events)
@@ -3966,42 +3939,7 @@ public class VimEngine
     }
 
     private string[] CollectFilePathCompletions(string prefix)
-    {
-        // Determine base directory for relative paths
-        string? currentFile = _bufferManager.Current.FilePath;
-        string baseDir = currentFile != null
-            ? Path.GetDirectoryName(currentFile) ?? Directory.GetCurrentDirectory()
-            : Directory.GetCurrentDirectory();
-
-        // Split prefix into directory part and file prefix
-        string dirPart = Path.GetDirectoryName(prefix) ?? "";
-        string filePart = Path.GetFileName(prefix);
-        string searchDir = dirPart.Length > 0
-            ? (Path.IsPathRooted(dirPart) ? dirPart : Path.Combine(baseDir, dirPart))
-            : baseDir;
-
-        if (!Directory.Exists(searchDir))
-            return [];
-
-        var results = new List<string>();
-        try
-        {
-            foreach (var entry in Directory.EnumerateFileSystemEntries(searchDir, filePart + "*")
-                                           .OrderBy(e => e))
-            {
-                string name = Path.GetFileName(entry);
-                bool isDir = Directory.Exists(entry);
-                string completion = dirPart.Length > 0
-                    ? Path.Combine(dirPart, name).Replace('\\', '/')
-                    : name;
-                if (isDir) completion += "/";
-                results.Add(completion);
-            }
-        }
-        catch (UnauthorizedAccessException) { }
-        catch (IOException) { }
-        return [.. results];
-    }
+        => CompletionCollector.CollectFilePathCompletions(_bufferManager, prefix);
 
     // Ctrl+X Ctrl+L — whole-line completion
     private void CycleLineCompletion(int dir, List<VimEvent> events)
@@ -4027,24 +3965,7 @@ public class VimEngine
     }
 
     private string[] CollectLineCompletions(string prefix, int currentLine)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var result = new List<string>();
-        foreach (var vbuf in _bufferManager.Buffers)
-        {
-            for (int l = 0; l < vbuf.Text.LineCount; l++)
-            {
-                if (vbuf == _bufferManager.Current && l == currentLine) continue;
-                var line = vbuf.Text.GetLine(l);
-                var trimmed = line.TrimStart();
-                if (trimmed.Length > prefix.Length &&
-                    trimmed.StartsWith(prefix, StringComparison.Ordinal) &&
-                    seen.Add(line))
-                    result.Add(line);
-            }
-        }
-        return [.. result];
-    }
+        => CompletionCollector.CollectLineCompletions(_bufferManager, prefix, currentLine);
 
     private void InsertTextAtCursor(string rawText, List<VimEvent> events)
     {
