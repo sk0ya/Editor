@@ -28,6 +28,7 @@ public class VimEngine
     private readonly Commands.FoldCommands _foldCommands;
     private readonly Commands.FileNavCommands _fileNavCommands;
     private readonly ClipboardEditOps _clipboardOps;
+    private readonly TextTransformOps _textTransform;
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
@@ -202,6 +203,9 @@ public class VimEngine
         _fileNavCommands = new Commands.FileNavCommands(_bufferManager);
         _clipboardOps = new ClipboardEditOps(_bufferManager, _registerManager, Snapshot,
             (events, cursor) => { _cursor = cursor; EmitText(events); }, EmitStatus);
+        _textTransform = new TextTransformOps(_bufferManager, _syntaxEngine, _config.Options, Snapshot,
+            EmitText, (events, cursor) => { _cursor = cursor; EmitText(events); }, EmitCursor, EmitStatus,
+            (pos, events) => MoveCursor(pos, events));
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -777,11 +781,11 @@ public class VimEngine
             _awaitingMarkJumpLine = false;
             return;
         }
-        if (_pendingReplaceChar.HasValue) { ExecuteReplace(key[0], events); _pendingReplaceChar = null; return; }
+        if (_pendingReplaceChar.HasValue) { _cursor = _textTransform.ExecuteReplace(_cursor, key[0], events); _pendingReplaceChar = null; return; }
         if (_awaitingSurroundChar)
         {
             _awaitingSurroundChar = false;
-            if (key.Length == 1) ApplySurround(_surroundStart, _surroundEnd, _surroundLinewise, key[0], events);
+            if (key.Length == 1) _cursor = _textTransform.ApplySurround(_surroundStart, _surroundEnd, _surroundLinewise, key[0], events);
             return;
         }
 
@@ -857,14 +861,14 @@ public class VimEngine
             {
                 int cnt = int.TryParse(_commandParser.Buffer, out var n) ? n : 1;
                 _commandParser.Reset();
-                ExecuteIncrementNumber(cnt, true, events);
+                _cursor = _textTransform.ExecuteIncrementNumber(_cursor, cnt, true, events);
                 break;
             }
             case "x":
             {
                 int cnt = int.TryParse(_commandParser.Buffer, out var n) ? n : 1;
                 _commandParser.Reset();
-                ExecuteIncrementNumber(cnt, false, events);
+                _cursor = _textTransform.ExecuteIncrementNumber(_cursor, cnt, false, events);
                 break;
             }
             case "[":
@@ -975,11 +979,11 @@ public class VimEngine
                 case "y": _clipboardOps.YankLines(_cursor.Line, endLine, cmd.Register ?? '"', events); return;
                 case ">":
                     SetRepeatChange(cmd);
-                    IndentRange(_cursor.Line, endLine, true, events);
+                    _textTransform.IndentRange(_cursor.Line, endLine, true, events);
                     return;
                 case "<":
                     SetRepeatChange(cmd);
-                    IndentRange(_cursor.Line, endLine, false, events);
+                    _textTransform.IndentRange(_cursor.Line, endLine, false, events);
                     return;
                 case "=":
                     SetRepeatChange(cmd);
@@ -987,12 +991,12 @@ public class VimEngine
                     return;
                 case "gc":
                     SetRepeatChange(cmd);
-                    ToggleCommentLines(_cursor.Line, endLine, events);
+                    _textTransform.ToggleCommentLines(_cursor.Line, endLine, events);
                     return;
                 case "gq":
                     SetRepeatChange(cmd);
                     Snapshot();
-                    FormatText(_cursor.Line, endLine, events);
+                    _cursor = _textTransform.FormatText(_cursor, _cursor.Line, endLine, events);
                     return;
                 case "ys":
                     // yss{char}: surround current line(s) — await surround char
@@ -1005,17 +1009,17 @@ public class VimEngine
                 case "gu":
                     SetRepeatChange(cmd);
                     Snapshot();
-                    ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Lower, events);
+                    _textTransform.ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Lower, events);
                     return;
                 case "gU":
                     SetRepeatChange(cmd);
                     Snapshot();
-                    ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Upper, events);
+                    _textTransform.ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Upper, events);
                     return;
                 case "g~":
                     SetRepeatChange(cmd);
                     Snapshot();
-                    ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Toggle, events);
+                    _textTransform.ApplyCaseConversion(new CursorPosition(_cursor.Line, 0), new CursorPosition(endLine, 0), true, CaseConversion.Toggle, events);
                     return;
             }
         }
@@ -1024,13 +1028,13 @@ public class VimEngine
         if (cmd.Operator == null && cmd.Motion?.StartsWith("cs") == true && cmd.Motion.Length >= 4)
         {
             Snapshot();
-            ExecuteChangeSurround(cmd.Motion[2], cmd.Motion[3], events);
+            _cursor = _textTransform.ExecuteChangeSurround(_cursor, cmd.Motion[2], cmd.Motion[3], events);
             return;
         }
         if (cmd.Operator == null && cmd.Motion?.StartsWith("ds") == true && cmd.Motion.Length >= 3)
         {
             Snapshot();
-            ExecuteDeleteSurround(cmd.Motion[2], events);
+            _cursor = _textTransform.ExecuteDeleteSurround(_cursor, cmd.Motion[2], events);
             return;
         }
 
@@ -1169,7 +1173,7 @@ public class VimEngine
             }
             case "gJ":
                 SetRepeatChange(cmd);
-                JoinLinesNoSpace(count, events);
+                _cursor = _textTransform.JoinLinesNoSpace(_cursor, count, events);
                 break;
             case "gn":
             case "gN":
@@ -1339,25 +1343,27 @@ public class VimEngine
             case ".": RepeatLastChange(count, events); break;
             case "J":
                 SetRepeatChange(cmd);
-                JoinLines(count, events);
+                _textTransform.JoinLines(_cursor, count, events);
                 break;
             case "~":
                 SetRepeatChange(cmd);
-                ToggleCase(count, events);
+                _cursor = _textTransform.ToggleCase(_cursor, count, events);
                 break;
             case ">>":
                 SetRepeatChange(cmd);
-                IndentLine(true, count, events);
+                Snapshot();
+                _textTransform.IndentRange(_cursor.Line, _cursor.Line, true, events);
                 break;
             case "<<":
                 SetRepeatChange(cmd);
-                IndentLine(false, count, events);
+                Snapshot();
+                _textTransform.IndentRange(_cursor.Line, _cursor.Line, false, events);
                 break;
 
             // r: replace char (needs next input)
             case var r when r?.StartsWith('r') == true && r.Length == 2:
                 SetRepeatChange(cmd);
-                ExecuteReplace(r[1], events);
+                _cursor = _textTransform.ExecuteReplace(_cursor, r[1], events);
                 break;
             case "r": _pendingReplaceChar = null; /* wait */ break;
 
@@ -1567,20 +1573,20 @@ public class VimEngine
                 MoveCursor(start, events);
                 EmitStatus(events, linewise ? $"{end.Line - start.Line + 1} lines yanked" : "yanked");
                 break;
-            case ">": IndentRange(start.Line, end.Line, true, events); break;
-            case "<": IndentRange(start.Line, end.Line, false, events); break;
+            case ">": _textTransform.IndentRange(start.Line, end.Line, true, events); break;
+            case "<": _textTransform.IndentRange(start.Line, end.Line, false, events); break;
             case "=": AutoIndentRange(start.Line, end.Line, events); break;
-            case "gc": ToggleCommentLines(start.Line, end.Line, events); break;
-            case "gq": FormatText(start.Line, end.Line, events); break;
+            case "gc": _textTransform.ToggleCommentLines(start.Line, end.Line, events); break;
+            case "gq": _cursor = _textTransform.FormatText(_cursor, start.Line, end.Line, events); break;
             case "ys":
                 _surroundStart = start;
                 _surroundEnd = end;
                 _surroundLinewise = linewise;
                 _awaitingSurroundChar = true;
                 return;
-            case "gu": ApplyCaseConversion(start, end, linewise, CaseConversion.Lower, events); break;
-            case "gU": ApplyCaseConversion(start, end, linewise, CaseConversion.Upper, events); break;
-            case "g~": ApplyCaseConversion(start, end, linewise, CaseConversion.Toggle, events); break;
+            case "gu": _textTransform.ApplyCaseConversion(start, end, linewise, CaseConversion.Lower, events); break;
+            case "gU": _textTransform.ApplyCaseConversion(start, end, linewise, CaseConversion.Upper, events); break;
+            case "g~": _textTransform.ApplyCaseConversion(start, end, linewise, CaseConversion.Toggle, events); break;
         }
     }
 
@@ -1775,7 +1781,7 @@ public class VimEngine
                     InsertTextAtCursor(System.DateTime.Now.ToString("yyyy/MM/dd"), events);
                     return;
                 case "t": // Ctrl+T — indent current line by shiftwidth
-                    IndentRange(_cursor.Line, _cursor.Line, true, events);
+                    _textTransform.IndentRange(_cursor.Line, _cursor.Line, true, events);
                     _cursor = _cursor with { Column = _cursor.Column + _config.Options.ShiftWidth };
                     EmitCursor(events);
                     return;
@@ -1786,7 +1792,7 @@ public class VimEngine
                     var sw = _config.Options.ShiftWidth;
                     for (int i = 0; i < sw && i < lineBeforeDedent.Length && (lineBeforeDedent[i] == ' ' || lineBeforeDedent[i] == '\t'); i++)
                         removedChars++;
-                    IndentRange(_cursor.Line, _cursor.Line, false, events);
+                    _textTransform.IndentRange(_cursor.Line, _cursor.Line, false, events);
                     _cursor = _cursor with { Column = Math.Max(0, _cursor.Column - removedChars) };
                     EmitCursor(events);
                     return;
@@ -3747,94 +3753,6 @@ public class VimEngine
         EmitText(events);
     }
 
-    private void ExecuteReplace(char ch, List<VimEvent> events)
-    {
-        Snapshot();
-        var buf = _bufferManager.Current.Text;
-        if (_cursor.Column < buf.GetLineLength(_cursor.Line))
-        {
-            buf.DeleteChar(_cursor.Line, _cursor.Column);
-            buf.InsertChar(_cursor.Line, _cursor.Column, ch);
-        }
-        EmitText(events);
-    }
-
-    private void ExecuteIncrementNumber(int count, bool increment, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        var line = buf.GetLine(_cursor.Line);
-        int col = _cursor.Column;
-
-        int numStart = -1, numEnd = -1;
-        bool isHex = false, hexUpper = false;
-
-        for (int i = col; i < line.Length; i++)
-        {
-            // Hex: 0x... or 0X...
-            if (line[i] == '0' && i + 1 < line.Length && (line[i + 1] == 'x' || line[i + 1] == 'X'))
-            {
-                hexUpper = line[i + 1] == 'X';
-                int j = i + 2;
-                while (j < line.Length && char.IsAsciiHexDigit(line[j])) j++;
-                if (j > i + 2) { numStart = i; numEnd = j; isHex = true; break; }
-            }
-            // Negative decimal: -N (not preceded by word char or underscore)
-            if (line[i] == '-' && i + 1 < line.Length && char.IsDigit(line[i + 1])
-                && (i == 0 || (!char.IsLetterOrDigit(line[i - 1]) && line[i - 1] != '_')))
-            {
-                int j = i + 1;
-                while (j < line.Length && char.IsDigit(line[j])) j++;
-                numStart = i; numEnd = j; break;
-            }
-            // Decimal: walk backward first to find the true start of the number
-            if (char.IsDigit(line[i]))
-            {
-                int start = i;
-                while (start > 0 && char.IsDigit(line[start - 1])) start--;
-                // Check for negative sign before the number
-                if (start > 0 && line[start - 1] == '-'
-                    && (start < 2 || (!char.IsLetterOrDigit(line[start - 2]) && line[start - 2] != '_')))
-                    start--;
-                int end = i + 1;
-                while (end < line.Length && char.IsDigit(line[end])) end++;
-                numStart = start; numEnd = end; break;
-            }
-        }
-
-        if (numStart == -1) return;
-
-        long delta = increment ? count : -(long)count;
-        string numStr = line[numStart..numEnd];
-        string newStr;
-
-        if (isHex)
-        {
-            ulong hexVal = Convert.ToUInt64(numStr[2..], 16);
-            long newVal = (long)hexVal + delta;
-            int digits = numStr.Length - 2;
-            if (newVal >= 0)
-            {
-                string fmt = hexUpper ? "X" : "x";
-                newStr = (hexUpper ? "0X" : "0x") + ((ulong)newVal).ToString(fmt).PadLeft(digits, '0');
-            }
-            else
-            {
-                newStr = newVal.ToString();
-            }
-        }
-        else
-        {
-            long decVal = long.Parse(numStr);
-            newStr = (decVal + delta).ToString();
-        }
-
-        Snapshot();
-        string newLine = line[..numStart] + newStr + line[numEnd..];
-        buf.ReplaceLine(_cursor.Line, newLine);
-        _cursor = _cursor with { Column = Math.Min(numStart + newStr.Length - 1, Math.Max(0, newLine.Length - 1)) };
-        EmitText(events);
-    }
-
     private void ExecuteUndo(List<VimEvent> events)
     {
         var vbuf = _bufferManager.Current;
@@ -3985,360 +3903,12 @@ public class VimEngine
         _pendingVisualRepeatRegister = null;
     }
 
-    private void JoinLines(int count, List<VimEvent> events)
-    {
-        Snapshot();
-        var buf = _bufferManager.Current.Text;
-        for (int i = 0; i < count; i++)
-        {
-            if (_cursor.Line < buf.LineCount - 1)
-            {
-                var len = buf.GetLineLength(_cursor.Line);
-                buf.JoinLines(_cursor.Line);
-                // Add space if needed
-                if (len > 0 && _cursor.Column < buf.GetLineLength(_cursor.Line))
-                {
-                    var joined = buf.GetLine(_cursor.Line);
-                    if (joined.Length > len && joined[len] != ' ')
-                        buf.InsertChar(_cursor.Line, len, ' ');
-                }
-            }
-        }
-        EmitText(events);
-    }
-
-    private void JoinLinesNoSpace(int count, List<VimEvent> events)
-    {
-        Snapshot();
-        var buf = _bufferManager.Current.Text;
-        int joinCol = 0;
-        for (int i = 0; i < count; i++)
-        {
-            if (_cursor.Line < buf.LineCount - 1)
-            {
-                // Strip all leading whitespace from next line before joining (matches Vim gJ)
-                var nextLine = buf.GetLine(_cursor.Line + 1);
-                int trimStart = nextLine.Length - nextLine.TrimStart().Length;
-                if (trimStart > 0)
-                    buf.DeleteRange(_cursor.Line + 1, 0, trimStart);
-                joinCol = buf.GetLineLength(_cursor.Line);
-                buf.JoinLines(_cursor.Line);
-            }
-        }
-        _cursor = buf.ClampCursor(_cursor with { Column = Math.Max(0, joinCol - 1) });
-        EmitText(events);
-    }
-
-    private void ToggleCase(int count, List<VimEvent> events)
-    {
-        Snapshot();
-        var buf = _bufferManager.Current.Text;
-        for (int i = 0; i < count; i++)
-        {
-            var line = buf.GetLine(_cursor.Line);
-            if (_cursor.Column < line.Length)
-            {
-                var ch = line[_cursor.Column];
-                var toggled = char.IsUpper(ch) ? char.ToLower(ch) : char.ToUpper(ch);
-                buf.DeleteChar(_cursor.Line, _cursor.Column);
-                buf.InsertChar(_cursor.Line, _cursor.Column, toggled);
-                if (_cursor.Column < buf.GetLineLength(_cursor.Line) - 1)
-                    _cursor = _cursor with { Column = _cursor.Column + 1 };
-            }
-        }
-        EmitText(events);
-    }
-
-    private enum CaseConversion { Lower, Upper, Toggle }
-
-    private void ApplyBlockCaseConversion(Selection selection, CaseConversion mode, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        foreach (var range in GetBlockLineRanges(selection))
-        {
-            var line = buf.GetLine(range.Line);
-            if (line.Length <= range.StartColumn) continue;
-
-            var chars = line.ToCharArray();
-            var endColumn = Math.Min(range.EndColumn, chars.Length - 1);
-            bool changed = false;
-            for (int c = range.StartColumn; c <= endColumn; c++)
-            {
-                char converted = mode switch
-                {
-                    CaseConversion.Lower => char.ToLower(chars[c]),
-                    CaseConversion.Upper => char.ToUpper(chars[c]),
-                    _ => char.IsUpper(chars[c]) ? char.ToLower(chars[c]) : char.ToUpper(chars[c])
-                };
-                if (converted != chars[c]) { chars[c] = converted; changed = true; }
-            }
-            if (changed) buf.ReplaceLine(range.Line, new string(chars));
-        }
-
-        var (startLine, _, _, _) = GetBlockBounds(selection);
-        MoveCursor(new CursorPosition(startLine, GetBlockLeftColumn(selection)), events);
-        EmitText(events);
-    }
-
-    private void ApplyCaseConversion(CursorPosition from, CursorPosition to, bool linewise, CaseConversion mode, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        var start = from.Line < to.Line || (from.Line == to.Line && from.Column <= to.Column) ? from : to;
-        var end = start == from ? to : from;
-
-        for (int l = start.Line; l <= end.Line; l++)
-        {
-            var line = buf.GetLine(l);
-            int colStart = (!linewise && l == start.Line) ? start.Column : 0;
-            int colEnd = (!linewise && l == end.Line) ? end.Column : line.Length - 1;
-            var chars = line.ToCharArray();
-            bool changed = false;
-            for (int c = colStart; c <= colEnd && c < chars.Length; c++)
-            {
-                char converted = mode switch
-                {
-                    CaseConversion.Lower => char.ToLower(chars[c]),
-                    CaseConversion.Upper => char.ToUpper(chars[c]),
-                    _ => char.IsUpper(chars[c]) ? char.ToLower(chars[c]) : char.ToUpper(chars[c])
-                };
-                if (converted != chars[c]) { chars[c] = converted; changed = true; }
-            }
-            if (changed) buf.ReplaceLine(l, new string(chars));
-        }
-        MoveCursor(start, events);
-        EmitText(events);
-    }
-
-    private void IndentLine(bool indent, int count, List<VimEvent> events)
-    {
-        Snapshot();
-        IndentRange(_cursor.Line, _cursor.Line, indent, events);
-    }
-
-    private void IndentRange(int start, int end, bool indent, List<VimEvent> events)
-    {
-        Snapshot();
-        var buf = _bufferManager.Current.Text;
-        var sw = _config.Options.ShiftWidth;
-        var indentStr = _config.Options.ExpandTab ? new string(' ', sw) : "\t";
-
-        for (int l = start; l <= end; l++)
-        {
-            if (indent)
-                buf.InsertText(l, 0, indentStr);
-            else
-            {
-                var line = buf.GetLine(l);
-                int toRemove = 0;
-                for (int i = 0; i < sw && i < line.Length && (line[i] == ' ' || line[i] == '\t'); i++)
-                    toRemove++;
-                if (toRemove > 0) buf.DeleteRange(l, 0, toRemove);
-            }
-        }
-        EmitText(events);
-    }
-
     private void AutoIndentRange(int start, int end, List<VimEvent> events) { EmitText(events); }
 
     // Markdown list Tab indenting: in a .md/.markdown file, when the cursor line
     // is a list item, Tab should indent (and Shift+Tab dedent) the whole item by
     // one shiftwidth — matching Obsidian/VS Code — instead of inserting a tab at
     // the cursor. Callers test this first and fall back to normal Tab otherwise.
-    private void ToggleCommentLines(int startLine, int endLine, List<VimEvent> events)
-    {
-        var prefix = _syntaxEngine.GetCommentPrefix();
-        if (prefix != null)
-        {
-            Snapshot();
-            ToggleLineCommentLines(startLine, endLine, prefix, events);
-            return;
-        }
-
-        var block = _syntaxEngine.GetBlockComment();
-        if (block == null)
-        {
-            EmitStatus(events, "No comment prefix for this file type");
-            return;
-        }
-
-        Snapshot();
-        ToggleBlockCommentLines(startLine, endLine, block.Value.Prefix, block.Value.Suffix, events);
-    }
-
-    private void ToggleLineCommentLines(int startLine, int endLine, string prefix, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-
-        // Collect line data and detect if ALL non-empty lines are already commented
-        int count = endLine - startLine + 1;
-        var lines = new (string Raw, string Trimmed, int Indent)[count];
-        bool allCommented = true;
-        for (int i = 0; i < count; i++)
-        {
-            var raw = buf.GetLine(startLine + i);
-            var trimmed = raw.TrimStart();
-            lines[i] = (raw, trimmed, raw.Length - trimmed.Length);
-            if (trimmed.Length > 0 && !trimmed.StartsWith(prefix))
-                allCommented = false;
-        }
-
-        for (int i = 0; i < count; i++)
-        {
-            var (raw, trimmed, indent) = lines[i];
-            if (allCommented)
-            {
-                // Remove comment prefix (and one trailing space if present)
-                if (!trimmed.StartsWith(prefix)) continue;
-                string uncommented = trimmed[prefix.Length..];
-                if (uncommented.StartsWith(" ")) uncommented = uncommented[1..];
-                buf.ReplaceLine(startLine + i, raw[..indent] + uncommented);
-            }
-            else
-            {
-                // Add comment prefix; skip blank lines
-                if (trimmed.Length == 0) continue;
-                buf.ReplaceLine(startLine + i, raw[..indent] + prefix + " " + trimmed);
-            }
-        }
-
-        EmitText(events);
-    }
-
-    // Per-line block-comment toggle (used by languages with no line-comment syntax, e.g.
-    // CSS's /* */ or XML/Markdown's <!-- -->): each non-empty line is individually wrapped
-    // in open/close delimiters, mirroring the line-comment toggle's per-line semantics.
-    private void ToggleBlockCommentLines(int startLine, int endLine, string open, string close, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-
-        bool IsWrapped(string trimmed) =>
-            trimmed.Length >= open.Length + close.Length &&
-            trimmed.StartsWith(open) && trimmed.EndsWith(close);
-
-        int count = endLine - startLine + 1;
-        var lines = new (string Raw, string Trimmed, int Indent)[count];
-        bool allCommented = true;
-        for (int i = 0; i < count; i++)
-        {
-            var raw = buf.GetLine(startLine + i);
-            var trimmed = raw.TrimStart();
-            lines[i] = (raw, trimmed, raw.Length - trimmed.Length);
-            if (trimmed.Length > 0 && !IsWrapped(trimmed))
-                allCommented = false;
-        }
-
-        for (int i = 0; i < count; i++)
-        {
-            var (raw, trimmed, indent) = lines[i];
-            if (allCommented)
-            {
-                if (!IsWrapped(trimmed)) continue;
-                string inner = trimmed[open.Length..^close.Length];
-                if (inner.StartsWith(" ")) inner = inner[1..];
-                if (inner.EndsWith(" ")) inner = inner[..^1];
-                buf.ReplaceLine(startLine + i, raw[..indent] + inner);
-            }
-            else
-            {
-                if (trimmed.Length == 0) continue;
-                buf.ReplaceLine(startLine + i, raw[..indent] + open + " " + trimmed + " " + close);
-            }
-        }
-
-        EmitText(events);
-    }
-
-    private void FormatText(int startLine, int endLine, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        int tw = _config.Options.TextWidth;
-        if (tw <= 0) tw = 79;
-
-        // Collect lines, preserving leading indent of first line in each paragraph
-        var result = new List<string>();
-        int i = startLine;
-        while (i <= endLine)
-        {
-            var line = buf.GetLine(i);
-            // Blank line: preserve as-is and start new paragraph
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                result.Add(line);
-                i++;
-                continue;
-            }
-
-            // Detect indent from first line of paragraph
-            var indent = "";
-            int indentLen = 0;
-            while (indentLen < line.Length && (line[indentLen] == ' ' || line[indentLen] == '\t'))
-                indentLen++;
-            indent = line[..indentLen];
-
-            // Collect all non-blank lines of this paragraph
-            var words = new List<string>();
-            while (i <= endLine && !string.IsNullOrWhiteSpace(buf.GetLine(i)))
-            {
-                var l = buf.GetLine(i).TrimStart();
-                words.AddRange(l.Split(' ', StringSplitOptions.RemoveEmptyEntries));
-                i++;
-            }
-
-            // Wrap words at textwidth
-            var currentLine = new System.Text.StringBuilder(indent);
-            int currentLen = indent.Length;
-            bool first = true;
-            foreach (var word in words)
-            {
-                if (first)
-                {
-                    currentLine.Append(word);
-                    currentLen += word.Length;
-                    first = false;
-                }
-                else if (currentLen + 1 + word.Length <= tw)
-                {
-                    currentLine.Append(' ');
-                    currentLine.Append(word);
-                    currentLen += 1 + word.Length;
-                }
-                else
-                {
-                    result.Add(currentLine.ToString());
-                    currentLine = new System.Text.StringBuilder(indent);
-                    currentLine.Append(word);
-                    currentLen = indent.Length + word.Length;
-                }
-            }
-            if (currentLine.Length > 0)
-                result.Add(currentLine.ToString());
-        }
-
-        // Replace lines startLine..endLine with result lines
-        // First replace existing lines, then insert/delete extras
-        int origCount = endLine - startLine + 1;
-        int newCount = result.Count;
-        int replaceCount = Math.Min(origCount, newCount);
-        for (int j = 0; j < replaceCount; j++)
-            buf.ReplaceLine(startLine + j, result[j]);
-        if (newCount > origCount)
-        {
-            for (int j = origCount; j < newCount; j++)
-            {
-                buf.InsertLineAbove(startLine + j, result[j]);
-            }
-        }
-        else if (newCount < origCount)
-        {
-            buf.DeleteLines(startLine + newCount, startLine + origCount - 1);
-        }
-
-        _cursor = _cursor with { Line = Math.Min(startLine, buf.LineCount - 1), Column = 0 };
-        EmitText(events);
-        EmitCursor(events);
-        EmitStatus(events, $"Formatted {endLine - startLine + 1} lines");
-    }
-
     // ─────────────── SPELL ───────────────
     private void SyncSpellChecker()
     {
@@ -4451,141 +4021,6 @@ public class VimEngine
             EmitStatus(events, $"No suggestions for '{word}'");
         else
             EmitStatus(events, $"Suggestions for '{word}': {string.Join(", ", suggestions.Take(5))}");
-    }
-
-    // ─────────────── SURROUND ───────────────
-    private static (string Open, string Close) GetSurroundPair(char ch) => ch switch
-    {
-        '(' or 'b' => ("( ", " )"),
-        ')'        => ("(", ")"),
-        '{' or 'B' => ("{ ", " }"),
-        '}'        => ("{", "}"),
-        '['        => ("[ ", " ]"),
-        ']'        => ("[", "]"),
-        '<'        => ("< ", " >"),
-        '>'        => ("<", ">"),
-        _          => (ch.ToString(), ch.ToString())
-    };
-
-    private static char GetSurroundOpen(char ch) => ch switch
-    {
-        ')' or 'b' => '(',
-        '}' or 'B' => '{',
-        ']'        => '[',
-        '>'        => '<',
-        _          => ch
-    };
-
-    private static char GetSurroundClose(char ch) => ch switch
-    {
-        '(' or 'b' => ')',
-        '{' or 'B' => '}',
-        '['        => ']',
-        '<'        => '>',
-        _          => ch
-    };
-
-    private void ApplySurround(CursorPosition start, CursorPosition end, bool linewise, char ch, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        var (open, close) = GetSurroundPair(ch);
-
-        if (start.Line == end.Line)
-        {
-            // Single-line: insert close first, then open (to preserve column indices)
-            int closeCol = Math.Min(end.Column + 1, buf.GetLineLength(end.Line));
-            buf.InsertText(end.Line, closeCol, close);
-            buf.InsertText(start.Line, start.Column, open);
-            _cursor = start with { Column = start.Column };
-        }
-        else
-        {
-            // Multi-line: add close at end of last line, open at start of first line
-            var lastLine = buf.GetLine(end.Line).TrimEnd();
-            buf.ReplaceLine(end.Line, lastLine + close);
-            var firstLine = buf.GetLine(start.Line);
-            buf.ReplaceLine(start.Line, open + firstLine);
-            _cursor = start with { Column = 0 };
-        }
-
-        EmitText(events);
-        EmitCursor(events);
-    }
-
-    private void ExecuteDeleteSurround(char ch, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        char openCh = GetSurroundOpen(ch);
-        char closeCh = GetSurroundClose(ch);
-
-        var textObjs = new TextObjectEngine(buf);
-        (CursorPosition Start, CursorPosition End)? pair;
-        if (ch is '"' or '\'' or '`')
-            pair = textObjs.FindEnclosingQuote(ch, _cursor, true);
-        else
-            pair = textObjs.FindEnclosingPair(openCh, closeCh, _cursor, true);
-
-        if (pair == null) { EmitStatus(events, $"No surrounding '{ch}' found"); return; }
-
-        var (s, e) = pair.Value;
-        // Delete close char first (higher position), then open char
-        if (e.Line > s.Line || (e.Line == s.Line && e.Column > s.Column))
-        {
-            buf.DeleteChar(e.Line, e.Column);
-            buf.DeleteChar(s.Line, s.Column);
-        }
-        else
-        {
-            buf.DeleteChar(s.Line, s.Column);
-        }
-        _cursor = buf.ClampCursor(s, false);
-        EmitText(events);
-        EmitCursor(events);
-    }
-
-    private void ExecuteChangeSurround(char from, char to, List<VimEvent> events)
-    {
-        var buf = _bufferManager.Current.Text;
-        char openFrom = GetSurroundOpen(from);
-        char closeFrom = GetSurroundClose(from);
-
-        var textObjs = new TextObjectEngine(buf);
-        (CursorPosition Start, CursorPosition End)? pair;
-        if (from is '"' or '\'' or '`')
-            pair = textObjs.FindEnclosingQuote(from, _cursor, true);
-        else
-            pair = textObjs.FindEnclosingPair(openFrom, closeFrom, _cursor, true);
-
-        if (pair == null) { EmitStatus(events, $"No surrounding '{from}' found"); return; }
-
-        var (s, e) = pair.Value;
-        var (openStr, closeStr) = GetSurroundPair(to);
-
-        // Replace close first, then open (to preserve column indices)
-        if (e.Line > s.Line)
-        {
-            // Multi-line: replace chars
-            var closeLine = buf.GetLine(e.Line);
-            buf.ReplaceLine(e.Line, closeLine[..e.Column] + closeStr + (e.Column + 1 < closeLine.Length ? closeLine[(e.Column + 1)..] : ""));
-            var openLine = buf.GetLine(s.Line);
-            buf.ReplaceLine(s.Line, openLine[..s.Column] + openStr + (s.Column + 1 < openLine.Length ? openLine[(s.Column + 1)..] : ""));
-        }
-        else if (e.Column > s.Column)
-        {
-            buf.DeleteRange(e.Line, e.Column, e.Column);
-            buf.InsertText(e.Line, e.Column, closeStr);
-            buf.DeleteRange(s.Line, s.Column, s.Column);
-            buf.InsertText(s.Line, s.Column, openStr);
-        }
-        else
-        {
-            buf.DeleteRange(s.Line, s.Column, s.Column);
-            buf.InsertText(s.Line, s.Column, openStr + closeStr);
-        }
-
-        _cursor = buf.ClampCursor(s, false);
-        EmitText(events);
-        EmitCursor(events);
     }
 
     private void ScrollHalfPage(bool down, List<VimEvent> events)
@@ -4940,7 +4375,7 @@ public class VimEngine
     {
         if (_selection == null) { ExitVisualMode(events); return; }
         var sel = _selection.Value;
-        IndentRange(sel.NormalizedStart.Line, sel.NormalizedEnd.Line, indent, events);
+        _textTransform.IndentRange(sel.NormalizedStart.Line, sel.NormalizedEnd.Line, indent, events);
         ExitVisualMode(events);
     }
 
@@ -4948,7 +4383,7 @@ public class VimEngine
     {
         if (_selection == null) { ExitVisualMode(events); return; }
         var sel = _selection.Value;
-        ToggleCommentLines(sel.NormalizedStart.Line, sel.NormalizedEnd.Line, events);
+        _textTransform.ToggleCommentLines(sel.NormalizedStart.Line, sel.NormalizedEnd.Line, events);
         ExitVisualMode(events);
     }
 
@@ -4962,13 +4397,13 @@ public class VimEngine
         var sel = _selection.Value;
         if (_mode == VimMode.VisualBlock)
         {
-            ApplyBlockCaseConversion(sel, mode, events);
+            _textTransform.ApplyBlockCaseConversion(sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, mode, events);
             ExitVisualMode(events);
             return;
         }
 
         bool linewise = _mode == VimMode.VisualLine;
-        ApplyCaseConversion(sel.NormalizedStart, sel.NormalizedEnd, linewise, mode, events);
+        _textTransform.ApplyCaseConversion(sel.NormalizedStart, sel.NormalizedEnd, linewise, mode, events);
         ExitVisualMode(events);
     }
 
