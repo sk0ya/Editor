@@ -31,120 +31,6 @@ public partial class MainWindow : Window
     private const int WheelDelta = 120;
     private HwndSource? _windowSource;
 
-    // ─────────── Pane tree ──────────────────────────────────────
-
-    private abstract class PaneNode
-    {
-        public abstract IEnumerable<VimEditorControl> AllEditors();
-    }
-
-    private sealed class EditorPaneNode : PaneNode
-    {
-        public required VimEditorControl Editor { get; init; }
-        public override IEnumerable<VimEditorControl> AllEditors() { yield return Editor; }
-    }
-
-    private sealed class PreviewPaneNode : PaneNode
-    {
-        public required Grid Panel { get; init; }
-        public override IEnumerable<VimEditorControl> AllEditors() => [];
-    }
-
-    private sealed class SplitPaneNode : PaneNode
-    {
-        public bool Vertical { get; init; }
-        public required PaneNode First { get; set; }
-        public required PaneNode Second { get; set; }
-        public required Grid Container { get; set; }
-
-        public override IEnumerable<VimEditorControl> AllEditors()
-            => First.AllEditors().Concat(Second.AllEditors());
-
-        public static Grid BuildGrid(bool vertical, UIElement first, UIElement second)
-        {
-            var grid = new Grid();
-            var splitter = new GridSplitter
-            {
-                Background = new SolidColorBrush(Color.FromRgb(0x44, 0x47, 0x5A)),
-                ResizeBehavior = GridResizeBehavior.PreviousAndNext,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            if (vertical)
-            {
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                splitter.Width = 4;
-                Grid.SetColumn(first, 0); Grid.SetColumn(splitter, 1); Grid.SetColumn(second, 2);
-            }
-            else
-            {
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-                splitter.Height = 4;
-                Grid.SetRow(first, 0); Grid.SetRow(splitter, 1); Grid.SetRow(second, 2);
-            }
-            grid.Children.Add(first);
-            grid.Children.Add(splitter);
-            grid.Children.Add(second);
-            return grid;
-        }
-
-        public void ReplaceChild(UIElement oldChild, UIElement newChild)
-        {
-            int idx = Container.Children.IndexOf(oldChild);
-            if (idx < 0) return;
-            if (Vertical) Grid.SetColumn(newChild, Grid.GetColumn(oldChild));
-            else          Grid.SetRow(newChild, Grid.GetRow(oldChild));
-            Container.Children.RemoveAt(idx);
-            Container.Children.Insert(idx, newChild);
-        }
-    }
-
-    private static UIElement PaneToElement(PaneNode node) => node switch
-    {
-        EditorPaneNode e => e.Editor,
-        PreviewPaneNode p => p.Panel,
-        SplitPaneNode s  => s.Container,
-        _ => throw new InvalidOperationException()
-    };
-
-    private static SplitPaneNode? FindParentSplit(PaneNode root, PaneNode target)
-    {
-        if (root is SplitPaneNode spn)
-        {
-            if (spn.First == target || spn.Second == target) return spn;
-            return FindParentSplit(spn.First, target) ?? FindParentSplit(spn.Second, target);
-        }
-        return null;
-    }
-
-    private static EditorPaneNode? FindEditorPane(PaneNode root, VimEditorControl editor)
-    {
-        if (root is EditorPaneNode epn && epn.Editor == editor) return epn;
-        if (root is SplitPaneNode spn)
-            return FindEditorPane(spn.First, editor) ?? FindEditorPane(spn.Second, editor);
-        return null;
-    }
-
-    // ─────────── File tab (represents an open file in the tab bar) ─────────────
-
-    private sealed class FileTab
-    {
-        public required TabItem Item { get; init; }
-        public required TextBlock HeaderLabel { get; init; }
-        public string? FilePath { get; set; }
-
-        public void UpdateHeader(bool isModified, string? label = null)
-        {
-            var name = label ?? (FilePath != null ? Path.GetFileName(FilePath) : "[No Name]");
-            HeaderLabel.Text = isModified ? $"• {name}" : name;
-        }
-    }
-
-    private enum SidebarPanel { None, Explorer, Settings, Outline }
-
     // ── Search popup ────────────────────────────────────────
 
     private enum SearchMode { All, Class, File, Symbol, Action, Text }
@@ -190,10 +76,9 @@ public partial class MainWindow : Window
 
     // ────────────────────────────────────────────────────────
 
-    private readonly List<FileTab> _fileTabs = [];
+    private readonly TabManagerController _tabs;
     private PaneNode? _globalRoot;
     private VimEditorControl? _focusedEditor;
-    private bool _suppressTabSelectionChanged;
     private readonly RecentItemsManager _recentItems = new();
     private EditorTheme _currentTheme = EditorTheme.Dracula;
     private string _baseThemeName = "Dracula";
@@ -201,29 +86,10 @@ public partial class MainWindow : Window
     private string? _customAccent;
     private string _markdownPreviewStyle = "Dracula";
     private bool _vimEnabled = true;
-    private bool _sidebarVisible;
-    private double _sidebarWidth = 220;
-    private string? _currentFolderPath;
-    private int _quickfixCurrentIndex = -1;
-    private List<ReferenceListItem> _quickfixItems = [];
-    private string _quickfixTitle = "REFERENCES";
-    private readonly Dictionary<string, BufferLocationList> _locationLists = new(StringComparer.OrdinalIgnoreCase);
-    private ProjectSearchOptions? _lastGrepOptions;
-    private SidebarPanel _activeSidebarPanel = SidebarPanel.None;
-    private System.Windows.Point _shellMenuScreenPos;
-    private bool _suppressFileOpen;
-    private bool _fileTreeCtrlWPending;
+    private readonly SidebarController _sidebar;
+    private readonly ReferencesPanelController _refs;
     private bool _focusOutlineAfterPopulate;
-    private bool _previewVisible;
-    private PreviewPaneNode? _previewPaneNode;
-    private VimEditorControl? _previewSourceEditor;
-    private DispatcherTimer? _previewDebounceTimer;
-    private Task? _webView2InitTask;
-    private bool _previewWebViewEventsAttached;
-    private bool _syncingPreviewFromEditor;
-    private bool _syncingEditorFromPreview;
-    private bool _previewScrollSyncQueued;
-    private double _pendingPreviewScrollRatio;
+    private readonly MarkdownPreviewController _markdownPreview;
     private readonly List<TerminalSession> _terminalSessions = [];
     private int _currentTerminalIndex = -1;
     private int _nextTerminalId = 1;
@@ -240,27 +106,53 @@ public partial class MainWindow : Window
 
     private VimEditorControl? CurrentEditor => _focusedEditor;
 
-    private FileTab? FindFileTabByPath(string? path) =>
-        path == null
-            ? _fileTabs.FirstOrDefault(t => t.FilePath == null)
-            : _fileTabs.FirstOrDefault(t =>
-                string.Equals(t.FilePath, path, StringComparison.OrdinalIgnoreCase));
-
     private IEnumerable<VimEditorControl> AllEditors() =>
         _globalRoot?.AllEditors() ?? Enumerable.Empty<VimEditorControl>();
-
-    private void UpdateSelectedTabForEditor(VimEditorControl editor)
-    {
-        var path = editor.Engine.CurrentBuffer.FilePath;
-        var ft = FindFileTabByPath(path);
-        _suppressTabSelectionChanged = true;
-        TabCtrl.SelectedItem = ft?.Item;
-        _suppressTabSelectionChanged = false;
-    }
 
     public MainWindow()
     {
         InitializeComponent();
+        _markdownPreview = new MarkdownPreviewController(
+            getGlobalRoot: () => _globalRoot,
+            setGlobalRoot: root => _globalRoot = root,
+            currentEditor: () => CurrentEditor,
+            focusedEditor: () => _focusedEditor,
+            getMarkdownPreviewStyle: () => _markdownPreviewStyle,
+            EditorContent, MarkdownPreviewPanel, PreviewBtn, PreviewSplitter,
+            PreviewSplitterCol, PreviewCol, PreviewBrowser);
+        _tabs = new TabManagerController(
+            this, TabCtrl, SharedStatusBar,
+            getCurrentTheme: () => _currentTheme,
+            getVimEnabled: () => _vimEnabled,
+            wireEditorEvents: WireEditorEvents,
+            focusedEditor: () => _focusedEditor,
+            allEditors: AllEditors,
+            refreshOutlineForEditor: RefreshOutlineForEditor,
+            onAfterTabSelected: _markdownPreview.NotifyEditorActivated);
+        _sidebar = new SidebarController(
+            this, FileTree, FolderNameLabel, SidebarCol, SplitterCol,
+            ExplorerPanel, SettingsPanel, OutlinePanel,
+            ExplorerBtn, SettingsBtn, OutlineBtn,
+            focusedEditor: () => _focusedEditor,
+            allEditors: AllEditors,
+            openOrFocusFile: OpenOrFocusFile,
+            addTab: path => _tabs.AddTab(path),
+            showInputDialog: ShowInputDialog,
+            onFolderLoaded: path =>
+            {
+                _recentItems.AddFolder(path);
+                RefreshRecentMenus();
+                RefreshJumpList();
+            });
+        _refs = new ReferencesPanelController(
+            RefList, ReferencesPanel, RefSplitter, RefPanelRow, RefSplitterRow,
+            RefPanelTitle, ReplaceRefResultsBtn,
+            currentEditor: () => CurrentEditor,
+            focusedEditor: () => _focusedEditor,
+            allEditors: AllEditors,
+            getCurrentFolderPath: () => _sidebar.CurrentFolderPath,
+            showInputDialog: ShowInputDialog,
+            openFile: OpenFile);
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -277,7 +169,7 @@ public partial class MainWindow : Window
         _vimEnabled = _recentItems.VimEnabled;
 
         // Create the initial global editor and set up the pane tree
-        var initialEditor = CreateEditor(null);
+        var initialEditor = _tabs.CreateEditor(null);
         _globalRoot = new EditorPaneNode { Editor = initialEditor };
         _focusedEditor = initialEditor;
         EditorContent.Child = initialEditor;
@@ -287,11 +179,11 @@ public partial class MainWindow : Window
         {
             if (Directory.Exists(args[1]))
             {
-                AddTab(null);
+                _tabs.AddTab(null);
                 LoadFolder(args[1]);
             }
             else if (File.Exists(args[1]))
-                AddTab(args[1]);
+                _tabs.AddTab(args[1]);
         }
         else
         {
@@ -317,7 +209,7 @@ public partial class MainWindow : Window
         var session = _recentItems.LastSession;
         if (session == null || (session.TabFiles.Count == 0 && session.FolderPath == null))
         {
-            AddTab(null);
+            _tabs.AddTab(null);
             return;
         }
 
@@ -325,30 +217,24 @@ public partial class MainWindow : Window
         foreach (var file in session.TabFiles)
         {
             if (File.Exists(file))
-                AddFileTabEntry(file);
+                _tabs.AddFileTabEntry(file);
         }
-        if (_fileTabs.Count == 0)
+        if (_tabs.FileTabs.Count == 0)
         {
-            AddTab(null);
+            _tabs.AddTab(null);
         }
         else
         {
             // Load the active file (or the first one)
             var activeTab = session.ActiveFile != null
-                ? FindFileTabByPath(session.ActiveFile)
+                ? _tabs.FindFileTabByPath(session.ActiveFile)
                 : null;
-            SelectFileTab(activeTab ?? _fileTabs[0]);
+            _tabs.SelectFileTab(activeTab ?? _tabs.FileTabs[0]);
         }
 
         // Restore sidebar folder
         if (session.FolderPath != null && Directory.Exists(session.FolderPath))
-        {
-            _currentFolderPath = session.FolderPath;
-            FolderNameLabel.Text = Path.GetFileName(session.FolderPath) is { Length: > 0 } n
-                ? n : session.FolderPath;
-            FileTree.ItemsSource = FileTreeItem.LoadChildren(session.FolderPath);
-            ShowSidebar();
-        }
+            _sidebar.LoadFolder(session.FolderPath, recordRecent: false);
     }
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)
@@ -411,498 +297,37 @@ public partial class MainWindow : Window
         base.OnKeyDown(e);
     }
 
-    // ─────────── Sidebar ───────────────────────────────────
+    // ─────────── Sidebar (delegates to SidebarController) ─────
+    // See SidebarController.cs — owns panel visibility, file-tree navigation/keyboard
+    // handling and the file-tree context menu. These wrappers exist only because
+    // MainWindow.xaml wires event handlers to methods by name.
 
-    private void ShowSidebar(SidebarPanel panel = SidebarPanel.Explorer)
-    {
-        SidebarCol.Width = new GridLength(_sidebarWidth, GridUnitType.Pixel);
-        SidebarCol.MinWidth = 80;
-        SplitterCol.Width = new GridLength(4, GridUnitType.Pixel);
-        SplitterCol.MinWidth = 4;
-        _sidebarVisible = true;
-        _activeSidebarPanel = panel;
+    private void ShowSidebar(SidebarPanel panel = SidebarPanel.Explorer) => _sidebar.Show(panel);
 
-        // Hide all panels first, then show the requested one
-        ExplorerPanel.Visibility = Visibility.Collapsed;
-        SettingsPanel.Visibility  = Visibility.Collapsed;
-        OutlinePanel.Visibility   = Visibility.Collapsed;
-        ExplorerBtn.IsChecked = false;
-        SettingsBtn.IsChecked  = false;
-        OutlineBtn.IsChecked   = false;
+    private void HideSidebar() => _sidebar.Hide();
 
-        switch (panel)
-        {
-            case SidebarPanel.Settings:
-                SettingsPanel.Visibility = Visibility.Visible;
-                SettingsBtn.IsChecked = true;
-                break;
-            case SidebarPanel.Outline:
-                OutlinePanel.Visibility = Visibility.Visible;
-                OutlineBtn.IsChecked = true;
-                break;
-            default: // Explorer
-                ExplorerPanel.Visibility = Visibility.Visible;
-                ExplorerBtn.IsChecked = true;
-                break;
-        }
-    }
+    private void ToggleSidebar() => _sidebar.Toggle();
 
-    private void HideSidebar()
-    {
-        _sidebarWidth = SidebarCol.ActualWidth > 0 ? SidebarCol.ActualWidth : _sidebarWidth;
-        SidebarCol.Width = new GridLength(0);
-        SidebarCol.MinWidth = 0;
-        SplitterCol.Width = new GridLength(0);
-        SplitterCol.MinWidth = 0;
-        ExplorerBtn.IsChecked = false;
-        SettingsBtn.IsChecked  = false;
-        OutlineBtn.IsChecked   = false;
-        _fileTreeCtrlWPending = false;
-        _sidebarVisible = false;
-        _activeSidebarPanel = SidebarPanel.None;
-    }
+    private void LoadFolder(string folderPath) => _sidebar.LoadFolder(folderPath);
 
-    private void ToggleSidebar()
-    {
-        if (_sidebarVisible && _activeSidebarPanel == SidebarPanel.Explorer)
-            HideSidebar();
-        else
-        {
-            ShowSidebar(SidebarPanel.Explorer);
-            FileTree.Focus();
-        }
-    }
+    private void TreeViewItem_Expanded(object sender, RoutedEventArgs e) =>
+        _sidebar.TreeViewItem_Expanded(sender, e);
 
-    private void LoadFolder(string folderPath)
-    {
-        _currentFolderPath = folderPath;
-        FolderNameLabel.Text = Path.GetFileName(folderPath) is { Length: > 0 } n ? n : folderPath;
-        FileTree.ItemsSource = FileTreeItem.LoadChildren(folderPath);
-        if (!_sidebarVisible)
-            ShowSidebar();
-        _recentItems.AddFolder(folderPath);
-        RefreshRecentMenus();
-        RefreshJumpList();
-    }
-
-    // ─────────── File tree events ──────────────────────────
-
-    private void TreeViewItem_Expanded(object sender, RoutedEventArgs e)
-    {
-        if (sender is TreeViewItem { DataContext: FileTreeItem item })
-        {
-            item.IsExpanded = true;
-            item.Expand();
-            e.Handled = true;
-        }
-    }
-
-    private void TreeViewItem_Collapsed(object sender, RoutedEventArgs e)
-    {
-        if (sender is TreeViewItem { DataContext: FileTreeItem item })
-        {
-            item.IsExpanded = false;
-            e.Handled = true;
-        }
-    }
+    private void TreeViewItem_Collapsed(object sender, RoutedEventArgs e) =>
+        _sidebar.TreeViewItem_Collapsed(sender, e);
 
     private void FileTree_SelectedItemChanged(object sender,
-        RoutedPropertyChangedEventArgs<object> e)
-    {
-        if (!_suppressFileOpen && e.NewValue is FileTreeItem { IsDirectory: false } item)
-            OpenOrFocusFile(item.FullPath);
-    }
+        RoutedPropertyChangedEventArgs<object> e) =>
+        _sidebar.FileTree_SelectedItemChanged(sender, e);
 
-    private void FileTree_KeyDown(object sender, KeyEventArgs e)
-    {
-        bool ctrl  = e.KeyboardDevice.Modifiers.HasFlag(ModifierKeys.Control);
-        bool shift = e.KeyboardDevice.Modifiers.HasFlag(ModifierKeys.Shift);
-        var selected = FileTree.SelectedItem as FileTreeItem;
+    private void FileTree_KeyDown(object sender, KeyEventArgs e) =>
+        _sidebar.FileTree_KeyDown(sender, e);
 
-        // Ctrl+W prefix — buffer and wait for second key
-        if (ctrl && e.Key == Key.W)
-        {
-            _fileTreeCtrlWPending = true;
-            e.Handled = true;
-            return;
-        }
+    private void FileTree_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        _sidebar.FileTree_LostKeyboardFocus(sender, e);
 
-        // Second key of Ctrl+W sequence
-        if (_fileTreeCtrlWPending)
-        {
-            _fileTreeCtrlWPending = false;
-            switch (e.Key)
-            {
-                case Key.L:   // Ctrl+W l — move right to editor
-                    CurrentEditor?.Focus();
-                    e.Handled = true;
-                    return;
-                case Key.W:   // Ctrl+W w — cycle to next editor
-                    FocusEditorCycleFromFileTree(reverse: shift);
-                    e.Handled = true;
-                    return;
-                case Key.H:   // Ctrl+W h — already leftmost, no-op
-                case Key.Escape:
-                    e.Handled = true;
-                    return;
-                default:
-                    e.Handled = true;
-                    return;
-            }
-        }
-
-        switch (e.Key)
-        {
-            case Key.J:
-                FileTreeMoveSelection(+1);
-                e.Handled = true;
-                return;
-            case Key.K:
-                FileTreeMoveSelection(-1);
-                e.Handled = true;
-                return;
-            case Key.L:
-            case Key.Return:
-                FileTreeActivate(selected);
-                e.Handled = true;
-                return;
-            case Key.H:
-                FileTreeCollapseOrParent(selected);
-                e.Handled = true;
-                return;
-            case Key.A:
-                if (selected == null) return;
-                if (shift) ContextMenu_NewFolder(selected);
-                else       ContextMenu_NewFile(selected);
-                e.Handled = true;
-                return;
-            case Key.R:
-                if (selected != null) ContextMenu_Rename(selected);
-                e.Handled = true;
-                return;
-            case Key.D:
-            case Key.Delete:
-                if (selected != null) ContextMenu_Delete(selected);
-                e.Handled = true;
-                return;
-            case Key.Escape:
-                CurrentEditor?.Focus();
-                e.Handled = true;
-                return;
-        }
-    }
-
-    private void FileTree_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        _fileTreeCtrlWPending = false;
-    }
-
-    // ── File tree navigation helpers ──────────────────────────
-
-    private void FileTreeMoveSelection(int delta)
-    {
-        var flat = FileTreeFlatItems();
-        if (flat.Count == 0) return;
-
-        var current = FileTree.SelectedItem as FileTreeItem;
-        int idx = current == null ? -1 : flat.IndexOf(current);
-        int next = idx < 0
-            ? (delta > 0 ? 0 : flat.Count - 1)
-            : Math.Clamp(idx + delta, 0, flat.Count - 1);
-        if (next == idx) return;
-
-        SelectFileTreeItem(flat[next], suppressFileOpen: true);
-    }
-
-    private void FileTreeActivate(FileTreeItem? item)
-    {
-        if (item == null) return;
-        if (item.IsDirectory)
-        {
-            var tvi = FindTreeViewItem(FileTree, item);
-            item.IsExpanded = !item.IsExpanded;
-            if (item.IsExpanded)
-                item.Expand();
-            if (tvi != null)
-                tvi.IsExpanded = item.IsExpanded;
-        }
-        else
-        {
-            OpenOrFocusFile(item.FullPath);
-            CurrentEditor?.Focus();
-        }
-    }
-
-    private void FileTreeCollapseOrParent(FileTreeItem? item)
-    {
-        if (item == null) return;
-
-        if (item.IsDirectory && item.IsExpanded)
-        {
-            item.IsExpanded = false;
-            if (FindTreeViewItem(FileTree, item) is { } tvi)
-                tvi.IsExpanded = false;
-        }
-        else if (item.Parent != null)
-        {
-            SelectFileTreeItem(item.Parent, suppressFileOpen: true);
-        }
-    }
-
-    /// <summary>Flat list of currently visible FileTreeItems (respects expansion).</summary>
-    private List<FileTreeItem> FileTreeFlatItems()
-    {
-        var result = new List<FileTreeItem>();
-        foreach (var item in FileTree.Items.OfType<FileTreeItem>())
-            CollectVisibleTreeItems(item, result);
-        return result;
-    }
-
-    private void SelectFileTreeItem(FileTreeItem item, bool suppressFileOpen)
-    {
-        bool previous = _suppressFileOpen;
-        _suppressFileOpen = suppressFileOpen || previous;
-        try
-        {
-            FileTree.UpdateLayout();
-            var tvi = FindTreeViewItem(FileTree, item);
-            if (tvi == null) return;
-            tvi.IsSelected = true;
-            tvi.BringIntoView();
-        }
-        finally
-        {
-            _suppressFileOpen = previous;
-        }
-    }
-
-    private static void CollectVisibleTreeItems(FileTreeItem item, List<FileTreeItem> result)
-    {
-        if (item.FullPath.Length == 0) return;
-
-        result.Add(item);
-        if (!item.IsDirectory || !item.IsExpanded) return;
-
-        foreach (var child in item.Children)
-            CollectVisibleTreeItems(child, result);
-    }
-
-    private static TreeViewItem? FindTreeViewItem(ItemsControl parent, FileTreeItem target)
-    {
-        parent.UpdateLayout();
-        if (parent.ItemContainerGenerator.ContainerFromItem(target) is TreeViewItem direct)
-            return direct;
-
-        for (int i = 0; i < parent.Items.Count; i++)
-        {
-            if (parent.ItemContainerGenerator.ContainerFromIndex(i) is not TreeViewItem tvi) continue;
-            if (tvi.DataContext == target)
-                return tvi;
-            if (tvi.IsExpanded)
-            {
-                var found = FindTreeViewItem(tvi, target);
-                if (found != null) return found;
-            }
-        }
-        return null;
-    }
-
-    private void FocusEditorCycleFromFileTree(bool reverse)
-    {
-        var editors = AllEditors().ToList();
-        if (editors.Count == 0)
-            return;
-
-        if (_focusedEditor == null)
-        {
-            editors[0].Focus();
-            return;
-        }
-
-        int idx = editors.IndexOf(_focusedEditor);
-        if (idx < 0)
-        {
-            editors[0].Focus();
-            return;
-        }
-
-        if (editors.Count == 1)
-        {
-            editors[0].Focus();
-            return;
-        }
-
-        var next = reverse
-            ? editors[(idx - 1 + editors.Count) % editors.Count]
-            : editors[(idx + 1) % editors.Count];
-        next.Focus();
-    }
-
-    // ─────────── File tree context menu ────────────────────────
-
-    private void FileTree_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        var tvi = FindVisualAncestor<TreeViewItem>((DependencyObject)e.OriginalSource);
-        if (tvi == null) return;
-        if (tvi.DataContext is not FileTreeItem item) return;
-
-        tvi.IsSelected = true;
-        _shellMenuScreenPos = PointToScreen(e.GetPosition(this));
-
-        var cm = BuildFileTreeContextMenu(item);
-        cm.PlacementTarget = tvi;
-        cm.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
-        cm.IsOpen = true;
-        e.Handled = true;
-    }
-
-    private ContextMenu BuildFileTreeContextMenu(FileTreeItem item)
-    {
-        var cmStyle  = (Style)FindResource("FileTreeContextMenuStyle");
-        var miStyle  = (Style)FindResource("FileTreeMenuItemStyle");
-        var sepStyle = (Style)FindResource("FileTreeSeparatorStyle");
-
-        var cm = new ContextMenu { Style = cmStyle };
-
-        if (item.IsDirectory)
-        {
-            cm.Items.Add(FtMi("新規ファイル...",   miStyle, () => ContextMenu_NewFile(item)));
-            cm.Items.Add(FtMi("新規フォルダー...", miStyle, () => ContextMenu_NewFolder(item)));
-            cm.Items.Add(new Separator { Style = sepStyle });
-        }
-        else
-        {
-            cm.Items.Add(FtMi("開く",             miStyle, () => OpenOrFocusFile(item.FullPath)));
-            cm.Items.Add(FtMi("新しいタブで開く", miStyle, () => AddTab(item.FullPath)));
-            cm.Items.Add(new Separator { Style = sepStyle });
-        }
-
-        cm.Items.Add(FtMi("名前の変更", miStyle, () => ContextMenu_Rename(item)));
-        cm.Items.Add(FtMi("削除",       miStyle, () => ContextMenu_Delete(item)));
-        cm.Items.Add(new Separator { Style = sepStyle });
-
-        var explorerLabel = item.IsDirectory ? "エクスプローラーで開く" : "エクスプローラーで表示";
-        cm.Items.Add(FtMi(explorerLabel, miStyle, () => ContextMenu_OpenInExplorer(item)));
-        cm.Items.Add(new Separator { Style = sepStyle });
-        cm.Items.Add(FtMi("Windowsのコンテキストメニュー", miStyle, () => ContextMenu_ShowWindowsMenu(item)));
-
-        return cm;
-    }
-
-    private void ContextMenu_ShowWindowsMenu(FileTreeItem item)
-    {
-        var hwnd = new WindowInteropHelper(this).Handle;
-        ShellMenuContext.ShowDirect(hwnd, item.FullPath,
-            (int)_shellMenuScreenPos.X, (int)_shellMenuScreenPos.Y);
-    }
-
-    private static MenuItem FtMi(string header, Style style, Action handler)
-    {
-        var mi = new MenuItem { Header = header, Style = style };
-        mi.Click += (_, _) => handler();
-        return mi;
-    }
-
-    private void ContextMenu_NewFile(FileTreeItem folder)
-    {
-        var targetDir = folder.IsDirectory
-            ? folder.FullPath
-            : Path.GetDirectoryName(folder.FullPath) ?? _currentFolderPath ?? "";
-
-        var name = ShowInputDialog("新規ファイル", "ファイル名:", "newfile.txt");
-        if (string.IsNullOrWhiteSpace(name)) return;
-
-        var path = Path.Combine(targetDir, name);
-        try
-        {
-            File.WriteAllText(path, "");
-            RefreshCurrentFolder();
-            OpenOrFocusFile(path);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"ファイルの作成に失敗しました: {ex.Message}", "エラー",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private void ContextMenu_NewFolder(FileTreeItem folder)
-    {
-        var targetDir = folder.IsDirectory
-            ? folder.FullPath
-            : Path.GetDirectoryName(folder.FullPath) ?? _currentFolderPath ?? "";
-
-        var name = ShowInputDialog("新規フォルダー", "フォルダー名:", "新しいフォルダー");
-        if (string.IsNullOrWhiteSpace(name)) return;
-
-        var path = Path.Combine(targetDir, name);
-        try
-        {
-            Directory.CreateDirectory(path);
-            RefreshCurrentFolder();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"フォルダーの作成に失敗しました: {ex.Message}", "エラー",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private void ContextMenu_Rename(FileTreeItem item)
-    {
-        var newName = ShowInputDialog("名前の変更", "新しい名前:", item.Name);
-        if (string.IsNullOrWhiteSpace(newName) || newName == item.Name) return;
-
-        var dir     = Path.GetDirectoryName(item.FullPath) ?? "";
-        var newPath = Path.Combine(dir, newName);
-        try
-        {
-            if (item.IsDirectory) Directory.Move(item.FullPath, newPath);
-            else                  File.Move(item.FullPath, newPath);
-            RefreshCurrentFolder();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"名前の変更に失敗しました: {ex.Message}", "エラー",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private void ContextMenu_Delete(FileTreeItem item)
-    {
-        var result = MessageBox.Show(
-            $"「{item.Name}」を削除しますか？",
-            "削除の確認",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning);
-        if (result != MessageBoxResult.Yes) return;
-
-        try
-        {
-            if (item.IsDirectory) Directory.Delete(item.FullPath, recursive: true);
-            else                  File.Delete(item.FullPath);
-            RefreshCurrentFolder();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"削除に失敗しました: {ex.Message}", "エラー",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private void ContextMenu_OpenInExplorer(FileTreeItem item)
-    {
-        var path = item.IsDirectory
-            ? item.FullPath
-            : Path.GetDirectoryName(item.FullPath) ?? item.FullPath;
-        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
-    }
-
-    private void RefreshCurrentFolder()
-    {
-        if (_currentFolderPath == null) return;
-        FileTree.ItemsSource = FileTreeItem.LoadChildren(_currentFolderPath);
-    }
+    private void FileTree_MouseRightButtonUp(object sender, MouseButtonEventArgs e) =>
+        _sidebar.FileTree_MouseRightButtonUp(sender, e);
 
     private string? ShowInputDialog(string title, string message, string defaultValue = "")
     {
@@ -966,7 +391,7 @@ public partial class MainWindow : Window
         return result;
     }
 
-    private static T? FindVisualAncestor<T>(DependencyObject? obj) where T : DependencyObject
+    internal static T? FindVisualAncestor<T>(DependencyObject? obj) where T : DependencyObject
     {
         while (obj != null)
         {
@@ -1034,16 +459,16 @@ public partial class MainWindow : Window
     private void OpenOrFocusFile(string path)
     {
         // Already tracked in a tab? Select it (and load into focused pane).
-        var existing = FindFileTabByPath(path);
+        var existing = _tabs.FindFileTabByPath(path);
         if (existing != null)
         {
-            SelectFileTab(existing);
+            _tabs.SelectFileTab(existing);
             RecordRecentFile(path);
             return;
         }
 
         // Otherwise add a new tab entry and load
-        AddTab(path);
+        _tabs.AddTab(path);
         RecordRecentFile(path);
     }
 
@@ -1055,89 +480,12 @@ public partial class MainWindow : Window
         RefreshJumpList();
     }
 
-    // ─────────── Tab management ────────────────────────────
-
-    private VimEditorControl CreateEditor(string? filePath)
-    {
-        var editor = new VimEditorControl(VimEditorControlDefaults.CreateOptions());
-        editor.SetTheme(_currentTheme);
-        editor.VimEnabled = _vimEnabled;
-        editor.SetSharedStatusBar(SharedStatusBar);
-        WireEditorEvents(editor);
-        if (filePath != null && File.Exists(filePath))
-            editor.LoadFile(filePath);
-        else
-            editor.SetText("");
-        return editor;
-    }
-
-    /// <summary>Add a file tab entry to the tab bar (without loading into focused pane).</summary>
-    private FileTab AddFileTabEntry(string? filePath)
-    {
-        var label = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
-        var closeBtn = new Button { Content = "×", Style = (Style)FindResource("TabCloseButton") };
-        var header = new StackPanel { Orientation = Orientation.Horizontal };
-        header.Children.Add(label);
-        header.Children.Add(closeBtn);
-
-        var tabItem = new TabItem { Header = header };  // No Content — editor is in EditorContent
-        var fileTab = new FileTab { Item = tabItem, HeaderLabel = label, FilePath = filePath };
-        closeBtn.Click += (_, _) => CloseFileTab(fileTab, force: false);
-        header.MouseDown += (_, e) =>
-        {
-            if (e.ChangedButton == MouseButton.Middle) CloseFileTab(fileTab, force: false);
-        };
-
-        fileTab.UpdateHeader(isModified: false);
-        _fileTabs.Add(fileTab);
-        TabCtrl.Items.Add(tabItem);
-        return fileTab;
-    }
-
-    /// <summary>Ensure a file is tracked in the tab bar. Returns existing or newly-created FileTab.</summary>
-    private FileTab EnsureFileTab(string? filePath)
-    {
-        var existing = FindFileTabByPath(filePath);
-        if (existing != null) return existing;
-        return AddFileTabEntry(filePath);
-    }
-
-    /// <summary>Add tab entry and immediately load the file into the focused pane.</summary>
-    private void AddTab(string? filePath)
-    {
-        // If file already tracked, just select it
-        if (filePath != null)
-        {
-            var existing = FindFileTabByPath(filePath);
-            if (existing != null)
-            {
-                SelectFileTab(existing);
-                return;
-            }
-        }
-        var fileTab = AddFileTabEntry(filePath);
-        SelectFileTab(fileTab);
-    }
-
-    /// <summary>Select a file tab and load its file into the focused pane.</summary>
-    private void SelectFileTab(FileTab fileTab)
-    {
-        _suppressTabSelectionChanged = true;
-        TabCtrl.SelectedItem = fileTab.Item;
-        _suppressTabSelectionChanged = false;
-
-        if (_focusedEditor == null) return;
-
-        if (fileTab.FilePath != null && File.Exists(fileTab.FilePath))
-            _focusedEditor.LoadFile(fileTab.FilePath);
-        // FilePath == null → keep current content (new empty buffer shown as-is)
-
-        _focusedEditor.Focus();
-        RefreshOutlineForEditor(_focusedEditor);
-
-        if (_previewVisible && _previewSourceEditor == _focusedEditor)
-            SchedulePreviewUpdate();
-    }
+    // ─────────── Tab management (delegates to TabManagerController) ─
+    // See TabManagerController.cs — owns the FileTab bar, editor-pane creation, and
+    // tab selection/closing. WireEditorEvents stays here since most of the ~25 events
+    // it wires are handled by MainWindow methods spanning unrelated concerns (git,
+    // terminal, quickfix, session, markdown preview); TabManagerController reaches it
+    // through the wireEditorEvents callback instead.
 
     private void WireEditorEvents(VimEditorControl editor)
     {
@@ -1146,32 +494,32 @@ public partial class MainWindow : Window
         editor.OpenFileRequested += Editor_OpenFileRequested;
         editor.NewTabRequested   += Editor_NewTabRequested;
         editor.SplitRequested    += Editor_SplitRequested;
-        editor.NextTabRequested  += Editor_NextTabRequested;
-        editor.PrevTabRequested  += Editor_PrevTabRequested;
-        editor.CloseTabRequested    += Editor_CloseTabRequested;
+        editor.NextTabRequested  += _tabs.Editor_NextTabRequested;
+        editor.PrevTabRequested  += _tabs.Editor_PrevTabRequested;
+        editor.CloseTabRequested    += _tabs.Editor_CloseTabRequested;
         editor.WindowNavRequested   += Editor_WindowNavRequested;
         editor.WindowCloseRequested += Editor_WindowCloseRequested;
         editor.BufferChanged        += Editor_BufferChanged;
-        editor.FindReferencesResult += Editor_FindReferencesResult;
-        editor.QuickfixOpenRequested  += (_, _) => ShowQuickfixPanel();
-        editor.QuickfixCloseRequested += (_, _) => CloseRefPanel_Click(editor, new RoutedEventArgs());
-        editor.QuickfixNextRequested  += (_, count) => QuickfixNavigate(count);
-        editor.QuickfixPrevRequested  += (_, count) => QuickfixNavigate(-count);
-        editor.QuickfixGotoRequested  += (_, index) => QuickfixNavigateTo(index);
-        editor.LocationListOpenRequested  += (_, _) => ShowLocationListPanel();
-        editor.LocationListCloseRequested += (_, _) => CloseRefPanel_Click(editor, new RoutedEventArgs());
-        editor.LocationListNextRequested  += (_, count) => LocationListNavigate(count);
-        editor.LocationListPrevRequested  += (_, count) => LocationListNavigate(-count);
-        editor.LocationListGotoRequested  += (_, index) => LocationListNavigateTo(index);
-        editor.GrepRequested          += Editor_GrepRequested;
-        editor.ProjectReplaceRequested += Editor_ProjectReplaceRequested;
-        editor.QuickfixReplaceRequested += Editor_QuickfixReplaceRequested;
+        editor.FindReferencesResult += _refs.Editor_FindReferencesResult;
+        editor.QuickfixOpenRequested  += (_, _) => _refs.ShowQuickfixPanel();
+        editor.QuickfixCloseRequested += (_, _) => _refs.Close();
+        editor.QuickfixNextRequested  += (_, count) => _refs.QuickfixNavigate(count);
+        editor.QuickfixPrevRequested  += (_, count) => _refs.QuickfixNavigate(-count);
+        editor.QuickfixGotoRequested  += (_, index) => _refs.QuickfixNavigateTo(index);
+        editor.LocationListOpenRequested  += (_, _) => _refs.ShowLocationListPanel();
+        editor.LocationListCloseRequested += (_, _) => _refs.Close();
+        editor.LocationListNextRequested  += (_, count) => _refs.LocationListNavigate(count);
+        editor.LocationListPrevRequested  += (_, count) => _refs.LocationListNavigate(-count);
+        editor.LocationListGotoRequested  += (_, index) => _refs.LocationListNavigateTo(index);
+        editor.GrepRequested          += _refs.Editor_GrepRequested;
+        editor.ProjectReplaceRequested += _refs.Editor_ProjectReplaceRequested;
+        editor.QuickfixReplaceRequested += _refs.Editor_QuickfixReplaceRequested;
         editor.GotKeyboardFocus       += Editor_GotKeyboardFocus;
         editor.MkSessionRequested     += Editor_MkSessionRequested;
         editor.SourceRequested        += Editor_SourceRequested;
         editor.TerminalRequested          += Editor_TerminalRequested;
         editor.TerminalCommandRequested   += Editor_TerminalCommandRequested;
-        editor.MarkdownPreviewRequested   += (_, _) => ToggleMarkdownPreview();
+        editor.MarkdownPreviewRequested   += (_, _) => _markdownPreview.Toggle();
         editor.GitOutputRequested         += Editor_GitOutputRequested;
         editor.GitCommitRequested     += Editor_GitCommitRequested;
         editor.DocumentSymbolsResult  += Editor_DocumentSymbolsResult;
@@ -1181,11 +529,10 @@ public partial class MainWindow : Window
     {
         if (sender is not VimEditorControl editor) return;
         var path = editor.Engine.CurrentBuffer.FilePath;
-        var ft = FindFileTabByPath(path);
+        var ft = _tabs.FindFileTabByPath(path);
         ft?.UpdateHeader(isModified: editor.Engine.CurrentBuffer.Text.IsModified);
 
-        if (_previewVisible && editor == _previewSourceEditor)
-            SchedulePreviewUpdate();
+        _markdownPreview.NotifyEditorActivated(editor);
     }
 
     private void Editor_MkSessionRequested(object? sender, string sessionPath)
@@ -1243,8 +590,8 @@ public partial class MainWindow : Window
     private void Editor_GitOutputRequested(object? sender, GitOutputRequestedEventArgs e)
     {
         // Open a new tab with in-memory git output content
-        var ft = AddFileTabEntry(null);
-        SelectFileTab(ft);
+        var ft = _tabs.AddFileTabEntry(null);
+        _tabs.SelectFileTab(ft);
         ft.UpdateHeader(isModified: false, label: e.Title);
         _focusedEditor?.SetText(e.Content);
     }
@@ -1443,305 +790,13 @@ public partial class MainWindow : Window
         TerminalContent.Content  = null;
     }
 
-    // ─────────── Markdown Preview ───────────────────────────────────────
+    // ─────────── Markdown Preview (delegates to MarkdownPreviewController) ─
+    // See MarkdownPreviewController.cs — owns preview pane splicing, WebView2
+    // rendering, and scroll sync between the source editor and the preview.
 
-    private void ToggleMarkdownPreview()
-    {
-        if (_previewVisible)
-            CloseMarkdownPreview();
-        else
-            ShowMarkdownPreview();
-    }
+    private void PreviewBtn_Click(object sender, RoutedEventArgs e) => _markdownPreview.Toggle();
 
-    private void PreviewBtn_Click(object sender, RoutedEventArgs e) =>
-        ToggleMarkdownPreview();
-
-    private void ShowMarkdownPreview()
-    {
-        if (_globalRoot == null || CurrentEditor == null) return;
-
-        CloseMarkdownPreview(focusEditor: false);
-
-        var sourcePane = FindEditorPane(_globalRoot, CurrentEditor);
-        if (sourcePane == null) return;
-
-        _previewVisible = true;
-        _previewSourceEditor = CurrentEditor;
-        _previewSourceEditor.ViewportScrolled += PreviewSourceEditor_ViewportScrolled;
-        MarkdownPreviewPanel.Visibility = Visibility.Visible;
-        PreviewBtn.IsChecked = true;
-
-        PreviewSplitter.Visibility = Visibility.Collapsed;
-        PreviewSplitterCol.Width = new GridLength(0);
-        PreviewCol.Width = new GridLength(0);
-
-        var sourceElement = (UIElement)sourcePane.Editor;
-        var parentSplit = FindParentSplit(_globalRoot, sourcePane);
-        int gridPos = -1;
-        if (parentSplit != null)
-        {
-            gridPos = parentSplit.Vertical
-                ? Grid.GetColumn(sourceElement)
-                : Grid.GetRow(sourceElement);
-            parentSplit.Container.Children.Remove(sourceElement);
-        }
-        else
-        {
-            EditorContent.Child = null;
-        }
-
-        DetachFromParent(MarkdownPreviewPanel);
-        var previewNode = new PreviewPaneNode { Panel = MarkdownPreviewPanel };
-        var newGrid = SplitPaneNode.BuildGrid(vertical: true, sourceElement, MarkdownPreviewPanel);
-        var splitNode = new SplitPaneNode
-        {
-            Vertical = true,
-            First = sourcePane,
-            Second = previewNode,
-            Container = newGrid
-        };
-
-        if (parentSplit == null)
-        {
-            _globalRoot = splitNode;
-            EditorContent.Child = newGrid;
-        }
-        else
-        {
-            if (parentSplit.Vertical) Grid.SetColumn(newGrid, gridPos);
-            else                      Grid.SetRow(newGrid, gridPos);
-            parentSplit.Container.Children.Add(newGrid);
-
-            if (parentSplit.First == sourcePane) parentSplit.First = splitNode;
-            else parentSplit.Second = splitNode;
-        }
-
-        _previewPaneNode = previewNode;
-        UpdateMarkdownPreview();
-        CurrentEditor.Focus();
-    }
-
-    private void CloseMarkdownPreview(bool focusEditor = true)
-    {
-        _previewDebounceTimer?.Stop();
-
-        if (_globalRoot != null && _previewPaneNode != null)
-        {
-            var parentSplit = FindParentSplit(_globalRoot, _previewPaneNode);
-            if (parentSplit != null)
-            {
-                var sibling = parentSplit.First == _previewPaneNode
-                    ? parentSplit.Second
-                    : parentSplit.First;
-                var siblingElement = PaneToElement(sibling);
-
-                parentSplit.Container.Children.Remove(siblingElement);
-                parentSplit.Container.Children.Remove(MarkdownPreviewPanel);
-
-                var grandParent = FindParentSplit(_globalRoot, parentSplit);
-                if (grandParent == null)
-                {
-                    _globalRoot = sibling;
-                    EditorContent.Child = siblingElement;
-                }
-                else
-                {
-                    grandParent.ReplaceChild(parentSplit.Container, siblingElement);
-                    if (grandParent.First == parentSplit) grandParent.First = sibling;
-                    else grandParent.Second = sibling;
-                }
-            }
-        }
-
-        _previewVisible = false;
-        _previewPaneNode = null;
-        if (_previewSourceEditor != null)
-            _previewSourceEditor.ViewportScrolled -= PreviewSourceEditor_ViewportScrolled;
-        _previewSourceEditor = null;
-        PreviewBtn.IsChecked = false;
-        MarkdownPreviewPanel.Visibility = Visibility.Collapsed;
-        PreviewSplitter.Visibility = Visibility.Collapsed;
-        PreviewSplitterCol.Width = new GridLength(0);
-        PreviewCol.Width = new GridLength(0);
-        DetachFromParent(MarkdownPreviewPanel);
-
-        if (focusEditor)
-            _focusedEditor?.Focus();
-    }
-
-    private void ClosePreview_Click(object sender, RoutedEventArgs e) =>
-        CloseMarkdownPreview();
-
-    private static void DetachFromParent(UIElement element)
-    {
-        switch (VisualTreeHelper.GetParent(element))
-        {
-            case Panel panel:
-                panel.Children.Remove(element);
-                break;
-            case Decorator decorator when decorator.Child == element:
-                decorator.Child = null;
-                break;
-            case ContentControl contentControl when contentControl.Content == element:
-                contentControl.Content = null;
-                break;
-        }
-    }
-
-    private void SchedulePreviewUpdate()
-    {
-        if (_previewDebounceTimer == null)
-        {
-            _previewDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
-            // Use sender to avoid closing over the nullable field
-            _previewDebounceTimer.Tick += (s, _) =>
-            {
-                ((DispatcherTimer)s!).Stop();
-                UpdateMarkdownPreview();
-            };
-        }
-        _previewDebounceTimer.Stop();
-        _previewDebounceTimer.Start();
-    }
-
-    private void AttachPreviewWebViewEvents()
-    {
-        if (_previewWebViewEventsAttached || PreviewBrowser.CoreWebView2 == null) return;
-
-        PreviewBrowser.CoreWebView2.WebMessageReceived += PreviewBrowser_WebMessageReceived;
-        PreviewBrowser.NavigationCompleted += PreviewBrowser_NavigationCompleted;
-        _previewWebViewEventsAttached = true;
-    }
-
-    private async void PreviewSourceEditor_ViewportScrolled(object? sender, EventArgs e)
-    {
-        if (_syncingEditorFromPreview || sender is not VimEditorControl editor) return;
-        await QueuePreviewScrollSyncAsync(editor.VerticalScrollRatio);
-    }
-
-    private async void PreviewBrowser_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
-    {
-        if (!_previewVisible || _previewSourceEditor == null) return;
-        await QueuePreviewScrollSyncAsync(_previewSourceEditor.VerticalScrollRatio);
-    }
-
-    private void PreviewBrowser_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
-    {
-        if (_syncingPreviewFromEditor || !_previewVisible || _previewSourceEditor == null) return;
-
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(e.WebMessageAsJson);
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("type", out var type)
-                || type.GetString() != "markdownPreviewScroll"
-                || !root.TryGetProperty("ratio", out var ratioElement)
-                || !ratioElement.TryGetDouble(out double ratio))
-                return;
-
-            _syncingEditorFromPreview = true;
-            _previewSourceEditor.ScrollToVerticalRatio(ratio);
-        }
-        catch
-        {
-            // Ignore malformed messages from preview content.
-        }
-        finally
-        {
-            _syncingEditorFromPreview = false;
-        }
-    }
-
-    private async Task QueuePreviewScrollSyncAsync(double ratio)
-    {
-        _pendingPreviewScrollRatio = Math.Clamp(ratio, 0.0, 1.0);
-        if (_previewScrollSyncQueued) return;
-
-        _previewScrollSyncQueued = true;
-        try
-        {
-            while (_previewVisible)
-            {
-                var nextRatio = _pendingPreviewScrollRatio;
-                await ScrollPreviewToRatioAsync(nextRatio);
-
-                if (Math.Abs(nextRatio - _pendingPreviewScrollRatio) < 0.0001)
-                    break;
-            }
-        }
-        finally
-        {
-            _previewScrollSyncQueued = false;
-        }
-    }
-
-    private async Task ScrollPreviewToRatioAsync(double ratio)
-    {
-        if (!_previewVisible || PreviewBrowser.CoreWebView2 == null) return;
-
-        _syncingPreviewFromEditor = true;
-        try
-        {
-            var script = FormattableString.Invariant(
-                $"window.setMarkdownPreviewScrollRatio && window.setMarkdownPreviewScrollRatio({Math.Clamp(ratio, 0.0, 1.0):R});");
-            await PreviewBrowser.ExecuteScriptAsync(script);
-        }
-        catch
-        {
-            // Best effort: WebView can be navigating while the editor scrolls.
-        }
-        finally
-        {
-            _syncingPreviewFromEditor = false;
-        }
-    }
-
-    private async void UpdateMarkdownPreview()
-    {
-        var editor = _previewSourceEditor ?? CurrentEditor;
-        if (!_previewVisible || editor == null) return;
-
-        // All concurrent callers await the same Task — prevents parallel EnsureCoreWebView2Async calls.
-        _webView2InitTask ??= PreviewBrowser.EnsureCoreWebView2Async();
-        try
-        {
-            await _webView2InitTask;
-        }
-        catch
-        {
-            _webView2InitTask = null; // allow retry on next open
-            if (!_previewVisible) return;
-            PreviewBrowser.CoreWebView2?.NavigateToString(
-                "<html><body style='background:#282A36;color:#FF5555;"
-                + "font-family:Segoe UI,sans-serif;font-size:13px;padding:20px'>"
-                + "WebView2 の初期化に失敗しました。Edge WebView2 ランタイムがインストールされているか確認してください。"
-                + "</body></html>");
-            return;
-        }
-
-        // Re-check state after the async suspension (user may have closed preview or switched editor)
-        editor = _previewSourceEditor ?? CurrentEditor;
-        if (!_previewVisible || editor == null) return;
-        if (PreviewBrowser.CoreWebView2 == null) return;
-        AttachPreviewWebViewEvents();
-
-        var filePath = editor.Engine.CurrentBuffer.FilePath;
-        var ext = filePath != null ? Path.GetExtension(filePath).ToLowerInvariant() : string.Empty;
-
-        if (ext != ".md" && ext != ".markdown")
-        {
-            PreviewBrowser.CoreWebView2.NavigateToString(
-                "<html><body style='background:#282A36;color:#6272A4;"
-                + "font-family:Segoe UI,sans-serif;font-size:13px;padding:20px'>"
-                + "Not a Markdown file</body></html>");
-            return;
-        }
-
-        var text = editor.Engine.CurrentBuffer.Text.GetText();
-        var title = filePath != null ? Path.GetFileName(filePath) : "Preview";
-        var html = MarkdownRenderer.RenderToHtml(text, title, _markdownPreviewStyle);
-        PreviewBrowser.CoreWebView2.NavigateToString(html);
-    }
+    private void ClosePreview_Click(object sender, RoutedEventArgs e) => _markdownPreview.Close();
 
     private void Editor_SourceRequested(object? sender, string filePath)
     {
@@ -1771,12 +826,12 @@ public partial class MainWindow : Window
                     if (cmd.Path != null && File.Exists(cmd.Path))
                     {
                         if (firstFile) { _focusedEditor?.LoadFile(cmd.Path); firstFile = false; }
-                        else AddTab(cmd.Path);
+                        else _tabs.AddTab(cmd.Path);
                     }
                     break;
                 case SessionCommandType.OpenFileInTab:
                     if (cmd.Path != null && File.Exists(cmd.Path))
-                        AddTab(cmd.Path);
+                        _tabs.AddTab(cmd.Path);
                     break;
                 case SessionCommandType.SetCursor:
                     _focusedEditor?.Engine.SetCursorPosition(
@@ -1790,587 +845,15 @@ public partial class MainWindow : Window
         }
     }
 
-    // ─────────────── References panel ───────────────
+    // ─────────── References panel (delegates to ReferencesPanelController) ─
+    // See ReferencesPanelController.cs — owns the quickfix/references panel: LSP
+    // find-references results, project grep/replace, and per-buffer location lists.
 
-    private enum LocationListSource { Empty, Diagnostics, Search }
+    private void ReplaceRefResults_Click(object sender, RoutedEventArgs e) => _refs.ReplaceRefResults_Click(sender, e);
 
-    private sealed class ReferenceListItem
-    {
-        public required string FilePath  { get; init; }
-        public required string FileName  { get; init; }
-        public required string LineCol   { get; init; }
-        public required string Preview   { get; init; }
-        public required int    Line      { get; init; }
-        public required int    Col       { get; init; }
-        public bool CurrentBufferOnly { get; init; }
-        public string? BufferKey { get; init; }
-    }
+    private void CloseRefPanel_Click(object sender, RoutedEventArgs e) => _refs.Close();
 
-    private sealed class BufferLocationList
-    {
-        public List<ReferenceListItem> Items { get; set; } = [];
-        public string Title { get; set; } = "LOCATION LIST";
-        public LocationListSource Source { get; set; } = LocationListSource.Empty;
-        public string SourceKey { get; set; } = "";
-        public LocationListNavigator Navigator { get; } = new();
-    }
-
-    private void Editor_FindReferencesResult(object? sender, FindReferencesResultEventArgs e)
-    {
-        var items = e.Items.Select(r =>
-        {
-            string fileName = Path.GetFileName(r.FilePath);
-            string lineCol  = $":{r.Line + 1}:{r.Col + 1}";
-            string preview  = r.Preview ?? ReadSourceLine(r.FilePath, r.Line);
-            return new ReferenceListItem
-            {
-                FilePath = r.FilePath,
-                FileName = fileName,
-                LineCol  = lineCol,
-                Preview  = preview,
-                Line     = r.Line,
-                Col      = r.Col
-            };
-        }).ToList();
-
-        SetQuickfixItems(items);
-        _quickfixCurrentIndex = -1;
-
-        int fileCount = items.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        _quickfixTitle = $"{e.TitlePrefix} ({items.Count}) — {e.SymbolName}  [{fileCount} file(s)]";
-        _lastGrepOptions = null;
-
-        ShowQuickfixPanel();
-    }
-
-    private static string ReadSourceLine(string filePath, int line)
-    {
-        try
-        {
-            using var reader = new StreamReader(filePath);
-            for (int i = 0; i < line; i++)
-                if (reader.ReadLine() == null) return "";
-            return (reader.ReadLine() ?? "").Trim();
-        }
-        catch { return ""; }
-    }
-
-    private void ShowReferencesPanel()
-    {
-        RefPanelRow.Height     = new System.Windows.GridLength(200);
-        RefSplitterRow.Height  = new System.Windows.GridLength(4);
-        ReferencesPanel.Visibility = Visibility.Visible;
-        RefSplitter.Visibility     = Visibility.Visible;
-    }
-
-    private void Editor_GrepRequested(object? sender, GrepRequestedEventArgs e)
-    {
-        var currentFilePath = _focusedEditor?.Engine.CurrentBuffer.FilePath;
-        _ = RunGrepAsync(e.Pattern, e.FileGlob, e.IgnoreCase, currentFilePath);
-    }
-
-    private async Task RunGrepAsync(string pattern, string? fileGlob, bool ignoreCase, string? currentFilePath)
-    {
-        SetQuickfixItems([]);
-        _quickfixCurrentIndex = -1;
-        _quickfixTitle = $"GREP \"{pattern}\" — Searching…";
-        ShowQuickfixPanel();
-
-        List<ReferenceListItem> results;
-        var grepOptions = CreateProjectSearchOptions(pattern, fileGlob, ignoreCase, currentFilePath);
-        try
-        {
-            results = grepOptions == null
-                ? []
-                : await Task.Run(() => ExecuteGrep(grepOptions));
-        }
-        catch { results = []; }
-
-        SetQuickfixItems(results);
-        _quickfixCurrentIndex = -1;
-
-        int fileCount = results.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        _quickfixTitle = results.Count > 0
-            ? $"GREP \"{pattern}\" — {results.Count} matches [{fileCount} file(s)]"
-            : $"GREP \"{pattern}\" — no matches";
-        _lastGrepOptions = grepOptions;
-        ShowQuickfixPanel();
-
-    }
-
-    private ProjectSearchOptions? CreateProjectSearchOptions(string pattern, string? fileGlob, bool ignoreCase, string? currentFilePath)
-    {
-        string? root;
-        if (fileGlob == "%")
-        {
-            if (currentFilePath == null) return null;
-            root = Path.GetDirectoryName(currentFilePath);
-        }
-        else
-        {
-            root = _currentFolderPath
-                   ?? (currentFilePath != null ? Path.GetDirectoryName(currentFilePath) : null);
-        }
-
-        return root == null
-            ? null
-            : new ProjectSearchOptions(root, pattern, fileGlob, ignoreCase, currentFilePath);
-    }
-
-    private static List<ReferenceListItem> ExecuteGrep(ProjectSearchOptions options)
-    {
-        try
-        {
-            return ProjectFindReplaceService.Find(options)
-                .Select(match => new ReferenceListItem
-                {
-                    FilePath = match.FilePath,
-                    FileName = Path.GetFileName(match.FilePath),
-                    LineCol  = $":{match.Line + 1}:{match.Column + 1}",
-                    Preview  = match.LineText.Trim(),
-                    Line     = match.Line,
-                    Col      = match.Column,
-                })
-                .ToList();
-        }
-        catch
-        {
-            return [];
-        }
-    }
-
-    private async void ReplaceRefResults_Click(object sender, RoutedEventArgs e)
-    {
-        var replacement = ShowInputDialog("Project Replace", "Replacement:", "");
-        if (replacement == null)
-            return;
-
-        await ReplaceLastGrepAsync(replacement);
-    }
-
-    private void Editor_QuickfixReplaceRequested(object? sender, string replacement)
-    {
-        _ = ReplaceLastGrepAsync(replacement);
-    }
-
-    private void Editor_ProjectReplaceRequested(object? sender, ProjectReplaceRequestedEventArgs e)
-    {
-        _ = ReplaceProjectAsync(e.Pattern, e.Replacement, e.FileGlob, e.IgnoreCase);
-    }
-
-    private async Task ReplaceProjectAsync(string pattern, string replacement, string? fileGlob, bool ignoreCase)
-    {
-        var currentFilePath = _focusedEditor?.Engine.CurrentBuffer.FilePath;
-        var options = CreateProjectSearchOptions(pattern, fileGlob, ignoreCase, currentFilePath);
-        if (options == null)
-        {
-            MessageBox.Show("No project folder or current file is available.", "Project Replace",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        SetQuickfixItems([]);
-        _quickfixCurrentIndex = -1;
-        _quickfixTitle = $"REPLACE \"{pattern}\" — Searching…";
-        ShowQuickfixPanel();
-
-        var results = await Task.Run(() => ExecuteGrep(options));
-        SetQuickfixItems(results);
-        _quickfixCurrentIndex = -1;
-        _lastGrepOptions = options;
-
-        var fileCount = results.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        _quickfixTitle = results.Count > 0
-            ? $"REPLACE \"{pattern}\" — {results.Count} matches [{fileCount} file(s)]"
-            : $"REPLACE \"{pattern}\" — no matches";
-        ShowQuickfixPanel();
-
-        if (results.Count > 0)
-            await ConfirmAndApplyReplaceAsync(options, replacement, results);
-    }
-
-    private async Task ReplaceLastGrepAsync(string replacement)
-    {
-        if (_lastGrepOptions == null)
-        {
-            MessageBox.Show("Run :grep first, or use :grepreplace /pattern/replacement/.", "Project Replace",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        var results = _quickfixItems.ToList();
-        if (results.Count == 0)
-            results = await Task.Run(() => ExecuteGrep(_lastGrepOptions));
-
-        if (results.Count == 0)
-        {
-            MessageBox.Show("No grep results to replace.", "Project Replace",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        await ConfirmAndApplyReplaceAsync(_lastGrepOptions, replacement, results);
-    }
-
-    private async Task ConfirmAndApplyReplaceAsync(
-        ProjectSearchOptions options,
-        string replacement,
-        IReadOnlyList<ReferenceListItem> results)
-    {
-        var files = results
-            .Select(i => i.FilePath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var modifiedOpenFiles = AllEditors()
-            .Where(editor => editor.Engine.CurrentBuffer.Text.IsModified &&
-                             editor.Engine.CurrentBuffer.FilePath != null &&
-                             files.Contains(editor.Engine.CurrentBuffer.FilePath, StringComparer.OrdinalIgnoreCase))
-            .Select(editor => editor.Engine.CurrentBuffer.FilePath!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (modifiedOpenFiles.Count > 0)
-        {
-            MessageBox.Show(
-                "Save or discard changes in these open files before replacing:\n\n" +
-                string.Join("\n", modifiedOpenFiles.Select(Path.GetFileName)),
-                "Project Replace",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
-        }
-
-        var confirm = MessageBox.Show(
-            $"Replace {results.Count} match(es) in {files.Count} file(s)?\n\nPattern: {options.Pattern}\nReplacement: {replacement}",
-            "Project Replace",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning);
-        if (confirm != MessageBoxResult.Yes)
-            return;
-
-        ProjectReplaceResult replaceResult;
-        try
-        {
-            replaceResult = await Task.Run(() => ProjectFindReplaceService.Replace(options, replacement));
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(ex.Message, "Project Replace Failed", MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
-        }
-
-        ReloadOpenEditors(files);
-        await RunGrepAsync(options.Pattern, options.FileGlob, options.IgnoreCase, options.CurrentFilePath);
-
-        var errorText = replaceResult.Errors.Count > 0
-            ? $"\n\nErrors:\n{string.Join("\n", replaceResult.Errors.Take(5))}"
-            : "";
-        MessageBox.Show(
-            $"Replaced {replaceResult.MatchCount} match(es) in {replaceResult.FileCount} file(s).{errorText}",
-            "Project Replace",
-            MessageBoxButton.OK,
-            replaceResult.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
-    }
-
-    private void ReloadOpenEditors(IReadOnlyCollection<string> filePaths)
-    {
-        foreach (var editor in AllEditors())
-        {
-            var path = editor.Engine.CurrentBuffer.FilePath;
-            if (path == null || !filePaths.Contains(path, StringComparer.OrdinalIgnoreCase) || !File.Exists(path))
-                continue;
-
-            try
-            {
-                editor.LoadFile(path);
-            }
-            catch
-            {
-                // File watcher or a later explicit open can recover if a reload fails.
-            }
-        }
-    }
-
-    private void SetQuickfixItems(List<ReferenceListItem> items)
-    {
-        _quickfixItems = items;
-    }
-
-    private void ShowQuickfixPanel()
-    {
-        DisplayReferenceItems(_quickfixItems, _quickfixTitle, _quickfixCurrentIndex,
-            _lastGrepOptions != null && _quickfixItems.Count > 0);
-    }
-
-    private void DisplayReferenceItems(
-        IReadOnlyList<ReferenceListItem> items,
-        string title,
-        int selectedIndex,
-        bool replaceEnabled)
-    {
-        RefList.SelectionChanged -= RefList_SelectionChanged;
-        RefList.ItemsSource = items;
-        RefList.SelectedIndex = selectedIndex >= 0 && selectedIndex < items.Count ? selectedIndex : -1;
-        RefList.SelectionChanged += RefList_SelectionChanged;
-
-        RefPanelTitle.Text = title;
-        ReplaceRefResultsBtn.IsEnabled = replaceEnabled;
-        ShowReferencesPanel();
-    }
-
-    private void QuickfixNavigate(int delta)
-    {
-        var count = _quickfixItems.Count;
-        if (count == 0) return;
-        ShowQuickfixPanel();
-        _quickfixCurrentIndex = Math.Clamp(_quickfixCurrentIndex + delta, 0, count - 1);
-        RefList.SelectedIndex = _quickfixCurrentIndex;
-        RefList.ScrollIntoView(RefList.SelectedItem);
-        CurrentEditor?.Focus();
-    }
-
-    private void QuickfixNavigateTo(int index)
-    {
-        var count = _quickfixItems.Count;
-        if (count == 0) return;
-        ShowQuickfixPanel();
-        // index == -1 means :cc with no arg — go to current item (or first)
-        _quickfixCurrentIndex = index < 0
-            ? Math.Max(0, _quickfixCurrentIndex)
-            : Math.Clamp(index, 0, count - 1);
-        RefList.SelectedIndex = _quickfixCurrentIndex;
-        RefList.ScrollIntoView(RefList.SelectedItem);
-        CurrentEditor?.Focus();
-    }
-
-    private void ShowLocationListPanel()
-    {
-        var state = RefreshCurrentLocationList();
-        DisplayReferenceItems(state.Items, state.Title, state.Navigator.CurrentIndex, false);
-    }
-
-    private void LocationListNavigate(int delta)
-    {
-        var state = RefreshCurrentLocationList();
-        var target = state.Navigator.Move(delta);
-        if (target == null) return;
-
-        ShowLocationListPanel();
-        RefList.SelectedIndex = target.Value;
-        RefList.ScrollIntoView(RefList.SelectedItem);
-        CurrentEditor?.Focus();
-    }
-
-    private void LocationListNavigateTo(int index)
-    {
-        var state = RefreshCurrentLocationList();
-        var target = state.Navigator.Goto(index);
-        if (target == null) return;
-
-        ShowLocationListPanel();
-        RefList.SelectedIndex = target.Value;
-        RefList.ScrollIntoView(RefList.SelectedItem);
-        CurrentEditor?.Focus();
-    }
-
-    private BufferLocationList RefreshCurrentLocationList()
-    {
-        var editor = CurrentEditor;
-        if (editor == null)
-            return new BufferLocationList();
-
-        var key = GetLocationListKey(editor);
-        if (!_locationLists.TryGetValue(key, out var state))
-        {
-            state = new BufferLocationList();
-            _locationLists[key] = state;
-        }
-
-        var (items, title, source, sourceKey) = BuildLocationList(editor);
-        bool replaced = state.Source != source || state.SourceKey != sourceKey;
-        state.Items = items;
-        state.Title = title;
-        state.Source = source;
-        state.SourceKey = sourceKey;
-        if (replaced)
-            state.Navigator.Reset(items.Count);
-        else
-            state.Navigator.SetCount(items.Count);
-
-        return state;
-    }
-
-    private (List<ReferenceListItem> Items, string Title, LocationListSource Source, string SourceKey)
-        BuildLocationList(VimEditorControl editor)
-    {
-        var diagnostics = BuildDiagnosticLocationItems(editor);
-        if (diagnostics.Count > 0)
-        {
-            string title = $"LOCATION LIST — diagnostics ({diagnostics.Count})";
-            return (diagnostics, title, LocationListSource.Diagnostics, "diagnostics");
-        }
-
-        var searchItems = BuildSearchLocationItems(editor, out var pattern);
-        if (searchItems.Count > 0)
-        {
-            string title = $"LOCATION LIST — /{pattern}/ ({searchItems.Count})";
-            return (searchItems, title, LocationListSource.Search, $"search:{pattern}");
-        }
-
-        return ([], "LOCATION LIST — no diagnostics or search matches", LocationListSource.Empty, "");
-    }
-
-    private static List<ReferenceListItem> BuildDiagnosticLocationItems(VimEditorControl editor)
-    {
-        var filePath = editor.Engine.CurrentBuffer.FilePath ?? "";
-        var fileName = string.IsNullOrEmpty(filePath) ? "[No Name]" : Path.GetFileName(filePath);
-        var bufferKey = GetLocationListKey(editor);
-
-        return editor.CurrentDiagnostics
-            .OrderBy(d => d.Range.Start.Line)
-            .ThenBy(d => d.Range.Start.Character)
-            .Select(d => new ReferenceListItem
-            {
-                FilePath = filePath,
-                FileName = fileName,
-                LineCol = $":{d.Range.Start.Line + 1}:{d.Range.Start.Character + 1}",
-                Preview = $"{d.Severity}: {d.Message}",
-                Line = d.Range.Start.Line,
-                Col = d.Range.Start.Character,
-                CurrentBufferOnly = true,
-                BufferKey = bufferKey,
-            })
-            .ToList();
-    }
-
-    private static List<ReferenceListItem> BuildSearchLocationItems(VimEditorControl editor, out string pattern)
-    {
-        pattern = editor.Engine.SearchPattern;
-        if (string.IsNullOrEmpty(pattern))
-            return [];
-
-        var ignoreCase = editor.Engine.Options.SmartCase
-            ? !pattern.Any(char.IsUpper)
-            : editor.Engine.Options.IgnoreCase;
-        var buffer = editor.Engine.CurrentBuffer.Text;
-        var filePath = editor.Engine.CurrentBuffer.FilePath ?? "";
-        var fileName = string.IsNullOrEmpty(filePath) ? "[No Name]" : Path.GetFileName(filePath);
-        var bufferKey = GetLocationListKey(editor);
-
-        return buffer.FindAll(pattern, ignoreCase)
-            .Select(pos => new ReferenceListItem
-            {
-                FilePath = filePath,
-                FileName = fileName,
-                LineCol = $":{pos.Line + 1}:{pos.Column + 1}",
-                Preview = buffer.GetLine(pos.Line).Trim(),
-                Line = pos.Line,
-                Col = pos.Column,
-                CurrentBufferOnly = true,
-                BufferKey = bufferKey,
-            })
-            .ToList();
-    }
-
-    private static string GetLocationListKey(VimEditorControl editor)
-    {
-        var filePath = editor.Engine.CurrentBuffer.FilePath;
-        return string.IsNullOrEmpty(filePath)
-            ? $"editor:{RuntimeHelpers.GetHashCode(editor)}"
-            : Path.GetFullPath(filePath);
-    }
-
-    private void CloseRefPanel_Click(object sender, RoutedEventArgs e)
-    {
-        ReferencesPanel.Visibility = Visibility.Collapsed;
-        RefSplitter.Visibility     = Visibility.Collapsed;
-        RefPanelRow.Height    = new System.Windows.GridLength(0);
-        RefSplitterRow.Height = new System.Windows.GridLength(0);
-        // Return focus to editor
-        CurrentEditor?.Focus();
-    }
-
-    private void RefList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (RefList.SelectedItem is not ReferenceListItem item) return;
-
-        var editor = CurrentEditor;
-        if (editor == null) return;
-
-        if (item.CurrentBufferOnly)
-        {
-            if (!string.Equals(item.BufferKey, GetLocationListKey(editor), StringComparison.OrdinalIgnoreCase))
-            {
-                ShowLocationListPanel();
-                return;
-            }
-
-            editor.NavigateTo(item.Line, item.Col);
-            editor.Focus();
-        }
-        else if (string.Equals(item.FilePath, editor.Engine.CurrentBuffer.FilePath,
-                               StringComparison.OrdinalIgnoreCase))
-        {
-            editor.NavigateTo(item.Line, item.Col);
-            editor.Focus();
-        }
-        else
-        {
-            OpenFile(item.FilePath);
-            CurrentEditor?.NavigateTo(item.Line, item.Col);
-        }
-    }
-
-    private void CloseFileTab(FileTab fileTab, bool force)
-    {
-        // Check ALL panes showing this file for unsaved changes
-        var modifiedEditors = AllEditors()
-            .Where(e =>
-                string.Equals(e.Engine.CurrentBuffer.FilePath, fileTab.FilePath,
-                    StringComparison.OrdinalIgnoreCase) &&
-                e.Engine.CurrentBuffer.Text.IsModified)
-            .ToList();
-
-        if (!force && modifiedEditors.Count > 0)
-        {
-            var name = fileTab.FilePath != null ? Path.GetFileName(fileTab.FilePath) : "[No Name]";
-            var result = MessageBox.Show(
-                $"'{name}' has unsaved changes. Save before closing?",
-                "Editor",
-                MessageBoxButton.YesNoCancel,
-                MessageBoxImage.Warning);
-
-            if (result == MessageBoxResult.Cancel) return;
-            if (result == MessageBoxResult.Yes)
-            {
-                foreach (var ed in modifiedEditors)
-                {
-                    try { ed.Engine.CurrentBuffer.Save(); }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
-                        return;
-                    }
-                }
-            }
-        }
-
-        var idx = _fileTabs.IndexOf(fileTab);
-        _fileTabs.Remove(fileTab);
-        TabCtrl.Items.Remove(fileTab.Item);
-
-        if (_fileTabs.Count == 0)
-        {
-            // If there are split panes, close them all first; then close app
-            Close();
-            return;
-        }
-
-        // Load the next adjacent tab into the focused pane
-        var nextIdx = Math.Clamp(idx, 0, _fileTabs.Count - 1);
-        SelectFileTab(_fileTabs[nextIdx]);
-    }
+    private void RefList_SelectionChanged(object sender, SelectionChangedEventArgs e) => _refs.RefList_SelectionChanged(sender, e);
 
     private void OpenFile(string path)
     {
@@ -2378,10 +861,8 @@ public partial class MainWindow : Window
         if (_focusedEditor == null) return;
         _focusedEditor.LoadFile(path);
         // Ensure the file has a tab entry
-        var ft = EnsureFileTab(path);
-        _suppressTabSelectionChanged = true;
-        TabCtrl.SelectedItem = ft.Item;
-        _suppressTabSelectionChanged = false;
+        var ft = _tabs.EnsureFileTab(path);
+        _tabs.SetSelectedTabItemQuietly(ft);
         Title = $"Editor — {Path.GetFileName(path)}";
         RecordRecentFile(path);
     }
@@ -2414,7 +895,7 @@ public partial class MainWindow : Window
                     return;
                 }
                 // Ensure a tab exists for the new path
-                EnsureFileTab(e.FilePath);
+                _tabs.EnsureFileTab(e.FilePath);
             }
             else if (buf.FilePath == null)
             {
@@ -2426,7 +907,7 @@ public partial class MainWindow : Window
                     MessageBox.Show($"Save failed: {ex.Message}", "Editor", MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
-                var ft = FindFileTabByPath(null) ?? EnsureFileTab(dlg.FileName);
+                var ft = _tabs.FindFileTabByPath(null) ?? _tabs.EnsureFileTab(dlg.FileName);
                 ft.FilePath = dlg.FileName;
                 ft.UpdateHeader(isModified: false);
                 return;
@@ -2448,7 +929,7 @@ public partial class MainWindow : Window
             editor.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
                 () => editor.OnSaveFinished());
         }
-        var fileTab = FindFileTabByPath(buf.FilePath);
+        var fileTab = _tabs.FindFileTabByPath(buf.FilePath);
         fileTab?.UpdateHeader(isModified: false);
     }
 
@@ -2457,9 +938,9 @@ public partial class MainWindow : Window
         if (sender is not VimEditorControl editor) return;
         // :wq/:x saves first (engine handles it), then closes the current tab.
         // :qa/:qa! closes the current tab; if it's the last one, the app exits.
-        var ft = FindFileTabByPath(editor.Engine.CurrentBuffer.FilePath);
+        var ft = _tabs.FindFileTabByPath(editor.Engine.CurrentBuffer.FilePath);
         if (ft != null)
-            CloseFileTab(ft, e.Force);
+            _tabs.CloseFileTab(ft, e.Force);
         else
             Close();
     }
@@ -2488,10 +969,10 @@ public partial class MainWindow : Window
     {
         if (string.IsNullOrWhiteSpace(e.FilePath))
         {
-            AddTab(null);
+            _tabs.AddTab(null);
             return;
         }
-        AddTab(ResolvePath(e.FilePath));
+        _tabs.AddTab(ResolvePath(e.FilePath));
     }
 
     private void Editor_SplitRequested(object? sender, SplitRequestedEventArgs e)
@@ -2499,19 +980,19 @@ public partial class MainWindow : Window
         if (sender is not VimEditorControl source) return;
         if (_globalRoot == null) return;
 
-        var sourcePane = FindEditorPane(_globalRoot, source);
+        var sourcePane = PaneTreeHelpers.FindEditorPane(_globalRoot, source);
         if (sourcePane == null) return;
 
         // Resolve file to open in new pane (default: same file as source)
         var newFilePath = e.FilePath != null
             ? ResolvePath(e.FilePath)
             : source.Engine.CurrentBuffer.FilePath;
-        var newEditor = CreateEditor(newFilePath);
+        var newEditor = _tabs.CreateEditor(newFilePath);
         var newLeaf = new EditorPaneNode { Editor = newEditor };
 
         // WPF requires element removed from its current parent before being added to a new Grid.
         var firstElement = (UIElement)sourcePane.Editor;
-        var parentSplit = FindParentSplit(_globalRoot, sourcePane);
+        var parentSplit = PaneTreeHelpers.FindParentSplit(_globalRoot, sourcePane);
         int gridPos = -1;
         if (parentSplit != null)
         {
@@ -2548,28 +1029,28 @@ public partial class MainWindow : Window
 
         // Ensure the new file has a tab entry
         if (newFilePath != null)
-            EnsureFileTab(newFilePath);
+            _tabs.EnsureFileTab(newFilePath);
 
         _focusedEditor = newEditor;
-        UpdateSelectedTabForEditor(newEditor);
+        _tabs.UpdateSelectedTabForEditor(newEditor);
         newEditor.Focus();
     }
 
     private void CloseSplitPane(VimEditorControl editor, bool force)
     {
         if (_globalRoot == null) return;
-        var editorPane = FindEditorPane(_globalRoot, editor);
+        var editorPane = PaneTreeHelpers.FindEditorPane(_globalRoot, editor);
         if (editorPane == null) return;
-        var parentSplit = FindParentSplit(_globalRoot, editorPane);
+        var parentSplit = PaneTreeHelpers.FindParentSplit(_globalRoot, editorPane);
         if (parentSplit == null) return;
 
         var sibling = parentSplit.First == editorPane ? parentSplit.Second : parentSplit.First;
-        var siblingElement = PaneToElement(sibling);
+        var siblingElement = PaneTreeHelpers.PaneToElement(sibling);
 
         // Detach sibling from parentSplit.Container before reparenting
         parentSplit.Container.Children.Remove(siblingElement);
 
-        var grandParent = FindParentSplit(_globalRoot, parentSplit);
+        var grandParent = PaneTreeHelpers.FindParentSplit(_globalRoot, parentSplit);
         if (grandParent == null)
         {
             _globalRoot = sibling;
@@ -2584,7 +1065,7 @@ public partial class MainWindow : Window
 
         var nextFocus = sibling.AllEditors().First();
         _focusedEditor = nextFocus;
-        UpdateSelectedTabForEditor(nextFocus);
+        _tabs.UpdateSelectedTabForEditor(nextFocus);
         nextFocus.Focus();
         // Release the closed editor's LSP/file-watcher resources. (Unloaded no longer does this —
         // it fires on transient detaches too — so disposal is now the host's responsibility.)
@@ -2595,16 +1076,16 @@ public partial class MainWindow : Window
     {
         if (sender is not VimEditorControl editor) return;
 
-        if (_previewSourceEditor == editor)
-            CloseMarkdownPreview(focusEditor: false);
+        if (_markdownPreview.SourceEditor == editor)
+            _markdownPreview.Close(focusEditor: false);
 
         if (!AllEditors().Skip(1).Any())
         {
             // Single pane: close the current file's tab
             var path = editor.Engine.CurrentBuffer.FilePath;
-            var ft = FindFileTabByPath(path);
+            var ft = _tabs.FindFileTabByPath(path);
             if (ft != null)
-                CloseFileTab(ft, e.Force);
+                _tabs.CloseFileTab(ft, e.Force);
             else
                 Close();
             return;
@@ -2645,7 +1126,7 @@ public partial class MainWindow : Window
 
         // No editor pane in that direction — move to Explorer sidebar if applicable
         if (e.Dir == WindowNavDir.Left
-            && _sidebarVisible && _activeSidebarPanel == SidebarPanel.Explorer)
+            && _sidebar.IsVisible && _sidebar.ActivePanel == SidebarPanel.Explorer)
         {
             FileTree.Focus();
             return;
@@ -2675,38 +1156,10 @@ public partial class MainWindow : Window
     {
         if (sender is not VimEditorControl editor) return;
         _focusedEditor = editor;
-        UpdateSelectedTabForEditor(editor);
+        _tabs.UpdateSelectedTabForEditor(editor);
         RefreshOutlineForEditor(editor);
 
-        if (_previewVisible && editor == _previewSourceEditor)
-            SchedulePreviewUpdate();
-    }
-
-    private void Editor_NextTabRequested(object? sender, EventArgs e)
-    {
-        if (_fileTabs.Count == 0) return;
-        var selectedItem = TabCtrl.SelectedItem as TabItem;
-        var current = _fileTabs.FindIndex(t => t.Item == selectedItem);
-        var next = (current + 1) % _fileTabs.Count;
-        SelectFileTab(_fileTabs[next]);
-    }
-
-    private void Editor_PrevTabRequested(object? sender, EventArgs e)
-    {
-        if (_fileTabs.Count == 0) return;
-        var selectedItem = TabCtrl.SelectedItem as TabItem;
-        var current = _fileTabs.FindIndex(t => t.Item == selectedItem);
-        var prev = (current - 1 + _fileTabs.Count) % _fileTabs.Count;
-        SelectFileTab(_fileTabs[prev]);
-    }
-
-    private void Editor_CloseTabRequested(object? sender, CloseTabRequestedEventArgs e)
-    {
-        if (sender is not VimEditorControl editor) return;
-        var path = editor.Engine.CurrentBuffer.FilePath;
-        var ft = FindFileTabByPath(path);
-        if (ft != null)
-            CloseFileTab(ft, e.Force);
+        _markdownPreview.NotifyEditorActivated(editor);
     }
 
     // ─────────── Recent items ──────────────────────────────────
@@ -2790,7 +1243,7 @@ public partial class MainWindow : Window
 
     // ─────────── Menu handlers ───────────────
 
-    private void NewTab_Click(object sender, RoutedEventArgs e) => AddTab(null);
+    private void NewTab_Click(object sender, RoutedEventArgs e) => _tabs.AddTab(null);
 
     private void OpenFile_Click(object sender, RoutedEventArgs e)
     {
@@ -2863,7 +1316,7 @@ public partial class MainWindow : Window
 
     private void ExplorerBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (_sidebarVisible && _activeSidebarPanel == SidebarPanel.Explorer)
+        if (_sidebar.IsVisible && _sidebar.ActivePanel == SidebarPanel.Explorer)
             HideSidebar();
         else
             ShowSidebar(SidebarPanel.Explorer);
@@ -2871,7 +1324,7 @@ public partial class MainWindow : Window
 
     private void SettingsBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (_sidebarVisible && _activeSidebarPanel == SidebarPanel.Settings)
+        if (_sidebar.IsVisible && _sidebar.ActivePanel == SidebarPanel.Settings)
             HideSidebar();
         else
             ShowSidebar(SidebarPanel.Settings);
@@ -2879,7 +1332,7 @@ public partial class MainWindow : Window
 
     private void OutlineBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (_sidebarVisible && _activeSidebarPanel == SidebarPanel.Outline)
+        if (_sidebar.IsVisible && _sidebar.ActivePanel == SidebarPanel.Outline)
         {
             HideSidebar();
             return;
@@ -2951,7 +1404,7 @@ public partial class MainWindow : Window
             return;
 
         // Always show the outline panel (e.g. triggered via :Outline command)
-        if (!_sidebarVisible || _activeSidebarPanel != SidebarPanel.Outline)
+        if (!_sidebar.IsVisible || _sidebar.ActivePanel != SidebarPanel.Outline)
         {
             ShowSidebar(SidebarPanel.Outline);
         }
@@ -2989,7 +1442,7 @@ public partial class MainWindow : Window
 
     private void RefreshOutlineForEditor(VimEditorControl? editor)
     {
-        if (!_sidebarVisible || _activeSidebarPanel != SidebarPanel.Outline)
+        if (!_sidebar.IsVisible || _sidebar.ActivePanel != SidebarPanel.Outline)
             return;
 
         PopulateOutlineList([]);
@@ -3092,11 +1545,9 @@ public partial class MainWindow : Window
         var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "All Files|*.*", Title = "Save File As" };
         if (dlg.ShowDialog() != true) return;
         editor.Engine.CurrentBuffer.Save(dlg.FileName);
-        var ft = EnsureFileTab(dlg.FileName);
+        var ft = _tabs.EnsureFileTab(dlg.FileName);
         ft.UpdateHeader(isModified: false);
-        _suppressTabSelectionChanged = true;
-        TabCtrl.SelectedItem = ft.Item;
-        _suppressTabSelectionChanged = false;
+        _tabs.SetSelectedTabItemQuietly(ft);
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
@@ -3132,8 +1583,8 @@ public partial class MainWindow : Window
         }
 
         _recentItems.SaveMarkdownPreviewStyle(_markdownPreviewStyle);
-        if (_previewVisible)
-            UpdateMarkdownPreview();
+        if (_markdownPreview.IsVisible)
+            _markdownPreview.Refresh();
     }
 
     private static readonly string[] BgPaletteColors =
@@ -3272,17 +1723,8 @@ public partial class MainWindow : Window
         catch { return false; }
     }
 
-    private void TabCtrl_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressTabSelectionChanged) return;
-        var selectedItem = TabCtrl.SelectedItem as TabItem;
-        var fileTab = _fileTabs.Find(t => t.Item == selectedItem);
-        if (fileTab == null) return;
-        if (fileTab.FilePath != null && File.Exists(fileTab.FilePath))
-            _focusedEditor?.LoadFile(fileTab.FilePath);
-        _focusedEditor?.Focus();
-        RefreshOutlineForEditor(_focusedEditor);
-    }
+    private void TabCtrl_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        _tabs.TabCtrl_SelectionChanged(sender, e);
 
     // ─────────── Title bar controls ─────────────────────────
 
@@ -3486,15 +1928,15 @@ public partial class MainWindow : Window
 
     private List<SearchResultItem> SearchFiles(string query)
     {
-        if (_currentFolderPath == null) return [];
+        if (_sidebar.CurrentFolderPath == null) return [];
         try
         {
             var q = query.Trim();
             var ranked = new List<(string FilePath, string FileName, string RelativePath, int Score)>();
-            foreach (var f in EnumerateSourceFiles(_currentFolderPath))
+            foreach (var f in EnumerateSourceFiles(_sidebar.CurrentFolderPath))
             {
                 var fileName = Path.GetFileName(f);
-                var relativePath = Path.GetRelativePath(_currentFolderPath, f);
+                var relativePath = Path.GetRelativePath(_sidebar.CurrentFolderPath, f);
 
                 if (string.IsNullOrEmpty(q))
                 {
@@ -3602,11 +2044,11 @@ public partial class MainWindow : Window
 
     private List<SearchResultItem> SearchText(string query)
     {
-        if (_currentFolderPath == null || string.IsNullOrWhiteSpace(query)) return [];
+        if (_sidebar.CurrentFolderPath == null || string.IsNullOrWhiteSpace(query)) return [];
         var results = new List<SearchResultItem>();
         try
         {
-            foreach (var f in EnumerateSourceFiles(_currentFolderPath))
+            foreach (var f in EnumerateSourceFiles(_sidebar.CurrentFolderPath))
             {
                 if (results.Count >= 50) break;
                 var info = new FileInfo(f);
@@ -3644,7 +2086,7 @@ public partial class MainWindow : Window
     {
         var all = new (string Name, string Detail, string Icon, string Color, Action Act)[]
         {
-            ("新しいタブを開く",        "", "\uE710", "#50FA7B", () => { CloseSearch(); AddTab(null); }),
+            ("新しいタブを開く",        "", "\uE710", "#50FA7B", () => { CloseSearch(); _tabs.AddTab(null); }),
             ("ファイルを開く...",        "", "\uED25", "#8BE9FD", () => { CloseSearch(); OpenFile_Click(this, new RoutedEventArgs()); }),
             ("フォルダーを開く...",      "", "\uED41", "#E6C07B", () => { CloseSearch(); OpenFolder_Click(this, new RoutedEventArgs()); }),
             ("ファイルを保存",           "", "\uE74E", "#BD93F9", () => { CloseSearch(); Save_Click(this, new RoutedEventArgs()); }),
@@ -4139,16 +2581,16 @@ public partial class MainWindow : Window
             Col      = i.Col
         }).ToList();
 
-        SetQuickfixItems(panelItems);
-        _quickfixCurrentIndex = -1;
+        _refs.SetQuickfixItems(panelItems);
+        _refs.QuickfixCurrentIndex = -1;
 
         int fileCount = panelItems.Select(i => i.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        _quickfixTitle = string.IsNullOrWhiteSpace(query)
+        _refs.QuickfixTitle = string.IsNullOrWhiteSpace(query)
             ? $"SEARCH ({panelItems.Count} results) [{fileCount} file(s)]"
             : $"SEARCH \"{query}\" ({panelItems.Count} results) [{fileCount} file(s)]";
-        _lastGrepOptions = null;
+        _refs.LastGrepOptions = null;
 
-        ShowQuickfixPanel();
+        _refs.ShowQuickfixPanel();
     }
 
     // ─────────────────────────────────────────────────────────
@@ -4180,13 +2622,13 @@ public partial class MainWindow : Window
             ViminfoManager.Save(ex.CommandHistory, ex.SearchHistory);
         }
 
-        var tabFiles = _fileTabs
+        var tabFiles = _tabs.FileTabs
             .Where(t => t.FilePath != null)
             .Select(t => t.FilePath!);
         var activeFile = _focusedEditor?.Engine.CurrentBuffer.FilePath;
-        _recentItems.SaveSession(_currentFolderPath, tabFiles, activeFile);
+        _recentItems.SaveSession(_sidebar.CurrentFolderPath, tabFiles, activeFile);
 
-        _previewDebounceTimer?.Stop();
+        _markdownPreview.StopPendingWork();
 
         foreach (var session in _terminalSessions)
         {
@@ -4206,354 +2648,5 @@ public partial class MainWindow : Window
             ed.Dispose();
 
         base.OnClosing(e);
-    }
-}
-
-// ─────────── File tree model ─────────────────────────────────
-
-/// <summary>Document symbol entry shown in the Outline sidebar panel.</summary>
-public sealed class OutlineItem
-{
-    public required string Name     { get; init; }
-    public required int    Depth    { get; init; }
-    public required string KindIcon { get; init; }
-    public required string KindColor{ get; init; }
-    public required int    Line     { get; init; }
-    public required int    Col      { get; init; }
-    public Thickness IndentMargin => new(Depth * 16, 0, 0, 0);
-}
-
-public sealed class FileTreeItem
-{
-    private bool _childrenLoaded;
-    private readonly bool _isPlaceholder;
-
-    public string FullPath { get; }
-    public string Name { get; }
-    public bool IsDirectory { get; }
-    public string Icon { get; }
-    public Brush IconBrush { get; }
-    public FileTreeItem? Parent { get; }
-    public bool IsExpanded { get; set; }
-    public ObservableCollection<FileTreeItem> Children { get; } = [];
-
-    public FileTreeItem(string path, FileTreeItem? parent = null)
-    {
-        FullPath = path;
-        Name = Path.GetFileName(path) is { Length: > 0 } n ? n : path;
-        IsDirectory = Directory.Exists(path);
-        Icon = IsDirectory ? "\uED41" : "\uE7C3";
-        IconBrush = IsDirectory
-            ? new SolidColorBrush(Color.FromRgb(0xE6, 0xC0, 0x7B))
-            : new SolidColorBrush(Color.FromRgb(0x99, 0xBB, 0xDD));
-        Parent = parent;
-
-        if (IsDirectory)
-            Children.Add(Placeholder);
-    }
-
-    private FileTreeItem()
-    {
-        _isPlaceholder = true;
-        FullPath = string.Empty;
-        Name = string.Empty;
-        Icon = string.Empty;
-        IconBrush = Brushes.Transparent;
-        _childrenLoaded = true;
-        IsExpanded = true;
-    }
-
-    private static readonly FileTreeItem Placeholder = new();
-
-    public void Expand()
-    {
-        if (_childrenLoaded || _isPlaceholder) return;
-        _childrenLoaded = true;
-        Children.Clear();
-        if (!Directory.Exists(FullPath)) return;
-        try
-        {
-            foreach (var d in Directory.GetDirectories(FullPath)
-                         .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-                Children.Add(new FileTreeItem(d, this));
-            foreach (var f in Directory.GetFiles(FullPath)
-                         .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-                Children.Add(new FileTreeItem(f, this));
-        }
-        catch { /* access denied, etc. */ }
-    }
-
-    public void Refresh()
-    {
-        if (!IsDirectory) return;
-        _childrenLoaded = false;
-        Children.Clear();
-        Children.Add(Placeholder);
-        if (IsExpanded)
-            Expand();
-    }
-
-    /// <summary>Load top-level children of a folder (eager, for root display).</summary>
-    public static ObservableCollection<FileTreeItem> LoadChildren(string folderPath)
-    {
-        var items = new ObservableCollection<FileTreeItem>();
-        try
-        {
-            foreach (var d in Directory.GetDirectories(folderPath)
-                         .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-                items.Add(new FileTreeItem(d));
-            foreach (var f in Directory.GetFiles(folderPath)
-                         .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-                items.Add(new FileTreeItem(f));
-        }
-        catch { }
-        return items;
-    }
-}
-
-// ─────────── Native folder picker (COM IFileOpenDialog) ──────
-
-internal static class NativeFolderPicker
-{
-    public static string? Show(IntPtr ownerHandle, string title = "Select Folder")
-    {
-        var dialog = (IFileOpenDialog)new FileOpenDialogCoClass();
-        try
-        {
-            dialog.SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
-            dialog.SetTitle(title);
-            int hr = dialog.Show(ownerHandle);
-            if (hr != 0) return null;   // cancelled or error
-            dialog.GetResult(out IShellItem item);
-            item.GetDisplayName(SIGDN_FILESYSPATH, out string path);
-            return path;
-        }
-        catch { return null; }
-        finally { Marshal.ReleaseComObject(dialog); }
-    }
-
-    private const uint FOS_PICKFOLDERS    = 0x00000020;
-    private const uint FOS_FORCEFILESYSTEM = 0x00000040;
-    private const uint FOS_PATHMUSTEXIST  = 0x00000800;
-    private const uint SIGDN_FILESYSPATH  = 0x80058000;
-
-    [ComImport, ClassInterface(ClassInterfaceType.None),
-     Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
-    private class FileOpenDialogCoClass { }
-
-    [ComImport, Guid("42F85136-DB7E-439C-85F1-E4075D135FC8"),
-     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IFileOpenDialog
-    {
-        [PreserveSig] int Show([In] IntPtr hwndOwner);
-        void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
-        void SetFileTypeIndex(uint iFileType);
-        void GetFileTypeIndex(out uint piFileType);
-        void Advise(IntPtr pfde, out uint pdwCookie);
-        void Unadvise(uint dwCookie);
-        void SetOptions(uint fos);
-        void GetOptions(out uint pfos);
-        void SetDefaultFolder([MarshalAs(UnmanagedType.Interface)] IShellItem psi);
-        void SetFolder([MarshalAs(UnmanagedType.Interface)] IShellItem psi);
-        void GetFolder([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
-        void GetCurrentSelection([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
-        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
-        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
-        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
-        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
-        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
-        void GetResult([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
-        void AddPlace([MarshalAs(UnmanagedType.Interface)] IShellItem psi, int fdap);
-        void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);
-        void Close(int hr);
-        void SetClientGuid(ref Guid guid);
-        void ClearClientData();
-        void SetFilter(IntPtr pFilter);
-        void GetResults(out IntPtr ppenum);
-        void GetSelectedItems(out IntPtr ppenum);
-    }
-
-    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"),
-     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IShellItem
-    {
-        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
-        void GetParent([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
-        void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
-        void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
-        void Compare([MarshalAs(UnmanagedType.Interface)] IShellItem psi, uint hint, out int piOrder);
-    }
-}
-
-// ─────────── Shell menu item model ───────────────────────────
-
-// ─────────── Shell context menu (COM IContextMenu) ───────────
-
-internal sealed class ShellMenuContext : IDisposable
-{
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern int SHParseDisplayName(
-        string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
-
-    [DllImport("shell32.dll")]
-    private static extern int SHBindToParent(
-        IntPtr pidl, ref Guid riid, out IntPtr ppv, out IntPtr ppidlLast);
-
-    [DllImport("shell32.dll")]
-    private static extern void ILFree(IntPtr pidl);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr CreatePopupMenu();
-
-    [DllImport("user32.dll")]
-    private static extern bool DestroyMenu(IntPtr hMenu);
-
-    [DllImport("user32.dll")]
-    private static extern uint TrackPopupMenuEx(
-        IntPtr hmenu, uint fuFlags, int x, int y, IntPtr hwnd, IntPtr lptpm);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct CMINVOKECOMMANDINFO
-    {
-        public uint   cbSize;
-        public uint   fMask;
-        public IntPtr hwnd;
-        public IntPtr lpVerb;
-        public IntPtr lpParameters;
-        public IntPtr lpDirectory;
-        public int    nShow;
-        public uint   dwHotKey;
-        public IntPtr hIcon;
-    }
-
-    private const uint CMF_NORMAL      = 0x00000000;
-    private const uint CMF_EXPLORE     = 0x00000020;
-    private const uint TPM_RETURNCMD   = 0x0100;
-    private const uint TPM_RIGHTBUTTON = 0x0002;
-
-    [ComImport, Guid("000214e4-0000-0000-c000-000000000046"),
-     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IContextMenuCom
-    {
-        [PreserveSig] int QueryContextMenu(IntPtr hmenu, uint indexMenu, uint idCmdFirst, uint idCmdLast, uint uFlags);
-        [PreserveSig] int InvokeCommand(IntPtr pici);
-        [PreserveSig] int GetCommandString(UIntPtr idCmd, uint uType, IntPtr pReserved, IntPtr pszName, uint cchMax);
-    }
-
-    [ComImport, Guid("000214E6-0000-0000-C000-000000000046"),
-     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IShellFolderCom
-    {
-        void ParseDisplayName(IntPtr hwnd, IntPtr pbc, [MarshalAs(UnmanagedType.LPWStr)] string pszDisplayName, out uint pchEaten, out IntPtr ppidl, ref uint pdwAttributes);
-        void EnumObjects(IntPtr hwnd, uint grfFlags, out IntPtr ppenumIDList);
-        void BindToObject(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
-        void BindToStorage(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
-        [PreserveSig] int CompareIDs(IntPtr lParam, IntPtr pidl1, IntPtr pidl2);
-        void CreateViewObject(IntPtr hwnd, ref Guid riid, out IntPtr ppv);
-        void GetAttributesOf(uint cidl, [MarshalAs(UnmanagedType.LPArray)] IntPtr[] apidl, ref uint rgfInOut);
-        [PreserveSig] int GetUIObjectOf(IntPtr hwndOwner, uint cidl, [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] IntPtr[] apidl, ref Guid riid, uint rgfReserved, out IntPtr ppv);
-        void GetDisplayNameOf(IntPtr pidl, uint uFlags, out IntPtr pName);
-        void SetNameOf(IntPtr hwnd, IntPtr pidl, [MarshalAs(UnmanagedType.LPWStr)] string pszName, uint uFlags, out IntPtr ppidlOut);
-    }
-
-    private object? _ctxObj;
-    private object? _folderObj;
-    private IntPtr  _pidlFull;
-    private IntPtr  _hMenu;
-    private IContextMenuCom? _ctx;
-
-    private ShellMenuContext(object ctxObj, object folderObj, IntPtr pidlFull,
-        IntPtr hMenu, IContextMenuCom ctx)
-    {
-        _ctxObj    = ctxObj;
-        _folderObj = folderObj;
-        _pidlFull  = pidlFull;
-        _hMenu     = hMenu;
-        _ctx       = ctx;
-    }
-
-    private static ShellMenuContext? Create(IntPtr hwnd, string path)
-    {
-        IntPtr pidlFull   = IntPtr.Zero;
-        IntPtr hMenu      = IntPtr.Zero;
-        object? ctxObj    = null;
-        object? folderObj = null;
-
-        try
-        {
-            int hr = SHParseDisplayName(path, IntPtr.Zero, out pidlFull, 0, out _);
-            if (hr != 0 || pidlFull == IntPtr.Zero) return null;
-
-            var iidFolder = new Guid("000214E6-0000-0000-C000-000000000046");
-            hr = SHBindToParent(pidlFull, ref iidFolder, out IntPtr psfParent, out IntPtr pidlChild);
-            if (hr != 0 || psfParent == IntPtr.Zero) return null;
-
-            folderObj = Marshal.GetObjectForIUnknown(psfParent);
-            Marshal.Release(psfParent);
-
-            var iidCtx = new Guid("000214e4-0000-0000-c000-000000000046");
-            IntPtr[] pidls = [pidlChild];
-            hr = ((IShellFolderCom)folderObj).GetUIObjectOf(hwnd, 1, pidls, ref iidCtx, 0, out IntPtr pCtx);
-            if (hr != 0 || pCtx == IntPtr.Zero) return null;
-
-            ctxObj = Marshal.GetObjectForIUnknown(pCtx);
-            Marshal.Release(pCtx);
-            var ctx = (IContextMenuCom)ctxObj;
-
-            hMenu = CreatePopupMenu();
-            ctx.QueryContextMenu(hMenu, 0, 1, 0x7FFF, CMF_NORMAL | CMF_EXPLORE);
-
-            return new ShellMenuContext(ctxObj, folderObj, pidlFull, hMenu, ctx);
-        }
-        catch
-        {
-            if (hMenu     != IntPtr.Zero) DestroyMenu(hMenu);
-            if (pidlFull  != IntPtr.Zero) ILFree(pidlFull);
-            if (ctxObj    != null) Marshal.ReleaseComObject(ctxObj);
-            if (folderObj != null) Marshal.ReleaseComObject(folderObj);
-            return null;
-        }
-    }
-
-    // Show the Win32 popup and invoke the selected command.
-    private void Show(IntPtr hwnd, int x, int y)
-    {
-        if (_ctx == null || _hMenu == IntPtr.Zero) return;
-
-        uint cmd = TrackPopupMenuEx(_hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, hwnd, IntPtr.Zero);
-        if (cmd == 0) return;
-
-        var ici = new CMINVOKECOMMANDINFO
-        {
-            cbSize       = (uint)Marshal.SizeOf<CMINVOKECOMMANDINFO>(),
-            hwnd         = hwnd,
-            lpVerb       = new IntPtr((int)(cmd - 1)),
-            lpParameters = IntPtr.Zero,
-            lpDirectory  = IntPtr.Zero,
-            nShow        = 1
-        };
-        IntPtr pIci = Marshal.AllocHGlobal(Marshal.SizeOf<CMINVOKECOMMANDINFO>());
-        try
-        {
-            Marshal.StructureToPtr(ici, pIci, false);
-            _ctx.InvokeCommand(pIci);
-        }
-        catch { /* best-effort */ }
-        finally { Marshal.FreeHGlobal(pIci); }
-    }
-
-    public static void ShowDirect(IntPtr hwnd, string path, int x, int y)
-    {
-        using var ctx = Create(hwnd, path);
-        ctx?.Show(hwnd, x, y);
-    }
-
-    public void Dispose()
-    {
-        if (_hMenu    != IntPtr.Zero) { DestroyMenu(_hMenu);   _hMenu    = IntPtr.Zero; }
-        if (_pidlFull != IntPtr.Zero) { ILFree(_pidlFull);     _pidlFull = IntPtr.Zero; }
-        if (_ctxObj    != null) { Marshal.ReleaseComObject(_ctxObj);    _ctxObj    = null; }
-        if (_folderObj != null) { Marshal.ReleaseComObject(_folderObj); _folderObj = null; }
-        _ctx = null;
     }
 }
