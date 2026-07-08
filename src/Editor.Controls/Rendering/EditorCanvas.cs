@@ -176,22 +176,21 @@ public partial class EditorCanvas : FrameworkElement
     public event Action<string>? LinkClicked;          // (url) Ctrl+clicked on a detected URL
     public event Action<string>? FileLinkClicked;      // (absolutePath) Ctrl+clicked on a detected file path
 
-    // Brushes/pens for popup chrome and spell underlines — created once (theme-independent)
-    private static readonly SolidColorBrush s_popupBg1    = Freeze(new SolidColorBrush(Color.FromArgb(0xF0, 0x25, 0x26, 0x33)));
-    private static readonly SolidColorBrush s_popupBg2    = Freeze(new SolidColorBrush(Color.FromArgb(0xF0, 0x1E, 0x1F, 0x29)));
-    private static readonly SolidColorBrush s_popupBg3    = Freeze(new SolidColorBrush(Color.FromArgb(0xEE, 0x1E, 0x1F, 0x29)));
-    private static readonly SolidColorBrush s_popupDocBg  = Freeze(new SolidColorBrush(Color.FromArgb(0xF0, 0x26, 0x27, 0x35)));
-    private static readonly Pen             s_popupBorder = FreezePen(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(0x63, 0x65, 0x72))), 1));
+    // Brushes/pens for spell underlines — created once (theme-independent). Popup chrome brushes
+    // shared with LspOverlayRenderer live in PopupChrome.
     private static readonly SolidColorBrush s_spellBrush  = Freeze(new SolidColorBrush(Color.FromRgb(0x4F, 0x9F, 0xFF)));
     private static readonly Pen             s_spellPen    = FreezePen(new Pen(s_spellBrush, 1.0));
 
     private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
     private static Pen FreezePen(Pen p) { p.Freeze(); return p; }
 
+    private readonly GutterHitTester _gutterHitTester;
+
     public EditorCanvas()
     {
         ClipToBounds = true;
         Focusable = false;
+        _gutterHitTester = new GutterHitTester(HitTestGutterLine);
         StartCursorBlink();
         RebuildVisualLayout();
     }
@@ -210,8 +209,8 @@ public partial class EditorCanvas : FrameworkElement
     // width actually usable for text, so scroll clamping keeps content clear of the bars.
     private bool HorizontalBarPresent => _showScrollbar && !_wrapLines && TotalContentWidth > RenderSize.Width + 1;
     private bool VerticalBarPresent => _showScrollbar && TotalContentHeight > RenderSize.Height + 1;
-    private double UsableViewportHeight => Math.Max(0, RenderSize.Height - (HorizontalBarPresent ? ScrollbarSize : 0));
-    private double UsableViewportWidth => Math.Max(0, RenderSize.Width - (VerticalBarPresent ? ScrollbarSize : 0));
+    private double UsableViewportHeight => Math.Max(0, RenderSize.Height - (HorizontalBarPresent ? OverlayRenderer.ScrollbarSize : 0));
+    private double UsableViewportWidth => Math.Max(0, RenderSize.Width - (VerticalBarPresent ? OverlayRenderer.ScrollbarSize : 0));
 
     // Allows scrolling past the last line (like Vim's `~` lines) so the last line can
     // still be moved all the way to the top of the viewport. Without this, `zz` on the
@@ -872,6 +871,7 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         var (bpColWidth, lineNumWidth, _, gutterWidth) = GetGutterMetrics();
+        var boundaries = new GutterHitTester.Boundaries(_blameColWidth, bpColWidth, lineNumWidth, gutterWidth);
 
         // blame カラム右端のリサイズハンドル — ドラッグで幅の変更を開始する（CaptureMouse は取得済み）。
         if (IsOnBlameColEdge(point))
@@ -883,20 +883,18 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         // Blame margin click (far left) — report the line's commit info to the host.
-        if (_blameColWidth > 0 && point.X < _blameColWidth)
+        if (_gutterHitTester.TryHitBlameGutter(point, boundaries, out int blameClickLine))
         {
-            int bufferLine = HitTestGutterLine(point);
-            if (bufferLine >= 0 && _blameLines.TryGetValue(bufferLine, out var blame))
-                BlameClicked?.Invoke(bufferLine, blame);
+            if (blameClickLine >= 0 && _blameLines.TryGetValue(blameClickLine, out var blame))
+                BlameClicked?.Invoke(blameClickLine, blame);
             e.Handled = true;
             return;
         }
 
         // Breakpoint column click — toggle a breakpoint on that line.
-        if (_breakpointsEnabled && bpColWidth > 0 && point.X < _blameColWidth + bpColWidth)
+        if (_gutterHitTester.TryHitBreakpointGutter(point, boundaries, out int bpClickLine))
         {
-            int bufferLine = HitTestGutterLine(point);
-            if (bufferLine >= 0) BreakpointToggled?.Invoke(bufferLine);
+            if (bpClickLine >= 0) BreakpointToggled?.Invoke(bpClickLine);
             e.Handled = true;
             return;
         }
@@ -904,11 +902,10 @@ public partial class EditorCanvas : FrameworkElement
         if (_showLineNumbers && point.X < gutterWidth)
         {
             // Fold column click — check for fold indicator
-            if (point.X >= _blameColWidth + bpColWidth + lineNumWidth)
+            if (_gutterHitTester.TryHitFoldGutter(point, boundaries, out int foldClickLine))
             {
-                int bufferLine = HitTestGutterLine(point);
-                if (bufferLine >= 0 && (_closedFoldStarts.Contains(bufferLine) || _openFoldStarts.Contains(bufferLine)))
-                    FoldGutterClicked?.Invoke(bufferLine);
+                if (foldClickLine >= 0 && (_closedFoldStarts.Contains(foldClickLine) || _openFoldStarts.Contains(foldClickLine)))
+                    FoldGutterClicked?.Invoke(foldClickLine);
             }
             e.Handled = true;
             return;
@@ -1002,6 +999,7 @@ public partial class EditorCanvas : FrameworkElement
 
         // Update fold/breakpoint/blame hover state
         var (bpColW, lineNumWidth2, _, gutterWidth2) = GetGutterMetrics();
+        var boundaries2 = new GutterHitTester.Boundaries(_blameColWidth, bpColW, lineNumWidth2, gutterWidth2);
 
         // blame カラム右端のリサイズハンドル上 — 左右カーソルを出し、他のホバー状態は解除する。
         if (IsOnBlameColEdge(point))
@@ -1016,13 +1014,8 @@ public partial class EditorCanvas : FrameworkElement
 
         // blame 左カラム（最左）のホバー行（注釈のある行だけ）。領域外へ出たら解除して再描画し、
         // コミット情報ツールチップも開閉する。
-        int blameHover = -1;
-        if (_blameColWidth > 0 && point.X < _blameColWidth)
-        {
-            int blameLine = HitTestGutterLine(point);
-            if (blameLine >= 0 && _blameLines.ContainsKey(blameLine))
-                blameHover = blameLine;
-        }
+        bool inBlameGutter = _gutterHitTester.TryHitBlameGutter(point, boundaries2, out int blameLine);
+        int blameHover = inBlameGutter && _blameLines.ContainsKey(blameLine) ? blameLine : -1;
         if (blameHover != _hoveredBlameLine)
         {
             _hoveredBlameLine = blameHover;
@@ -1030,16 +1023,15 @@ public partial class EditorCanvas : FrameworkElement
             InvalidateVisual();
         }
 
-        if (_breakpointsEnabled && bpColW > 0 && point.X >= _blameColWidth && point.X < _blameColWidth + bpColW)
+        if (_gutterHitTester.TryHitBreakpointGutter(point, boundaries2, out int bpHoverLine))
         {
             // Hovering in breakpoint column — show a faint placeholder dot and a hand cursor.
-            int bufferLine = HitTestGutterLine(point);
-            Cursor = bufferLine >= 0 ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
-            SetHoveredBreakpointLine(bufferLine);
+            Cursor = bpHoverLine >= 0 ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
+            SetHoveredBreakpointLine(bpHoverLine);
             ClearDataTipHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
         }
-        else if (_blameColWidth > 0 && point.X < _blameColWidth)
+        else if (inBlameGutter)
         {
             // Hovering in blame margin — hand cursor over an annotated (clickable) line.
             SetHoveredBreakpointLine(-1);
@@ -1049,19 +1041,18 @@ public partial class EditorCanvas : FrameworkElement
                 ? System.Windows.Input.Cursors.Hand
                 : System.Windows.Input.Cursors.Arrow;
         }
-        else if (_showLineNumbers && point.X >= _blameColWidth + bpColW + lineNumWidth2 && point.X < gutterWidth2)
+        else if (_showLineNumbers && _gutterHitTester.TryHitFoldGutter(point, boundaries2, out int foldHoverLine))
         {
             // Hovering in fold column
             SetHoveredBreakpointLine(-1);
             ClearDataTipHover();
-            int bufferLine = HitTestGutterLine(point);
-            bool onFold = bufferLine >= 0 && (_closedFoldStarts.Contains(bufferLine) || _openFoldStarts.Contains(bufferLine));
+            bool onFold = foldHoverLine >= 0 && (_closedFoldStarts.Contains(foldHoverLine) || _openFoldStarts.Contains(foldHoverLine));
             Cursor = onFold ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
             int prev = _hoveredFoldLine;
-            _hoveredFoldLine = onFold ? bufferLine : -1;
+            _hoveredFoldLine = onFold ? foldHoverLine : -1;
             if (_hoveredFoldLine != prev) InvalidateVisual();
         }
-        else if (_showLineNumbers && point.X < _blameColWidth + bpColW + lineNumWidth2)
+        else if (_showLineNumbers && _gutterHitTester.TryHitLineNumberGutter(point, boundaries2, out _))
         {
             // Hovering in line number area
             SetHoveredBreakpointLine(-1);
@@ -1257,11 +1248,12 @@ public partial class EditorCanvas : FrameworkElement
         // overlaps the last line of text. Content (text/gutter/minimap) is clipped
         // to contentBottom; the scrollbars themselves are drawn afterwards.
         bool needHorizBar = _showScrollbar && !_wrapLines && TotalContentWidth > size.Width + 1;
-        double contentBottom = needHorizBar ? Math.Max(0, size.Height - ScrollbarSize) : size.Height;
+        double contentBottom = needHorizBar ? Math.Max(0, size.Height - OverlayRenderer.ScrollbarSize) : size.Height;
         dc.PushClip(new RectangleGeometry(new Rect(0, 0, size.Width, contentBottom)));
 
         var (bpColWidth, lineNumWidth, foldColWidth, gutterWidth) = GetGutterMetrics();
         double textLeft = gutterWidth;
+        var metrics = BuildGlyphMetrics();
 
         int firstLine = (int)(_scrollOffsetY / _lineHeight);
         int lastLine = Math.Min(TotalVisualLines - 1, firstLine + _visibleLines + 1);
@@ -1338,72 +1330,18 @@ public partial class EditorCanvas : FrameworkElement
                 dc.DrawRectangle(Theme.LineNumberBg, null, new Rect(0, y, gutterWidth, _lineHeight));
                 if (drawNumberAndFold)
                 {
-                    bool isCursorLine = l == _cursor.Line;
-                    var lineNumberBrush = isCursorLine ? Theme.CurrentLineNumberFg : Theme.LineNumberFg;
-                    string lineNumStr;
-                    if (_relativeNumber && !isCursorLine)
-                        lineNumStr = Math.Abs(l - _cursor.Line).ToString().PadLeft(_lineNumberWidth);
-                    else
-                        lineNumStr = (l + 1).ToString().PadLeft(_lineNumberWidth);
-                    var numText = FormatText(lineNumStr, lineNumberBrush);
-                    dc.DrawText(numText, new Point(_blameColWidth + bpColWidth + 2, y + (_lineHeight - numText.Height) / 2));
-
-                    // Fold indicator in dedicated fold column (▶ closed, ▼ open)
-                    bool isClosed = _closedFoldStarts.Contains(l);
-                    bool isOpen = _openFoldStarts.Contains(l);
-                    if (isClosed || isOpen)
-                    {
-                        bool hovered = _hoveredFoldLine == l;
-                        var indicatorColor = hovered ? Theme.Foreground : Theme.LineNumberFg;
-                        if (hovered)
-                            dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)), null,
-                                new Rect(_blameColWidth + bpColWidth + lineNumWidth, y, foldColWidth, _lineHeight));
-                        var marker = FormatText(isClosed ? "▶" : "▼", indicatorColor);
-                        double mx = _blameColWidth + bpColWidth + lineNumWidth + (foldColWidth - marker.Width) / 2;
-                        dc.DrawText(marker, new Point(mx, y + (_lineHeight - marker.Height) / 2));
-                    }
-
-                    // Git diff bar (3px wide on left edge of the breakpoint/line-number region)
-                    if (_gitDiff.TryGetValue(l, out var gitState) && gitState != GitLineState.None)
-                    {
-                        var gitBrush = gitState switch
-                        {
-                            GitLineState.Added    => Theme.GitAdded,
-                            GitLineState.Modified => Theme.GitModified,
-                            GitLineState.Deleted  => Theme.GitDeleted,
-                            _                     => null
-                        };
-                        if (gitBrush != null)
-                            dc.DrawRectangle(gitBrush, null, new Rect(_blameColWidth, y, 3, _lineHeight));
-                    }
+                    GutterRenderer.DrawLineNumberAndFold(dc, Theme, metrics, l, y,
+                        _blameColWidth, bpColWidth, lineNumWidth, foldColWidth,
+                        _cursor.Line, _relativeNumber, _lineNumberWidth,
+                        _closedFoldStarts, _openFoldStarts, _hoveredFoldLine, _gitDiff);
                 }
             }
 
             // Changed-since-save change bar — flush against the text at the right edge of the
             // gutter, so it reads as a property of the code line (distinct from the git bar,
             // which sits at the far-left edge). Shown even when line numbers are hidden.
-            if (drawNumberAndFold && gutterWidth > 0
-                && _saveDiff.TryGetValue(l, out var saveState) && saveState != SaveLineState.None)
-            {
-                var saveBrush = saveState switch
-                {
-                    SaveLineState.Added    => Theme.GitAdded,
-                    SaveLineState.Modified => Theme.GitModified,
-                    SaveLineState.Deleted  => Theme.GitDeleted,
-                    _                      => null
-                };
-                if (saveBrush != null)
-                {
-                    const double saveBarW = 2;
-                    double saveBarX = gutterWidth - saveBarW;
-                    // Deletions removed lines above this one (the line itself is unchanged),
-                    // so mark it with a short notch at the top rather than a full-height bar.
-                    double barH = saveState == SaveLineState.Deleted
-                        ? Math.Min(_lineHeight, _lineHeight / 3 + 1)
-                        : _lineHeight;
-                    dc.DrawRectangle(saveBrush, null, new Rect(saveBarX, y, saveBarW, barH));
-                }
-            }
+            if (drawNumberAndFold)
+                GutterRenderer.DrawSaveDiffBar(dc, Theme, _lineHeight, l, y, gutterWidth, _saveDiff);
 
             // Breakpoint glyph / execution-line arrow in the dedicated breakpoint column
             // (right of the blame margin when blame is active).
@@ -1412,7 +1350,7 @@ public partial class EditorCanvas : FrameworkElement
 
             // Git blame margin (far-left column of the gutter)
             if (_blameColWidth > 0)
-                DrawBlameMargin(dc, l, y, 0, drawNumberAndFold);
+                GutterRenderer.DrawBlameMargin(dc, Theme, metrics, _blameLines, _hoveredBlameLine, l, y, 0, _blameColWidth, drawNumberAndFold);
 
             dc.PushClip(new RectangleGeometry(new Rect(textLeft, y, Math.Max(0, size.Width - textLeft), _lineHeight)));
 
@@ -1423,10 +1361,10 @@ public partial class EditorCanvas : FrameworkElement
             DrawSearchHighlights(dc, l, y, textLeft, lineText);
 
             // Document highlights (LSP)
-            DrawDocumentHighlights(dc, l, y, textLeft, lineText);
+            LspOverlayRenderer.DrawDocumentHighlights(dc, Theme, metrics, _documentHighlights, l, y, textLeft, lineText, _scrollOffsetX);
 
             // Full-width space / trailing whitespace markers
-            DrawWhitespaceIssues(dc, l, y, textLeft, lineText);
+            OverlayRenderer.DrawWhitespaceIssues(dc, Theme, metrics, l, y, textLeft, lineText, _scrollOffsetX, _whitespaceIssues);
 
             // Matching bracket highlight
             DrawMatchingBrackets(dc, l, y, textLeft, lineText, bracketMatch);
@@ -1436,13 +1374,13 @@ public partial class EditorCanvas : FrameworkElement
 
             // Inline color preview swatches
             if (_showColorPreview)
-                DrawColorSwatches(dc, lineText, y, textLeft);
+                OverlayRenderer.DrawColorSwatches(dc, metrics, lineText, y, textLeft, _scrollOffsetX);
 
             // Invisible character markers (set list)
             DrawListChars(dc, lineText, y, textLeft);
 
             // LSP inlay hints (inline ghost text)
-            DrawInlayHints(dc, l, lineText, y, textLeft);
+            LspOverlayRenderer.DrawInlayHints(dc, metrics, _inlayHintsByLine, l, lineText, y, textLeft, _scrollOffsetX);
 
             // LSP diagnostics (wavy underlines)
             DrawDiagnostics(dc, l, y, textLeft, lineText);
@@ -1465,26 +1403,17 @@ public partial class EditorCanvas : FrameworkElement
         _scrollOffsetX = baseOffsetX;
 
         DrawImeCandidatePopup(dc, textLeft, size);
-        DrawSignatureHelp(dc, textLeft, size);
-        DrawCompletionPopup(dc, textLeft, size);
-        DrawCodeActionPopup(dc, textLeft, size);
+        LspOverlayRenderer.DrawSignatureHelp(dc, Theme, metrics, _signatureHelp, textLeft, size, GetCursorPixelPosition());
+        LspOverlayRenderer.DrawCompletionPopup(dc, Theme, metrics, _completionItems, _completionSelection, _completionScrollOffset, textLeft, size, GetCursorPixelPosition());
+        LspOverlayRenderer.DrawCodeActionPopup(dc, Theme, metrics, _codeActionItems, _codeActionsSelection, _codeActionsScrollOffset, textLeft, size, GetCursorPixelPosition());
 
         // Color column guide line
-        if (_colorColumn > 0 && _charWidth > 0)
-        {
-            double ccX = gutterWidth + (_colorColumn - 1) * _charWidth - _scrollOffsetX;
-            if (ccX >= gutterWidth && ccX < size.Width)
-            {
-                var ccPen = new Pen(Theme.ColorColumnBrush, 1);
-                dc.DrawLine(ccPen, new Point(ccX, 0), new Point(ccX, size.Height));
-            }
-        }
+        OverlayRenderer.DrawColorColumn(dc, Theme, _colorColumn, _charWidth, gutterWidth, _scrollOffsetX, size);
 
         // Indent guide lines
         if (_showIndentGuides && _charWidth > 0)
         {
             double indentWidth = _indentGuideTabStop * _charWidth;
-            var guidePen = new Pen(Theme.IndentGuideBrush, 1);
 
             // Find the deepest indent level among all visible non-blank lines
             int maxIndentLevel = 0;
@@ -1506,12 +1435,7 @@ public partial class EditorCanvas : FrameworkElement
                 if (level > maxIndentLevel) maxIndentLevel = level;
             }
 
-            for (int level = 1; level <= maxIndentLevel; level++)
-            {
-                double x = gutterWidth + level * indentWidth - _scrollOffsetX;
-                if (x < gutterWidth || x >= size.Width) continue;
-                dc.DrawLine(guidePen, new Point(x, 0), new Point(x, size.Height));
-            }
+            OverlayRenderer.DrawIndentGuides(dc, Theme, gutterWidth, indentWidth, maxIndentLevel, _scrollOffsetX, size);
         }
 
         // Gutter border
@@ -1523,142 +1447,21 @@ public partial class EditorCanvas : FrameworkElement
 
         // Minimap
         if (_showMinimap)
-            DrawMinimap(dc, size);
+            OverlayRenderer.DrawMinimap(dc, Theme, _lines, _lineHeight, _scrollOffsetY, _visibleLines, MinimapWidth, size);
 
         dc.Pop(); // end content clip (contentBottom)
 
         // Overlay scrollbars
         if (_showScrollbar)
-            DrawScrollbars(dc, size);
+            OverlayRenderer.DrawScrollbars(dc, Theme, size, ComputeScrollbarLayout(size));
     }
 
-    private void DrawMinimap(DrawingContext dc, Size size)
-    {
-        if (_lineHeight <= 0 || _lines.Length == 0) return;
-
-        double mmLeft = size.Width - MinimapWidth;
-
-        // Background
-        dc.DrawRectangle(Theme.MinimapBackground, null, new Rect(mmLeft, 0, MinimapWidth, size.Height));
-
-        int totalLines = _lines.Length;
-        // Each buffer line is represented as a tiny strip
-        double lineStripH = Math.Max(1.0, Math.Min(2.0, size.Height / totalLines));
-        double totalMapH  = totalLines * lineStripH;
-
-        // Scroll the minimap so the viewport center stays centred when file is larger than minimap
-        double viewportTopLine    = _scrollOffsetY / _lineHeight;
-        double viewportBottomLine = viewportTopLine + _visibleLines;
-        double viewportCentreLine = (viewportTopLine + viewportBottomLine) / 2.0;
-
-        // Offset so the center of the visible region maps to the center of the minimap
-        double mapOffsetY = 0;
-        if (totalMapH > size.Height)
-        {
-            double idealCentre = viewportCentreLine * lineStripH;
-            mapOffsetY = Math.Clamp(idealCentre - size.Height / 2.0, 0, totalMapH - size.Height);
-        }
-
-        // Foreground brush at low opacity for content strips
-        var fgColor = (Theme.Foreground is SolidColorBrush sb) ? sb.Color : Color.FromRgb(0xCC, 0xCC, 0xCC);
-        var contentBrush = new SolidColorBrush(Color.FromArgb(0x50, fgColor.R, fgColor.G, fgColor.B));
-
-        // Draw each line as a colored block proportional to line length
-        for (int l = 0; l < totalLines; l++)
-        {
-            double y = l * lineStripH - mapOffsetY;
-            if (y + lineStripH < 0 || y > size.Height) continue;
-
-            int lineLen = _lines[l].Length;
-            if (lineLen == 0) continue;
-
-            // Cap line width at minimap width, scale proportionally to a reasonable max (120 chars)
-            double lineW = Math.Min(MinimapWidth - 4, lineLen / 120.0 * (MinimapWidth - 4));
-            if (lineW < 1) lineW = 1;
-
-            dc.DrawRectangle(contentBrush, null, new Rect(mmLeft + 2, y, lineW, Math.Max(1, lineStripH - 0.5)));
-        }
-
-        // Viewport highlight rectangle
-        double vpTop = viewportTopLine * lineStripH - mapOffsetY;
-        double vpH   = _visibleLines * lineStripH;
-        vpTop = Math.Clamp(vpTop, 0, size.Height);
-        vpH   = Math.Min(vpH, size.Height - vpTop);
-        if (vpH > 0)
-            dc.DrawRectangle(Theme.MinimapViewport, null, new Rect(mmLeft, vpTop, MinimapWidth, vpH));
-    }
-
-    private const double ScrollbarSize = 6.0;
-    private const double ScrollbarThumbMinSize = 20.0;
-    // The visible bars are thin (ScrollbarSize); the grab zone is wider so the
+    // The visible bars are thin (OverlayRenderer.ScrollbarSize); the grab zone is wider so the
     // thumb is easy to hit and drag with the mouse.
     private const double ScrollbarHitSize = 16.0;
 
-    // Geometry of the overlay scrollbars, shared by rendering and mouse hit-testing.
-    private struct ScrollbarLayout
-    {
-        public bool NeedVert;
-        public bool NeedHoriz;
-        public double VertTrackH;
-        public double VertThumbY;
-        public double VertThumbH;
-        public double VertMaxOff;
-        public double HorizTrackW;
-        public double HorizThumbX;
-        public double HorizThumbW;
-        public double HorizMaxOff;
-    }
-
-    private ScrollbarLayout ComputeScrollbarLayout(Size size)
-    {
-        var l = new ScrollbarLayout();
-        double totalH = TotalContentHeight;
-        double viewH  = size.Height;
-        double totalW = TotalContentWidth;
-        double viewW  = size.Width;
-
-        l.NeedVert  = totalH > viewH + 1;
-        l.NeedHoriz = !_wrapLines && totalW > viewW + 1;
-        if (!l.NeedVert && !l.NeedHoriz) return l;
-
-        // Reserve space so the two bars don't overlap at the corner
-        l.VertTrackH  = l.NeedHoriz ? size.Height - ScrollbarSize : size.Height;
-        l.HorizTrackW = l.NeedVert  ? size.Width  - ScrollbarSize : size.Width;
-
-        if (l.NeedVert)
-        {
-            l.VertThumbH = Math.Min(l.VertTrackH, Math.Max(ScrollbarThumbMinSize, l.VertTrackH * viewH / totalH));
-            l.VertMaxOff = MaxScrollOffsetY;
-            l.VertThumbY = l.VertMaxOff > 0 ? (l.VertTrackH - l.VertThumbH) * (_scrollOffsetY / l.VertMaxOff) : 0;
-        }
-        if (l.NeedHoriz)
-        {
-            l.HorizThumbW = Math.Min(l.HorizTrackW, Math.Max(ScrollbarThumbMinSize, l.HorizTrackW * viewW / totalW));
-            l.HorizMaxOff = totalW - viewW;
-            l.HorizThumbX = l.HorizMaxOff > 0 ? (l.HorizTrackW - l.HorizThumbW) * (_scrollOffsetX / l.HorizMaxOff) : 0;
-        }
-        return l;
-    }
-
-    private void DrawScrollbars(DrawingContext dc, Size size)
-    {
-        var l = ComputeScrollbarLayout(size);
-        if (!l.NeedVert && !l.NeedHoriz) return;
-
-        if (l.NeedVert && l.VertTrackH > 0)
-        {
-            double trackX = size.Width - ScrollbarSize;
-            dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(trackX, 0, ScrollbarSize, l.VertTrackH));
-            dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(trackX + 1, l.VertThumbY + 1, ScrollbarSize - 2, Math.Max(0, l.VertThumbH - 2)));
-        }
-
-        if (l.NeedHoriz && l.HorizTrackW > 0)
-        {
-            double trackY = size.Height - ScrollbarSize;
-            dc.DrawRectangle(Theme.ScrollbarTrack, null, new Rect(0, trackY, l.HorizTrackW, ScrollbarSize));
-            dc.DrawRectangle(Theme.ScrollbarThumb, null, new Rect(l.HorizThumbX + 1, trackY + 1, Math.Max(0, l.HorizThumbW - 2), ScrollbarSize - 2));
-        }
-    }
+    private OverlayRenderer.ScrollbarLayout ComputeScrollbarLayout(Size size) =>
+        OverlayRenderer.ComputeScrollbarLayout(size, _wrapLines, TotalContentHeight, TotalContentWidth, MaxScrollOffsetY, _scrollOffsetY, _scrollOffsetX);
 
     private bool IsOverScrollbar(System.Windows.Point point)
     {
@@ -1757,26 +1560,6 @@ public partial class EditorCanvas : FrameworkElement
             dc.DrawRectangle(brush, null, new Rect(textLeft, y, width, _lineHeight));
     }
 
-    private static readonly SolidColorBrush s_blameHoverBg =
-        Freeze(new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)));
-
-    /// <summary>blame 左カラムの1行分を描く（背景は折り返し継続行にも、注釈テキストは先頭セグメントだけ）。
-    /// ホバー中の行はハイライト＋前景色でクリックできることを示す。</summary>
-    private void DrawBlameMargin(DrawingContext dc, int lineIndex, double y, double x, bool drawText)
-    {
-        dc.DrawRectangle(Theme.LineNumberBg, null, new Rect(x, y, _blameColWidth, _lineHeight));
-        if (!drawText || !_blameLines.TryGetValue(lineIndex, out var blame)) return;
-
-        bool hovered = lineIndex == _hoveredBlameLine;
-        if (hovered)
-            dc.DrawRectangle(s_blameHoverBg, null, new Rect(x, y, _blameColWidth, _lineHeight));
-        var ft = FormatText(blame.Display, hovered ? Theme.Foreground : Theme.LineNumberFg);
-        // ユーザーがカラムを狭めたとき、注釈がブレークポイント列以降へはみ出さないようクリップする
-        dc.PushClip(new RectangleGeometry(new Rect(x, y, _blameColWidth, _lineHeight)));
-        dc.DrawText(ft, new Point(x + 6, y + (_lineHeight - ft.Height) / 2));
-        dc.Pop();
-    }
-
     /// <summary>blame カラム右端のリサイズハンドル（±<see cref="BlameColEdgeGrip"/>px）に載っているか。</summary>
     private bool IsOnBlameColEdge(Point p) =>
         !_isDragging && _blameColWidth > 0 && Math.Abs(p.X - _blameColWidth) <= BlameColEdgeGrip;
@@ -1817,39 +1600,6 @@ public partial class EditorCanvas : FrameworkElement
     private void CloseBlameToolTip()
     {
         if (_blameToolTip is { } tip) tip.IsOpen = false;
-    }
-
-    private static readonly SolidColorBrush s_inlayHintBg =
-        Freeze(new SolidColorBrush(Color.FromArgb(0x40, 0x88, 0x88, 0xAA)));
-    private static readonly SolidColorBrush s_inlayHintFg =
-        Freeze(new SolidColorBrush(Color.FromArgb(0xB0, 0xAA, 0xAA, 0xCC)));
-
-    private void DrawInlayHints(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft)
-    {
-        if (_inlayHintsByLine.Count == 0) return;
-        if (!_inlayHintsByLine.TryGetValue(lineIndex, out var hints)) return;
-
-        foreach (var hint in hints)
-        {
-            int col = Math.Min(hint.Position.Character, lineText.Length);
-            double xBase = textLeft + GetVisualX(lineText, col) - _scrollOffsetX;
-
-            var ft = new FormattedText(
-                hint.Label,
-                CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight,
-                _italicTypeface,
-                _fontSize * 0.85,
-                s_inlayHintFg,
-                GetDpi());
-
-            double hintY = y + (_lineHeight - ft.Height) / 2;
-
-            // Draw a subtle background pill
-            var bgRect = new Rect(xBase - 1, hintY - 1, ft.Width + 2, ft.Height + 2);
-            dc.DrawRectangle(s_inlayHintBg, null, bgRect);
-            dc.DrawText(ft, new Point(xBase, hintY));
-        }
     }
 
     private void DrawDiagnostics(DrawingContext dc, int line, double y, double textLeft, string lineText)
@@ -2011,230 +1761,6 @@ public partial class EditorCanvas : FrameworkElement
         }
     }
 
-    private void DrawSignatureHelp(DrawingContext dc, double textLeft, Size size)
-    {
-        if (_signatureHelp == null || _signatureHelp.Signatures.Count == 0) return;
-
-        int sigIdx = Math.Clamp(_signatureHelp.ActiveSignature, 0, _signatureHelp.Signatures.Count - 1);
-        var sig = _signatureHelp.Signatures[sigIdx];
-        if (string.IsNullOrEmpty(sig.Label)) return;
-
-        int activeParam = _signatureHelp.ActiveParameter;
-
-        // Find active parameter substring offsets within sig.Label
-        int hlStart = -1, hlEnd = -1;
-        if (activeParam >= 0 && activeParam < sig.Parameters.Count)
-        {
-            var paramLabel = sig.Parameters[activeParam].Label;
-            if (!string.IsNullOrEmpty(paramLabel))
-            {
-                int idx = sig.Label.IndexOf(paramLabel, StringComparison.Ordinal);
-                if (idx >= 0) { hlStart = idx; hlEnd = idx + paramLabel.Length; }
-            }
-        }
-
-        const double padX = 8, padY = 3;
-
-        // Build formatted text pieces
-        var before = hlStart > 0 ? sig.Label[..hlStart] : (hlStart < 0 ? sig.Label : "");
-        var hl     = hlStart >= 0 ? sig.Label[hlStart..hlEnd] : "";
-        var after  = hlEnd > 0 && hlEnd < sig.Label.Length ? sig.Label[hlEnd..] : "";
-
-        var ftBefore = FormatText(before, Theme.Foreground);
-        var ftHl     = string.IsNullOrEmpty(hl) ? null : FormatText(hl, Theme.TokenKeyword);
-        var ftAfter  = FormatText(after, Theme.Foreground);
-
-        double totalW = ftBefore.Width + (ftHl?.Width ?? 0) + ftAfter.Width + padX * 2;
-        double totalH = _lineHeight + padY * 2;
-
-        var cursor = GetCursorPixelPosition();
-        double x = cursor.X;
-        // Prefer above the cursor; fall back to below if no room
-        double y = cursor.Y - totalH - 2;
-        if (y < 0) y = cursor.Y + _lineHeight + 2;
-        if (x + totalW > size.Width) x = Math.Max(textLeft, size.Width - totalW - 2);
-
-        dc.DrawRectangle(s_popupBg1, s_popupBorder, new Rect(x, y, totalW, totalH));
-
-        double tx = x + padX;
-        double ty = y + padY + (_lineHeight - ftBefore.Height) / 2;
-
-        dc.DrawText(ftBefore, new Point(tx, ty));
-        tx += ftBefore.Width;
-        if (ftHl != null)
-        {
-            dc.DrawText(ftHl, new Point(tx, ty));
-            tx += ftHl.Width;
-        }
-        dc.DrawText(ftAfter, new Point(tx, ty));
-    }
-
-    private void DrawCompletionPopup(DrawingContext dc, double textLeft, Size size)
-    {
-        if (_completionItems.Count == 0) return;
-
-        const int maxVisible = 10;
-        int scrollOffset = Math.Max(0, Math.Min(_completionScrollOffset, _completionItems.Count - 1));
-        int count = Math.Min(maxVisible, _completionItems.Count - scrollOffset);
-
-        var texts = new FormattedText[count];
-        double maxW = 0;
-        for (int i = 0; i < count; i++)
-        {
-            var item = _completionItems[scrollOffset + i];
-            var label = item.Detail != null ? $"{item.Label}  {item.Detail}" : item.Label;
-            var ft = FormatText(label, Theme.Foreground);
-            texts[i] = ft;
-            maxW = Math.Max(maxW, ft.Width);
-        }
-
-        double rowH   = Math.Max(_lineHeight, texts.Max(static t => t.Height));
-        double padX   = 8;
-        double padY   = 4;
-        double popupW = maxW + padX * 2 + 24; // 24px for kind icon column
-        double popupH = rowH * count + padY * 2;
-
-        var cursor = GetCursorPixelPosition();
-        double x = cursor.X;
-        double y = cursor.Y + _lineHeight + 2;
-
-        if (x + popupW > size.Width)  x = Math.Max(textLeft, size.Width - popupW - 2);
-        if (y + popupH > size.Height) y = Math.Max(0, cursor.Y - popupH - 2);
-
-        dc.DrawRectangle(s_popupBg2, s_popupBorder, new Rect(x, y, popupW, popupH));
-
-        for (int i = 0; i < count; i++)
-        {
-            int itemIndex = scrollOffset + i;
-            double rowY = y + padY + rowH * i;
-            if (itemIndex == _completionSelection)
-                dc.DrawRectangle(Theme.SelectionBg, null, new Rect(x + 1, rowY, popupW - 2, rowH));
-
-            // Kind indicator dot
-            var kindBrush = GetCompletionKindBrush(_completionItems[itemIndex].Kind);
-            dc.DrawEllipse(kindBrush, null, new Point(x + padX + 4, rowY + rowH / 2), 4, 4);
-
-            dc.DrawText(texts[i], new Point(x + padX + 16, rowY + (rowH - texts[i].Height) / 2));
-        }
-
-        // Documentation panel for selected item
-        if (_completionSelection >= 0 && _completionSelection < _completionItems.Count)
-        {
-            var selectedItem = _completionItems[_completionSelection];
-            var docText = selectedItem.Documentation;
-            if (!string.IsNullOrWhiteSpace(docText))
-            {
-                const double docPadX = 10;
-                const double docPadY = 8;
-                const double docMaxW = 320;
-                const double docMaxH = 200;
-
-                // Word-wrap documentation text
-                var docLines = WrapDocText(docText, docMaxW - docPadX * 2);
-                double docLineH = _lineHeight;
-                double docW = docLines.Max(l => l.Width) + docPadX * 2;
-                double docH = Math.Min(docMaxH, docLines.Count * docLineH + docPadY * 2);
-
-                double docX = x + popupW + 2;
-                double docY = y;
-
-                // Flip to left if no room on right
-                if (docX + docW > size.Width)
-                    docX = x - docW - 2;
-
-                dc.DrawRectangle(s_popupDocBg, s_popupBorder, new Rect(docX, docY, docW, docH));
-
-                // Clip doc text to panel
-                dc.PushClip(new RectangleGeometry(new Rect(docX + 1, docY + 1, docW - 2, docH - 2)));
-                int maxLines = (int)((docH - docPadY * 2) / docLineH);
-                for (int i = 0; i < Math.Min(maxLines, docLines.Count); i++)
-                    dc.DrawText(docLines[i], new Point(docX + docPadX, docY + docPadY + i * docLineH));
-                dc.Pop();
-            }
-        }
-    }
-
-    private List<FormattedText> WrapDocText(string text, double maxWidth)
-    {
-        var result = new List<FormattedText>();
-        var paragraphs = text.Replace("\r\n", "\n").Split('\n');
-        foreach (var para in paragraphs)
-        {
-            if (string.IsNullOrEmpty(para)) { result.Add(FormatText("", Theme.TokenComment)); continue; }
-            var words = para.Split(' ');
-            var line = new System.Text.StringBuilder();
-            foreach (var word in words)
-            {
-                var test = line.Length == 0 ? word : line + " " + word;
-                var ft = FormatText(test, Theme.TokenComment);
-                if (ft.Width <= maxWidth || line.Length == 0)
-                    line.Clear().Append(test);
-                else
-                {
-                    result.Add(FormatText(line.ToString(), Theme.TokenComment));
-                    line.Clear().Append(word);
-                }
-            }
-            if (line.Length > 0)
-                result.Add(FormatText(line.ToString(), Theme.TokenComment));
-        }
-        return result;
-    }
-
-    private Brush GetCompletionKindBrush(CompletionItemKind kind) => kind switch
-    {
-        CompletionItemKind.Class or CompletionItemKind.Interface => Theme.TokenType,
-        CompletionItemKind.Method or CompletionItemKind.Function or CompletionItemKind.Constructor => Theme.TokenKeyword,
-        CompletionItemKind.Field or CompletionItemKind.Property or CompletionItemKind.Variable => Theme.TokenAttribute,
-        CompletionItemKind.Keyword => Theme.TokenKeyword,
-        CompletionItemKind.Snippet => Theme.TokenString,
-        _ => Theme.TokenIdentifier
-    };
-
-    private void DrawCodeActionPopup(DrawingContext dc, double textLeft, Size size)
-    {
-        if (_codeActionItems.Count == 0) return;
-
-        const int maxVisible = 10;
-        int scrollOffset = Math.Max(0, Math.Min(_codeActionsScrollOffset, _codeActionItems.Count - 1));
-        int count = Math.Min(maxVisible, _codeActionItems.Count - scrollOffset);
-
-        var texts = new FormattedText[count];
-        double maxW = 0;
-        for (int i = 0; i < count; i++)
-        {
-            var action = _codeActionItems[scrollOffset + i];
-            var label = action.Kind != null ? $"[{action.Kind}]  {action.Title}" : action.Title;
-            var ft = FormatText(label, Theme.Foreground);
-            texts[i] = ft;
-            maxW = Math.Max(maxW, ft.Width);
-        }
-
-        double rowH   = Math.Max(_lineHeight, texts.Max(static t => t.Height));
-        double padX   = 8;
-        double padY   = 4;
-        double popupW = maxW + padX * 2 + 16;
-        double popupH = rowH * count + padY * 2;
-
-        var cursor = GetCursorPixelPosition();
-        double x = cursor.X;
-        double y = cursor.Y - popupH - 2;  // prefer above cursor
-        if (y < 0) y = cursor.Y + _lineHeight + 2;  // fall back to below
-
-        if (x + popupW > size.Width) x = Math.Max(textLeft, size.Width - popupW - 2);
-
-        dc.DrawRectangle(s_popupBg2, s_popupBorder, new Rect(x, y, popupW, popupH));
-
-        for (int i = 0; i < count; i++)
-        {
-            int itemIndex = scrollOffset + i;
-            double rowY = y + padY + rowH * i;
-            if (itemIndex == _codeActionsSelection)
-                dc.DrawRectangle(Theme.SelectionBg, null, new Rect(x + 1, rowY, popupW - 2, rowH));
-            dc.DrawText(texts[i], new Point(x + padX, rowY + (rowH - texts[i].Height) / 2));
-        }
-    }
-
     // Returns the (line, col) of the bracket that matches the one at (cursorLine, cursorCol),
     // or null if the cursor is not on a bracket or no match is found.
     private (int line, int col)? FindMatchingBracket(int cursorLine, int cursorCol)
@@ -2280,20 +1806,6 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         return null;
-    }
-
-    private void DrawWhitespaceIssues(DrawingContext dc, int line, double y, double textLeft, string lineText)
-    {
-        if (!_whitespaceIssues.TryGetValue(line, out var issues)) return;
-        foreach (var issue in issues)
-        {
-            var brush = issue.Kind == WhitespaceIssueKind.FullWidthSpace
-                ? Theme.FullWidthSpaceBackground
-                : Theme.TrailingWhitespaceBackground;
-            double hLeft  = textLeft + GetVisualX(lineText, issue.Start) - _scrollOffsetX;
-            double hWidth = GetVisualX(lineText, issue.End) - GetVisualX(lineText, issue.Start);
-            dc.DrawRectangle(brush, null, new Rect(hLeft, y, Math.Max(0, hWidth), _lineHeight));
-        }
     }
 
     private void DrawMatchingBrackets(DrawingContext dc, int line, double y, double textLeft, string lineText,
@@ -2368,25 +1880,6 @@ public partial class EditorCanvas : FrameworkElement
         }
     }
 
-    private void DrawDocumentHighlights(DrawingContext dc, int line, double y, double textLeft, string lineText)
-    {
-        if (_documentHighlights is null || _documentHighlights.Count == 0) return;
-        foreach (var hl in _documentHighlights)
-        {
-            if (hl.Range.Start.Line != line && hl.Range.End.Line != line
-                && !(hl.Range.Start.Line < line && hl.Range.End.Line > line)) continue;
-
-            int startCol = hl.Range.Start.Line == line ? hl.Range.Start.Character : 0;
-            int endCol   = hl.Range.End.Line   == line ? hl.Range.End.Character   : lineText.Length;
-            startCol = Math.Clamp(startCol, 0, lineText.Length);
-            endCol   = Math.Clamp(endCol,   0, lineText.Length);
-            if (endCol <= startCol) continue;
-
-            double hLeft  = textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX;
-            double hWidth = GetVisualX(lineText, endCol) - GetVisualX(lineText, startCol);
-            dc.DrawRectangle(Theme.DocumentHighlightBackground, null, new Rect(hLeft, y, Math.Max(0, hWidth), _lineHeight));
-        }
-    }
 
     private void DrawLineText(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft)
     {
@@ -2532,37 +2025,6 @@ public partial class EditorCanvas : FrameworkElement
         {
             var ft = FormatText(lineText[runStart..endCol], brush);
             dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, runStart) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
-        }
-    }
-
-    private static readonly Pen s_swatchBorderPen = FreezePen(new Pen(Freeze(new SolidColorBrush(Colors.Black)), 0.75));
-
-    private void DrawColorSwatches(DrawingContext dc, string lineText, double y, double textLeft)
-    {
-        if (string.IsNullOrEmpty(lineText)) return;
-
-        double swatchSize = Math.Max(8, _lineHeight - 4);
-        double swatchY    = y + (_lineHeight - swatchSize) / 2;
-
-        for (int i = 0; i < lineText.Length; i++)
-        {
-            char c = lineText[i];
-            if (c != '#' && c != 'r' && c != 'R') continue;
-
-            if (!ColorParser.TryParseColor(lineText, i, out var color, out int matchLen))
-                continue;
-
-            // Position swatch right after the color text
-            double textX = textLeft + GetVisualX(lineText, i + matchLen) - _scrollOffsetX;
-            double swatchX = textX + 2; // small gap
-
-            var brush = new SolidColorBrush(color);
-            brush.Freeze();
-            var swatchRect = new Rect(swatchX, swatchY, swatchSize, swatchSize);
-            dc.DrawRectangle(brush, s_swatchBorderPen, swatchRect);
-
-            // Advance past the matched token so we don't re-scan its interior
-            i += matchLen - 1;
         }
     }
 
@@ -2840,7 +2302,7 @@ public partial class EditorCanvas : FrameworkElement
         if (y + popupH > size.Height)
             y = Math.Max(0, cursor.Y - popupH - 2);
 
-        dc.DrawRectangle(s_popupBg3, s_popupBorder, new Rect(x, y, popupW, popupH));
+        dc.DrawRectangle(PopupChrome.Bg3, PopupChrome.Border, new Rect(x, y, popupW, popupH));
 
         int selected = _imeCandidateSelection;
         for (int i = 0; i < count; i++)
@@ -3035,6 +2497,22 @@ public partial class EditorCanvas : FrameworkElement
             brush,
             GetDpi());
     }
+
+    /// <summary>Formats text in the italic typeface at <paramref name="sizeScale"/> times the normal
+    /// font size (used for inlay hints).</summary>
+    private FormattedText FormatScaledText(string text, Brush brush, double sizeScale)
+    {
+        return new FormattedText(
+            text,
+            CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            _italicTypeface,
+            _fontSize * sizeScale,
+            brush,
+            GetDpi());
+    }
+
+    private GlyphMetrics BuildGlyphMetrics() => new(FormatText, FormatScaledText, GetVisualX, _lineHeight, _charWidth);
 
     private void MeasureChar()
     {
