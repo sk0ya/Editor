@@ -87,18 +87,21 @@
 
 **目的:** ユーザーから改めて「VimEngineを徹底的にリファクタリングしてコード行を減らして」との依頼があり、Phase 2で対象外とした`ModeTransitionCommands`/`EditingCommands`/`SearchNavCommands`(高リスク領域)を含めることも明示で確認した上で再着手。
 
-**結果:** `VimEngine.cs` は 6,249 → 4,605行(-26.3%)。`src/Editor.Core/Engine/` 配下(ステートレス、`MotionEngine`と同じ流儀)に:
+**結果:** `VimEngine.cs` は 6,249 → 4,257行(-31.9%)。`src/Editor.Core/Engine/` 配下(ステートレス、`MotionEngine`と同じ流儀)に:
 - `TextObjectEngine`(テキストオブジェクト: `GetRange`/`GetWordRange`/`FindEnclosingPair`/`FindEnclosingQuote`/`GetTagRange`/`GetSentenceRange`/`GetParagraphRange`/`WordEndBackward`) — `TextBuffer`をctorで受け取り、カーソルは呼び出し時の引数
 - `BlockRangeCalculator`(static) — Visual Blockの座標計算(`GetBounds`/`GetLeftColumn`/`GetLineRanges`/`BuildEditColumns`/`BuildAppendToLineEndColumns`)。ブロック末尾拡張フラグ(`_visualBlockToLineEnd`等)は呼び出し元がそのまま引数で渡す
 - `CompletionCollector`(static) — Ctrl+N/P・Ctrl+X Ctrl+F・Ctrl+X Ctrl+Lの補完候補収集。`BufferManager`のみに依存
+- `BufferInfoReporter`(static) — Ctrl+G/`g<C-g>`ファイル情報メッセージ組み立て(`BuildFileInfo`、旧`EmitFileInfo`本体+`CountWords`+`CountBytesToCursor`)
 
 `src/Editor.Core/Engine/Ops/` 配下(新設フォルダ。VimEngineへの参照は持たず、必要なコールバック(undo snapshot・イベント発火・カーソル移動)だけをctorで受け取り、`_cursor`はVimEngineが引き渡し/受け取る形で所有権を保持し続ける — `Commands.FoldCommands`の`Result`パターンと同型):
 - `ClipboardEditOps` — delete/yank/paste系(`ExecuteDelete`/`DeleteLines`/`YankRange`/`YankLines`/`PasteAfter`/`PasteBefore`/`InsertLinewisePaste`/`InsertCharacterwiseText`/`CursorOnLastInsertedChar`/`ExecuteIndentedPaste`/`DeleteBlock`/`YankBlock`)
-- `TextTransformOps` — join/大文字小文字変換/indent/コメントトグル/`gq`整形/surround(`JoinLines`系/`ToggleCase`/`ApplyCaseConversion`系/`IndentRange`/`ToggleCommentLines`系/`FormatText`/`ApplySurround`系/`ExecuteReplace`/`ExecuteIncrementNumber`)
+- `TextTransformOps` — join/大文字小文字変換/indent/コメントトグル/`gq`整形/surround/Backspace系/Visual置換(`JoinLines`系/`ToggleCase`/`ApplyCaseConversion`系/`IndentRange`/`ToggleCommentLines`系/`FormatText`/`ApplySurround`系/`ExecuteReplace`/`ExecuteIncrementNumber`/`DeleteWordBack`/`DeleteLineBack`/`DeleteCharBack`/`TryDeleteIndentBack`/`ReplaceBlock`/`ReplaceCharwise`)
 - `RepeatTracker` — dot-repeat(`.`)状態機械。`_lastRepeatChange`等の状態を丸ごと保持し、`ExecuteNormalCommand`/`ProcessKeyInternal`/`ProcessStroke`への再帰呼び出しはコンストラクタ経由のコールバックデリゲートで対応
 - `SearchOps` — 検索状態(`Pattern`/`Forward`/`PreSearchCursor`)と実行ロジック(`DoSearch`/`DoIncrSearch`/`FindGnMatch`/`RepeatFind`/`SearchNext`/`SearchWordUnderCursor`)を状態ごと保持
+- `KeywordCompletionOps` — Ctrl+N/P・Ctrl+X Ctrl+F・Ctrl+X Ctrl+Lの補完サイクル状態(候補/index/prefix/適用済み長)。内部で`CompletionCollector`を利用
+- `BlockInsertOps` — Visual Block insert/append/change(`I`/`A`/`c`後)の複数行同時編集セッション状態と、`TryHandleKey`によるBackspace/Delete/Tab/文字入力の全選択行への複製
 
-いずれも`ExecuteNormalCommand`/`HandleVisual`/`ApplyVisualMotion`等の既存switch/if-chainはそのまま残し、各case本体を`_xxxOps.Method(...)`という委譲に置き換えただけ。ClipboardEditOps/TextTransformOpsの抽出中、「ローカル変数で計算したカーソルをコールバックで`EmitText`する前に`_cursor`フィールドへ反映していないと`VimEvent.CursorMoved`が古い座標を運ぶ」という抽出特有のバグ候補を発見し、`emitTextAt(events, cursor)`(カーソルをセットしてから`EmitText`する)という専用コールバック形状で解消した(全テストgreenで検証済み)。
+いずれも`ExecuteNormalCommand`/`HandleVisual`/`ApplyVisualMotion`等の既存switch/if-chainはそのまま残し、各case本体を`_xxxOps.Method(...)`という委譲に置き換えただけ。抽出中、「ローカル変数で計算したカーソルをコールバックで`EmitText`する前に`_cursor`フィールドへ反映していないと`VimEvent.CursorMoved`が古い座標を運ぶ」という抽出特有のバグ候補と、「1-based byte offsetの`+1`を移し忘れる」という転記ミスの2件を発見し、いずれもテストgreenを保った状態で確認・修正した。前者は`emitTextAt(events, cursor)`(カーソルをセットしてから`EmitText`する)という専用コールバック形状で恒久的に解消。
 
 ### 今回も対象外にしたもの
 
