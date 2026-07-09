@@ -34,6 +34,7 @@ public class VimEngine
     private readonly SearchOps _searchOps;
     private readonly KeywordCompletionOps _kwCompletionOps;
     private readonly BlockInsertOps _blockInsertOps;
+    private readonly VisualEditOps _visualEditOps;
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
 
@@ -197,6 +198,9 @@ public class VimEngine
             (events, cursor) => { _cursor = cursor; EmitText(events); }, EmitStatus);
         _blockInsertOps = new BlockInsertOps(_bufferManager, _config.Options,
             (events, cursor) => { _cursor = cursor; EmitText(events); });
+        _visualEditOps = new VisualEditOps(_bufferManager, _registerManager, _clipboardOps, _textTransform, _repeatTracker,
+            () => _selection, () => _mode, () => _visualBlockToLineEnd, () => _visualBlockLineEndStartColumn,
+            cursor => _cursor = cursor, Snapshot, EmitText, ExitVisualMode, MoveCursor);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -2123,13 +2127,13 @@ public class VimEngine
             if (key == "c") // Ctrl+C = Copy selection to clipboard
             {
                 _commandParser.Reset();
-                ExecuteVisualYank('+', events);
+                _visualEditOps.ExecuteVisualYank('+', events);
                 return;
             }
             if (key == "x") // Ctrl+X = Cut selection to clipboard
             {
                 _commandParser.Reset();
-                ExecuteVisualDelete('+', events);
+                _visualEditOps.ExecuteVisualDelete('+', events);
                 return;
             }
             if (key == "a") // Ctrl+A = Select All
@@ -2251,16 +2255,16 @@ public class VimEngine
             case "X":
             case "D":
                 _commandParser.Reset();
-                ExecuteVisualDelete(ConsumeVisualRegister(), events);
+                _visualEditOps.ExecuteVisualDelete(ConsumeVisualRegister(), events);
                 return;
             case "y":
                 _commandParser.Reset();
-                ExecuteVisualYank(ConsumeVisualRegister(), events);
+                _visualEditOps.ExecuteVisualYank(ConsumeVisualRegister(), events);
                 return;
             case "p":
             case "P":
                 _commandParser.Reset();
-                ExecuteVisualPaste(ConsumeVisualRegister(), events);
+                _visualEditOps.ExecuteVisualPaste(ConsumeVisualRegister(), events);
                 return;
             case "c":
             case "C":
@@ -2272,21 +2276,21 @@ public class VimEngine
                     BeginVisualBlockChange(changeRegister, events);
                 else
                 {
-                    ExecuteVisualDelete(changeRegister, events);
+                    _visualEditOps.ExecuteVisualDelete(changeRegister, events);
                     EnterInsertMode(false, events);
                 }
                 return;
             case ">":
                 _commandParser.Reset();
-                ExecuteVisualIndent(true, events);
+                _visualEditOps.ExecuteVisualIndent(true, events);
                 return;
             case "<":
                 _commandParser.Reset();
-                ExecuteVisualIndent(false, events);
+                _visualEditOps.ExecuteVisualIndent(false, events);
                 return;
             case "~":
                 _commandParser.Reset();
-                ExecuteVisualToggleCase(events);
+                _visualEditOps.ExecuteVisualToggleCase(events);
                 return;
             case "r":
                 if (_mode == VimMode.VisualBlock)
@@ -2323,8 +2327,8 @@ public class VimEngine
         if (_commandParser.Buffer == "g" && key is "c" or "u" or "U" or "~")
         {
             _commandParser.Reset();
-            if (key == "c") ExecuteVisualComment(events);
-            else ExecuteVisualCaseConvert(key switch { "u" => CaseConversion.Lower, "U" => CaseConversion.Upper, _ => CaseConversion.Toggle }, events);
+            if (key == "c") _visualEditOps.ExecuteVisualComment(events);
+            else _visualEditOps.ExecuteVisualCaseConvert(key switch { "u" => CaseConversion.Lower, "U" => CaseConversion.Upper, _ => CaseConversion.Toggle }, events);
             return true;
         }
 
@@ -2539,7 +2543,7 @@ public class VimEngine
                 _cursor = motion.FindChar(_cursor, cmd.FindChar.Value, fwd, before, count);
                 return true;
             case var r when r?.StartsWith('r') == true && r.Length == 2:
-                ExecuteVisualReplace(r[1], events);
+                _visualEditOps.ExecuteVisualReplace(r[1], events);
                 return true;
             case "za": CurrentBuffer.Folds.ToggleFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); return false;
             case "zo": CurrentBuffer.Folds.OpenFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); return false;
@@ -3448,225 +3452,6 @@ public class VimEngine
         _visualPendingRegister = null;
         _awaitingVisualRegister = false;
         return register;
-    }
-
-    private void ExecuteVisualDelete(char register, List<VimEvent> events)
-    {
-        if (_selection == null) { ExitVisualMode(events); return; }
-        var sel = _selection.Value;
-        if (_mode == VimMode.VisualBlock)
-        {
-            var (startLine, _, _, _) = GetBlockBounds(sel);
-            var leftColumn = GetBlockLeftColumn(sel);
-            Snapshot();
-            if (register != '_')
-                _clipboardOps.YankBlock(register, sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, isDelete: true);
-            _clipboardOps.DeleteBlock(sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn);
-            _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(startLine, leftColumn));
-            EmitText(events);
-            ExitVisualMode(events);
-            return;
-        }
-
-        Snapshot();
-        var start = sel.NormalizedStart;
-        var end = sel.NormalizedEnd;
-
-        if (_mode == VimMode.VisualLine)
-        {
-            if (register != '_')
-                _clipboardOps.YankLines(start.Line, end.Line, register, events, isDelete: true);
-            CurrentBuffer.Folds.OnLinesDeleted(start.Line, end.Line);
-            _bufferManager.Current.Text.DeleteLines(start.Line, end.Line);
-            _cursor = _bufferManager.Current.Text.ClampCursor(new CursorPosition(start.Line, 0));
-            EmitText(events);
-        }
-        else
-        {
-            _cursor = _clipboardOps.ExecuteDelete(start, end, false, events, register);
-        }
-        ExitVisualMode(events);
-    }
-
-    // Visual-mode paste: replaces the selection with the register contents.
-    // The deleted selection is yanked into the unnamed register (Vim behavior),
-    // so the register is read up front before any delete overwrites it.
-    private void ExecuteVisualPaste(char register, List<VimEvent> events)
-    {
-        if (_selection == null) { ExitVisualMode(events); return; }
-
-        var reg = _registerManager.Get(register);
-        if (reg.IsEmpty) { ExecuteVisualDelete('"', events); return; }
-        var regType = reg.Type;
-        var regText = reg.Text;
-        var regLines = reg.GetLines();
-        if (!_repeatTracker.IsDotReplaying)
-            _repeatTracker.PendingVisualRepeatRegister = (register, new Register(reg.Text, reg.Type));
-
-        var sel = _selection.Value;
-        var mode = _mode;
-        var start = sel.NormalizedStart;
-        var end = sel.NormalizedEnd;
-
-        Snapshot();
-        var buf = _bufferManager.Current.Text;
-
-        if (mode == VimMode.VisualBlock)
-        {
-            var (blockStartLine, _, _, _) = GetBlockBounds(sel);
-            var leftColumn = GetBlockLeftColumn(sel);
-            _clipboardOps.YankBlock('"', sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, isDelete: true);
-            _clipboardOps.DeleteBlock(sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn);
-            _cursor = buf.ClampCursor(new CursorPosition(blockStartLine, leftColumn));
-            if (regType == RegisterType.Line)
-                _cursor = _clipboardOps.InsertLinewisePaste(_cursor, regLines, after: false);
-            else
-            {
-                var startPos = _cursor;
-                var endPos = _clipboardOps.InsertCharacterwiseText(buf, startPos.Line, startPos.Column, regText);
-                _cursor = ClipboardEditOps.CursorOnLastInsertedChar(buf, startPos, endPos);
-            }
-            EmitText(events);
-            ExitVisualMode(events);
-            return;
-        }
-
-        if (mode == VimMode.VisualLine)
-        {
-            var deleted = buf.GetLines(start.Line, end.Line);
-            _registerManager.SetDelete('"', new Register(string.Join("\n", deleted), RegisterType.Line));
-
-            string[] newLines = regType == RegisterType.Line ? regLines : regText.Split('\n');
-            bool deletedAll = start.Line == 0 && end.Line >= buf.LineCount - 1;
-
-            CurrentBuffer.Folds.OnLinesDeleted(start.Line, end.Line);
-            buf.DeleteLines(start.Line, end.Line);
-
-            if (deletedAll)
-            {
-                buf.ReplaceLine(0, newLines[0]);
-                if (newLines.Length > 1)
-                    buf.InsertLines(0, newLines[1..]);
-            }
-            else
-            {
-                for (int i = newLines.Length - 1; i >= 0; i--)
-                    buf.InsertLineAbove(start.Line, newLines[i]);
-            }
-            CurrentBuffer.Folds.OnLinesInserted(start.Line, newLines.Length);
-            _cursor = buf.ClampCursor(new CursorPosition(start.Line, 0));
-            EmitText(events);
-            ExitVisualMode(events);
-            return;
-        }
-
-        // Characterwise visual selection.
-        _clipboardOps.YankRange('"', start, end, false, isDelete: true);
-        if (start.Line == end.Line)
-            buf.DeleteRange(start.Line, start.Column, Math.Min(end.Column + 1, buf.GetLineLength(start.Line)));
-        else
-        {
-            buf.DeleteRange(start.Line, start.Column, buf.GetLineLength(start.Line));
-            buf.DeleteRange(end.Line, 0, Math.Min(end.Column + 1, buf.GetLineLength(end.Line)));
-            for (int l = end.Line - 1; l > start.Line; l--)
-                buf.DeleteLines(l, l);
-            buf.JoinLines(start.Line);
-        }
-
-        if (regType == RegisterType.Line)
-        {
-            string curLine = buf.GetLine(start.Line);
-            string before = curLine[..Math.Min(start.Column, curLine.Length)];
-            string after = curLine[Math.Min(start.Column, curLine.Length)..];
-            buf.ReplaceLine(start.Line, before);
-            var insert = new List<string>(regLines) { after };
-            buf.InsertLines(start.Line, insert);
-            _cursor = buf.ClampCursor(new CursorPosition(start.Line + 1, 0));
-        }
-        else
-        {
-            var endPos = _clipboardOps.InsertCharacterwiseText(buf, start.Line, start.Column, regText);
-            _cursor = ClipboardEditOps.CursorOnLastInsertedChar(buf, start, endPos);
-        }
-        EmitText(events);
-        ExitVisualMode(events);
-    }
-
-    private void ExecuteVisualYank(char register, List<VimEvent> events)
-    {
-        if (_selection == null) { ExitVisualMode(events); return; }
-        var sel = _selection.Value;
-        if (_mode == VimMode.VisualBlock)
-        {
-            var (startLine, _, _, _) = GetBlockBounds(sel);
-            var leftColumn = GetBlockLeftColumn(sel);
-            _clipboardOps.YankBlock(register, sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn);
-            MoveCursor(new CursorPosition(startLine, leftColumn), events);
-            ExitVisualMode(events);
-            return;
-        }
-
-        var start = sel.NormalizedStart;
-        var end = sel.NormalizedEnd;
-
-        if (_mode == VimMode.VisualLine)
-            _clipboardOps.YankLines(start.Line, end.Line, register, events);
-        else
-            _clipboardOps.YankRange(register, start, end, false);
-
-        MoveCursor(start, events);
-        ExitVisualMode(events);
-    }
-
-    private void ExecuteVisualIndent(bool indent, List<VimEvent> events)
-    {
-        if (_selection == null) { ExitVisualMode(events); return; }
-        var sel = _selection.Value;
-        _textTransform.IndentRange(sel.NormalizedStart.Line, sel.NormalizedEnd.Line, indent, events);
-        ExitVisualMode(events);
-    }
-
-    private void ExecuteVisualComment(List<VimEvent> events)
-    {
-        if (_selection == null) { ExitVisualMode(events); return; }
-        var sel = _selection.Value;
-        _textTransform.ToggleCommentLines(sel.NormalizedStart.Line, sel.NormalizedEnd.Line, events);
-        ExitVisualMode(events);
-    }
-
-    private void ExecuteVisualToggleCase(List<VimEvent> events) =>
-        ExecuteVisualCaseConvert(CaseConversion.Toggle, events);
-
-    private void ExecuteVisualCaseConvert(CaseConversion mode, List<VimEvent> events)
-    {
-        if (_selection == null) { ExitVisualMode(events); return; }
-        Snapshot();
-        var sel = _selection.Value;
-        if (_mode == VimMode.VisualBlock)
-        {
-            _textTransform.ApplyBlockCaseConversion(sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, mode, events);
-            ExitVisualMode(events);
-            return;
-        }
-
-        bool linewise = _mode == VimMode.VisualLine;
-        _textTransform.ApplyCaseConversion(sel.NormalizedStart, sel.NormalizedEnd, linewise, mode, events);
-        ExitVisualMode(events);
-    }
-
-    private void ExecuteVisualReplace(char replacement, List<VimEvent> events)
-    {
-        if (_selection == null) { ExitVisualMode(events); return; }
-        Snapshot();
-        var sel = _selection.Value;
-
-        if (_mode == VimMode.VisualBlock)
-            _textTransform.ReplaceBlock(sel, _visualBlockToLineEnd, _visualBlockLineEndStartColumn, replacement);
-        else
-            _textTransform.ReplaceCharwise(sel, replacement);
-
-        EmitText(events);
-        ExitVisualMode(events);
     }
 
     // ─── Abbreviation expansion ───
