@@ -21,6 +21,7 @@ public class VimEngine
     private readonly MarkManager _markManager;
     private readonly MacroManager _macroManager;
     private readonly ExCommandProcessor _exProcessor;
+    private AutocmdRunner _autocmdRunner = null!;
     private readonly SyntaxEngine _syntaxEngine;
     private readonly CommandParser _commandParser;
     private readonly VimConfig _config;
@@ -92,7 +93,6 @@ public class VimEngine
     private CursorPosition _lastVisualEnd;
     private VimMode _lastVisualMode = VimMode.Visual;
     private readonly List<VimKeyStroke> _pendingMappedInput = [];
-    private int _autocmdDepth;
 
     public VimMode Mode => _mode;
 
@@ -173,8 +173,8 @@ public class VimEngine
     {
         _config = config ?? new VimConfig();
         _bufferManager = new BufferManager();
-        _bufferManager.BufferWillWrite += (_, path) => RunAutocmds("BufWritePre", path);
-        _bufferManager.BufferDidWrite += (_, path) => RunAutocmds("BufWritePost", path);
+        _bufferManager.BufferWillWrite += (_, path) => _autocmdRunner.RunAutocmds("BufWritePre", path);
+        _bufferManager.BufferDidWrite += (_, path) => _autocmdRunner.RunAutocmds("BufWritePost", path);
         _registerManager = new RegisterManager(_config.Options);
         _markManager = new MarkManager();
         _macroManager = new MacroManager();
@@ -182,6 +182,7 @@ public class VimEngine
         _commandParser = new CommandParser();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
             _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames, _config.Functions);
+        _autocmdRunner = new AutocmdRunner(_config, _exProcessor, () => _cursor);
         _foldCommands = new Commands.FoldCommands(_bufferManager);
         _fileNavCommands = new Commands.FileNavCommands(_bufferManager);
         _clipboardOps = new ClipboardEditOps(_bufferManager, _registerManager, Snapshot,
@@ -215,13 +216,13 @@ public class VimEngine
     public void LoadFile(string path)
     {
         if (_bufferManager.Current.FilePath is { } outgoingPath)
-            RunAutocmds("BufLeave", outgoingPath);
+            _autocmdRunner.RunAutocmds("BufLeave", outgoingPath);
 
         // Real Vim skips BufReadPre/BufRead/BufReadPost for a path that doesn't exist yet and
         // fires BufNewFile instead; BufEnter/FileType still fire normally either way.
         bool isNewFile = !File.Exists(path);
         if (!isNewFile)
-            RunAutocmds("BufReadPre", path);
+            _autocmdRunner.RunAutocmds("BufReadPre", path);
         var editorConfig = EditorConfig.LoadForFile(path);
         editorConfig.TryGetFileEncoding(out var preferredEncoding);
         _bufferManager.OpenFile(path, preferredEncoding);
@@ -237,15 +238,15 @@ public class VimEngine
         _config.ApplyModelines(_bufferManager.Current);
         if (isNewFile)
         {
-            RunAutocmds("BufNewFile", path);
+            _autocmdRunner.RunAutocmds("BufNewFile", path);
         }
         else
         {
-            RunAutocmds("BufRead", path);
-            RunAutocmds("BufReadPost", path);
+            _autocmdRunner.RunAutocmds("BufRead", path);
+            _autocmdRunner.RunAutocmds("BufReadPost", path);
         }
-        RunAutocmds("BufEnter", path);
-        RunAutocmds("FileType", GetFileTypeNames(path));
+        _autocmdRunner.RunAutocmds("BufEnter", path);
+        _autocmdRunner.RunAutocmds("FileType", AutocmdRunner.GetFileTypeNames(path));
     }
 
     /// <summary>
@@ -471,14 +472,14 @@ public class VimEngine
                 return true;
             }
 
-            var match = ResolveMapMatch(maps, _pendingMappedInput);
+            var match = KeyMappingResolver.ResolveMapMatch(maps, _pendingMappedInput);
             if (match.HasExactMatch)
             {
                 if (match.HasLongerPrefix)
                     return true;
 
                 _pendingMappedInput.Clear();
-                foreach (var mappedStroke in ParseMappingSequence(match.MappedValue ?? ""))
+                foreach (var mappedStroke in KeyMappingResolver.ParseMappingSequence(match.MappedValue ?? ""))
                     ProcessStroke(mappedStroke, events, allowMapping: false);
                 return true;
             }
@@ -519,184 +520,6 @@ public class VimEngine
             ProcessStroke(literal, events, allowMapping: false);
         }
     }
-
-    private static MapMatch ResolveMapMatch(Dictionary<string, string> maps, IReadOnlyList<VimKeyStroke> input)
-    {
-        bool hasPrefix = false;
-        bool hasLongerPrefix = false;
-        string? mappedValue = null;
-        int exactLength = -1;
-
-        foreach (var kv in maps)
-        {
-            var lhs = ParseMappingSequence(kv.Key);
-            if (lhs.Count == 0 || !StartsWith(lhs, input))
-                continue;
-
-            if (lhs.Count == input.Count)
-            {
-                if (lhs.Count > exactLength)
-                {
-                    exactLength = lhs.Count;
-                    mappedValue = kv.Value;
-                }
-            }
-            else
-            {
-                hasPrefix = true;
-                if (exactLength >= 0)
-                    hasLongerPrefix = true;
-            }
-        }
-
-        return new MapMatch(
-            HasExactMatch: exactLength >= 0,
-            HasPrefix: hasPrefix,
-            HasLongerPrefix: hasLongerPrefix,
-            MappedValue: mappedValue);
-    }
-
-    private static bool StartsWith(IReadOnlyList<VimKeyStroke> candidate, IReadOnlyList<VimKeyStroke> input)
-    {
-        if (input.Count > candidate.Count)
-            return false;
-
-        for (int i = 0; i < input.Count; i++)
-        {
-            if (!AreSameStroke(candidate[i], input[i]))
-                return false;
-        }
-
-        return true;
-    }
-
-    private static bool AreSameStroke(VimKeyStroke left, VimKeyStroke right) =>
-        left.Ctrl == right.Ctrl &&
-        left.Alt == right.Alt &&
-        string.Equals(left.Key, right.Key, StringComparison.Ordinal) &&
-        // For a single printable character the Shift state is already encoded in
-        // the character itself (e.g. 'H' == Shift+h), so the Shift flag is
-        // redundant. A map LHS is parsed with Shift=false (see ParseMappingSequence),
-        // but key delivery routes disagree on the flag — the IME / OnKeyDown path
-        // reports Shift=true for 'H' while the OnTextInput path reports false. Only
-        // enforce Shift equality for named keys (Tab, Space, F-keys, …) where
-        // <S-…> is a genuinely distinct chord; otherwise an uppercase-letter map
-        // like `nnoremap H ^` silently fails whenever Shift is reported.
-        (left.Key.Length == 1 || left.Shift == right.Shift);
-
-    private static IReadOnlyList<VimKeyStroke> ParseMappingSequence(string sequence)
-    {
-        var strokes = new List<VimKeyStroke>();
-        for (int i = 0; i < sequence.Length; i++)
-        {
-            if (sequence[i] == '<')
-            {
-                int end = sequence.IndexOf('>', i + 1);
-                if (end > i)
-                {
-                    var token = sequence[i..(end + 1)];
-                    if (TryParseMapToken(token, out var parsed))
-                    {
-                        strokes.Add(parsed);
-                        i = end;
-                        continue;
-                    }
-                }
-            }
-
-            strokes.Add(new VimKeyStroke(sequence[i].ToString(), false, false, false));
-        }
-
-        return strokes;
-    }
-
-    private static bool TryParseMapToken(string token, out VimKeyStroke stroke)
-    {
-        stroke = default;
-        if (token.Length < 3 || token[0] != '<' || token[^1] != '>')
-            return false;
-
-        var inner = token[1..^1];
-        if (string.IsNullOrWhiteSpace(inner))
-            return false;
-
-        var parts = inner.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        bool ctrl = false, shift = false, alt = false;
-        string keyPart;
-
-        if (parts.Length == 1)
-        {
-            keyPart = parts[0];
-        }
-        else
-        {
-            for (int i = 0; i < parts.Length - 1; i++)
-            {
-                switch (parts[i].ToLowerInvariant())
-                {
-                    case "c":
-                    case "ctrl":
-                    case "control":
-                        ctrl = true;
-                        break;
-                    case "s":
-                    case "shift":
-                        shift = true;
-                        break;
-                    case "a":
-                    case "alt":
-                    case "m":
-                    case "meta":
-                        alt = true;
-                        break;
-                    default:
-                        return false;
-                }
-            }
-
-            keyPart = parts[^1];
-        }
-
-        var key = NormalizeMapKeyName(keyPart);
-        if (key == null)
-            return false;
-
-        stroke = new VimKeyStroke(key, ctrl, shift, alt);
-        return true;
-    }
-
-    private static string? NormalizeMapKeyName(string keyName)
-    {
-        if (string.IsNullOrWhiteSpace(keyName))
-            return null;
-
-        var lowered = keyName.ToLowerInvariant();
-        return lowered switch
-        {
-            "esc" or "escape" => "Escape",
-            "cr" or "enter" or "return" => "Return",
-            "tab" => "Tab",
-            "bs" or "backspace" or "back" => "Back",
-            "del" or "delete" => "Delete",
-            "space" => " ",
-            "left" => "Left",
-            "right" => "Right",
-            "up" => "Up",
-            "down" => "Down",
-            "home" => "Home",
-            "end" => "End",
-            "lt" => "<",
-            "bar" => "|",
-            _ when keyName.Length == 1 => keyName,
-            _ => null
-        };
-    }
-
-    private readonly record struct MapMatch(
-        bool HasExactMatch,
-        bool HasPrefix,
-        bool HasLongerPrefix,
-        string? MappedValue);
 
     private void ProcessKeyInternal(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
@@ -2915,144 +2738,6 @@ public class VimEngine
         EmitCmdLine(events);
     }
 
-    private bool TryExecuteConfigCommand(string cmdLine, out string? message, out string? error, out bool optionsChanged)
-    {
-        message = null;
-        error = null;
-        optionsChanged = false;
-
-        var cmd = cmdLine.Trim();
-        if (!IsConfigCommand(cmd))
-            return false;
-
-        error = _config.ParseCommand(cmd);
-        if (error != null)
-            return true;
-
-        if (IsMapCommand(cmd))
-            message = "Key mapping registered";
-        else if (cmd.Equals("autocmd", StringComparison.OrdinalIgnoreCase) ||
-                 cmd.Equals("au", StringComparison.OrdinalIgnoreCase))
-            message = _config.Autocmds.Format();
-        else if (cmd.StartsWith("autocmd ", StringComparison.OrdinalIgnoreCase) ||
-                 cmd.StartsWith("au ", StringComparison.OrdinalIgnoreCase))
-            message = cmd.Contains('!') ? "Autocommands cleared" : "Autocommand registered";
-        else if (cmd.StartsWith("colorscheme ", StringComparison.OrdinalIgnoreCase))
-            message = $"colorscheme: {_config.Options.ColorScheme}";
-        else if (cmd.StartsWith("set ", StringComparison.OrdinalIgnoreCase) ||
-                 cmd.StartsWith("syntax ", StringComparison.OrdinalIgnoreCase))
-            optionsChanged = true;
-
-        return true;
-    }
-
-    private static bool IsConfigCommand(string cmd)
-    {
-        if (cmd.Equals("set", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return cmd.StartsWith("set ", StringComparison.OrdinalIgnoreCase) ||
-            cmd.StartsWith("colorscheme ", StringComparison.OrdinalIgnoreCase) ||
-            cmd.StartsWith("syntax ", StringComparison.OrdinalIgnoreCase) ||
-            IsMapLeaderLetCommand(cmd) ||
-            cmd.StartsWith("augroup", StringComparison.OrdinalIgnoreCase) ||
-            cmd.StartsWith("autocmd", StringComparison.OrdinalIgnoreCase) ||
-            cmd.Equals("au", StringComparison.OrdinalIgnoreCase) ||
-            cmd.StartsWith("au ", StringComparison.OrdinalIgnoreCase) ||
-            IsMapCommand(cmd);
-    }
-
-    private static bool IsMapLeaderLetCommand(string cmd)
-    {
-        if (!cmd.StartsWith("let ", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var rest = cmd[3..].Trim();
-        var eqIdx = rest.IndexOf('=');
-        if (eqIdx < 0)
-            return rest.Equals("mapleader", StringComparison.OrdinalIgnoreCase);
-
-        var name = rest[..eqIdx].Trim();
-        return name.Equals("mapleader", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsMapCommand(string cmd) =>
-        cmd.StartsWith("nmap ", StringComparison.OrdinalIgnoreCase) ||
-        cmd.StartsWith("imap ", StringComparison.OrdinalIgnoreCase) ||
-        cmd.StartsWith("vmap ", StringComparison.OrdinalIgnoreCase) ||
-        cmd.StartsWith("nnoremap ", StringComparison.OrdinalIgnoreCase) ||
-        cmd.StartsWith("inoremap ", StringComparison.OrdinalIgnoreCase) ||
-        cmd.StartsWith("vnoremap ", StringComparison.OrdinalIgnoreCase);
-
-    private void RunAutocmds(string eventName, string filePathOrType) =>
-        RunAutocmds(eventName, [filePathOrType]);
-
-    private void RunAutocmds(string eventName, IEnumerable<string> filePathOrTypes)
-    {
-        if (_autocmdDepth > 8)
-            return;
-
-        _autocmdDepth++;
-        try
-        {
-            var autocmds = filePathOrTypes
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .SelectMany(v => _config.Autocmds.Match(eventName, v))
-                .Distinct()
-                .ToArray();
-
-            foreach (var autocmd in autocmds)
-                ExecuteAutocmdCommand(autocmd.Command);
-        }
-        finally
-        {
-            _autocmdDepth--;
-        }
-    }
-
-    private void ExecuteAutocmdCommand(string command)
-    {
-        foreach (var part in command.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (TryExecuteConfigCommand(part, out _, out _, out _))
-                continue;
-
-            if (part.StartsWith("echo ", StringComparison.OrdinalIgnoreCase) ||
-                part.StartsWith("echomsg ", StringComparison.OrdinalIgnoreCase))
-            {
-                _exProcessor.Execute(part, _cursor);
-            }
-        }
-    }
-
-    private static string[] GetFileTypeNames(string filePath)
-    {
-        var ext = Path.GetExtension(filePath).ToLowerInvariant();
-        return ext switch
-        {
-            ".cs" => ["cs", "csharp"],
-            ".py" => ["python"],
-            ".xml" => ["xml"],
-            ".md" or ".markdown" => ["markdown"],
-            ".js" or ".jsx" => ["javascript"],
-            ".ts" or ".tsx" => ["typescript"],
-            ".rs" => ["rust"],
-            ".json" => ["json"],
-            ".toml" => ["toml"],
-            ".yaml" or ".yml" => ["yaml"],
-            ".sh" or ".bash" or ".zsh" or ".fish" => ["sh", "shell"],
-            ".css" => ["css"],
-            ".sql" => ["sql"],
-            ".c" => ["c"],
-            ".cpp" or ".cc" or ".cxx" or ".hpp" or ".hh" => ["cpp", "c"],
-            ".h" => ["c", "cpp"],
-            ".go" => ["go"],
-            ".bat" or ".cmd" => ["dosbatch", "batch"],
-            ".ps1" or ".psm1" or ".psd1" => ["ps1", "powershell"],
-            _ => [],
-        };
-    }
-
     /// <summary>
     /// Sets the active search pattern as if the user had searched for it, so all
     /// matches get highlighted (honouring <c>hlsearch</c>/<c>ignorecase</c>/<c>smartcase</c>),
@@ -3209,9 +2894,9 @@ public class VimEngine
         if (!suppressInsertAutocmd && _bufferManager.Current.FilePath is { } path)
         {
             if (!wasInsertLike && isInsertLike)
-                RunAutocmds("InsertEnter", path);
+                _autocmdRunner.RunAutocmds("InsertEnter", path);
             else if (wasInsertLike && !isInsertLike)
-                RunAutocmds("InsertLeave", path);
+                _autocmdRunner.RunAutocmds("InsertLeave", path);
         }
     }
 
@@ -3700,7 +3385,7 @@ public class VimEngine
     private void ExecuteExCommand(string cmdLine, List<VimEvent> events)
     {
         _registerManager.SetLastCommand(cmdLine); // ":" register — last executed Ex command line
-        if (TryExecuteConfigCommand(cmdLine, out var msg, out var err, out var optChanged))
+        if (_autocmdRunner.TryExecuteConfigCommand(cmdLine, out var msg, out var err, out var optChanged))
         {
             if (err != null) EmitStatus(events, "E: " + err);
             else if (msg != null) EmitStatus(events, msg);
