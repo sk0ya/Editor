@@ -10,7 +10,7 @@
                    Foreground="#F8F8F2" TextWrapping="Wrap"/>
     </Border>
 
-    <Grid Height="24">
+    <Grid x:Name="StatusGrid" MinHeight="24">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="*"/>

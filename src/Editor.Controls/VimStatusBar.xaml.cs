@@ -17,6 +17,25 @@ public partial class VimStatusBar : UserControl
         UpdateMode(VimMode.Normal);
     }
 
+    /// <summary>
+    /// Scales the status-bar text to follow the editor font size. The XAML font
+    /// sizes were tuned for the default editor size (14 px), so each element is
+    /// scaled by <c>editorFontSize / 14</c> to keep its relative proportion, and
+    /// the bar's minimum height grows so larger text is not clipped.
+    /// </summary>
+    public void SetEditorFontSize(double editorFontSize)
+    {
+        var ratio = System.Math.Max(1, editorFontSize) / 14.0;
+        ModeText.FontSize     = 13 * ratio;
+        FileText.FontSize     = 12 * ratio;
+        CommandText.FontSize  = 13 * ratio;
+        StatusText.FontSize   = 12 * ratio;
+        BranchText.FontSize   = 12 * ratio;
+        PosText.FontSize      = 12 * ratio;
+        WildmenuText.FontSize = 12 * ratio;
+        StatusGrid.MinHeight  = 24 * ratio;
+    }
+
     public void UpdateMode(VimMode mode, bool vimEnabled = true)
     {
         if (!vimEnabled)

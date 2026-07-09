@@ -2624,6 +2624,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (!string.IsNullOrWhiteSpace(family)) _editorFontFamily = family;
         _editorFontSize = Math.Max(1, size);
         Canvas.UpdateFont(_editorFontFamily, _editorFontSize);
+        StatusBar.SetEditorFontSize(_editorFontSize);
+        _sharedStatusBar?.SetEditorFontSize(_editorFontSize);
     }
 
     // ─────────────── Indentation (tab width) ───────────────
@@ -2676,7 +2678,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         _sharedStatusBar = bar;
         StatusBar.Visibility = (bar != null || _minimalChrome) ? Visibility.Collapsed : Visibility.Visible;
-        if (bar != null) bar.Theme = _theme;
+        if (bar != null) { bar.Theme = _theme; bar.SetEditorFontSize(_editorFontSize); }
     }
 
     /// <summary>
