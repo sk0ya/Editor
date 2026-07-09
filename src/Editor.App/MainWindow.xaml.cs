@@ -1686,6 +1686,9 @@ public partial class MainWindow : Window
         // Update theme radio buttons
         if (ThemeDraculaRb != null) ThemeDraculaRb.IsChecked = themeName == "Dracula";
         if (ThemeDarkRb != null) ThemeDarkRb.IsChecked = themeName == "Dark";
+        if (ThemeNordRb != null) ThemeNordRb.IsChecked = themeName == "Nord";
+        if (ThemeTokyoNightRb != null) ThemeTokyoNightRb.IsChecked = themeName == "TokyoNight";
+        if (ThemeOneDarkRb != null) ThemeOneDarkRb.IsChecked = themeName == "OneDark";
 
         // Update current-color swatches
         var baseTheme = EditorTheme.GetByName(themeName);

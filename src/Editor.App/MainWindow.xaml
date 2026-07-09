@@ -952,6 +952,24 @@
                                      GroupName="ColorTheme"
                                      Style="{StaticResource SettingRadioButton}"
                                      Checked="ColorTheme_Checked"/>
+                        <RadioButton x:Name="ThemeNordRb"
+                                     Content="Nord"
+                                     Tag="Nord"
+                                     GroupName="ColorTheme"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="ColorTheme_Checked"/>
+                        <RadioButton x:Name="ThemeTokyoNightRb"
+                                     Content="Tokyo Night"
+                                     Tag="TokyoNight"
+                                     GroupName="ColorTheme"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="ColorTheme_Checked"/>
+                        <RadioButton x:Name="ThemeOneDarkRb"
+                                     Content="One Dark"
+                                     Tag="OneDark"
+                                     GroupName="ColorTheme"
+                                     Style="{StaticResource SettingRadioButton}"
+                                     Checked="ColorTheme_Checked"/>
 
                         <!-- Separator -->
                         <Border Height="1" Background="#3A3D46" Margin="0,14,0,14"/>
