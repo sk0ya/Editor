@@ -136,6 +136,14 @@ Filetype-aware editing aids live in `Editor.Core/Editing/` (pure .NET, no WPF):
 
 `VimEngine` calls the resolved assist in `InsertNewline` (Enter), `TryEditAssistTab` (Tab), and `OpenLineBelow`/`OpenLineAbove` (`o`/`O`), falling back to default behaviour when the assist declines. The Enter/Tab path covers both Vim Insert mode and the plain (Vim-disabled) edit mode. **To add smart editing for a new filetype, implement `IEditAssist` and register it — no `VimEngine` changes needed.**
 
+## Clipboard Image Paste (Markdown)
+
+Pasting into a `.md`/`.markdown` file while the system clipboard holds an **image** saves the image to disk and inserts a Markdown link (`![alt](path)`) instead of pasting text. Triggered by `p`/`P` (Normal mode) or `Ctrl+V` (Insert mode); non-image pastes and non-Markdown files fall through to the normal paste path.
+
+- **`Editor.Core/Editing/ImagePasteOptions.cs`** (pure, no WPF) — the configurable rules: `Directory` (save folder relative to the Markdown file, default `images`), `FileName` (default `{filename}-{datetime}.png`), and `AltText`. `Resolve(markdownPath, timestamp, fileExists)` computes the `ImagePasteTarget(AbsolutePath, LinkPath, AltText)`. Template placeholders: `{filename}` (Markdown stem), `{date}`, `{time}`, `{datetime}`, `{seq}` (uniquifying counter). Without `{seq}`, a taken name gets a `-N` suffix.
+- **`Editor.Controls/ImagePasteHandler.cs`** (WPF) — reads the clipboard image (prefers a raw `PNG` payload, else re-encodes the DIB via `PngBitmapEncoder`), writes the file, returns the link text. Owns an `ImagePasteOptions`.
+- **Wiring** — `VimEditorControl.TryHandleImagePaste` intercepts the paste keystroke at the top of `ProcessKey` and calls `VimEngine.PasteText(text, after)` (public; undo + events, backed by `ClipboardEditOps.PasteRawText`). **Config API:** set `VimEditorControlOptions.ImagePasteOptions` at construction, or mutate `VimEditorControl.ImagePasteOptions` at runtime.
+
 ## Tests
 
 Tests live in `tests/Editor.Core.Tests/`. Key files: `VimEngineTests.cs` (core vim ops), `TextBufferTests.cs` (buffer mutations), `ExCommandProcessorTests.cs` (`:` commands), `MarkdownEditAssistTests.cs` (edit assists).

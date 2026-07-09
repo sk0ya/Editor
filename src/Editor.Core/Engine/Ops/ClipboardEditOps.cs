@@ -119,6 +119,25 @@ public sealed class ClipboardEditOps(
         return cursor;
     }
 
+    /// <summary>
+    /// Pastes literal <paramref name="text"/> characterwise at (after=true) or before
+    /// (after=false) the cursor, without touching any register. Mirrors the p/P cursor
+    /// placement (rests on the last inserted character). Used for synthesised host pastes
+    /// such as image → Markdown link.
+    /// </summary>
+    public CursorPosition PasteRawText(CursorPosition cursor, string text, bool after, List<VimEvent> events)
+    {
+        snapshot();
+        var buf = bufferManager.Current.Text;
+        var start = after
+            ? new CursorPosition(cursor.Line, Math.Min(cursor.Column + 1, buf.GetLineLength(cursor.Line)))
+            : cursor;
+        var end = InsertCharacterwiseText(buf, start.Line, start.Column, text);
+        var result = CursorOnLastInsertedChar(buf, start, end);
+        emitTextAt(events, result);
+        return result;
+    }
+
     public CursorPosition PasteBefore(CursorPosition cursor, char register, List<VimEvent> events, bool cursorAfterPaste = false)
     {
         snapshot();

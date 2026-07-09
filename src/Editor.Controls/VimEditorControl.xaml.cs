@@ -348,6 +348,21 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     // Identity of the segments currently rendered, to skip rebuilding the bar when unchanged.
     private string _lastBreadcrumbKey = "\0";
 
+    // ─── Clipboard image → Markdown link paste ───
+    private readonly ImagePasteHandler _imagePasteHandler;
+
+    /// <summary>
+    /// Rules for pasting a clipboard image into a Markdown file (destination directory +
+    /// file-name templates, see <see cref="Editor.Core.Editing.ImagePasteOptions"/>). Mutate
+    /// in place to reconfigure at runtime; seeded from
+    /// <see cref="VimEditorControlOptions.ImagePasteOptions"/>.
+    /// </summary>
+    public Editor.Core.Editing.ImagePasteOptions ImagePasteOptions
+    {
+        get => _imagePasteHandler.Options;
+        set => _imagePasteHandler.Options = value ?? new Editor.Core.Editing.ImagePasteOptions();
+    }
+
     // ─── Multi-cursor ───
     private readonly MultiCursorManager _multiCursorManager;
 
@@ -617,6 +632,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         var config = options.ConfigFactory?.Invoke() ?? VimConfig.LoadDefault();
         _engine = new VimEngine(config);
         _engine.SetClipboardProvider(options.ClipboardProviderFactory?.Invoke() ?? new WpfClipboardProvider());
+        _imagePasteHandler = new ImagePasteHandler { Options = options.ImagePasteOptions ?? new Editor.Core.Editing.ImagePasteOptions() };
         Canvas.WrapLines = _engine.Options.Wrap;
         _multiCursorManager = new MultiCursorManager(_engine, Canvas, msg => ActiveStatusBar.UpdateStatus(msg), UpdateAll);
         _snippetTabStopManager = new SnippetTabStopManager(_engine, ProcessKey, ClearSelectionRangeState, ProcessVimEvents, UpdateAll);
@@ -3892,10 +3908,47 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
     }
 
+    /// <summary>
+    /// Intercepts a paste keystroke (p/P in Normal mode, Ctrl+V in Insert mode) when the current
+    /// file is Markdown and the clipboard holds an image: saves the image and inserts a Markdown
+    /// link in place of the paste. Returns true when it consumed the keystroke.
+    /// </summary>
+    private bool TryHandleImagePaste(string key, bool ctrl, bool alt)
+    {
+        var mode = _engine.Mode;
+        bool isNormalPaste = mode is VimMode.Normal && !ctrl && !alt && (key == "p" || key == "P");
+        bool isInsertPaste = mode is VimMode.Insert && ctrl && !alt && key == "v";
+        if (!isNormalPaste && !isInsertPaste) return false;
+
+        var filePath = _engine.CurrentBuffer.FilePath;
+        if (!ImagePasteHandler.IsMarkdownFile(filePath) || !ImagePasteHandler.ClipboardHasImage())
+            return false;
+
+        var link = _imagePasteHandler.TryBuildMarkdownLink(filePath, out var error);
+        if (link == null)
+        {
+            if (error != null) ActiveStatusBar.UpdateStatus(error);
+            return false; // fall through to normal paste
+        }
+
+        var events = _engine.PasteText(link, after: key != "P");
+        ProcessVimEvents(events);
+        if (events.Any(e => e.Type == VimEventType.TextChanged))
+            _lspManager.OnTextChanged(_engine.CurrentBuffer.Text.GetText());
+        UpdateAll();
+        return true;
+    }
+
     private void ProcessKey(string key, bool ctrl, bool shift, bool alt)
     {
         Canvas.ResetCursorBlink();
         ClearSelectionRangeState();
+
+        // Clipboard image → Markdown link: when pasting (p/P in Normal, Ctrl+V in Insert)
+        // into a Markdown file while the clipboard holds an image, save the image per
+        // ImagePasteOptions and insert a link instead of the (empty) clipboard text.
+        if (TryHandleImagePaste(key, ctrl, alt))
+            return;
 
         bool hadCompletion = _lspManager.CompletionVisible;
 

@@ -213,6 +213,30 @@ public class VimEngine
     }
 
     /// <summary>
+    /// Inserts <paramref name="text"/> as a characterwise paste at the cursor, honouring
+    /// the current mode: Insert mode inserts at the caret (like Ctrl+V), Normal/Visual mode
+    /// pastes after the cursor (like <c>p</c>). Used by the host for synthesised pastes such
+    /// as saving a clipboard image and dropping a Markdown link in its place. Participates
+    /// in undo and emits TextChanged/CursorMoved, so callers can treat it like a keypress.
+    /// </summary>
+    public IReadOnlyList<VimEvent> PasteText(string text, bool after = true)
+    {
+        var events = new List<VimEvent>();
+        if (string.IsNullOrEmpty(text)) return events;
+
+        if (_mode == VimMode.Insert)
+        {
+            Snapshot();
+            InsertTextAtCursor(text, events);
+        }
+        else
+        {
+            _cursor = _clipboardOps.PasteRawText(_cursor, text, after, events);
+        }
+        return events;
+    }
+
+    /// <summary>
     /// LSPのfoldingRangeレスポンスを現在のバッファに適用する。
     /// 既存の開閉状態は同じ範囲のフォールドに引き継がれる。
     /// </summary>
