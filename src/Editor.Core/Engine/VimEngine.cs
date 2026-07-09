@@ -3918,25 +3918,3 @@ public class VimEngine
         _ => name
     };
 }
-
-// Extension for MotionEngine public access
-public static class MotionEngineExtensions
-{
-    public static CursorPosition WordForward(this MotionEngine me, CursorPosition cursor, int count, bool WORD)
-    {
-        var mot = me.Calculate(WORD ? "W" : "w", cursor, count);
-        return mot?.Target ?? cursor;
-    }
-
-    public static CursorPosition WordBackward(this MotionEngine me, CursorPosition cursor, int count, bool WORD)
-    {
-        var mot = me.Calculate(WORD ? "B" : "b", cursor, count);
-        return mot?.Target ?? cursor;
-    }
-
-    public static CursorPosition WordEnd(this MotionEngine me, CursorPosition cursor, int count, bool WORD)
-    {
-        var mot = me.Calculate(WORD ? "E" : "e", cursor, count);
-        return mot?.Target ?? cursor;
-    }
-}
