@@ -22,10 +22,8 @@ public partial class EditorCanvas : FrameworkElement
     private double _charWidth;
     private double _lineHeight;
     private readonly Dictionary<char, double> _charWidthCache = [];
-    // Character-boundary X positions measured with the same FormattedText layout used for
-    // drawing.  Summing isolated glyph widths is not equivalent to laying out a string (and
-    // treating every ASCII character as the width of "M" only works for strictly monospaced
-    // fonts), so cursor/selection/hit-test geometry must use these positions instead.
+    // Character-boundary X positions measured by WPF's text formatter. Unchanged line strings
+    // retain their entry across edits; changed/deleted strings are pruned in SetLines.
     private readonly Dictionary<string, double[]> _textBoundaryCache = [];
     private double _scrollOffsetY;
     private double _scrollOffsetX;
@@ -305,7 +303,16 @@ public partial class EditorCanvas : FrameworkElement
             return;
 
         _lines = lines.Length > 0 ? lines : [""];
-        _textBoundaryCache.Clear();
+        // A TextBuffer snapshot is a new array after every edit, but almost all of its line
+        // strings are unchanged. Keep those measurements and discard only stale line text.
+        // This also bounds the cache to the current document instead of clearing it globally.
+        if (_textBoundaryCache.Count > 0)
+        {
+            var currentLines = _lines.ToHashSet(StringComparer.Ordinal);
+            foreach (string cachedLine in _textBoundaryCache.Keys.ToArray())
+                if (!currentLines.Contains(cachedLine))
+                    _textBoundaryCache.Remove(cachedLine);
+        }
         _lineNumberWidth = Math.Max(3, _lines.Length.ToString().Length);
         RecomputeTableOverrides();
         RebuildVisualLayout();
@@ -2446,18 +2453,7 @@ public partial class EditorCanvas : FrameworkElement
     private double[] GetTextBoundaries(string text)
     {
         if (_textBoundaryCache.TryGetValue(text, out var cached)) return cached;
-
-        // Keep the cache bounded for long editing sessions. Current document lines will be
-        // repopulated on demand, and SetLines/UpdateFont clear it eagerly.
-        if (_textBoundaryCache.Count >= 4096) _textBoundaryCache.Clear();
-
-        var boundaries = new double[text.Length + 1];
-        for (int i = 1; i <= text.Length; i++)
-        {
-            var prefix = FormatText(text[..i], Brushes.White);
-            boundaries[i] = prefix.WidthIncludingTrailingWhitespace;
-        }
-
+        var boundaries = TextBoundaryMeasurer.Measure(text, _typeface, _fontSize, GetDpi());
         _textBoundaryCache[text] = boundaries;
         return boundaries;
     }
