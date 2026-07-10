@@ -642,6 +642,28 @@ public partial class EditorCanvas : FrameworkElement
     }
 
     public double CharWidth => _charWidth;
+
+    /// <summary>
+    /// Maps a sticky source column to the closest character cell on another line using the
+    /// actual rendered X coordinate. Markdown table alignment overrides are included for both
+    /// lines, so j/k follows the pipes and cells as they appear rather than their buffer columns.
+    /// </summary>
+    public int ResolveVerticalColumn(int sourceLine, int sourceColumn, int targetLine, int maxColumn)
+    {
+        if (_lines.Length == 0) return 0;
+
+        sourceLine = Math.Clamp(sourceLine, 0, _lines.Length - 1);
+        targetLine = Math.Clamp(targetLine, 0, _lines.Length - 1);
+        string sourceText = _lines[sourceLine];
+        string targetText = _lines[targetLine];
+
+        SetActiveLine(sourceLine);
+        double goalX = GetVisualX(sourceText, Math.Clamp(sourceColumn, 0, sourceText.Length));
+
+        SetActiveLine(targetLine);
+        int column = VisualXToCol(targetText, goalX);
+        return Math.Clamp(column, 0, maxColumn);
+    }
     public double LineHeight => _lineHeight;
     public int VisibleLines => Math.Max(1, _visibleLines);
     public int FirstVisibleLine => _lineHeight <= 0 ? 0 : (int)(_scrollOffsetY / _lineHeight);

@@ -8,6 +8,43 @@ namespace Editor.Core.Tests;
 
 public class VimEngineTests
 {
+    [Fact]
+    public void JK_WithVerticalColumnResolver_PreservesOriginalStickyAnchorAcrossShortLine()
+    {
+        var engine = CreateEngine("WW\nx\niiii");
+        var calls = new List<(int SourceLine, int SourceColumn, int TargetLine, int MaxColumn)>();
+        engine.VerticalColumnResolver = (sourceLine, sourceColumn, targetLine, maxColumn) =>
+        {
+            calls.Add((sourceLine, sourceColumn, targetLine, maxColumn));
+            return targetLine == 1 ? 0 : 3;
+        };
+
+        engine.ProcessKey("l");
+        engine.ProcessKey("j");
+        engine.ProcessKey("j");
+
+        Assert.Equal(new CursorPosition(2, 3), engine.Cursor);
+        Assert.Equal((0, 1, 2, 3), calls[1]);
+    }
+
+    [Theory]
+    [InlineData("v", false, VimMode.Visual)]
+    [InlineData("V", false, VimMode.VisualLine)]
+    [InlineData("v", true, VimMode.VisualBlock)]
+    public void VisualModes_J_UsesVerticalColumnResolver(string enterKey, bool ctrl, VimMode expectedMode)
+    {
+        var engine = CreateEngine("WW\niiii");
+        engine.ProcessKey("l");
+        engine.VerticalColumnResolver = (_, _, targetLine, _) => targetLine == 1 ? 3 : 0;
+
+        engine.ProcessKey(enterKey, ctrl: ctrl);
+        engine.ProcessKey("j");
+
+        Assert.Equal(expectedMode, engine.Mode);
+        Assert.Equal(new CursorPosition(1, 3), engine.Cursor);
+        Assert.NotNull(engine.Selection);
+    }
+
     private sealed class FakeClipboardProvider : IClipboardProvider
     {
         private string _text = "";

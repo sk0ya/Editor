@@ -631,6 +631,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         var config = options.ConfigFactory?.Invoke() ?? VimConfig.LoadDefault();
         _engine = new VimEngine(config);
+        _engine.VerticalColumnResolver = Canvas.ResolveVerticalColumn;
         _engine.SetClipboardProvider(options.ClipboardProviderFactory?.Invoke() ?? new WpfClipboardProvider());
         _imagePasteHandler = new ImagePasteHandler { Options = options.ImagePasteOptions ?? new Editor.Core.Editing.ImagePasteOptions() };
         Canvas.WrapLines = _engine.Options.Wrap;

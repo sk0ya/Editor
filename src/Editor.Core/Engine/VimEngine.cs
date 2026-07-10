@@ -84,6 +84,14 @@ public class VimEngine
     private bool _surroundLinewise;
     private bool _foldDisabled;
     private int _preferredColumn = 0; // Sticky column for j/k
+    private int _preferredLine = 0;
+
+    /// <summary>
+    /// Optional display-layer resolver for vertical motions. The arguments are the line and
+    /// column where the sticky goal was established, the target line, and its maximum column.
+    /// Core falls back to logical-column movement when no resolver is supplied.
+    /// </summary>
+    public Func<int, int, int, int, int>? VerticalColumnResolver { get; set; }
 
     private int _viewportTopLine = 0;      // First visible buffer line in the viewport
     private int _viewportVisibleLines = 25; // Number of lines visible in the viewport
@@ -298,7 +306,7 @@ public class VimEngine
         int maxCol = _mode == VimMode.Insert ? lineLen : Math.Max(0, lineLen - 1);
         int col = Math.Clamp(old.Column, 0, maxCol);
         _cursor = new CursorPosition(line, col);
-        _preferredColumn = col;
+        SetPreferredColumn(col);
     }
 
     // Move cursor to an arbitrary position (used for mouse click).
@@ -311,7 +319,7 @@ public class VimEngine
         int maxCol = insertMode ? lineLen : Math.Max(0, lineLen - 1);
         int col = Math.Clamp(pos.Column, 0, maxCol);
         _cursor = new CursorPosition(line, col);
-        _preferredColumn = col;
+        SetPreferredColumn(col);
 
         var events = new List<VimEvent> { VimEvent.CursorMoved(_cursor) };
 
@@ -341,7 +349,7 @@ public class VimEngine
 
         _visualStart = CurrentBuffer.Text.ClampCursor(selection.Start);
         _cursor = CurrentBuffer.Text.ClampCursor(selection.End);
-        _preferredColumn = _cursor.Column;
+        SetPreferredColumn(_cursor.Column);
 
         if (_mode != targetMode)
             ChangeMode(targetMode, events);
@@ -699,7 +707,7 @@ public class VimEngine
             case "i": { var jf = _markManager.JumpForward(); if (jf.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(jf.Value, events); } break; }
             case "v": EnterVisualMode(VimMode.VisualBlock, events); break;
             case "w": _ctrlWPending = true; EmitStatus(events, "^W"); break;
-            case "h": MoveCursor(motion.MoveLeft(_cursor, 1), events); _preferredColumn = _cursor.Column; break;
+            case "h": MoveCursor(motion.MoveLeft(_cursor, 1), events); SetPreferredColumn(_cursor.Column); break;
             case "j": MoveVertical(1, events); break;
             case "m": MoveLineAndFirstNonBlank(1, events); break;
             case "a":
@@ -953,11 +961,11 @@ public class VimEngine
                 break;
 
             // Movement
-            case "h": MoveCursor(motion.MoveLeft(_cursor, count), events); _preferredColumn = _cursor.Column; break;
-            case "l": MoveCursor(motion.MoveRight(_cursor, count), events); _preferredColumn = _cursor.Column; break;
+            case "h": MoveCursor(motion.MoveLeft(_cursor, count), events); SetPreferredColumn(_cursor.Column); break;
+            case "l": MoveCursor(motion.MoveRight(_cursor, count), events); SetPreferredColumn(_cursor.Column); break;
             case "j": MoveVertical(count, events); break;
             case "k": MoveVertical(-count, events); break;
-            case "0": MoveCursor(_cursor with { Column = 0 }, events); _preferredColumn = 0; break;
+            case "0": MoveCursor(_cursor with { Column = 0 }, events); SetPreferredColumn(0); break;
             case "^": var fnb = GetFirstNonBlank(); MoveCursor(_cursor with { Column = fnb }, events); break;
             case "$": GoToLineEnd(false, events); break;
             case "w": MoveCursor(motion.WordForward(_cursor, count, false), events); break;
@@ -1683,19 +1691,21 @@ public class VimEngine
             case "Left":
                 var ml = new MotionEngine(buf, _bufferManager.Current.FilePath);
                 _cursor = ml.MoveLeft(_cursor);
+                SetPreferredColumn(_cursor.Column);
                 EmitCursor(events);
                 break;
             case "Right":
                 var mr = new MotionEngine(buf, _bufferManager.Current.FilePath);
                 _cursor = mr.MoveRight(_cursor, 1, true);
+                SetPreferredColumn(_cursor.Column);
                 EmitCursor(events);
                 break;
             case "Up":
-                _cursor = new MotionEngine(buf, _bufferManager.Current.FilePath).MoveUp(_cursor, insertMode: true);
+                MoveVerticalCursor(-1, insertMode: true);
                 EmitCursor(events);
                 break;
             case "Down":
-                _cursor = new MotionEngine(buf, _bufferManager.Current.FilePath).MoveDown(_cursor, insertMode: true);
+                MoveVerticalCursor(1, insertMode: true);
                 EmitCursor(events);
                 break;
             case "Tab":
@@ -1926,7 +1936,7 @@ public class VimEngine
         _plainSelAnchor = buf.ClampCursor(anchor, insertMode: true);
         var events = new List<VimEvent>();
         UpdatePlainSelection(buf.ClampCursor(caret, insertMode: true), events);
-        _preferredColumn = _cursor.Column;
+        SetPreferredColumn(_cursor.Column);
         return events;
     }
 
@@ -1955,7 +1965,7 @@ public class VimEngine
             _cursor = target;
             EmitCursor(events);
         }
-        _preferredColumn = _cursor.Column;
+        SetPreferredColumn(_cursor.Column);
     }
 
     // Vertical caret move in plain mode. Uses _preferredColumn as the goal column
@@ -1966,7 +1976,8 @@ public class VimEngine
     {
         var buf = _bufferManager.Current.Text;
         int line = Math.Clamp(_cursor.Line + delta, 0, buf.LineCount - 1);
-        int col = Math.Min(_preferredColumn, buf.GetLineLength(line));
+        int maxCol = buf.GetLineLength(line);
+        int col = ResolveVerticalColumn(line, maxCol);
         var target = new CursorPosition(line, col);
         _plainEditRunActive = false;
         if (shift)
@@ -2343,6 +2354,8 @@ public class VimEngine
         if (!ApplyVisualMotion(cmd.Value, events))
             return;
 
+        if (!IsVerticalVisualMotion(cmd.Value.Motion)) SetPreferredColumn(_cursor.Column);
+
         UpdateSelection(events);
     }
 
@@ -2372,6 +2385,8 @@ public class VimEngine
 
         if (!ApplyVisualMotion(cmd.Value, events))
             return false;
+
+        if (!IsVerticalVisualMotion(cmd.Value.Motion)) SetPreferredColumn(_cursor.Column);
 
         UpdateSelection(events);
         return true;
@@ -2407,34 +2422,32 @@ public class VimEngine
             case "Left":
             case "h":
                 _cursor = motion.MoveLeft(_cursor, count);
-                _preferredColumn = _cursor.Column;
+                SetPreferredColumn(_cursor.Column);
                 return true;
             case "Right":
             case "l":
                 _cursor = motion.MoveRight(_cursor, count);
-                _preferredColumn = _cursor.Column;
+                SetPreferredColumn(_cursor.Column);
                 return true;
             case "Up":
             case "k":
-                for (int i = 0; i < count; i++)
-                    _cursor = motion.MoveUp(_cursor);
+                MoveVerticalCursor(-count);
                 return true;
             case "Down":
             case "j":
-                for (int i = 0; i < count; i++)
-                    _cursor = motion.MoveDown(_cursor);
+                MoveVerticalCursor(count);
                 return true;
             case "0":
                 _cursor = _cursor with { Column = 0 };
-                _preferredColumn = 0;
+                SetPreferredColumn(0);
                 return true;
             case "^":
                 _cursor = _cursor with { Column = GetFirstNonBlank() };
-                _preferredColumn = _cursor.Column;
+                SetPreferredColumn(_cursor.Column);
                 return true;
             case "$":
                 _cursor = _cursor with { Column = Math.Max(0, GetLineLength() - 1) };
-                _preferredColumn = _cursor.Column;
+                SetPreferredColumn(_cursor.Column);
                 if (_mode == VimMode.VisualBlock)
                 {
                     _visualBlockToLineEnd = true;
@@ -2466,12 +2479,10 @@ public class VimEngine
                 _cursor = new TextObjectEngine(buf).WordEndBackward(_cursor, count);
                 return true;
             case "gj":
-                for (int i = 0; i < count; i++)
-                    _cursor = motion.MoveDown(_cursor);
+                MoveVerticalCursor(count);
                 return true;
             case "gk":
-                for (int i = 0; i < count; i++)
-                    _cursor = motion.MoveUp(_cursor);
+                MoveVerticalCursor(-count);
                 return true;
             case "g_":
                 var g_vm = motion.Calculate("g_", _cursor, count);
@@ -2479,31 +2490,31 @@ public class VimEngine
                 return true;
             case "gg":
                 _cursor = new CursorPosition(0, 0);
-                _preferredColumn = 0;
+                SetPreferredColumn(0);
                 return true;
             case "G":
                 var targetLine = count == 1 ? buf.LineCount - 1 : count - 1;
                 _cursor = new CursorPosition(Math.Clamp(targetLine, 0, buf.LineCount - 1), 0);
-                _preferredColumn = 0;
+                SetPreferredColumn(0);
                 return true;
             case "+":
                 var downLine = Math.Clamp(_cursor.Line + count, 0, buf.LineCount - 1);
                 _cursor = new CursorPosition(downLine, GetFirstNonBlank(downLine));
-                _preferredColumn = _cursor.Column;
+                SetPreferredColumn(_cursor.Column);
                 return true;
             case "-":
                 var upLine = Math.Clamp(_cursor.Line - count, 0, buf.LineCount - 1);
                 _cursor = new CursorPosition(upLine, GetFirstNonBlank(upLine));
-                _preferredColumn = _cursor.Column;
+                SetPreferredColumn(_cursor.Column);
                 return true;
             case "_":
                 var underLine = Math.Clamp(_cursor.Line + Math.Max(0, count - 1), 0, buf.LineCount - 1);
                 _cursor = new CursorPosition(underLine, GetFirstNonBlank(underLine));
-                _preferredColumn = _cursor.Column;
+                SetPreferredColumn(_cursor.Column);
                 return true;
             case "|":
                 _cursor = _cursor with { Column = Math.Clamp(count - 1, 0, Math.Max(0, GetLineLength() - 1)) };
-                _preferredColumn = _cursor.Column;
+                SetPreferredColumn(_cursor.Column);
                 return true;
             case "{":
                 for (int i = 0; i < count; i++)
@@ -2935,6 +2946,7 @@ public class VimEngine
     private void MoveCursor(CursorPosition pos, List<VimEvent> events)
     {
         _cursor = _bufferManager.Current.Text.ClampCursor(pos, _mode == VimMode.Insert);
+        SetPreferredColumn(_cursor.Column);
         EmitCursor(events);
     }
 
@@ -3037,6 +3049,12 @@ public class VimEngine
 
     private void MoveVertical(int delta, List<VimEvent> events)
     {
+        MoveVerticalCursor(delta);
+        EmitCursor(events);
+    }
+
+    private void MoveVerticalCursor(int delta, bool insertMode = false)
+    {
         var buf = _bufferManager.Current.Text;
         var folds = CurrentBuffer.Folds;
         int[] visMap = folds.BuildVisibleLineMap(buf.LineCount);
@@ -3044,10 +3062,12 @@ public class VimEngine
         if (currentVis < 0) currentVis = 0;
         int targetVis = Math.Clamp(currentVis + delta, 0, visMap.Length - 1);
         int newLine = visMap[targetVis];
-        int maxCol = Math.Max(0, buf.GetLineLength(newLine) - 1);
-        _cursor = new CursorPosition(newLine, Math.Min(_preferredColumn, maxCol));
-        EmitCursor(events);
+        int maxCol = insertMode ? buf.GetLineLength(newLine) : Math.Max(0, buf.GetLineLength(newLine) - 1);
+        _cursor = new CursorPosition(newLine, ResolveVerticalColumn(newLine, maxCol));
     }
+
+    private static bool IsVerticalVisualMotion(string motion) =>
+        motion is "Up" or "Down" or "j" or "k" or "gj" or "gk";
 
 
     private void GoToLineEnd(bool insertMode, List<VimEvent> events)
@@ -3056,7 +3076,7 @@ public class VimEngine
         var len = buf.GetLineLength(_cursor.Line);
         var col = insertMode ? len : Math.Max(0, len - 1);
         _cursor = _cursor with { Column = col };
-        _preferredColumn = int.MaxValue;
+        SetPreferredColumn(int.MaxValue);
         EmitCursor(events);
     }
 
@@ -3082,7 +3102,7 @@ public class VimEngine
         var buf = _bufferManager.Current.Text;
         var line = Math.Clamp(_cursor.Line + lineDelta, 0, buf.LineCount - 1);
         var col = GetFirstNonBlank(line);
-        _preferredColumn = col;
+        SetPreferredColumn(col);
         MoveCursor(new CursorPosition(line, col), events);
     }
 
@@ -3090,11 +3110,24 @@ public class VimEngine
     {
         var maxCol = Math.Max(0, _bufferManager.Current.Text.GetLineLength(_cursor.Line) - 1);
         var col = Math.Clamp(oneBasedColumn - 1, 0, maxCol);
-        _preferredColumn = col;
+        SetPreferredColumn(col);
         MoveCursor(_cursor with { Column = col }, events);
     }
 
     private int GetLineLength() => _bufferManager.Current.Text.GetLineLength(_cursor.Line);
+
+    private void SetPreferredColumn(int column)
+    {
+        _preferredColumn = column;
+        _preferredLine = _cursor.Line;
+    }
+
+    private int ResolveVerticalColumn(int targetLine, int maxColumn)
+    {
+        if (_preferredColumn == int.MaxValue) return maxColumn;
+        if (VerticalColumnResolver == null) return Math.Min(_preferredColumn, maxColumn);
+        return Math.Clamp(VerticalColumnResolver(_preferredLine, _preferredColumn, targetLine, maxColumn), 0, maxColumn);
+    }
 
     private void OpenLineBelow(List<VimEvent> events)
     {
