@@ -22,6 +22,11 @@ public partial class EditorCanvas : FrameworkElement
     private double _charWidth;
     private double _lineHeight;
     private readonly Dictionary<char, double> _charWidthCache = [];
+    // Character-boundary X positions measured with the same FormattedText layout used for
+    // drawing.  Summing isolated glyph widths is not equivalent to laying out a string (and
+    // treating every ASCII character as the width of "M" only works for strictly monospaced
+    // fonts), so cursor/selection/hit-test geometry must use these positions instead.
+    private readonly Dictionary<string, double[]> _textBoundaryCache = [];
     private double _scrollOffsetY;
     private double _scrollOffsetX;
     private int _visibleLines;
@@ -245,6 +250,7 @@ public partial class EditorCanvas : FrameworkElement
         _fontSize = size;
         _charWidth = 0;
         _charWidthCache.Clear();
+        _textBoundaryCache.Clear();
         _maxLineWidthCacheLines = null; // char widths changed — invalidate cached extent
         MeasureChar();
         RecomputeTableOverrides();
@@ -299,6 +305,7 @@ public partial class EditorCanvas : FrameworkElement
             return;
 
         _lines = lines.Length > 0 ? lines : [""];
+        _textBoundaryCache.Clear();
         _lineNumberWidth = Math.Max(3, _lines.Length.ToString().Length);
         RecomputeTableOverrides();
         RebuildVisualLayout();
@@ -1969,6 +1976,22 @@ public partial class EditorCanvas : FrameworkElement
     private void DrawLineTextWithSegments(DrawingContext dc, string lineText, double y, double textLeft,
         IEnumerable<(int StartCol, int Length, Brush? Brush)> segments)
     {
+        // Keep shaping identical to the layout used by GetTextBoundaries. Drawing each syntax
+        // token as a separate FormattedText run changes kerning/ligatures and can move glyphs
+        // away from the cursor geometry. A single formatted line can carry per-range brushes.
+        if (_activeLineOverrides == null || _activeLineOverrides.Count == 0)
+        {
+            var ft = FormatText(lineText, Theme.Foreground);
+            foreach (var (startCol, length, brush) in segments)
+            {
+                int start = Math.Clamp(startCol, 0, lineText.Length);
+                int count = Math.Clamp(length, 0, lineText.Length - start);
+                if (count > 0 && brush != null) ft.SetForegroundBrush(brush, start, count);
+            }
+            dc.DrawText(ft, new Point(textLeft - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
+            return;
+        }
+
         int pos = 0;
         foreach (var (startCol, length, brush) in segments)
         {
@@ -2339,16 +2362,13 @@ public partial class EditorCanvas : FrameworkElement
 
     // ─────────────── Character width helpers ───────────────
 
-    private static bool UsesBaseMonospaceWidth(char c) =>
-        c is '\t' || (c >= '\u0020' && c <= '\u007E');
-
     private double CharW(char c)
     {
-        if (UsesBaseMonospaceWidth(c)) return _charWidth;
+        if (c == '\t') return _charWidth;
         if (_charWidthCache.TryGetValue(c, out double w)) return w;
         var ft = new FormattedText(c.ToString(), CultureInfo.CurrentCulture,
             FlowDirection.LeftToRight, _typeface, _fontSize, Brushes.White, GetDpi());
-        w = ft.Width;
+        w = ft.WidthIncludingTrailingWhitespace;
         _charWidthCache[c] = w;
         return w;
     }
@@ -2373,24 +2393,51 @@ public partial class EditorCanvas : FrameworkElement
     /// <summary>Visual X offset (in pixels) for character index <paramref name="col"/> in <paramref name="line"/>.</summary>
     private double GetVisualX(string line, int col)
     {
-        double x = 0;
-        int limit = Math.Min(col, line.Length);
-        for (int i = 0; i < limit; i++)
-            x += CharW(line[i], i);
+        int limit = Math.Clamp(col, 0, line.Length);
+        if (_activeLineOverrides == null || _activeLineOverrides.Count == 0)
+            return GetTextBoundaries(line)[limit];
+
+        // Markdown table alignment intentionally stretches selected character cells beyond
+        // their natural layout width, so apply only those deltas on top of the real boundary.
+        double x = GetTextBoundaries(line)[limit];
+        foreach (var (column, width) in _activeLineOverrides)
+        {
+            if (column >= limit || column >= line.Length) continue;
+            double naturalWidth = GetTextBoundaries(line)[column + 1] - GetTextBoundaries(line)[column];
+            x += width - naturalWidth;
+        }
         return x;
     }
 
     /// <summary>Convert a visual X pixel offset to a character index in <paramref name="line"/>.</summary>
     private int VisualXToCol(string line, double visualX)
     {
-        double x = 0;
         for (int i = 0; i < line.Length; i++)
         {
-            double w = CharW(line[i], i);
-            if (x + w / 2 >= visualX) return i;
-            x += w;
+            double left = GetVisualX(line, i);
+            double right = GetVisualX(line, i + 1);
+            if ((left + right) / 2 >= visualX) return i;
         }
         return line.Length;
+    }
+
+    private double[] GetTextBoundaries(string text)
+    {
+        if (_textBoundaryCache.TryGetValue(text, out var cached)) return cached;
+
+        // Keep the cache bounded for long editing sessions. Current document lines will be
+        // repopulated on demand, and SetLines/UpdateFont clear it eagerly.
+        if (_textBoundaryCache.Count >= 4096) _textBoundaryCache.Clear();
+
+        var boundaries = new double[text.Length + 1];
+        for (int i = 1; i <= text.Length; i++)
+        {
+            var prefix = FormatText(text[..i], Brushes.White);
+            boundaries[i] = prefix.WidthIncludingTrailingWhitespace;
+        }
+
+        _textBoundaryCache[text] = boundaries;
+        return boundaries;
     }
 
     /// <summary>
