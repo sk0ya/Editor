@@ -43,4 +43,7 @@ public static class GraphemeCluster
         }
         return col;
     }
+
+    /// <summary>The start of the grapheme cluster containing <paramref name="index"/> (itself if already a boundary).</summary>
+    public static int ClusterStart(string text, int index) => PrevBoundary(text, Math.Min(index + 1, text.Length), 1);
 }

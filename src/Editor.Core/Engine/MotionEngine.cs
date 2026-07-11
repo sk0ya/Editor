@@ -403,7 +403,8 @@ public class MotionEngine
                 while (col < line.Length - 1 && CharClass(line[col + 1]) == cls) col++;
             }
 
-            pos = pos with { Column = Math.Min(col, line.Length - 1) };
+            int endCol = Math.Min(col, line.Length - 1);
+            pos = pos with { Column = GraphemeCluster.ClusterStart(line, endCol) };
         }
         return new Motion(pos, MotionType.Inclusive);
     }

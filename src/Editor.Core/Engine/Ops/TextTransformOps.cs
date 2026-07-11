@@ -101,9 +101,11 @@ public sealed class TextTransformOps(
     {
         snapshot();
         var buf = bufferManager.Current.Text;
-        if (cursor.Column < buf.GetLineLength(cursor.Line))
+        var line = buf.GetLine(cursor.Line);
+        if (cursor.Column < line.Length)
         {
-            buf.DeleteChar(cursor.Line, cursor.Column);
+            int len = GraphemeCluster.LengthAt(line, cursor.Column);
+            buf.DeleteRange(cursor.Line, cursor.Column, cursor.Column + len);
             buf.InsertChar(cursor.Line, cursor.Column, ch);
         }
         emitTextAt(events, cursor);
@@ -261,10 +263,12 @@ public sealed class TextTransformOps(
             int lineLen = buf.GetLineLength(range.Line);
             if (lineLen <= range.StartColumn) continue; // line too short, skip
             int colEnd = Math.Min(range.EndColumn, lineLen - 1);
-            for (int col = range.StartColumn; col <= colEnd; col++)
+            for (int col = range.StartColumn; col <= colEnd && col < buf.GetLineLength(range.Line);)
             {
-                buf.DeleteChar(range.Line, col);
+                int len = GraphemeCluster.LengthAt(buf.GetLine(range.Line), col);
+                buf.DeleteRange(range.Line, col, col + len);
                 buf.InsertChar(range.Line, col, ch);
+                col++;
             }
         }
     }
@@ -285,10 +289,12 @@ public sealed class TextTransformOps(
             startCol = Math.Clamp(startCol, 0, Math.Max(0, line.Length - 1));
             endCol = Math.Clamp(endCol, startCol, Math.Max(0, line.Length - 1));
 
-            for (int col = startCol; col <= endCol; col++)
+            for (int col = startCol; col <= endCol && col < buf.GetLineLength(lineNo);)
             {
-                buf.DeleteChar(lineNo, col);
+                int len = GraphemeCluster.LengthAt(buf.GetLine(lineNo), col);
+                buf.DeleteRange(lineNo, col, col + len);
                 buf.InsertChar(lineNo, col, replacement);
+                col++;
             }
         }
     }

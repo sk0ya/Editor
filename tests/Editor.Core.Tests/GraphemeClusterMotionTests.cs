@@ -99,4 +99,59 @@ public class GraphemeClusterMotionTests
 
         Assert.Equal(new CursorPosition(0, 1), engine.Cursor);
     }
+
+    [Fact]
+    public void R_OnEmojiCluster_ReplacesWholeClusterNotHalf()
+    {
+        var engine = CreateEngine(Text);
+        engine.ProcessKey("l"); // onto cluster start
+        engine.ProcessKey("r");
+        engine.ProcessKey("x");
+
+        Assert.Equal("axb", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void VisualR_OnEmojiCluster_ReplacesWholeClusterNotHalf()
+    {
+        var engine = CreateEngine(Text);
+        engine.ProcessKey("l"); // onto cluster start
+        engine.ProcessKey("v"); // Visual mode, single-position selection on the cluster
+        engine.ProcessKey("r");
+        engine.ProcessKey("x");
+
+        Assert.Equal("axb", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void VisualBlockR_OnEmojiCluster_ReplacesWholeClusterNotHalf()
+    {
+        var engine = CreateEngine(Text);
+        engine.ProcessKey("l"); // onto cluster start
+        engine.ProcessKey("v", ctrl: true); // Visual Block mode
+        engine.ProcessKey("r");
+        engine.ProcessKey("x");
+
+        Assert.Equal("axb", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void E_OnWordEndingInEmoji_LandsOnClusterStartNotLastUnit()
+    {
+        var engine = CreateEngine("a" + Pic);
+        engine.ProcessKey("e");
+
+        Assert.Equal(new CursorPosition(0, 1), engine.Cursor);
+    }
+
+    [Fact]
+    public void GE_FromAfterEmojiWord_LandsOnClusterStartNotLastUnit()
+    {
+        var engine = CreateEngine("a" + Pic + " x");
+        engine.ProcessKey("$"); // onto 'x'
+        engine.ProcessKey("g");
+        engine.ProcessKey("e"); // back to the end of "a" + Pic word -> cluster start of Pic
+
+        Assert.Equal(new CursorPosition(0, 1), engine.Cursor);
+    }
 }

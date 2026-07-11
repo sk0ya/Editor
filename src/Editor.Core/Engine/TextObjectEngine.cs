@@ -1,5 +1,6 @@
 using Editor.Core.Buffer;
 using Editor.Core.Models;
+using Editor.Core.Text;
 
 namespace Editor.Core.Engine;
 
@@ -41,7 +42,7 @@ public sealed class TextObjectEngine(TextBuffer buffer)
                 while (col >= 0 && char.IsWhiteSpace(text[col])) col--;
                 if (col >= 0)
                 {
-                    pos = new CursorPosition(line, col);
+                    pos = new CursorPosition(line, GraphemeCluster.ClusterStart(text, col));
                     break;
                 }
 
