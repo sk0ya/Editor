@@ -673,7 +673,8 @@ public class VimEngine
 
         if (state == CommandState.Incomplete)
         {
-            EmitStatus(events, _commandParser.Buffer);
+            if (_config.Options.ShowCmd)
+                EmitStatus(events, _commandParser.Buffer);
             return;
         }
         if (state == CommandState.Invalid || cmd == null)

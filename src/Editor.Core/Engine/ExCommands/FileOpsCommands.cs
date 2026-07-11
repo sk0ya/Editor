@@ -1,10 +1,11 @@
 using Editor.Core.Buffer;
+using Editor.Core.Config;
 using Editor.Core.Models;
 
 namespace Editor.Core.Engine.ExCommands;
 
 /// <summary>Handles the :q/:quit/:wq/:w/:write/:e/:edit family of ex commands.</summary>
-public class FileOpsCommands(BufferManager bufferManager)
+public class FileOpsCommands(BufferManager bufferManager, VimOptions options)
 {
     public bool TryHandle(string cmd, out ExResult result)
     {
@@ -94,8 +95,11 @@ public class FileOpsCommands(BufferManager bufferManager)
                 return true;
             }
 
-            // :e [file] / :e! [file] — open a different file
-            if (!bang && bufferManager.Current.Text.IsModified)
+            // :e [file] / :e! [file] — open a different file. Switching buffers never loses
+            // data here (BufferManager keeps the old buffer around, reachable via :bn/:bp), so
+            // when 'hidden' is on this is allowed without '!' — matching real Vim's semantics
+            // where 'hidden' lets you leave a modified buffer without writing it.
+            if (!bang && !options.Hidden && bufferManager.Current.Text.IsModified)
             {
                 result = new ExResult(false, "No write since last change (add ! to override)");
                 return true;

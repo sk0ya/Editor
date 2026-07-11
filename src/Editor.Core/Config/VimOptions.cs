@@ -193,6 +193,7 @@ public class VimOptions
             "fontfamily"                                                         => Set(() => FontFamily = value),
             "fontsize"                      when double.TryParse(value, out var d) => Set(() => FontSize = d),
             "clipboard" or "cb"                                                 => Set(() => Clipboard = value),
+            "backspace" or "bs"                                                 => Set(() => BackSpace = value),
             "fileencoding" or "fenc"        => Set(() => FileEncoding = value.ToLowerInvariant()),
             // No-op key=value options
             "mouse"                         => null,

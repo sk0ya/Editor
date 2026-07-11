@@ -2702,10 +2702,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         bool branchMatchesCurrentFile = string.Equals(_gitBranchFilePath, buf.FilePath, StringComparison.OrdinalIgnoreCase);
         if (!branchMatchesCurrentFile)
             _ = RefreshGitDiffAsync();
-        ActiveStatusBar.UpdateMode(_engine.Mode, _engine.VimEnabled);
+        ActiveStatusBar.UpdateMode(_engine.Mode, _engine.VimEnabled, _engine.Options.ShowMode);
         ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified, buf.FileFormat);
         UpdateGitBranchStatusBarIfActive(branchMatchesCurrentFile ? _gitBranchName : null);
-        ActiveStatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount);
+        ActiveStatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount, _engine.Options.Ruler);
     }
 
     private void UpdateGitBranchStatusBarIfActive(string? branchName)
@@ -5255,7 +5255,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                     if (!needFullUpdate)
                     {
                         Canvas.SetCursor(ce.Position);
-                        ActiveStatusBar.UpdateCursor(ce.Position, _engine.CurrentBuffer.Text.LineCount);
+                        ActiveStatusBar.UpdateCursor(ce.Position, _engine.CurrentBuffer.Text.LineCount, _engine.Options.Ruler);
                         if (_engine.Mode is VimMode.Insert or VimMode.Replace)
                             UpdateImeWindowPos();
                         else
@@ -5292,7 +5292,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                     // the shared window's AssociateFocus default. See AssertImeStoreFocus.
                     if (IsImeTextInputMode(me.Mode))
                         AssertImeStoreFocus();
-                    ActiveStatusBar.UpdateMode(me.Mode, _engine.VimEnabled);
+                    ActiveStatusBar.UpdateMode(me.Mode, _engine.VimEnabled, _engine.Options.ShowMode);
                     Canvas.SetMode(me.Mode);
                     ModeChanged?.Invoke(this, new ModeChangedEventArgs(me.Mode));
                     break;

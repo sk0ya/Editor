@@ -36,9 +36,9 @@ public partial class VimStatusBar : UserControl
         StatusGrid.MinHeight  = 24 * ratio;
     }
 
-    public void UpdateMode(VimMode mode, bool vimEnabled = true)
+    public void UpdateMode(VimMode mode, bool vimEnabled = true, bool showMode = true)
     {
-        if (!vimEnabled)
+        if (!vimEnabled || !showMode)
         {
             ModeBorder.Visibility = System.Windows.Visibility.Collapsed;
             return;
@@ -81,8 +81,14 @@ public partial class VimStatusBar : UserControl
         BranchText.Visibility = System.Windows.Visibility.Visible;
     }
 
-    public void UpdateCursor(CursorPosition pos, int totalLines)
+    public void UpdateCursor(CursorPosition pos, int totalLines, bool ruler = true)
     {
+        if (!ruler)
+        {
+            PosText.Visibility = System.Windows.Visibility.Collapsed;
+            return;
+        }
+        PosText.Visibility = System.Windows.Visibility.Visible;
         var pct = totalLines > 0 ? (int)((pos.Line + 1) * 100.0 / totalLines) : 0;
         PosText.Text = $"{pos.Line + 1}/{totalLines}  Col {pos.Column + 1}  {pct}%%";
     }

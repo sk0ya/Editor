@@ -366,6 +366,39 @@ public class ExCommandProcessorTests
         Assert.Equal("other.txt", evt.FilePath);
     }
 
+    // ── 'hidden' option ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Edit_SwitchToOtherFile_WithModifiedBufferAndHiddenOn_Succeeds()
+    {
+        var buffers = new BufferManager();
+        var options = new VimOptions(); // Hidden = true by default
+        var processor = new ExCommandProcessor(buffers, options, new MarkManager());
+        buffers.Current.FilePath = "test.txt";
+        buffers.Current.Text.InsertChar(0, 0, 'x');
+
+        var result = processor.Execute("e other.txt", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<OpenFileRequestedEvent>(result.Event);
+        Assert.Equal("other.txt", evt.FilePath);
+    }
+
+    [Fact]
+    public void Edit_SwitchToOtherFile_WithModifiedBufferAndHiddenOff_RequiresForce()
+    {
+        var buffers = new BufferManager();
+        var options = new VimOptions { Hidden = false };
+        var processor = new ExCommandProcessor(buffers, options, new MarkManager());
+        buffers.Current.FilePath = "test.txt";
+        buffers.Current.Text.InsertChar(0, 0, 'x');
+
+        var result = processor.Execute("e other.txt", CursorPosition.Zero);
+
+        Assert.False(result.Success);
+        Assert.Contains("No write since last change", result.Message);
+    }
+
     // ── :global tests ──────────────────────────────────────────────────────
 
     [Fact]

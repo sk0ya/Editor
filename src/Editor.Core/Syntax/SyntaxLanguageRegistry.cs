@@ -39,7 +39,7 @@ public sealed class SyntaxLanguageRegistry
     private static SyntaxLanguageRegistry CreateDefault()
     {
         var r = new SyntaxLanguageRegistry();
-        Add<CSharpSyntax>(r); Add<PythonSyntax>(r); Add<XmlSyntax>(r); Add<MarkdownSyntax>(r); Add<JavaScriptSyntax>(r); Add<TypeScriptSyntax>(r); Add<RustSyntax>(r); Add<JsonSyntax>(r); Add<TomlSyntax>(r); Add<YamlSyntax>(r); Add<ShellSyntax>(r); Add<CssSyntax>(r); Add<SqlSyntax>(r); Add<CppSyntax>(r); Add<GoSyntax>(r); Add<BatchSyntax>(r); Add<PowerShellSyntax>(r); return r;
+        Add<CSharpSyntax>(r); Add<PythonSyntax>(r); Add<XmlSyntax>(r); Add<MarkdownSyntax>(r); Add<JavaScriptSyntax>(r); Add<TypeScriptSyntax>(r); Add<RustSyntax>(r); Add<JsonSyntax>(r); Add<TomlSyntax>(r); Add<YamlSyntax>(r); Add<ShellSyntax>(r); Add<CssSyntax>(r); Add<SqlSyntax>(r); Add<CppSyntax>(r); Add<GoSyntax>(r); Add<BatchSyntax>(r); Add<PowerShellSyntax>(r); Add<LuaSyntax>(r); Add<RubySyntax>(r); return r;
     }
     private static void Add<T>(SyntaxLanguageRegistry r) where T : ISyntaxLanguage, new() { var sample = new T(); r.Register(new(sample.Name, sample.Extensions), static () => new T()); }
     private sealed class Registration(Action action) : IDisposable { private Action? _action = action; public void Dispose() => Interlocked.Exchange(ref _action, null)?.Invoke(); }

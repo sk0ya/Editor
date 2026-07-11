@@ -15,6 +15,8 @@ public static class SyntaxFoldDetector
         new XmlFoldLanguage(),
         new JsonFoldLanguage(),
         new PythonFoldLanguage(),
+        new RubyFoldLanguage(),
+        new LuaFoldLanguage(),
     ];
 
     // 拡張子 → 言語の逆引きテーブル（起動時に1回だけ構築）

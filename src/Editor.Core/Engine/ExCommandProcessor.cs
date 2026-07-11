@@ -65,7 +65,7 @@ public class ExCommandProcessor
         _visualMaps = visualMaps ?? [];
         _scriptNames = scriptNames ?? [];
         _lspCommands = new ExCommands.LspCommands(lspRegistry ?? LspServerRegistry.Default);
-        _fileOpsCommands = new ExCommands.FileOpsCommands(bufferManager);
+        _fileOpsCommands = new ExCommands.FileOpsCommands(bufferManager, options);
         _rangeResolver = new ExCommands.RangeResolver(markManager);
         _substituteCommands = new ExCommands.SubstituteCommands(bufferManager, options, _rangeResolver,
             () => _searchHistory.Count > 0 ? _searchHistory[0] : "", AddSearchHistory);

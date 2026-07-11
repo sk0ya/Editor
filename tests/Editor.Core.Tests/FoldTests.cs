@@ -1117,4 +1117,121 @@ public class SyntaxFoldDetectorTests
         var folds = SyntaxFoldDetector.Detect(".unknown", lines);
         Assert.Empty(folds);
     }
+
+    // ── Ruby ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Ruby_DefEndBlock_Detected()
+    {
+        var lines = new[]
+        {
+            "def foo",       // 0
+            "  x = 1",       // 1
+            "  return x",    // 2
+            "end",           // 3
+        };
+
+        var folds = SyntaxFoldDetector.Detect(".rb", lines);
+
+        Assert.Contains(folds, f => f.StartLine == 0 && f.EndLine == 3);
+    }
+
+    [Fact]
+    public void Ruby_ClassWithNestedDef_BothFoldsDetected()
+    {
+        var lines = new[]
+        {
+            "class Foo",           // 0
+            "  def initialize",    // 1
+            "  end",                // 2
+            "end",                  // 3
+        };
+
+        var folds = SyntaxFoldDetector.Detect(".rb", lines);
+
+        Assert.Contains(folds, f => f.StartLine == 0 && f.EndLine == 3);
+        Assert.Contains(folds, f => f.StartLine == 1 && f.EndLine == 2);
+    }
+
+    [Fact]
+    public void Ruby_EachDoBlock_Detected()
+    {
+        var lines = new[]
+        {
+            "[1, 2, 3].each do |x|",  // 0
+            "  puts x",                // 1
+            "end",                     // 2
+        };
+
+        var folds = SyntaxFoldDetector.Detect(".rb", lines);
+
+        Assert.Contains(folds, f => f.StartLine == 0 && f.EndLine == 2);
+    }
+
+    [Fact]
+    public void Ruby_PostfixIf_DoesNotOpenFold()
+    {
+        var lines = new[]
+        {
+            "def foo",              // 0
+            "  return x if x",      // 1
+            "end",                  // 2
+        };
+
+        var folds = SyntaxFoldDetector.Detect(".rb", lines);
+
+        Assert.Single(folds);
+        Assert.Equal(0, folds[0].StartLine);
+        Assert.Equal(2, folds[0].EndLine);
+    }
+
+    // ── Lua ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Lua_FunctionEndBlock_Detected()
+    {
+        var lines = new[]
+        {
+            "function greet(name)",  // 0
+            "  print(name)",          // 1
+            "end",                    // 2
+        };
+
+        var folds = SyntaxFoldDetector.Detect(".lua", lines);
+
+        Assert.Contains(folds, f => f.StartLine == 0 && f.EndLine == 2);
+    }
+
+    [Fact]
+    public void Lua_IfThenEndBlock_Detected()
+    {
+        var lines = new[]
+        {
+            "if x > 0 then",  // 0
+            "  print(x)",      // 1
+            "end",             // 2
+        };
+
+        var folds = SyntaxFoldDetector.Detect(".lua", lines);
+
+        Assert.Contains(folds, f => f.StartLine == 0 && f.EndLine == 2);
+    }
+
+    [Fact]
+    public void Lua_RepeatUntilBlock_ClosesWithUntilNotEnd()
+    {
+        var lines = new[]
+        {
+            "local i = 0",     // 0
+            "repeat",           // 1
+            "  i = i + 1",      // 2
+            "until i > 10",     // 3
+        };
+
+        var folds = SyntaxFoldDetector.Detect(".lua", lines);
+
+        Assert.Single(folds);
+        Assert.Equal(1, folds[0].StartLine);
+        Assert.Equal(3, folds[0].EndLine);
+    }
 }

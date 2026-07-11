@@ -3471,6 +3471,60 @@ public class VimEngineTests
         Assert.Equal("", engine.CurrentBuffer.Text.GetText());
     }
 
+    // ─── 'backspace' option (eol) ─────────────────────────────────────────────
+
+    [Fact]
+    public void Backspace_DefaultOption_JoinsWithPreviousLineAtColumnZero()
+    {
+        var engine = CreateEngine("foo\nbar");
+        engine.ProcessKey("j");
+        engine.ProcessKey("i");
+
+        engine.ProcessKey("Back");
+
+        Assert.Equal("foobar", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(new CursorPosition(0, 3), engine.Cursor);
+    }
+
+    [Fact]
+    public void Backspace_WithoutEol_DoesNotJoinAtColumnZero()
+    {
+        var config = new VimConfig();
+        config.Options.BackSpace = "indent,start"; // no "eol"
+        var engine = CreateEngine("foo\nbar", config);
+        engine.ProcessKey("j");
+        engine.ProcessKey("i");
+
+        engine.ProcessKey("Back");
+
+        Assert.Equal("foo\nbar", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(new CursorPosition(1, 0), engine.Cursor);
+    }
+
+    // ─── 'showcmd' option ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void ShowCmd_DefaultOn_EchoesPendingCommandBuffer()
+    {
+        var engine = CreateEngine("hello");
+
+        var events = engine.ProcessKey("2"); // pending count — incomplete command
+
+        Assert.Contains(events, e => e is StatusMessageEvent { Message: "2" });
+    }
+
+    [Fact]
+    public void ShowCmd_Off_DoesNotEchoPendingCommandBuffer()
+    {
+        var config = new VimConfig();
+        config.Options.ShowCmd = false;
+        var engine = CreateEngine("hello", config);
+
+        var events = engine.ProcessKey("2");
+
+        Assert.DoesNotContain(events, e => e.Type == VimEventType.StatusMessage);
+    }
+
     // ─── Case conversion operators ───────────────────────────────────────────
 
     [Fact]

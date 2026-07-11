@@ -67,14 +67,32 @@ public sealed class TextTransformOps(
             buf.DeleteRange(cursor.Line, start, cursor.Column);
             cursor = cursor with { Column = start };
         }
-        else if (cursor.Line > 0)
+        else if (cursor.Line > 0 && BackspaceCanCrossLine())
         {
             var prevLen = buf.GetLineLength(cursor.Line - 1);
             buf.JoinLines(cursor.Line - 1);
             cursor = new CursorPosition(cursor.Line - 1, prevLen);
         }
+        else
+        {
+            // Nothing to delete: at buffer start, or 'backspace' doesn't include "eol"
+            // so Backspace refuses to join with the previous line.
+            return cursor;
+        }
         emitTextAt(events, cursor);
         return cursor;
+    }
+
+    // 'backspace' option: whether Backspace at column 0 may join with the previous line.
+    // Accepts the comma-separated keyword form ("indent,eol,start", the default) as well
+    // as the legacy numeric form (0=none, 1="indent,eol", 2/3="indent,eol,start"/nostop).
+    private bool BackspaceCanCrossLine()
+    {
+        var bs = options.BackSpace.Trim();
+        if (bs is "1" or "2" or "3") return true;
+        if (bs == "0" || bs.Length == 0) return false;
+        return bs.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Any(t => t.Equals("eol", StringComparison.OrdinalIgnoreCase));
     }
 
     // Backspace inside leading indent composed entirely of spaces (soft tabs) removes
