@@ -1,6 +1,7 @@
 using Editor.Core.Buffer;
 using Editor.Core.Matchit;
 using Editor.Core.Models;
+using Editor.Core.Text;
 
 namespace Editor.Core.Engine;
 
@@ -186,15 +187,16 @@ public class MotionEngine
 
     public CursorPosition MoveLeft(CursorPosition cursor, int count = 1)
     {
-        var col = Math.Max(0, cursor.Column - count);
+        var line = _buffer.GetLine(cursor.Line);
+        var col = GraphemeCluster.PrevBoundary(line, cursor.Column, count);
         return cursor with { Column = col };
     }
 
     public CursorPosition MoveRight(CursorPosition cursor, int count = 1, bool insertMode = false)
     {
         var line = _buffer.GetLine(cursor.Line);
-        var maxCol = insertMode ? line.Length : Math.Max(0, line.Length - 1);
-        var col = Math.Min(maxCol, cursor.Column + count);
+        var maxCol = insertMode ? line.Length : GraphemeCluster.PrevBoundary(line, line.Length, 1);
+        var col = Math.Min(maxCol, GraphemeCluster.NextBoundary(line, cursor.Column, count));
         return cursor with { Column = col };
     }
 
@@ -216,7 +218,10 @@ public class MotionEngine
 
     private Motion MoveH(CursorPosition cursor, int delta)
     {
-        var col = Math.Clamp(cursor.Column + delta, 0, Math.Max(0, _buffer.GetLineLength(cursor.Line) - 1));
+        var line = _buffer.GetLine(cursor.Line);
+        int col = delta >= 0
+            ? Math.Min(GraphemeCluster.PrevBoundary(line, line.Length, 1), GraphemeCluster.NextBoundary(line, cursor.Column, delta))
+            : GraphemeCluster.PrevBoundary(line, cursor.Column, -delta);
         return new Motion(cursor with { Column = col }, MotionType.Exclusive);
     }
 

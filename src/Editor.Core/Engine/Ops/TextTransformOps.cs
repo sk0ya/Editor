@@ -2,6 +2,7 @@ using Editor.Core.Buffer;
 using Editor.Core.Config;
 using Editor.Core.Models;
 using Editor.Core.Syntax;
+using Editor.Core.Text;
 
 namespace Editor.Core.Engine.Ops;
 
@@ -61,8 +62,10 @@ public sealed class TextTransformOps(
         var buf = bufferManager.Current.Text;
         if (cursor.Column > 0)
         {
-            buf.DeleteChar(cursor.Line, cursor.Column - 1);
-            cursor = cursor with { Column = cursor.Column - 1 };
+            var line = buf.GetLine(cursor.Line);
+            int start = GraphemeCluster.PrevBoundary(line, cursor.Column, 1);
+            buf.DeleteRange(cursor.Line, start, cursor.Column);
+            cursor = cursor with { Column = start };
         }
         else if (cursor.Line > 0)
         {

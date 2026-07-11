@@ -12,6 +12,7 @@ using Editor.Core.Syntax;
 using Editor.Core.Engine.Ops;
 using Editor.Core;
 using Editor.Core.Extensibility;
+using Editor.Core.Text;
 
 namespace Editor.Core.Engine;
 
@@ -1135,8 +1136,9 @@ public class VimEngine
             // Editing
             case "x":
                 _repeatTracker.SetRepeatChange(cmd);
-                // Delete [count] chars from cursor position
-                var xEnd = _cursor with { Column = Math.Min(_cursor.Column + count - 1, Math.Max(0, buf.GetLineLength(_cursor.Line) - 1)) };
+                // Delete [count] chars (grapheme clusters) from cursor position
+                var xBoundary = GraphemeCluster.NextBoundary(buf.GetLine(_cursor.Line), _cursor.Column, count);
+                var xEnd = _cursor with { Column = Math.Max(_cursor.Column, xBoundary - 1) };
                 _cursor = _clipboardOps.ExecuteDelete(_cursor, xEnd, false, events, cmd.Register ?? '"');
                 break;
             case "X":
@@ -1688,9 +1690,13 @@ public class VimEngine
                 _cursor = _textTransform.DeleteCharBack(_cursor, events);
                 break;
             case "Delete":
-                buf.DeleteChar(_cursor.Line, _cursor.Column);
+            {
+                var delLine = buf.GetLine(_cursor.Line);
+                if (_cursor.Column < delLine.Length)
+                    buf.DeleteRange(_cursor.Line, _cursor.Column, GraphemeCluster.NextBoundary(delLine, _cursor.Column, 1));
                 EmitText(events);
                 break;
+            }
             case "Return":
                 TryExpandAbbreviation(buf, events);
                 InsertNewline(events);
@@ -1865,7 +1871,8 @@ public class VimEngine
                 if (_cursor.Column < buf.GetLineLength(_cursor.Line))
                 {
                     BeginPlainEdit();
-                    buf.DeleteChar(_cursor.Line, _cursor.Column);
+                    var plainDelLine = buf.GetLine(_cursor.Line);
+                    buf.DeleteRange(_cursor.Line, _cursor.Column, GraphemeCluster.NextBoundary(plainDelLine, _cursor.Column, 1));
                     EmitText(events);
                 }
                 else if (_cursor.Line < buf.LineCount - 1)

@@ -2197,7 +2197,7 @@ public partial class EditorCanvas : FrameworkElement
         double cursorX = textLeft + GetVisualX(lineText, _cursor.Column) - _scrollOffsetX;
         double cursorY = y;
 
-        double cursorW = _cursor.Column < lineText.Length ? CharW(lineText[_cursor.Column], _cursor.Column) : _charWidth;
+        double cursorW = _cursor.Column < lineText.Length ? CursorGlyphWidth(lineText, _cursor.Column) : _charWidth;
 
         if (_mode is VimMode.Insert or VimMode.Replace)
             DrawImeCompositionUnderline(dc, cursorX, cursorY);
@@ -2237,7 +2237,7 @@ public partial class EditorCanvas : FrameworkElement
             dc.DrawRectangle(Theme.CursorBackground, null, new Rect(cursorX, cursorY, cursorW, _lineHeight));
             if (_cursor.Column < lineText.Length)
             {
-                var ch = lineText[_cursor.Column].ToString();
+                var ch = lineText.Substring(_cursor.Column, GraphemeLength(lineText, _cursor.Column));
                 var ft = FormatText(ch, Theme.CursorForeground);
                 dc.DrawText(ft, new Point(cursorX, cursorY + (_lineHeight - ft.Height) / 2));
             }
@@ -2253,7 +2253,7 @@ public partial class EditorCanvas : FrameworkElement
         {
             if (ecLine != line) continue;
             double cx = textLeft + GetVisualX(lineText, ecCol) - _scrollOffsetX;
-            double cw = ecCol < lineText.Length ? CharW(lineText[ecCol], ecCol) : _charWidth;
+            double cw = ecCol < lineText.Length ? CursorGlyphWidth(lineText, ecCol) : _charWidth;
 
             if (_mode == VimMode.Insert || _mode == VimMode.Command ||
                 _mode == VimMode.SearchForward || _mode == VimMode.SearchBackward)
@@ -2272,7 +2272,7 @@ public partial class EditorCanvas : FrameworkElement
                 dc.DrawRectangle(extraBrush, null, new Rect(cx, y, cw, _lineHeight));
                 if (ecCol < lineText.Length)
                 {
-                    var ft = FormatText(lineText[ecCol].ToString(), Theme.CursorForeground);
+                    var ft = FormatText(lineText.Substring(ecCol, GraphemeLength(lineText, ecCol)), Theme.CursorForeground);
                     dc.DrawText(ft, new Point(cx, y + (_lineHeight - ft.Height) / 2));
                 }
             }
@@ -2394,6 +2394,17 @@ public partial class EditorCanvas : FrameworkElement
     }
 
     // ─────────────── Character width helpers ───────────────
+
+    /// <summary>
+    /// Number of UTF-16 <c>char</c> units the glyph at <paramref name="col"/> occupies — more than 1
+    /// for surrogate-pair emoji, variation selectors, ZWJ sequences, and flag pairs. Used so the
+    /// cursor box spans the whole glyph instead of measuring/drawing just one code unit of it.
+    /// </summary>
+    private static int GraphemeLength(string line, int col) => GraphemeCluster.LengthAt(line, col);
+
+    /// <summary>Visual width of the glyph at <paramref name="col"/>, grapheme-cluster aware.</summary>
+    private double CursorGlyphWidth(string line, int col) =>
+        GetVisualX(line, col + GraphemeLength(line, col)) - GetVisualX(line, col);
 
     private double CharW(char c)
     {
@@ -2624,7 +2635,7 @@ public partial class EditorCanvas : FrameworkElement
             int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);
             SetActiveLine(_cursor.Line);
             double cursorX = GetVisualX(line, cursorCol);
-            double cursorW = cursorCol < line.Length ? CharW(line[cursorCol], cursorCol) : _charWidth;
+            double cursorW = cursorCol < line.Length ? CursorGlyphWidth(line, cursorCol) : _charWidth;
             double marginX = 4 * _charWidth;
 
             if (viewportWidth > 0)
