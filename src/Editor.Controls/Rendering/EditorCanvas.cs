@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Automation.Peers;
 using Editor.Controls.Git;
 using Editor.Controls.Themes;
 using Editor.Core.Editing;
@@ -198,6 +199,8 @@ public partial class EditorCanvas : FrameworkElement
         RebuildVisualLayout();
     }
 
+    protected override AutomationPeer OnCreateAutomationPeer() => new EditorCanvasAutomationPeer(this);
+
     // ─────────────── Public scroll info ───────────────
 
     private int TotalVisualLines => Math.Max(1, _visualLines.Length);
@@ -317,6 +320,7 @@ public partial class EditorCanvas : FrameworkElement
         RecomputeTableOverrides();
         RebuildVisualLayout();
         InvalidateVisual();
+        EditorCanvasAutomationPeer.NotifyTextChanged(this);
     }
 
     /// <summary>
@@ -344,9 +348,9 @@ public partial class EditorCanvas : FrameworkElement
         set { if (_isActive == value) return; _isActive = value; InvalidateVisual(); }
     }
 
-    public void SetCursor(CursorPosition cursor) { _cursor = cursor; EnsureCursorVisible(); InvalidateVisual(); }
+    public void SetCursor(CursorPosition cursor) { if (_cursor == cursor) return; _cursor = cursor; EnsureCursorVisible(); InvalidateVisual(); EditorCanvasAutomationPeer.NotifySelectionChanged(this); }
     public void SetExtraCursors(IReadOnlyList<(int Line, int Col)> cursors) { _extraCursors = cursors; InvalidateVisual(); }
-    public void SetSelection(Selection? sel) { _selection = sel; InvalidateVisual(); }
+    public void SetSelection(Selection? sel) { if (_selection == sel) return; _selection = sel; InvalidateVisual(); EditorCanvasAutomationPeer.NotifySelectionChanged(this); }
     public void SetMode(VimMode mode) { _mode = mode; InvalidateVisual(); }
 
     public void SetFolds(int[] visibleLineMap, IEnumerable<int> closedFoldStarts, IEnumerable<int> openFoldStarts)
