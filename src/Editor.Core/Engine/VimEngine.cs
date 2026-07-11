@@ -11,6 +11,7 @@ using Editor.Core.Spell;
 using Editor.Core.Syntax;
 using Editor.Core.Engine.Ops;
 using Editor.Core;
+using Editor.Core.Extensibility;
 
 namespace Editor.Core.Engine;
 
@@ -127,6 +128,11 @@ public class VimEngine
     public ExCommandProcessor ExProcessor => _exProcessor;
     public bool FoldsDisabled => _foldDisabled;
 
+    /// <summary>Executes a registered synchronous or asynchronous command from a raw Ex line.</summary>
+    public ValueTask<EditorCommandResult?> ExecuteExtensionCommandAsync(string rawCommand,
+        CancellationToken cancellationToken = default)
+        => _exProcessor.ExecuteExtensionAsync(rawCommand, _cursor, cancellationToken);
+
     /// <summary>
     /// Returns the text covered by the current visual selection, honouring the
     /// selection type (character/line/block). Returns an empty string when there
@@ -179,7 +185,8 @@ public class VimEngine
         _viewportVisibleLines = Math.Max(1, visibleLines);
     }
 
-    public VimEngine(VimConfig? config = null)
+    public VimEngine(VimConfig? config = null, SyntaxLanguageRegistry? syntaxLanguages = null,
+        EditorCommandRegistry? commands = null, IServiceProvider? services = null)
     {
         _config = config ?? new VimConfig();
         _bufferManager = new BufferManager();
@@ -188,10 +195,11 @@ public class VimEngine
         _registerManager = new RegisterManager(_config.Options);
         _markManager = new MarkManager();
         _macroManager = new MacroManager();
-        _syntaxEngine = new SyntaxEngine();
+        _syntaxEngine = new SyntaxEngine(syntaxLanguages);
         _commandParser = new CommandParser();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
-            _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames, _config.Functions);
+            _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames, _config.Functions,
+            commandRegistry: commands, services: services);
         _autocmdRunner = new AutocmdRunner(_config, _exProcessor, () => _cursor);
         _foldCommands = new Commands.FoldCommands(_bufferManager);
         _fileNavCommands = new Commands.FileNavCommands(_bufferManager);

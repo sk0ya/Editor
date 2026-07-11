@@ -1,5 +1,3 @@
-using Editor.Core.Syntax.Languages;
-
 namespace Editor.Core.Syntax;
 
 public interface ISyntaxLanguage
@@ -22,26 +20,7 @@ public class SyntaxEngine
     public const int LargeFileLineThreshold = 5000;
     public const int VisibleRangeContextLineCount = 200;
 
-    private static readonly ISyntaxLanguage[] _languages =
-    [
-        new CSharpSyntax(),
-        new PythonSyntax(),
-        new XmlSyntax(),
-        new MarkdownSyntax(),
-        new JavaScriptSyntax(),
-        new TypeScriptSyntax(),
-        new RustSyntax(),
-        new JsonSyntax(),
-        new TomlSyntax(),
-        new YamlSyntax(),
-        new ShellSyntax(),
-        new CssSyntax(),
-        new SqlSyntax(),
-        new CppSyntax(),
-        new GoSyntax(),
-        new BatchSyntax(),
-        new PowerShellSyntax(),
-    ];
+    private readonly SyntaxLanguageRegistry _languages;
 
     private ISyntaxLanguage? _currentLanguage;
     private LineTokens[]? _cachedTokens;
@@ -53,18 +32,19 @@ public class SyntaxEngine
 
     public string? LanguageName => _currentLanguage?.Name;
 
+    public SyntaxEngine(SyntaxLanguageRegistry? languages = null) => _languages = languages ?? SyntaxLanguageRegistry.Default;
+
     public void DetectLanguage(string? filePath)
     {
         if (filePath == null) { _currentLanguage = null; Invalidate(); return; }
         var ext = Path.GetExtension(filePath).ToLower();
-        _currentLanguage = _languages.FirstOrDefault(l => l.Extensions.Contains(ext));
+        _currentLanguage = _languages.CreateByExtension(ext);
         Invalidate();
     }
 
     public void SetLanguage(string name)
     {
-        _currentLanguage = _languages.FirstOrDefault(l =>
-            l.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        _currentLanguage = _languages.CreateByName(name);
         Invalidate();
     }
 

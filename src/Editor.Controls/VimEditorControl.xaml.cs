@@ -20,6 +20,7 @@ using Editor.Core.Formatting;
 using Editor.Core.Lsp;
 using Editor.Core.Models;
 using Editor.Core.Snippets;
+using Editor.Core.Extensibility;
 
 namespace Editor.Controls;
 
@@ -199,6 +200,13 @@ public sealed record DocumentMeta(
 
 public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditorTextStoreHost, IDisposable
 {
+    /// <summary>Commands available to host palettes and programmatic invocation.</summary>
+    public IReadOnlyList<EditorCommandDescriptor> ExtensionCommands => _engine.ExProcessor.CommandRegistry.Commands;
+
+    /// <summary>Executes a host-registered command using the current editor cursor and raw Ex syntax.</summary>
+    public ValueTask<EditorCommandResult?> ExecuteExtensionCommandAsync(string rawCommand,
+        CancellationToken cancellationToken = default)
+        => _engine.ExecuteExtensionCommandAsync(rawCommand, cancellationToken);
     // ─────────────── Win32 P/Invoke ───────────────
 
     // imm32 — inspect/cancel an active IME composition
@@ -632,7 +640,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         options ??= new VimEditorControlOptions();
 
         var config = options.ConfigFactory?.Invoke() ?? VimConfig.LoadDefault();
-        _engine = new VimEngine(config);
+        _engine = new VimEngine(config, options.SyntaxLanguages, options.Commands, options.CommandServices);
         _engine.VerticalColumnResolver = Canvas.ResolveVerticalColumn;
         _engine.SetClipboardProvider(options.ClipboardProviderFactory?.Invoke() ?? new WpfClipboardProvider());
         _imagePasteHandler = new ImagePasteHandler { Options = options.ImagePasteOptions ?? new Editor.Core.Editing.ImagePasteOptions() };

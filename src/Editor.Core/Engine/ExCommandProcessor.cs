@@ -9,6 +9,7 @@ using Editor.Core.Marks;
 using Editor.Core.Models;
 using Editor.Core;
 using Editor.Core.Registers;
+using Editor.Core.Extensibility;
 
 namespace Editor.Core.Engine;
 
@@ -42,6 +43,8 @@ public class ExCommandProcessor
     private readonly List<string> _searchHistory = [];
     private int _searchHistoryIndex = -1;
     private int _suppressHistory;
+    private readonly EditorCommandRegistry _commandRegistry;
+    private readonly IServiceProvider? _services;
 
     public ExCommandProcessor(BufferManager bufferManager, VimOptions options, MarkManager markManager,
         Dictionary<string, string>? abbreviations = null, RegisterManager? registerManager = null,
@@ -49,7 +52,8 @@ public class ExCommandProcessor
         Dictionary<string, string>? visualMaps = null, Dictionary<string, string>? variables = null,
         IReadOnlyList<string>? scriptNames = null,
         Dictionary<string, VimFunctionDefinition>? functions = null,
-        LspServerRegistry? lspRegistry = null)
+        LspServerRegistry? lspRegistry = null, EditorCommandRegistry? commandRegistry = null,
+        IServiceProvider? services = null)
     {
         _bufferManager = bufferManager;
         _options = options;
@@ -70,11 +74,27 @@ public class ExCommandProcessor
             functions ?? new Dictionary<string, VimFunctionDefinition>(StringComparer.OrdinalIgnoreCase),
             Execute, ExecuteNoHistory);
         _registerMarkCommands = new ExCommands.RegisterMarkCommands(bufferManager, markManager, registerManager, _rangeResolver);
+        _commandRegistry = commandRegistry ?? EditorCommandRegistry.Default;
+        _services = services;
     }
 
     public string? LastCommand => _history.Count > 0 ? _history[0] : null;
     public IReadOnlyList<string> CommandHistory => _history.AsReadOnly();
     public IReadOnlyList<string> SearchHistory  => _searchHistory.AsReadOnly();
+    public EditorCommandRegistry CommandRegistry => _commandRegistry;
+
+    /// <summary>
+    /// Executes a host-registered command, including asynchronous registrations, from a raw Ex line.
+    /// Range and command parsing is identical to <see cref="Execute"/>; built-in or unknown commands return null.
+    /// </summary>
+    public ValueTask<EditorCommandResult?> ExecuteExtensionAsync(string rawCommand, CursorPosition cursor,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rawCommand);
+        var (command, range) = ParseExtensionCommand(rawCommand);
+        if (command.Length == 0) return ValueTask.FromResult<EditorCommandResult?>(null);
+        return _commandRegistry.ExecuteParsedAsync(command, rawCommand, range, cursor, _services, cancellationToken);
+    }
 
     public IReadOnlyDictionary<int, string> GetSubstitutePreview(string cmdLine, CursorPosition cursor)
     {
@@ -193,6 +213,7 @@ public class ExCommandProcessor
 
     public ExResult Execute(string cmdLine, CursorPosition cursor)
     {
+        var rawCommand = cmdLine;
         if (_suppressHistory == 0)
             AddHistory(cmdLine);
         var cmd = cmdLine.Trim();
@@ -200,9 +221,9 @@ public class ExCommandProcessor
 
         // Range prefix: %, number, ., or a mark reference ('x), and combinations
         // thereof separated by a comma (e.g. '<,'>  'a,'b  'a,5  .,'b).
-        TryScanRangePrefix(cmd, out string range, out int cmdStart);
-
-        cmd = cmd[cmdStart..].Trim();
+        var parsed = ParseExtensionCommand(cmdLine);
+        cmd = parsed.Command;
+        var range = parsed.Range;
 
         // :q/:quit/:wq/:w/:write/:e/:edit — see ExCommands/FileOpsCommands.cs
         if (_fileOpsCommands.TryHandle(cmd, out var fileOpsResult))
@@ -647,7 +668,17 @@ public class ExCommandProcessor
         if (_registerMarkCommands.TryHandle(cmd, range, cursor, out var registerMarkResult))
             return registerMarkResult;
 
+        if (_commandRegistry.TryExecuteSynchronously(cmd, rawCommand, range, cursor, _services, out var extensionResult))
+            return extensionResult;
         return new ExResult(false, $"Not an editor command: {cmd}");
+    }
+
+    private static (string Command, string Range) ParseExtensionCommand(string rawCommand)
+    {
+        var command = rawCommand.Trim();
+        if (command.Length == 0) return ("", "");
+        TryScanRangePrefix(command, out var range, out var commandStart);
+        return (command[commandStart..].Trim(), range);
     }
 
     private ExResult ExecuteUndoCommand(string argument, CursorPosition cursor)
