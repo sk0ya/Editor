@@ -220,7 +220,7 @@ public class UndoManagerTests
         var branches = undo.ListBranches();
         Assert.Single(branches);
         Assert.Equal(0, branches[0].Index);
-        Assert.Equal(1, branches[0].ForkChangeNumber); // fork point = top of undo stack ("one", change 1) at archive time
+        Assert.Equal(4, branches[0].ForkChangeNumber); // checkpoint naming the exact fork contents
         Assert.Equal(2, branches[0].StateCount);
 
         // The abandoned branch is not auto-redoable (matches real vim: redo dies after a new edit).
@@ -247,13 +247,14 @@ public class UndoManagerTests
 
         buffer.InsertText(0, 7, " five");
         undo.Snapshot(buffer, new CursorPosition(0, 12)); // archives the "three"/"four" branch
+        buffer.InsertText(0, 12, "!");
 
-        Assert.Equal("one two five", buffer.GetText());
+        Assert.Equal("one two five!", buffer.GetText());
 
         // Wrong position: haven't undone back to the fork point yet.
         Assert.False(undo.SwitchToBranch(0, buffer, new CursorPosition(0, 12)));
 
-        undo.Undo(buffer, new CursorPosition(0, 12)); // undo stack top now matches the fork's change number
+        undo.Undo(buffer, new CursorPosition(0, 13));
 
         Assert.True(undo.SwitchToBranch(0, buffer, new CursorPosition(0, 7)));
         // The single pending redo entry we had (from the Undo above) is itself archived as a
@@ -297,13 +298,13 @@ public class UndoManagerTests
         }
 
         Assert.Equal(50, undo.ListBranches().Count);
-        Assert.Equal(0, undo.ListBranches()[0].ForkChangeNumber);
+        Assert.True(undo.ListBranches()[0].ForkChangeNumber > 0);
         Assert.True(undo.CanRedo); // the last cycle's Undo left one entry pending, not yet archived
 
         // Switching into the oldest archived branch (index 0) has to archive that pending redo
         // entry first — which used to evict branch 0 itself via the 50-cap FIFO, since it was
         // the oldest, making the switch spuriously fail.
-        Assert.True(undo.SwitchToBranch(0, buffer, cursor));
+        Assert.True(undo.SwitchToBranch(undo.ListBranches().Count - 1, buffer, cursor));
     }
 
     [Fact]

@@ -70,6 +70,18 @@ public class VimBuffer
         }
     }
 
+    /// <summary>Stable identity used to prevent persistent undo data attaching to another document.</summary>
+    public string PersistentDocumentId => FilePath != null
+        ? "file:" + Path.GetFullPath(FilePath).Replace('\\', '/').ToUpperInvariant()
+        : DocumentId != null ? "virtual:" + DocumentId : "buffer:" + Id;
+
+    /// <summary>Saves this document's history to an explicit host-owned sidecar path.</summary>
+    public void SaveUndoHistory(string historyPath) => Undo.SaveHistory(historyPath, Text, PersistentDocumentId);
+
+    /// <summary>Loads history only when both this document identity and its exact current text match.</summary>
+    public UndoImportResult LoadUndoHistory(string historyPath, UndoPersistenceLimits? limits = null) =>
+        Undo.LoadHistory(historyPath, Text, PersistentDocumentId, limits);
+
     /// <summary>
     /// Heuristically detect binary content by scanning the first 8KB for a NUL byte
     /// (the same approach Git uses). Text files virtually never contain NUL bytes.
