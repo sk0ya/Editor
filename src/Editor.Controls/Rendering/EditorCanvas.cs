@@ -2456,11 +2456,14 @@ public partial class EditorCanvas : FrameworkElement
     /// <summary>Convert a visual X pixel offset to a character index in <paramref name="line"/>.</summary>
     private int VisualXToCol(string line, double visualX)
     {
-        for (int i = 0; i < line.Length; i++)
+        int i = 0;
+        while (i < line.Length)
         {
+            int next = GraphemeCluster.NextBoundary(line, i, 1);
             double left = GetVisualX(line, i);
-            double right = GetVisualX(line, i + 1);
+            double right = GetVisualX(line, next);
             if ((left + right) / 2 >= visualX) return i;
+            i = next;
         }
         return line.Length;
     }
