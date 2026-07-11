@@ -36,16 +36,5 @@ public class EditorCanvasVerticalColumnTests
     }
 
     private static void RunSta(Action action)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try { action(); }
-            catch (Exception ex) { failure = ex; }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (failure != null) throw failure;
-    }
+        => WpfTestHost.Run(action);
 }
