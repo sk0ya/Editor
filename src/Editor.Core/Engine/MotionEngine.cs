@@ -243,16 +243,16 @@ public class MotionEngine
     private Motion LastNonBlank(CursorPosition cursor)
     {
         var line = _buffer.GetLine(cursor.Line);
-        int col = line.Length - 1;
-        while (col > 0 && char.IsWhiteSpace(line[col])) col--;
+        int col = GraphemeCluster.PrevBoundary(line, line.Length, 1);
+        while (col > 0 && char.IsWhiteSpace(line[col])) col = GraphemeCluster.PrevBoundary(line, col, 1);
         return new Motion(cursor with { Column = Math.Max(0, col) }, MotionType.Inclusive);
     }
 
     private Motion EndOfLine(CursorPosition cursor, int lineOffset)
     {
         var lineNum = Math.Min(_buffer.LineCount - 1, cursor.Line + lineOffset);
-        var lineLen = _buffer.GetLineLength(lineNum);
-        var col = Math.Max(0, lineLen - 1);
+        var line = _buffer.GetLine(lineNum);
+        var col = GraphemeCluster.PrevBoundary(line, line.Length, 1);
         return new Motion(new CursorPosition(lineNum, col), MotionType.Inclusive);
     }
 

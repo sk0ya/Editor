@@ -76,4 +76,27 @@ public class GraphemeClusterMotionTests
 
         Assert.Equal("ab", engine.CurrentBuffer.Text.GetText());
     }
+
+    [Fact]
+    public void Dollar_OnLineEndingInEmoji_LandsOnClusterStartNotMidCluster()
+    {
+        // "a" + 🖼️ (no trailing char) — the emoji is the last thing on the line.
+        var engine = CreateEngine("a" + Pic);
+        engine.ProcessKey("$");
+
+        // Must land at the start of the 3-unit cluster (col 1), not col 3 (the last
+        // raw UTF-16 unit, which sits mid-cluster on the variation selector and made
+        // the cursor render at zero width / invisible).
+        Assert.Equal(new CursorPosition(0, 1), engine.Cursor);
+    }
+
+    [Fact]
+    public void GUnderscore_OnLineEndingInEmoji_LandsOnClusterStartNotMidCluster()
+    {
+        var engine = CreateEngine("a" + Pic + "  ");
+        engine.ProcessKey("g");
+        engine.ProcessKey("_");
+
+        Assert.Equal(new CursorPosition(0, 1), engine.Cursor);
+    }
 }

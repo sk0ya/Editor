@@ -3088,8 +3088,8 @@ public class VimEngine
     private void GoToLineEnd(bool insertMode, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
-        var len = buf.GetLineLength(_cursor.Line);
-        var col = insertMode ? len : Math.Max(0, len - 1);
+        var line = buf.GetLine(_cursor.Line);
+        var col = insertMode ? line.Length : GraphemeCluster.PrevBoundary(line, line.Length, 1);
         _cursor = _cursor with { Column = col };
         SetPreferredColumn(int.MaxValue);
         EmitCursor(events);
