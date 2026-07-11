@@ -575,6 +575,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     }
 
     public VimEngine Engine => _engine;
+    /// <summary>LSP-only diagnostics. Prefer <see cref="EffectiveDiagnostics"/> for host integration.</summary>
+    [Obsolete("This property exposes Editor.Core LSP types and excludes host diagnostics. Use EffectiveDiagnostics.")]
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => _lspManager.CurrentDiagnostics;
     public double VerticalScrollRatio
     {
@@ -732,7 +734,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void OnLspStateChanged()
     {
-        Canvas.SetDiagnostics(_lspManager.CurrentDiagnostics);
+        RefreshCombinedDiagnostics();
         if (!_pathCompletionManager.Visible)
             Canvas.SetCompletionItems(_lspManager.CompletionItems, _lspManager.CompletionSelection, _lspManager.CompletionScrollOffset);
         Canvas.SetSignatureHelp(_lspManager.CurrentSignatureHelp);
@@ -5406,12 +5408,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                     QuickfixCloseRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 case VimEventType.QuickfixNextRequested when evt is QuickfixNextEvent qne:
+                    NavigateHostQuickfix(qne.Count);
                     QuickfixNextRequested?.Invoke(this, qne.Count);
                     break;
                 case VimEventType.QuickfixPrevRequested when evt is QuickfixPrevEvent qpe:
+                    NavigateHostQuickfix(-qpe.Count);
                     QuickfixPrevRequested?.Invoke(this, qpe.Count);
                     break;
                 case VimEventType.QuickfixGotoRequested when evt is QuickfixGotoEvent qge:
+                    GotoHostQuickfix(qge.Index);
                     QuickfixGotoRequested?.Invoke(this, qge.Index);
                     break;
                 case VimEventType.LocationListOpenRequested:
