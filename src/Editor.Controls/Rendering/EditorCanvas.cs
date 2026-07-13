@@ -2401,6 +2401,26 @@ public partial class EditorCanvas : FrameworkElement
         return new Point(Math.Max(gutterWidth, x), y);
     }
 
+    /// <summary>
+    /// Caret pixel position including the in-flight IME composition offset, so the native
+    /// candidate window anchors under the converting clause (the caret the user sees) rather
+    /// than the composition's start column. Falls back to <see cref="GetCursorPixelPosition"/>
+    /// when no composition is active.
+    /// </summary>
+    public Point GetImeCaretPixelPosition()
+    {
+        var p = GetCursorPixelPosition();
+        if (string.IsNullOrEmpty(_imeCompositionText)) return p;
+
+        int caretChars = _imeCompositionCursor < 0
+            ? _imeCompositionText.Length
+            : Math.Clamp(_imeCompositionCursor, 0, _imeCompositionText.Length);
+        if (caretChars <= 0) return p;
+
+        double advance = FormatText(_imeCompositionText[..caretChars], Theme.Foreground).Width;
+        return new Point(p.X + advance, p.Y);
+    }
+
     // ─────────────── Character width helpers ───────────────
 
     /// <summary>

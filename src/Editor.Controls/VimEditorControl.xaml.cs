@@ -729,12 +729,14 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             SyncViewportState();
             UpdateViewportDecorations();
             HideDataTip();
+            NotifyImeLayoutChanged();
             ViewportScrolled?.Invoke(this, EventArgs.Empty);
         };
         Canvas.SizeChanged += (_, _) =>
         {
             SyncViewportState();
             UpdateViewportDecorations();
+            NotifyImeLayoutChanged();
         };
 
         ApplyTheme();
@@ -3261,6 +3263,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         CancelScheduledImeCompositionOverlayClear();
         _lastImeCompositionText = text;
         Canvas.SetImeCompositionText(_lastImeCompositionText, caret);
+        // The caret advanced with the composition (or a clause-caret move that changes no
+        // text); re-anchor the native candidate window to the new on-screen position.
+        NotifyImeLayoutChanged();
     }
 
     void Editor.Controls.Ime.IEditorTextStoreHost.OnCompositionCommitted(string text)
@@ -3278,13 +3283,25 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         ScheduleImeCompositionOverlayClear();
     }
 
+    /// <summary>
+    /// Re-anchors the native IME candidate window while a composition is active. The custom
+    /// TSF store positions that window from <see cref="IEditorTextStoreHost.TryGetCaretScreenRect"/>,
+    /// which TSF only re-queries after an OnLayoutChange — so a scroll or resize mid-composition
+    /// would otherwise leave the candidate list stranded (or hidden if the caret scrolled away).
+    /// </summary>
+    private void NotifyImeLayoutChanged()
+    {
+        if (_customTextStoreActive && _customTextStore is { IsComposing: true } store)
+            store.NotifyLayoutChange();
+    }
+
     bool Editor.Controls.Ime.IEditorTextStoreHost.TryGetCaretScreenRect(out int left, out int top, out int right, out int bottom)
     {
         left = top = right = bottom = 0;
         try
         {
             if (Canvas.ActualWidth <= 0 || Canvas.ActualHeight <= 0) return false;
-            var p = Canvas.GetCursorPixelPosition();
+            var p = Canvas.GetImeCaretPixelPosition();
             var topPt = Canvas.PointToScreen(p);
             var botPt = Canvas.PointToScreen(new Point(p.X, p.Y + Canvas.LineHeight));
             left = (int)topPt.X;

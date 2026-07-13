@@ -31,6 +31,12 @@ internal sealed class EditorTextStore : ITextStoreACP, ITfContextOwnerCompositio
     private uint _lockType;          // 0 | TS_LF_READ | TS_LF_READWRITE bits
     private uint _pendingLockType;   // one coalesced asynchronous request; write wins
     private bool _composing;
+
+    // Last caret rect GetTextExt reported successfully (screen coords). Reused when a
+    // live query transiently fails so the IME keeps a valid anchor for its candidate
+    // window instead of hiding it; NotifyLayoutChange re-queries once layout is back.
+    private TS_RECT _lastCaretRect;
+    private bool _haveCaretRect;
     private int _pendingResetOldLength;
     private bool _resetNotificationScheduled;
     private readonly Action<Action> _schedule;
@@ -289,9 +295,39 @@ internal sealed class EditorTextStore : ITextStoreACP, ITfContextOwnerCompositio
         prc = default;
         pfClipped = false;
         if (_lockType == 0) return TsfHr.TS_E_NOLOCK;
-        if (!_host.TryGetCaretScreenRect(out int l, out int t, out int r, out int b)) return TsfHr.TS_E_NOLAYOUT;
-        prc = new TS_RECT { left = l, top = t, right = r, bottom = b };
+
+        if (_host.TryGetCaretScreenRect(out int l, out int t, out int r, out int b))
+        {
+            _lastCaretRect = new TS_RECT { left = l, top = t, right = r, bottom = b };
+            _haveCaretRect = true;
+        }
+        // A transient layout gap (control mid-relayout / not yet arranged) makes the live
+        // query fail. Returning TS_E_NOLAYOUT here makes TSF hide the candidate window and
+        // wait for OnLayoutChange, so fall back to the last good rect and keep it visible;
+        // NotifyLayoutChange drives the eventual re-query with the corrected position.
+        else if (!_haveCaretRect) return TsfHr.TS_E_NOLAYOUT;
+
+        prc = _lastCaretRect;
         return TsfHr.S_OK;
+    }
+
+    /// <summary>True while an IME composition is in flight (a candidate window may exist).</summary>
+    public bool IsComposing => _composing;
+
+    /// <summary>
+    /// Tells TSF the on-screen position of the store's text changed for a reason other than an
+    /// edit — the editor scrolled, resized, or the caret moved. Without this the IME leaves its
+    /// candidate/composition window at a stale position, and — critically — if a prior
+    /// <see cref="GetTextExt"/> returned <c>TS_E_NOLAYOUT</c>, keeps it hidden for the rest of the
+    /// composition. Sink notifications are forbidden while we service a document lock, so defer
+    /// until the lock unwinds in that case.
+    /// </summary>
+    public void NotifyLayoutChange()
+    {
+        if (_sink == null) return;
+        if (_lockType != 0) { _schedule(NotifyLayoutChange); return; }
+        try { _sink.OnLayoutChange(TsfConst.TS_LC_CHANGE, TsfConst.TEXT_STORE_VIEW); }
+        catch { /* layout-change notification is best-effort */ }
     }
 
     public int GetScreenExt(uint vcView, out TS_RECT prc)
