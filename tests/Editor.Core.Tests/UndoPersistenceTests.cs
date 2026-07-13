@@ -4,6 +4,9 @@ using Editor.Core.Models;
 
 namespace Editor.Core.Tests;
 
+// These tests deliberately exercise the [Obsolete] unbound Export/Import/Save/LoadHistory
+// overloads to keep that code path covered while it exists; suppress CS0618 for the file.
+#pragma warning disable CS0618
 public class UndoPersistenceTests
 {
     [Fact]
@@ -221,3 +224,4 @@ public class UndoPersistenceTests
         Assert.Empty(target.GetHistory());
     }
 }
+#pragma warning restore CS0618

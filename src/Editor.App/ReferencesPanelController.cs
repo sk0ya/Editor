@@ -506,17 +506,17 @@ internal sealed class ReferencesPanelController
         var fileName = string.IsNullOrEmpty(filePath) ? "[No Name]" : Path.GetFileName(filePath);
         var bufferKey = GetLocationListKey(editor);
 
-        return editor.CurrentDiagnostics
+        return editor.EffectiveDiagnostics
             .OrderBy(d => d.Range.Start.Line)
-            .ThenBy(d => d.Range.Start.Character)
+            .ThenBy(d => d.Range.Start.Column)
             .Select(d => new ReferenceListItem
             {
                 FilePath = filePath,
                 FileName = fileName,
-                LineCol = $":{d.Range.Start.Line + 1}:{d.Range.Start.Character + 1}",
+                LineCol = $":{d.Range.Start.Line + 1}:{d.Range.Start.Column + 1}",
                 Preview = $"{d.Severity}: {d.Message}",
                 Line = d.Range.Start.Line,
-                Col = d.Range.Start.Character,
+                Col = d.Range.Start.Column,
                 CurrentBufferOnly = true,
                 BufferKey = bufferKey,
             })
