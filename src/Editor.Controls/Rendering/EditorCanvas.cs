@@ -94,6 +94,14 @@ public partial class EditorCanvas : FrameworkElement
     private bool _markdownTableAlignEnabled;
     private Dictionary<int, Dictionary<int, double>> _tableColumnOverrides = [];
     private Dictionary<int, double>? _activeLineOverrides;
+    // The detected table blocks for the current text (kept so the cursor's enclosing table can be
+    // found without re-scanning on every cursor/mode change).
+    private IReadOnlyList<Editor.Core.Editing.MarkdownTableLayout.TableBlock> _tableBlocks = [];
+    // While editing (Insert/Replace mode, which also covers the Vim-disabled resting state), the
+    // whole table the cursor sits in is shown raw/unaligned. This is that block's line range, or
+    // [-1,-1] when no table is being edited. See SetActiveLine for why.
+    private int _suppressedTableStart = -1;
+    private int _suppressedTableEnd = -1;
 
     // Folds
     private int[] _visibleLineMap = [];
@@ -348,10 +356,10 @@ public partial class EditorCanvas : FrameworkElement
         set { if (_isActive == value) return; _isActive = value; InvalidateVisual(); }
     }
 
-    public void SetCursor(CursorPosition cursor) { if (_cursor == cursor) return; _cursor = cursor; EnsureCursorVisible(); InvalidateVisual(); EditorCanvasAutomationPeer.NotifySelectionChanged(this); }
+    public void SetCursor(CursorPosition cursor) { if (_cursor == cursor) return; _cursor = cursor; UpdateSuppressedTableRange(); EnsureCursorVisible(); InvalidateVisual(); EditorCanvasAutomationPeer.NotifySelectionChanged(this); }
     public void SetExtraCursors(IReadOnlyList<(int Line, int Col)> cursors) { _extraCursors = cursors; InvalidateVisual(); }
     public void SetSelection(Selection? sel) { if (_selection == sel) return; _selection = sel; InvalidateVisual(); EditorCanvasAutomationPeer.NotifySelectionChanged(this); }
-    public void SetMode(VimMode mode) { _mode = mode; InvalidateVisual(); }
+    public void SetMode(VimMode mode) { _mode = mode; UpdateSuppressedTableRange(); InvalidateVisual(); }
 
     public void SetFolds(int[] visibleLineMap, IEnumerable<int> closedFoldStarts, IEnumerable<int> openFoldStarts)
     {
@@ -2429,10 +2437,46 @@ public partial class EditorCanvas : FrameworkElement
     }
 
     /// <summary>Must be called before any GetVisualX/VisualXToCol/CharW(char,int) use for a given buffer line.</summary>
-    private void SetActiveLine(int lineIndex) =>
+    private void SetActiveLine(int lineIndex)
+    {
+        // While editing inside a table, the whole table is shown raw (unaligned). Table alignment
+        // is recomputed on every edit, and while an IME is composing the edited line's overrides
+        // are dropped entirely (the composition text is spliced in and shifts columns) — so an
+        // aligned table would flip between raw-while-composing and stretched-on-commit on every
+        // keystroke, which reads as the alignment "running or not running". Suppressing the entire
+        // enclosing table (not just the caret row) keeps every column stable while you edit any
+        // cell, and re-aligns in one step when insert mode is left. The suppressed range is only
+        // set in Insert/Replace mode (which also covers the Vim-disabled resting state); Normal-mode
+        // viewing/navigation keeps the table aligned.
+        if (_suppressedTableStart >= 0 && lineIndex >= _suppressedTableStart && lineIndex <= _suppressedTableEnd)
+        {
+            _activeLineOverrides = null;
+            return;
+        }
         _activeLineOverrides = _tableColumnOverrides.Count > 0 && _tableColumnOverrides.TryGetValue(lineIndex, out var ov)
             ? ov
             : null;
+    }
+
+    /// <summary>
+    /// Recomputes <see cref="_suppressedTableStart"/>/<see cref="_suppressedTableEnd"/>: the line
+    /// range of the table the cursor is currently editing, or [-1,-1] when the cursor is not inside
+    /// a table in an editing mode. Cheap — scans the already-detected <see cref="_tableBlocks"/>.
+    /// </summary>
+    private void UpdateSuppressedTableRange()
+    {
+        _suppressedTableStart = _suppressedTableEnd = -1;
+        if (_mode is not (VimMode.Insert or VimMode.Replace)) return;
+        foreach (var block in _tableBlocks)
+        {
+            if (_cursor.Line >= block.StartLine && _cursor.Line <= block.EndLine)
+            {
+                _suppressedTableStart = block.StartLine;
+                _suppressedTableEnd = block.EndLine;
+                return;
+            }
+        }
+    }
 
     /// <summary>Visual X offset (in pixels) for character index <paramref name="col"/> in <paramref name="line"/>.</summary>
     private double GetVisualX(string line, int col)
@@ -2485,10 +2529,13 @@ public partial class EditorCanvas : FrameworkElement
         if (!_markdownTableAlignEnabled)
         {
             _tableColumnOverrides = [];
+            _tableBlocks = [];
+            UpdateSuppressedTableRange();
             return;
         }
         MeasureChar();
         _tableColumnOverrides = ComputeTableColumnOverrides(_lines);
+        UpdateSuppressedTableRange();
     }
 
     /// <summary>
@@ -2503,9 +2550,10 @@ public partial class EditorCanvas : FrameworkElement
     private Dictionary<int, Dictionary<int, double>> ComputeTableColumnOverrides(string[] lines)
     {
         var result = new Dictionary<int, Dictionary<int, double>>();
-        if (lines.Length == 0) return result;
+        if (lines.Length == 0) { _tableBlocks = []; return result; }
 
         var blocks = Editor.Core.Editing.MarkdownTableLayout.FindBlocks(lines);
+        _tableBlocks = blocks;
         if (blocks.Count == 0) return result;
 
         foreach (var block in blocks)
