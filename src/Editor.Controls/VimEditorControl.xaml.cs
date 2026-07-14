@@ -991,8 +991,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             TextCompositionManager.AddPreviewTextInputStartHandler(this, OnPreviewTextInputStart);
             TextCompositionManager.AddPreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
         }
-        if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
-            hwndSource.AddHook(ImeWndProc);
+        AttachImeWindowHook();
         // LSP: notify for files already loaded before Loaded fired (e.g. command-line arg).
         // Guard against double-open: LoadFile already called OnFileOpened if the
         // file was opened after the control was constructed.
@@ -1005,6 +1004,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        DetachImeWindowHook();
         TextCompositionManager.RemovePreviewTextInputStartHandler(this, OnPreviewTextInputStart);
         TextCompositionManager.RemovePreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
         ClearImeCompositionOverlay();
@@ -1013,8 +1013,6 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         DetachTsfUiElementSink();
         DetachTsfTextEditSink();
         DisposeCustomTextStore();
-        if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
-            hwndSource.RemoveHook(ImeWndProc);
         _completionDebounce.Stop();
         // NOTE: the LSP client (language-server processes) and the file watcher are deliberately
         // NOT torn down here. Unloaded fires on every detach from the visual tree — including the
@@ -1024,6 +1022,30 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     }
 
     private bool _disposed;
+    // Keep the exact source used by AddHook. At Unloaded time the control may already be
+    // detached, so PresentationSource.FromVisual(this) can be null even though the hook is
+    // still registered on the host HWND. This is common in hosts that reparent editors.
+    private HwndSource? _imeHookSource;
+
+    private void AttachImeWindowHook()
+    {
+        if (PresentationSource.FromVisual(this) is not HwndSource source)
+            return;
+        if (ReferenceEquals(_imeHookSource, source))
+            return;
+
+        DetachImeWindowHook();
+        source.AddHook(ImeWndProc);
+        _imeHookSource = source;
+    }
+
+    private void DetachImeWindowHook()
+    {
+        if (_imeHookSource is not { } source)
+            return;
+        source.RemoveHook(ImeWndProc);
+        _imeHookSource = null;
+    }
 
     /// <summary>
     /// Releases resources that must outlive a transient detach from the visual tree: the LSP
@@ -1036,6 +1058,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         if (_disposed) return;
         _disposed = true;
+        DetachImeWindowHook();
         _completionDebounce.Stop();
         _imeOverlayClearTimer?.Stop();
         _lspManager.Dispose();
