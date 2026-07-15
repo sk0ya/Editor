@@ -10,12 +10,17 @@ namespace Editor.Core.Engine.ExCommands;
 /// </summary>
 public class LspCommands(LspServerRegistry lspRegistry)
 {
-    public bool TryHandle(string cmd, out ExResult result)
+    /// <param name="formatRange">
+    /// Resolved 0-based inclusive line range of the ex range prefix, or null when the command had none.
+    /// Only <c>:Format</c> uses it — `:'&lt;,'&gt;Format` formats just the selected lines.
+    /// </param>
+    public bool TryHandle(string cmd, out ExResult result, (int Start, int End)? formatRange = null)
     {
-        // :Format — format document via LSP
+        // :Format / :{range}Format — format the document (or just the range) via LSP
         if (cmd is "Format" or "format")
         {
-            result = new ExResult(true, null, VimEvent.FormatDocumentRequested());
+            result = new ExResult(true, null,
+                VimEvent.FormatDocumentRequested(formatRange?.Start, formatRange?.End));
             return true;
         }
 

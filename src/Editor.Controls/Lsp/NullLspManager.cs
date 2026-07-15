@@ -18,6 +18,7 @@ internal sealed class NullLspManager : IEditorLspManager
     public bool IsConnected => false;
     public bool IsDocumentReady => false;
     public bool ServerSupportsFoldingRange => false;
+    public bool ServerSupportsRangeFormatting => false;
     public bool ServerSupportsWorkspaceDiagnostics => false;
     public string? CurrentUri => null;
 
@@ -88,6 +89,9 @@ internal sealed class NullLspManager : IEditorLspManager
     }
 
     public Task<IReadOnlyList<LspTextEdit>> RequestFormattingAsync(int tabSize = 4, bool insertSpaces = true) =>
+        Task.FromResult<IReadOnlyList<LspTextEdit>>([]);
+
+    public Task<IReadOnlyList<LspTextEdit>> RequestRangeFormattingAsync(LspRange range, int tabSize = 4, bool insertSpaces = true) =>
         Task.FromResult<IReadOnlyList<LspTextEdit>>([]);
 
     public IReadOnlyList<DocumentSymbol> GetDocumentSymbols() => [];

@@ -31,6 +31,66 @@ public class ExCommandProcessorTests
     }
 
     [Fact]
+    public void Format_WithoutRange_RequestsWholeDocument()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("a\nb\nc\nd\ne");
+
+        var result = processor.Execute("Format", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<FormatDocumentRequestedEvent>(result.Event);
+        Assert.Null(evt.StartLine);
+        Assert.Null(evt.EndLine);
+    }
+
+    [Fact]
+    public void Format_WithLineRange_RequestsOnlyThoseLines()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("a\nb\nc\nd\ne");
+
+        var result = processor.Execute("2,4Format", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<FormatDocumentRequestedEvent>(result.Event);
+        Assert.Equal(1, evt.StartLine);
+        Assert.Equal(3, evt.EndLine);
+    }
+
+    [Fact]
+    public void Format_WithVisualRange_RequestsSelectedLines()
+    {
+        var buffers = new BufferManager();
+        buffers.Current.Text.SetText("a\nb\nc\nd\ne");
+        var marks = new MarkManager();
+        marks.SetMark('<', new CursorPosition(1, 0));
+        marks.SetMark('>', new CursorPosition(3, 0));
+        var processor = new ExCommandProcessor(buffers, new VimOptions(), marks);
+
+        var result = processor.Execute("'<,'>Format", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<FormatDocumentRequestedEvent>(result.Event);
+        Assert.Equal(1, evt.StartLine);
+        Assert.Equal(3, evt.EndLine);
+    }
+
+    [Fact]
+    public void Format_WithPercentRange_RequestsEveryLine()
+    {
+        var (processor, buffers) = CreateProcessor();
+        buffers.Current.Text.SetText("a\nb\nc\nd\ne");
+
+        var result = processor.Execute("%Format", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        var evt = Assert.IsType<FormatDocumentRequestedEvent>(result.Event);
+        Assert.Equal(0, evt.StartLine);
+        Assert.Equal(4, evt.EndLine);
+    }
+
+    [Fact]
     public void QuitAlias_ProducesWindowCloseRequestedEvent()
     {
         var (processor, _) = CreateProcessor();

@@ -85,6 +85,9 @@ public sealed class LspManager : IEditorLspManager
     /// <summary>現在のサーバーが textDocument/foldingRange をサポートしているか。</summary>
     public bool ServerSupportsFoldingRange => _currentClient?.SupportsFoldingRange == true;
 
+    /// <summary>現在のサーバーが textDocument/rangeFormatting をサポートしているか。</summary>
+    public bool ServerSupportsRangeFormatting => _currentClient?.SupportsRangeFormatting == true;
+
     /// <summary>現在のサーバーが workspace/diagnostic をサポートしているか。</summary>
     public bool ServerSupportsWorkspaceDiagnostics => _currentClient?.SupportsWorkspaceDiagnostics == true;
 
@@ -473,6 +476,14 @@ public sealed class LspManager : IEditorLspManager
     {
         if (_currentClient?.IsRunning != true || _currentUri == null || !_documentReady) return [];
         return await _currentClient.GetFormattingEditsAsync(_currentUri, tabSize, insertSpaces);
+    }
+
+    /// <summary>Request formatting edits for just <paramref name="range"/> of the current document.</summary>
+    public async Task<IReadOnlyList<LspTextEdit>> RequestRangeFormattingAsync(LspRange range, int tabSize = 4, bool insertSpaces = true)
+    {
+        if (_currentClient?.IsRunning != true || _currentUri == null || !_documentReady) return [];
+        if (!_currentClient.SupportsRangeFormatting) return [];
+        return await _currentClient.GetRangeFormattingEditsAsync(_currentUri, range, tabSize, insertSpaces);
     }
 
     /// <summary>Returns the current cached document symbols for the active file.</summary>

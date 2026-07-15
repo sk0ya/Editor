@@ -883,6 +883,41 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VisualMode_ColonFormat_RequestsOnlySelectedLines()
+    {
+        var engine = CreateEngine("a\nb\nc\nd");
+        engine.ProcessKey("j");
+        engine.ProcessKey("V");
+        engine.ProcessKey("j");
+
+        engine.ProcessKey(":");
+        foreach (var ch in "Format")
+            engine.ProcessKey(ch.ToString());
+        var events = engine.ProcessKey("Return");
+
+        var evt = Assert.IsType<FormatDocumentRequestedEvent>(
+            events.Single(e => e.Type == VimEventType.FormatDocumentRequested));
+        Assert.Equal(1, evt.StartLine);
+        Assert.Equal(2, evt.EndLine);
+    }
+
+    [Fact]
+    public void NormalMode_ColonFormat_RequestsWholeDocument()
+    {
+        var engine = CreateEngine("a\nb\nc\nd");
+
+        engine.ProcessKey(":");
+        foreach (var ch in "Format")
+            engine.ProcessKey(ch.ToString());
+        var events = engine.ProcessKey("Return");
+
+        var evt = Assert.IsType<FormatDocumentRequestedEvent>(
+            events.Single(e => e.Type == VimEventType.FormatDocumentRequested));
+        Assert.Null(evt.StartLine);
+        Assert.Null(evt.EndLine);
+    }
+
+    [Fact]
     public void VisualMode_ColonSort_AppliesToSelectedLines()
     {
         var engine = CreateEngine("c\na\nb\nd");

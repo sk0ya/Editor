@@ -145,8 +145,12 @@ public record VimEvent(VimEventType Type)
     public static VimEvent GoToDefinitionRequested() =>
         new(VimEventType.GoToDefinitionRequested);
 
-    public static VimEvent FormatDocumentRequested() =>
-        new(VimEventType.FormatDocumentRequested);
+    /// <summary>
+    /// Request formatting. With no arguments the whole document is formatted; with a line range
+    /// (0-based, inclusive) only those lines are — e.g. `:'&lt;,'&gt;Format` over a visual selection.
+    /// </summary>
+    public static VimEvent FormatDocumentRequested(int? startLine = null, int? endLine = null) =>
+        new FormatDocumentRequestedEvent(startLine, endLine);
 
     public static VimEvent QuickfixOpen() =>
         new(VimEventType.QuickfixOpenRequested);
@@ -297,6 +301,8 @@ public record NextTabRequestedEvent() : VimEvent(VimEventType.NextTabRequested);
 public record PrevTabRequestedEvent() : VimEvent(VimEventType.PrevTabRequested);
 public record CloseTabRequestedEvent(bool Force) : VimEvent(VimEventType.CloseTabRequested);
 public record ViewportAlignRequestedEvent(ViewportAlign Align) : VimEvent(VimEventType.ViewportAlignRequested);
+/// <summary>Format request; <c>StartLine</c>/<c>EndLine</c> are 0-based inclusive, or null for the whole document.</summary>
+public record FormatDocumentRequestedEvent(int? StartLine, int? EndLine) : VimEvent(VimEventType.FormatDocumentRequested);
 public record QuickfixNextEvent(int Count) : VimEvent(VimEventType.QuickfixNextRequested);
 public record QuickfixPrevEvent(int Count) : VimEvent(VimEventType.QuickfixPrevRequested);
 public record QuickfixGotoEvent(int Index) : VimEvent(VimEventType.QuickfixGotoRequested);

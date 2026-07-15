@@ -19,6 +19,7 @@ public interface IEditorLspManager : IDisposable
     bool IsConnected { get; }
     bool IsDocumentReady { get; }
     bool ServerSupportsFoldingRange { get; }
+    bool ServerSupportsRangeFormatting { get; }
     bool ServerSupportsWorkspaceDiagnostics { get; }
     string? CurrentUri { get; }
 
@@ -48,6 +49,9 @@ public interface IEditorLspManager : IDisposable
     void HideCodeActions();
     void MoveCodeActionsSelection(int delta);
     Task<IReadOnlyList<LspTextEdit>> RequestFormattingAsync(int tabSize = 4, bool insertSpaces = true);
+
+    /// <summary>Format only the text covered by <paramref name="range"/> instead of the whole document.</summary>
+    Task<IReadOnlyList<LspTextEdit>> RequestRangeFormattingAsync(LspRange range, int tabSize = 4, bool insertSpaces = true);
     IReadOnlyList<DocumentSymbol> GetDocumentSymbols();
     Task<IReadOnlyList<DocumentSymbol>> RequestDocumentSymbolsAsync();
     string? GetBreadcrumb(int line, int col);

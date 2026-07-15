@@ -329,7 +329,13 @@ public class ExCommandProcessor
             return new ExResult(true, null, VimEvent.CloseTabRequested(true));
 
         // :Format/:Rename/:Symbols/:CallHierarchy/:TypeHierarchy — see ExCommands/LspCommands.cs
-        if (_lspCommands.TryHandle(cmd, out var lspSimpleResult))
+        (int Start, int End)? formatRange = null;
+        if (range.Length > 0 && cmd is "Format" or "format")
+        {
+            var (_, fmtStart, fmtEnd) = ResolveRangeClamped(range, cursor);
+            formatRange = (fmtStart, fmtEnd);
+        }
+        if (_lspCommands.TryHandle(cmd, out var lspSimpleResult, formatRange))
             return lspSimpleResult;
 
         // :Git* commands — see ExCommands/GitCommands.cs

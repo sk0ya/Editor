@@ -13,6 +13,8 @@ public interface ILspClient : IDisposable
     bool SupportsFoldingRange { get; }
     /// <summary>サーバーが workspace/symbol をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsWorkspaceSymbol { get; }
+    /// <summary>サーバーが textDocument/rangeFormatting をサポートしているか。InitializeAsync 後に確定する。</summary>
+    bool SupportsRangeFormatting { get; }
     /// <summary>サーバーが textDocument/semanticTokens/full をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsSemanticTokens { get; }
     /// <summary>サーバーが textDocument/selectionRange をサポートしているか。InitializeAsync 後に確定する。</summary>
@@ -32,6 +34,7 @@ public interface ILspClient : IDisposable
     Task<(string Uri, int Line, int Column)?> GetDefinitionAsync(string uri, LspPosition position, CancellationToken ct = default);
     Task<LspSignatureHelp?> GetSignatureHelpAsync(string uri, LspPosition position, CancellationToken ct = default);
     Task<IReadOnlyList<LspTextEdit>> GetFormattingEditsAsync(string uri, int tabSize, bool insertSpaces, CancellationToken ct = default);
+    Task<IReadOnlyList<LspTextEdit>> GetRangeFormattingEditsAsync(string uri, LspRange range, int tabSize, bool insertSpaces, CancellationToken ct = default);
     Task<LspWorkspaceEdit?> GetRenameAsync(string uri, LspPosition position, string newName, CancellationToken ct = default);
     Task<IReadOnlyList<LspLocation>> GetReferencesAsync(string uri, LspPosition position, bool includeDeclaration = true, CancellationToken ct = default);
     Task<IReadOnlyList<LspFoldingRange>> GetFoldingRangesAsync(string uri, CancellationToken ct = default);

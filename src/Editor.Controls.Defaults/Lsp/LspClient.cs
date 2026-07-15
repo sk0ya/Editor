@@ -12,6 +12,7 @@ public sealed class LspClient : ILspClient
     public bool IsRunning => _process.IsRunning;
     public bool SupportsFoldingRange { get; private set; }
     public bool SupportsWorkspaceSymbol { get; private set; }
+    public bool SupportsRangeFormatting { get; private set; }
     public bool SupportsInlayHint { get; private set; }
     public bool SupportsSemanticTokens { get; private set; }
     public bool SupportsSelectionRange { get; private set; }
@@ -41,6 +42,7 @@ public sealed class LspClient : ILspClient
                     definition = new { },
                     signatureHelp = new { signatureInformation = new { documentationFormat = new[] { "plaintext" } } },
                     formatting = new { },
+                    rangeFormatting = new { },
                     rename = new { },
                     references = new { },
                     foldingRange = new { },
@@ -88,6 +90,8 @@ public sealed class LspClient : ILspClient
                 SupportsFoldingRange = frp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("workspaceSymbolProvider", out var wsp))
                 SupportsWorkspaceSymbol = wsp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            if (caps.TryGetProperty("documentRangeFormattingProvider", out var drf))
+                SupportsRangeFormatting = drf.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("inlayHintProvider", out var ihp))
                 SupportsInlayHint = ihp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("selectionRangeProvider", out var srp))
@@ -259,18 +263,43 @@ public sealed class LspClient : ILspClient
                 options = new { tabSize, insertSpaces }
             }, ct);
 
-            if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
-            var list = new List<LspTextEdit>();
-            foreach (var item in result.Value.EnumerateArray())
-            {
-                if (!item.TryGetProperty("range", out var rangeEl) ||
-                    !item.TryGetProperty("newText", out var textEl)) continue;
-                var range = ParseRange(rangeEl);
-                list.Add(new LspTextEdit(range, textEl.GetString() ?? ""));
-            }
-            return list;
+            return ParseTextEdits(result);
         }
         catch { return []; }
+    }
+
+    public async Task<IReadOnlyList<LspTextEdit>> GetRangeFormattingEditsAsync(
+        string uri, LspRange range, int tabSize, bool insertSpaces, CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/rangeFormatting", new
+            {
+                textDocument = new { uri },
+                range = new
+                {
+                    start = new { line = range.Start.Line, character = range.Start.Character },
+                    end   = new { line = range.End.Line,   character = range.End.Character }
+                },
+                options = new { tabSize, insertSpaces }
+            }, ct);
+
+            return ParseTextEdits(result);
+        }
+        catch { return []; }
+    }
+
+    private static IReadOnlyList<LspTextEdit> ParseTextEdits(JsonElement? result)
+    {
+        if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
+        var list = new List<LspTextEdit>();
+        foreach (var item in result.Value.EnumerateArray())
+        {
+            if (!item.TryGetProperty("range", out var rangeEl) ||
+                !item.TryGetProperty("newText", out var textEl)) continue;
+            list.Add(new LspTextEdit(ParseRange(rangeEl), textEl.GetString() ?? ""));
+        }
+        return list;
     }
 
     public async Task<LspWorkspaceEdit?> GetRenameAsync(

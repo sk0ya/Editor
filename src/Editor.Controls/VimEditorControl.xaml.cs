@@ -2960,6 +2960,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 () => _ = ShowLspHoverAsync()));
             menu.Items.Add(MakeItem("Format Document", ":Format",
                 () => _ = HandleFormatDocumentAsync()));
+            // Capture the selected lines now — invoking the menu item clears the selection.
+            if (_engine.Selection is { IsEmpty: false } fmtSel)
+            {
+                var fmtLines = (fmtSel.NormalizedStart.Line, fmtSel.NormalizedEnd.Line);
+                menu.Items.Add(MakeItem("Format Selection", ":'<,'>Format",
+                    () => _ = HandleFormatDocumentAsync(fmtLines)));
+            }
         }
 
         // ── Host-provided items ──────────────────────────────────
@@ -4372,29 +4379,44 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(filePath, line, col));
     }
 
-    private async Task HandleFormatDocumentAsync()
+    /// <summary>
+    /// Format the buffer, or — when <paramref name="lines"/> is given (0-based, inclusive) — only those lines.
+    /// A range comes from an ex range prefix (`:'&lt;,'&gt;Format` over a visual selection) or the context menu.
+    /// </summary>
+    private async Task HandleFormatDocumentAsync((int Start, int End)? lines = null)
     {
         var filePath = _engine.CurrentBuffer.FilePath;
         var ext = string.IsNullOrEmpty(filePath) ? "" : Path.GetExtension(filePath);
         var original = _engine.CurrentBuffer.Text.GetText();
+        if (lines is { } raw) lines = LineRangeText.Clamp(original, raw.Start, raw.End);
+        var scope = lines is null ? "document" : "selection";
 
         // 1) A configured CLI formatter for this extension wins over LSP.
         var def = FormatterRegistry.Default.GetForExtension(ext);
         if (def is not null)
         {
-            await RunCliFormatterAsync(def, filePath, original, registeredFor: null);
+            await RunCliFormatterAsync(def, filePath, original, registeredFor: null, lines);
             return;
         }
 
-        // 2) Otherwise fall back to the language server's textDocument/formatting.
-        var edits = await _lspManager.RequestFormattingAsync(_engine.Options.TabStop, _engine.Options.ExpandTab);
+        // 2) Otherwise fall back to the language server's textDocument/{range,}Formatting.
+        if (lines is not null && _lspManager.IsConnected && !_lspManager.ServerSupportsRangeFormatting)
+        {
+            // Don't silently widen a selection format into a whole-document one — that rewrites lines
+            // the user never selected. Say so and let them run :Format for the document instead.
+            ActiveStatusBar.UpdateStatus("Format: language server cannot format a range — use :Format for the whole document");
+            return;
+        }
+        var edits = lines is { } r
+            ? await _lspManager.RequestRangeFormattingAsync(ToLspRange(original, r), _engine.Options.TabStop, _engine.Options.ExpandTab)
+            : await _lspManager.RequestFormattingAsync(_engine.Options.TabStop, _engine.Options.ExpandTab);
         if (edits.Count > 0)
         {
             var formatted = ApplyTextEdits(original, edits);
             _engine.SetText(formatted);
             UpdateAll();
             _lspManager.OnTextChanged(formatted);
-            ActiveStatusBar.UpdateStatus("Format: document formatted");
+            ActiveStatusBar.UpdateStatus($"Format: {scope} formatted");
             return;
         }
 
@@ -4409,7 +4431,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         var installed = candidates.FirstOrDefault(c => FormatterRunner.IsOnPath(c.Executable));
         if (installed is not null)
         {
-            await RunCliFormatterAsync(new FormatterDef(installed.Executable, installed.Args), filePath, original, registeredFor: ext);
+            await RunCliFormatterAsync(new FormatterDef(installed.Executable, installed.Args), filePath, original, registeredFor: ext, lines);
             return;
         }
         var names = string.Join(", ", candidates.Select(c => c.Executable));
@@ -4417,9 +4439,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     }
 
     /// <summary>Run a CLI formatter off the UI thread, apply its stdout to the buffer, and (optionally) persist the mapping.</summary>
-    private async Task RunCliFormatterAsync(FormatterDef def, string? filePath, string original, string? registeredFor)
+    private async Task RunCliFormatterAsync(FormatterDef def, string? filePath, string original, string? registeredFor,
+        (int Start, int End)? lines = null)
     {
-        var result = await Task.Run(() => FormatterRunner.Run(def, filePath, original));
+        var indent = lines is { } sel ? LineRangeText.CommonIndent(original, sel.Start, sel.End) : "";
+        var input = lines is { } s
+            ? LineRangeText.Dedent(LineRangeText.Extract(original, s.Start, s.End), indent)
+            : original;
+
+        var result = await Task.Run(() => FormatterRunner.Run(def, filePath, input));
         if (!result.Ok)
         {
             ShowFormatStatus($"Format: {def.Executable} failed — {result.Error}");
@@ -4428,8 +4456,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (registeredFor is not null)
             FormatterRegistry.Default.Set(registeredFor, def);
 
-        var formatted = PreserveEol(original, result.Output ?? "");
+        var output = PreserveEol(input, result.Output ?? "");
+        // A formatter normally emits a trailing newline; keep it out of the splice so a range format
+        // doesn't insert a blank line after the selection.
+        var formatted = lines is { } rr
+            ? LineRangeText.Replace(original, rr.Start, rr.End, LineRangeText.Indent(output.TrimEnd('\r', '\n'), indent))
+            : output;
+
         var where = registeredFor is not null ? $" (registered for {registeredFor})" : "";
+        var scope = lines is null ? "" : " selection";
         if (string.Equals(formatted, original, StringComparison.Ordinal))
         {
             ActiveStatusBar.UpdateStatus($"Format: no changes — {def.Executable}{where}");
@@ -4438,8 +4473,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _engine.SetText(formatted);
         UpdateAll();
         _lspManager.OnTextChanged(formatted);
-        ActiveStatusBar.UpdateStatus($"Format: formatted with {def.Executable}{where}");
+        ActiveStatusBar.UpdateStatus($"Format:{scope} formatted with {def.Executable}{where}");
     }
+
+    /// <summary>The LSP range covering whole lines <paramref name="r"/>.Start..<paramref name="r"/>.End.</summary>
+    private static Editor.Core.Lsp.LspRange ToLspRange(string text, (int Start, int End) r) =>
+        new(new Editor.Core.Lsp.LspPosition(r.Start, 0),
+            new Editor.Core.Lsp.LspPosition(r.End, LineRangeText.LineLength(text, r.End)));
 
     /// <summary>
     /// Surface a "Format: …" status message. The status bar is a single fixed-height line, so a multi-line
@@ -5446,8 +5486,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 case VimEventType.LspHoverRequested:
                     _ = ShowLspHoverAsync();
                     break;
-                case VimEventType.FormatDocumentRequested:
-                    _ = HandleFormatDocumentAsync();
+                case VimEventType.FormatDocumentRequested when evt is FormatDocumentRequestedEvent fde:
+                    _ = HandleFormatDocumentAsync(
+                        fde is { StartLine: { } fs, EndLine: { } fe } ? (fs, fe) : null);
                     break;
                 case VimEventType.QuickfixOpenRequested:
                     QuickfixOpenRequested?.Invoke(this, EventArgs.Empty);
