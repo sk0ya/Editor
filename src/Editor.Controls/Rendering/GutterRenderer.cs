@@ -44,12 +44,11 @@ internal static class GutterRenderer
         {
             bool hovered = hoveredFoldLine == line;
             var indicatorColor = hovered ? theme.Foreground : theme.LineNumberFg;
+            double foldX = blameColWidth + bpColWidth + lineNumWidth;
             if (hovered)
                 dc.DrawRectangle(s_foldHoverBg, null,
-                    new Rect(blameColWidth + bpColWidth + lineNumWidth, y, foldColWidth, metrics.LineHeight));
-            var marker = metrics.FormatText(isClosed ? "▶" : "▼", indicatorColor);
-            double mx = blameColWidth + bpColWidth + lineNumWidth + (foldColWidth - marker.Width) / 2;
-            dc.DrawText(marker, new Point(mx, y + (metrics.LineHeight - marker.Height) / 2));
+                    new Rect(foldX, y, foldColWidth, metrics.LineHeight));
+            DrawFoldChevron(dc, indicatorColor, foldX, y, foldColWidth, metrics.LineHeight, metrics.CharWidth, isClosed, hovered);
         }
 
         if (gitDiff.TryGetValue(line, out var gitState) && gitState != GitLineState.None)
@@ -64,6 +63,54 @@ internal static class GutterRenderer
             if (gitBrush != null)
                 dc.DrawRectangle(gitBrush, null, new Rect(blameColWidth, y, 3, metrics.LineHeight));
         }
+    }
+
+    /// <summary>
+    /// Draws a crisp, font-independent chevron in the fold column: a right-pointing "›" when the
+    /// fold is closed, a downward "⌄" when open. Vector strokes (rounded caps/joins) render sharper
+    /// than the "▶"/"▼" glyphs at any DPI and animate the closed→open rotation implicitly.
+    /// </summary>
+    private static void DrawFoldChevron(
+        DrawingContext dc, Brush color,
+        double foldX, double y, double foldColWidth, double lineHeight, double charWidth,
+        bool closed, bool hovered)
+    {
+        double cx = foldX + foldColWidth / 2;
+        double cy = y + lineHeight / 2;
+        // Arm reach: scaled to the glyph cell but clamped so it never dominates a tall line.
+        double reach = Math.Min(Math.Min(foldColWidth, lineHeight) * 0.30, charWidth * 0.55);
+        double thickness = Math.Max(1.0, charWidth * (hovered ? 0.16 : 0.13));
+
+        var pen = new Pen(color, thickness)
+        {
+            StartLineCap = PenLineCap.Round,
+            EndLineCap = PenLineCap.Round,
+            LineJoin = PenLineJoin.Round,
+        };
+        pen.Freeze();
+
+        var geo = new StreamGeometry();
+        using (var ctx = geo.Open())
+        {
+            if (closed)
+            {
+                // ">" — nudged right a touch so the visual mass sits centered in the cell.
+                double x = cx - reach * 0.35;
+                ctx.BeginFigure(new Point(x - reach * 0.55, cy - reach), false, false);
+                ctx.LineTo(new Point(x + reach * 0.65, cy), true, true);
+                ctx.LineTo(new Point(x - reach * 0.55, cy + reach), true, true);
+            }
+            else
+            {
+                // "v" — nudged down slightly to balance the open state against the line-number baseline.
+                double yc = cy - reach * 0.25;
+                ctx.BeginFigure(new Point(cx - reach, yc - reach * 0.45), false, false);
+                ctx.LineTo(new Point(cx, yc + reach * 0.65), true, true);
+                ctx.LineTo(new Point(cx + reach, yc - reach * 0.45), true, true);
+            }
+        }
+        geo.Freeze();
+        dc.DrawGeometry(null, pen, geo);
     }
 
     /// <summary>The 2px changed-since-save bar flush against the right edge of the gutter.</summary>
