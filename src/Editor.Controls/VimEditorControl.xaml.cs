@@ -2254,10 +2254,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
     }
 
-    /// <summary>Turns off git blame and removes its gutter annotations. Used when the pane's content
-    /// is replaced by something the blame no longer describes (e.g. opening the Git history list from
-    /// a blame click), so stale per-line annotations don't linger over the new content.</summary>
-    public void ClearBlame()
+    /// <summary>Turns off git blame and removes its gutter annotations. Called from <see cref="SetText"/>
+    /// whenever the buffer content is wholesale-replaced, so stale per-line annotations never linger over
+    /// content the blame no longer describes (e.g. injected git-log/diff output).</summary>
+    private void ClearBlame()
     {
         _blameActive = false;
         Canvas.SetBlameLines(null);
@@ -2483,6 +2483,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     public void SetText(string text)
     {
         ClearSelectionRangeState();
+        // Replacing the whole buffer invalidates any git-blame annotations — they describe the old,
+        // per-line content. Clear here (the shared content-swap choke point) so injected content such
+        // as git-log/diff output never lingers under stale blame, regardless of the caller.
+        ClearBlame();
         _engine.SetText(text);
         UpdateAll();
     }

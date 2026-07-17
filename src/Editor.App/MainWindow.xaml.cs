@@ -628,8 +628,7 @@ public partial class MainWindow : Window
         var ft = _tabs.AddFileTabEntry(null);
         _tabs.SelectFileTab(ft, editor);
         ft.UpdateHeader(isModified: false, label: "[Git Log]");
-        editor.SetText(log);
-        editor.ClearBlame(); // the source file's blame no longer describes the history list
+        editor.SetText(log); // SetText clears any stale blame — the log list isn't the blamed file
 
         var line = FindCommitLine(log, commitHash);
         if (line < 0) return;
