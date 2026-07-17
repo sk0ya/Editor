@@ -2254,6 +2254,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
     }
 
+    /// <summary>Turns off git blame and removes its gutter annotations. Used when the pane's content
+    /// is replaced by something the blame no longer describes (e.g. opening the Git history list from
+    /// a blame click), so stale per-line annotations don't linger over the new content.</summary>
+    public void ClearBlame()
+    {
+        _blameActive = false;
+        Canvas.SetBlameLines(null);
+    }
+
     private async void ToggleBlame()
     {
         _blameActive = !_blameActive;
@@ -2449,8 +2458,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         var buf = _engine.CurrentBuffer.Text;
         if (line < 0 || line >= buf.LineCount) return;
         int len = buf.GetLineLength(line);
+        // Anchor at end-of-line, caret at column 0: the whole line is highlighted, but the caret
+        // (what EnsureCursorVisible scrolls to) sits at the start, so the line's leading text — e.g.
+        // the commit hash in a git-log list — stays visible instead of scrolling off the left.
         var events = _engine.SetPlainSelection(
-            new CursorPosition(line, 0), new CursorPosition(line, len));
+            new CursorPosition(line, len), new CursorPosition(line, 0));
         ProcessVimEvents(events);
     }
 
