@@ -1401,107 +1401,135 @@ public partial class EditorCanvas : FrameworkElement
                 GutterRenderer.DrawBlameMargin(dc, Theme, metrics, _blameLines, _hoveredBlameLine, l, y, 0, _blameColWidth, drawNumberAndFold);
 
             dc.PushClip(new RectangleGeometry(new Rect(textLeft, y, Math.Max(0, size.Width - textLeft), _lineHeight)));
+            // A bug in any single overlay must not tear down the whole render pass (which would
+            // crash the host app). Catch per-line, and always Pop the clip so it stays balanced.
+            try
+            {
+                // Selection highlight
+                DrawSelection(dc, l, y, textLeft, lineText);
 
-            // Selection highlight
-            DrawSelection(dc, l, y, textLeft, lineText);
+                // Search highlights
+                DrawSearchHighlights(dc, l, y, textLeft, lineText);
 
-            // Search highlights
-            DrawSearchHighlights(dc, l, y, textLeft, lineText);
+                // Document highlights (LSP)
+                LspOverlayRenderer.DrawDocumentHighlights(dc, Theme, metrics, _documentHighlights, l, y, textLeft, lineText, _scrollOffsetX);
 
-            // Document highlights (LSP)
-            LspOverlayRenderer.DrawDocumentHighlights(dc, Theme, metrics, _documentHighlights, l, y, textLeft, lineText, _scrollOffsetX);
+                // Full-width space / trailing whitespace markers
+                OverlayRenderer.DrawWhitespaceIssues(dc, Theme, metrics, l, y, textLeft, lineText, _scrollOffsetX, _whitespaceIssues);
 
-            // Full-width space / trailing whitespace markers
-            OverlayRenderer.DrawWhitespaceIssues(dc, Theme, metrics, l, y, textLeft, lineText, _scrollOffsetX, _whitespaceIssues);
+                // Matching bracket highlight
+                DrawMatchingBrackets(dc, l, y, textLeft, lineText, bracketMatch);
 
-            // Matching bracket highlight
-            DrawMatchingBrackets(dc, l, y, textLeft, lineText, bracketMatch);
+                // Text with syntax coloring
+                DrawLineText(dc, l, lineText, y, textLeft);
 
-            // Text with syntax coloring
-            DrawLineText(dc, l, lineText, y, textLeft);
+                // Inline color preview swatches
+                if (_showColorPreview)
+                    OverlayRenderer.DrawColorSwatches(dc, metrics, lineText, y, textLeft, _scrollOffsetX);
 
-            // Inline color preview swatches
-            if (_showColorPreview)
-                OverlayRenderer.DrawColorSwatches(dc, metrics, lineText, y, textLeft, _scrollOffsetX);
+                // Invisible character markers (set list)
+                DrawListChars(dc, lineText, y, textLeft);
 
-            // Invisible character markers (set list)
-            DrawListChars(dc, lineText, y, textLeft);
+                // LSP inlay hints (inline ghost text)
+                LspOverlayRenderer.DrawInlayHints(dc, metrics, _inlayHintsByLine, l, lineText, y, textLeft, _scrollOffsetX);
 
-            // LSP inlay hints (inline ghost text)
-            LspOverlayRenderer.DrawInlayHints(dc, metrics, _inlayHintsByLine, l, lineText, y, textLeft, _scrollOffsetX);
+                // LSP diagnostics (wavy underlines)
+                DrawDiagnostics(dc, l, y, textLeft, lineText);
 
-            // LSP diagnostics (wavy underlines)
-            DrawDiagnostics(dc, l, y, textLeft, lineText);
+                // Spell check errors (blue wavy underlines)
+                DrawSpellErrors(dc, l, y, textLeft, lineText);
 
-            // Spell check errors (blue wavy underlines)
-            DrawSpellErrors(dc, l, y, textLeft, lineText);
+                // Detected link underlines
+                DrawLinkUnderline(dc, l, y, textLeft, lineText, segment.StartColumn, GetSegmentEndColumn(vi));
 
-            // Detected link underlines
-            DrawLinkUnderline(dc, l, y, textLeft, lineText, segment.StartColumn, GetSegmentEndColumn(vi));
+                // Cursor
+                DrawCursor(dc, l, y, textLeft, lineText);
 
-            // Cursor
-            DrawCursor(dc, l, y, textLeft, lineText);
-
-            // Extra cursors (multi-cursor mode)
-            DrawExtraCursors(dc, l, y, textLeft, lineText);
-
-            dc.Pop();
+                // Extra cursors (multi-cursor mode)
+                DrawExtraCursors(dc, l, y, textLeft, lineText);
+            }
+            catch (System.Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"EditorCanvas: failed rendering line {l}: {ex}");
+            }
+            finally
+            {
+                dc.Pop();
+            }
         }
 
         _scrollOffsetX = baseOffsetX;
 
-        DrawImeCandidatePopup(dc, textLeft, size);
-        LspOverlayRenderer.DrawSignatureHelp(dc, Theme, metrics, _signatureHelp, textLeft, size, GetCursorPixelPosition());
-        LspOverlayRenderer.DrawCompletionPopup(dc, Theme, metrics, _completionItems, _completionSelection, _completionScrollOffset, textLeft, size, GetCursorPixelPosition());
-        LspOverlayRenderer.DrawCodeActionPopup(dc, Theme, metrics, _codeActionItems, _codeActionsSelection, _codeActionsScrollOffset, textLeft, size, GetCursorPixelPosition());
-
-        // Color column guide line
-        OverlayRenderer.DrawColorColumn(dc, Theme, _colorColumn, _charWidth, gutterWidth, _scrollOffsetX, size);
-
-        // Indent guide lines
-        if (_showIndentGuides && _charWidth > 0)
+        // Post-loop overlays. Guard them as a group so a failure can't escape OnRender (crashing
+        // the app); the content clip is popped in the finally either way so it stays balanced.
+        try
         {
-            double indentWidth = _indentGuideTabStop * _charWidth;
+            DrawImeCandidatePopup(dc, textLeft, size);
+            LspOverlayRenderer.DrawSignatureHelp(dc, Theme, metrics, _signatureHelp, textLeft, size, GetCursorPixelPosition());
+            LspOverlayRenderer.DrawCompletionPopup(dc, Theme, metrics, _completionItems, _completionSelection, _completionScrollOffset, textLeft, size, GetCursorPixelPosition());
+            LspOverlayRenderer.DrawCodeActionPopup(dc, Theme, metrics, _codeActionItems, _codeActionsSelection, _codeActionsScrollOffset, textLeft, size, GetCursorPixelPosition());
 
-            // Find the deepest indent level among all visible non-blank lines
-            int maxIndentLevel = 0;
-            for (int vi = firstLine; vi <= lastLine; vi++)
+            // Color column guide line
+            OverlayRenderer.DrawColorColumn(dc, Theme, _colorColumn, _charWidth, gutterWidth, _scrollOffsetX, size);
+
+            // Indent guide lines
+            if (_showIndentGuides && _charWidth > 0)
             {
-                var seg = GetVisualSegment(vi);
-                int l = seg.BufferLine;
-                if (l >= _lines.Length) continue;
-                var line = _lines[l];
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                int spaces = 0;
-                foreach (char ch in line)
+                double indentWidth = _indentGuideTabStop * _charWidth;
+
+                // Find the deepest indent level among all visible non-blank lines
+                int maxIndentLevel = 0;
+                for (int vi = firstLine; vi <= lastLine; vi++)
                 {
-                    if (ch == ' ') spaces++;
-                    else if (ch == '\t') spaces += _indentGuideTabStop;
-                    else break;
+                    var seg = GetVisualSegment(vi);
+                    int l = seg.BufferLine;
+                    if (l >= _lines.Length) continue;
+                    var line = _lines[l];
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    int spaces = 0;
+                    foreach (char ch in line)
+                    {
+                        if (ch == ' ') spaces++;
+                        else if (ch == '\t') spaces += _indentGuideTabStop;
+                        else break;
+                    }
+                    int level = spaces / _indentGuideTabStop;
+                    if (level > maxIndentLevel) maxIndentLevel = level;
                 }
-                int level = spaces / _indentGuideTabStop;
-                if (level > maxIndentLevel) maxIndentLevel = level;
+
+                OverlayRenderer.DrawIndentGuides(dc, Theme, gutterWidth, indentWidth, maxIndentLevel, _scrollOffsetX, size);
             }
 
-            OverlayRenderer.DrawIndentGuides(dc, Theme, gutterWidth, indentWidth, maxIndentLevel, _scrollOffsetX, size);
-        }
+            // Gutter border
+            if (_showLineNumbers)
+            {
+                var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)), 1);
+                dc.DrawLine(pen, new Point(gutterWidth - 1, 0), new Point(gutterWidth - 1, size.Height));
+            }
 
-        // Gutter border
-        if (_showLineNumbers)
+            // Minimap
+            if (_showMinimap)
+                OverlayRenderer.DrawMinimap(dc, Theme, _lines, _lineHeight, _scrollOffsetY, _visibleLines, MinimapWidth, size);
+        }
+        catch (System.Exception ex)
         {
-            var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)), 1);
-            dc.DrawLine(pen, new Point(gutterWidth - 1, 0), new Point(gutterWidth - 1, size.Height));
+            System.Diagnostics.Debug.WriteLine($"EditorCanvas: overlay render failed: {ex}");
         }
-
-        // Minimap
-        if (_showMinimap)
-            OverlayRenderer.DrawMinimap(dc, Theme, _lines, _lineHeight, _scrollOffsetY, _visibleLines, MinimapWidth, size);
-
-        dc.Pop(); // end content clip (contentBottom)
+        finally
+        {
+            dc.Pop(); // end content clip (contentBottom)
+        }
 
         // Overlay scrollbars
-        if (_showScrollbar)
-            OverlayRenderer.DrawScrollbars(dc, Theme, size, ComputeScrollbarLayout(size));
+        try
+        {
+            if (_showScrollbar)
+                OverlayRenderer.DrawScrollbars(dc, Theme, size, ComputeScrollbarLayout(size));
+        }
+        catch (System.Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"EditorCanvas: scrollbar render failed: {ex}");
+        }
     }
 
     // The visible bars are thin (OverlayRenderer.ScrollbarSize); the grab zone is wider so the

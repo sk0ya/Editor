@@ -4001,6 +4001,22 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void ProcessKey(string key, bool ctrl, bool shift, bool alt)
     {
+        // Never let a single keystroke crash the host app. A bug anywhere in the engine or the
+        // event handling would otherwise surface as an unhandled exception and take the process
+        // down; instead, swallow it (logged for diagnosis) and keep the editor usable.
+        try
+        {
+            ProcessKeyCore(key, ctrl, shift, alt);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"VimEditorControl: ProcessKey('{key}', ctrl:{ctrl}, shift:{shift}, alt:{alt}) failed: {ex}");
+            try { Canvas?.InvalidateVisual(); } catch { /* rendering guarded separately */ }
+        }
+    }
+
+    private void ProcessKeyCore(string key, bool ctrl, bool shift, bool alt)
+    {
         Canvas.ResetCursorBlink();
         ClearSelectionRangeState();
 
