@@ -142,6 +142,9 @@ public partial class EditorCanvas : FrameworkElement
     private Dictionary<int, EditorBlameLine> _blameLines = [];
     private double _blameColWidth;     // 0 = blame margin hidden (no annotations)
     private int _hoveredBlameLine = -1;
+    // 直近の右クリックが blame ガター上だったときの、その行のコミット情報（それ以外は null）。
+    // 右クリックメニュー構築時（VimEditorControl.BuildContextMenu）にホストへ渡すため一時的に控える。
+    private EditorBlameLine? _rightClickBlame;
     // blame ホバー中のコミット情報ツールチップ（手動開閉）
     private System.Windows.Controls.ToolTip? _blameToolTip;
     // blame カラムのユーザー調整幅（プロセス内共有。0 = 内容に合わせた自動幅）。カラム右端のドラッグで
@@ -185,6 +188,10 @@ public partial class EditorCanvas : FrameworkElement
     public event Action? MouseDragEnded;
     public event Action<int>? FoldGutterClicked;       // (bufferLine) fold indicator clicked
     public event Action<int, EditorBlameLine>? BlameClicked;  // (bufferLine, info) blame margin clicked
+
+    /// <summary>直近の右クリックが blame ガター上だった行のコミット情報（それ以外は null）。
+    /// 右クリックメニュー構築時にのみ意味を持つ（<see cref="OnMouseRightButtonDown"/> で毎回更新）。</summary>
+    public EditorBlameLine? RightClickBlame => _rightClickBlame;
     public event Action<string>? LinkClicked;          // (url) Ctrl+clicked on a detected URL
     public event Action<string>? FileLinkClicked;      // (absolutePath) Ctrl+clicked on a detected file path
 
@@ -1159,7 +1166,17 @@ public partial class EditorCanvas : FrameworkElement
     protected override void OnMouseRightButtonDown(System.Windows.Input.MouseButtonEventArgs e)
     {
         base.OnMouseRightButtonDown(e);
-        var (line, col) = HitTest(e.GetPosition(this));
+        var point = e.GetPosition(this);
+
+        // 右クリックが blame ガター上なら、その行のコミット情報を控える（メニュー構築でホストへ渡す）。
+        _rightClickBlame = null;
+        var (bpColWidth, lineNumWidth, _, gutterWidth) = GetGutterMetrics();
+        var boundaries = new GutterHitTester.Boundaries(_blameColWidth, bpColWidth, lineNumWidth, gutterWidth);
+        if (_gutterHitTester.TryHitBlameGutter(point, boundaries, out int blameLine)
+            && blameLine >= 0 && _blameLines.TryGetValue(blameLine, out var blame))
+            _rightClickBlame = blame;
+
+        var (line, col) = HitTest(point);
         MouseRightClicked?.Invoke(line, col);
         // Do not mark as Handled — WPF needs the event to bubble to trigger ContextMenu on MouseRightButtonUp
     }

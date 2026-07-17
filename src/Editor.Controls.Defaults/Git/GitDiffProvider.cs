@@ -68,6 +68,19 @@ public partial class GitDiffProvider : IEditorGitService
         return string.IsNullOrEmpty(output) ? "(no commits)" : output;
     }
 
+    public string GetFileHistoryOutput(string filePath, int? count = null)
+    {
+        if (!TryGetFileWorkDir(filePath, out var workDir)) return "(no file or not a git repository)";
+        // --follow so renames don't truncate the history that blame can attribute a line to.
+        var args = new List<string> { "log", "--oneline", "--follow" };
+        if (count is > 0)
+            args.Add($"-{count}");
+        args.Add("--");
+        args.Add(filePath);
+        var output = RunGit(workDir, args.ToArray());
+        return string.IsNullOrEmpty(output) ? "(no commits)" : output;
+    }
+
     public (bool Success, string Output) RunPush(string repoPath)
     {
         var root = ResolveGitRoot(repoPath);

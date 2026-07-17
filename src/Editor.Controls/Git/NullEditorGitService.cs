@@ -18,6 +18,8 @@ internal sealed class NullEditorGitService : IEditorGitService
 
     public string GetLogOutput(string repoPath, int count = 30) => "(git integration is not configured)";
 
+    public string GetFileHistoryOutput(string filePath, int? count = null) => "(git integration is not configured)";
+
     public (bool Success, string Output) RunPush(string repoPath) =>
         (false, "git integration is not configured");
 

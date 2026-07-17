@@ -20,6 +20,10 @@ public interface IEditorGitService
     string GetStatusOutput(string repoPath);
     string GetDiffOutput(string filePath);
     string GetLogOutput(string repoPath, int count = 30);
+    /// <summary>指定ファイルを変更したコミットの履歴（<c>git log --oneline -- &lt;file&gt;</c>）。
+    /// blame 行のコミットは必ずこの履歴に含まれるため、blame から履歴一覧を開いて該当コミットを
+    /// 選択する用途に使う。</summary>
+    string GetFileHistoryOutput(string filePath, int? count = null);
     (bool Success, string Output) RunPush(string repoPath);
     (bool Success, string Output) RunPull(string repoPath);
     (bool Success, string Output) RunCommit(string filePath, string message);

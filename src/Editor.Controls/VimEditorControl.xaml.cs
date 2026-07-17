@@ -150,7 +150,8 @@ public class FileLinkClickedEventArgs(string path, bool isDirectory) : EventArgs
 /// guarded by <see cref="HasSelection"/> and acting on <see cref="SelectedText"/>).
 /// </summary>
 public class EditorContextMenuBuildingEventArgs(
-    string selectedText, bool hasSelection, System.Windows.Controls.ContextMenu menu) : EventArgs
+    string selectedText, bool hasSelection, System.Windows.Controls.ContextMenu menu,
+    Git.EditorBlameLine? blameLine = null) : EventArgs
 {
     /// <summary>The current selection text (empty when nothing is selected).</summary>
     public string SelectedText { get; } = selectedText;
@@ -161,6 +162,14 @@ public class EditorContextMenuBuildingEventArgs(
     /// <summary>The menu being built. Append <see cref="System.Windows.Controls.MenuItem"/>s or
     /// separators here; unstyled additions inherit the editor's dark menu style.</summary>
     public System.Windows.Controls.ContextMenu Menu { get; } = menu;
+
+    /// <summary>
+    /// When the right-click landed on the blame gutter (<c>:Gblame</c> active), the commit info for
+    /// that line; otherwise <c>null</c>. Hosts can use this to offer commit-specific actions
+    /// (open the diff, show the file history, …). When set, the editor omits its own text-editing
+    /// items so the menu is blame-focused.
+    /// </summary>
+    public Git.EditorBlameLine? BlameLine { get; } = blameLine;
 }
 
 /// <summary>The kind of a text selection (mirrors the engine's selection type).</summary>
@@ -2299,6 +2308,18 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         await ShowGitOutputAsync("[Git Log]", () => _gitProvider.GetLogOutput(repoPath));
     }
 
+    /// <summary>現在のバッファの Git 履歴一覧（<c>git log --oneline -- &lt;file&gt;</c>）を返す。
+    /// blame 行のコミットは必ずこの履歴に含まれるので、blame からの操作
+    /// （<see cref="BlameCommitClicked"/> やコンテキストメニュー）で履歴一覧を開き、該当コミットを
+    /// 選択するために使う。ファイル未保存などでパスが無い場合はリポジトリ全体のログにフォールバックする。</summary>
+    public string GetGitLogOutput()
+    {
+        var filePath = _engine.CurrentBuffer.FilePath;
+        if (!string.IsNullOrEmpty(filePath))
+            return _gitProvider.GetFileHistoryOutput(filePath);
+        return _gitProvider.GetLogOutput(Environment.CurrentDirectory);
+    }
+
     private Task RunGitPushAsync()
     {
         var filePath = _engine.CurrentBuffer.FilePath;
@@ -2416,6 +2437,20 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         ClearSelectionRangeState();
         var events = _engine.SetCursorPosition(new CursorPosition(line, column));
+        ProcessVimEvents(events);
+    }
+
+    /// <summary>Visibly selects the whole of <paramref name="line"/> — a plain, highlighted
+    /// selection that stays in Normal mode — and scrolls it into view. Used to mark a chosen row,
+    /// e.g. the blame commit inside the Git history list, so it reads as "selected" rather than
+    /// just having the caret on it.</summary>
+    public void SelectLine(int line)
+    {
+        var buf = _engine.CurrentBuffer.Text;
+        if (line < 0 || line >= buf.LineCount) return;
+        int len = buf.GetLineLength(line);
+        var events = _engine.SetPlainSelection(
+            new CursorPosition(line, 0), new CursorPosition(line, len));
         ProcessVimEvents(events);
     }
 
@@ -2877,7 +2912,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             var moveEvents = _engine.SetCursorPosition(new CursorPosition(line, col));
             ProcessVimEvents(moveEvents);
         }
-        Canvas.ContextMenu = BuildContextMenu();
+        var menu = BuildContextMenu();
+        // blame ガター右クリックでホストが何も足さなかった場合など、空メニューは出さない。
+        Canvas.ContextMenu = menu.Items.Count > 0 ? menu : null;
     }
 
     private ContextMenu BuildContextMenu()
@@ -2895,6 +2932,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             return item;
         }
 
+        // 右クリックが blame ガター上のときは、テキスト編集/LSP 項目を出さず blame 専用メニューにする
+        // （ホストがコミット固有の操作＝差分表示・履歴表示などを ContextMenuBuilding で足す）。
+        var blameLine = Canvas.RightClickBlame;
+        if (blameLine is null)
+        {
         // ── Vim editing operations ──────────────────────────────
         menu.Items.Add(MakeItem(
             isVisual ? "Copy Selection" : "Copy Line",
@@ -2968,14 +3010,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                     () => _ = HandleFormatDocumentAsync(fmtLines)));
             }
         }
+        } // end: not a blame-gutter right-click
 
         // ── Host-provided items ──────────────────────────────────
         // Let the embedding application append its own entries (e.g. "Ask AI", "Search the web")
-        // that act on the current selection. They are added after the editor's own items.
+        // that act on the current selection, or commit actions when the right-click was on the blame
+        // gutter (BlameLine is non-null then). They are added after the editor's own items.
         if (ContextMenuBuilding is { } handler)
         {
             var before = menu.Items.Count;
-            handler(this, new EditorContextMenuBuildingEventArgs(SelectedText, HasSelection, menu));
+            handler(this, new EditorContextMenuBuildingEventArgs(SelectedText, HasSelection, menu, blameLine));
 
             // Apply the dark menu styling to any items the host added without their own style,
             // so host entries match the editor's native menu look.

@@ -14,6 +14,7 @@ using System.Windows.Media;
 using System.Windows.Shell;
 using System.Windows.Threading;
 using Editor.Controls;
+using Editor.Controls.Git;
 using Editor.Controls.Themes;
 using Editor.Core.Config;
 using Editor.Core.Lsp;
@@ -522,6 +523,8 @@ public partial class MainWindow : Window
         editor.MarkdownPreviewRequested   += (_, _) => _markdownPreview.Toggle();
         editor.GitOutputRequested         += Editor_GitOutputRequested;
         editor.GitCommitRequested     += Editor_GitCommitRequested;
+        editor.BlameCommitClicked     += Editor_BlameCommitClicked;
+        editor.ContextMenuBuilding    += Editor_ContextMenuBuilding;
         editor.DocumentSymbolsResult  += Editor_DocumentSymbolsResult;
     }
 
@@ -594,6 +597,66 @@ public partial class MainWindow : Window
         _tabs.SelectFileTab(ft);
         ft.UpdateHeader(isModified: false, label: e.Title);
         _focusedEditor?.SetText(e.Content);
+    }
+
+    // Clicking a blame annotation opens the Git log pane and selects that commit's line.
+    private async void Editor_BlameCommitClicked(object? sender, BlameCommitClickedEventArgs e)
+    {
+        if (sender is not VimEditorControl editor) return;
+        await ShowCommitInGitLogAsync(editor, e.CommitHash);
+    }
+
+    // Blame gutter right-click menu: offer opening the commit history (git log) with the
+    // blame-selected commit highlighted in the list.
+    private void Editor_ContextMenuBuilding(object? sender, EditorContextMenuBuildingEventArgs e)
+    {
+        if (sender is not VimEditorControl editor) return;
+        if (e.BlameLine is not { } blame) return;
+
+        var item = new MenuItem { Header = $"Show Commit {blame.CommitHash} in Git History" };
+        item.Click += async (_, _) => await ShowCommitInGitLogAsync(editor, blame.CommitHash);
+        e.Menu.Items.Add(item);
+    }
+
+    // Open the Git history (commit list) in the pane and visibly select the given commit's line.
+    private async Task ShowCommitInGitLogAsync(VimEditorControl editor, string commitHash)
+    {
+        var log = await Task.Run(editor.GetGitLogOutput);
+
+        // Keep the selected tab and its content in the pane that initiated the request, even if
+        // focus moved to another split while git was running.
+        var ft = _tabs.AddFileTabEntry(null);
+        _tabs.SelectFileTab(ft, editor);
+        ft.UpdateHeader(isModified: false, label: "[Git Log]");
+        editor.SetText(log);
+
+        var line = FindCommitLine(log, commitHash);
+        if (line < 0) return;
+
+        // Select the commit only after the history list has been laid out and rendered. Running the
+        // selection inline (before the freshly-set content is measured) can't scroll it into view
+        // yet, so it wouldn't visibly get selected. Defer to Background so the list is shown first.
+        _ = editor.Dispatcher.BeginInvoke(DispatcherPriority.Background, () => editor.SelectLine(line));
+    }
+
+    /// <summary>Find the <c>git log --oneline</c> line whose leading hash matches <paramref name="hash"/>
+    /// (blame's short hash and log's abbreviation may differ in length, so match by common prefix).
+    /// Returns the 0-based line index, or -1 if not found.</summary>
+    private static int FindCommitLine(string log, string hash)
+    {
+        if (string.IsNullOrEmpty(hash) || string.IsNullOrEmpty(log)) return -1;
+        var lines = log.Replace("\r\n", "\n").Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var text = lines[i].TrimStart();
+            int sp = text.IndexOf(' ');
+            var token = sp < 0 ? text : text[..sp];
+            if (token.Length == 0) continue;
+            if (token.StartsWith(hash, StringComparison.OrdinalIgnoreCase) ||
+                hash.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+        return -1;
     }
 
     private void Editor_GitCommitRequested(object? sender, GitCommitRequestedEventArgs e)

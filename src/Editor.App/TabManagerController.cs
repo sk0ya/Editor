@@ -152,20 +152,25 @@ internal sealed class TabManagerController
     /// <summary>Select a file tab and load its file into the focused pane.</summary>
     public void SelectFileTab(FileTab fileTab)
     {
+        SelectFileTab(fileTab, _focusedEditor());
+    }
+
+    /// <summary>Select a file tab and load its file into the specified pane.</summary>
+    public void SelectFileTab(FileTab fileTab, VimEditorControl? editor)
+    {
         _suppressTabSelectionChanged = true;
         _tabCtrl.SelectedItem = fileTab.Item;
         _suppressTabSelectionChanged = false;
 
-        var focused = _focusedEditor();
-        if (focused == null) return;
+        if (editor == null) return;
 
         if (fileTab.FilePath != null && File.Exists(fileTab.FilePath))
-            focused.LoadFile(fileTab.FilePath);
+            editor.LoadFile(fileTab.FilePath);
         // FilePath == null → keep current content (new empty buffer shown as-is)
 
-        focused.Focus();
-        _refreshOutlineForEditor(focused);
-        _onAfterTabSelected(focused);
+        editor.Focus();
+        _refreshOutlineForEditor(editor);
+        _onAfterTabSelected(editor);
     }
 
     /// <summary>Set the selected TabItem without triggering TabCtrl_SelectionChanged's reaction.</summary>
