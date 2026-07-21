@@ -9,6 +9,11 @@ public sealed class LspClient : ILspClient
     private readonly LspProcess _process;
 
     public event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
+
+    /// <summary>Raised once when the underlying process/connection dies for any reason other than
+    /// <see cref="Dispose"/> — see <see cref="LspProcess.Exited"/>.</summary>
+    public event Action? Exited;
+
     public bool IsRunning => _process.IsRunning;
     public bool SupportsFoldingRange { get; private set; }
     public bool SupportsWorkspaceSymbol { get; private set; }
@@ -23,6 +28,7 @@ public sealed class LspClient : ILspClient
     {
         _process = new LspProcess(executable, args, workingDir);
         _process.NotificationReceived += OnNotification;
+        _process.Exited += () => Exited?.Invoke();
     }
 
     public async Task InitializeAsync(string rootUri)

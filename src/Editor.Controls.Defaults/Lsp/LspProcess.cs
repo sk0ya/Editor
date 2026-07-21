@@ -13,8 +13,16 @@ internal sealed class LspProcess : IDisposable
     private readonly Dictionary<int, TaskCompletionSource<JsonElement?>> _pending = new();
     private int _nextId;
     private bool _disposed;
+    private int _exitRaised;
 
     public event Action<string, JsonElement>? NotificationReceived;
+
+    /// <summary>Raised exactly once when the connection becomes unusable for any reason other than an
+    /// intentional <see cref="Dispose"/> — the server crashed, its stdout closed, or the read loop hit an
+    /// unrecoverable IO error. By the time this fires <see cref="IsRunning"/> is already false (the process
+    /// has been torn down), so callers can rely on it to know a reconnect is actually needed.</summary>
+    public event Action? Exited;
+
     public bool IsRunning => !_disposed && !_process.HasExited;
 
     public LspProcess(string executable, IEnumerable<string> args, string? workingDir = null)
@@ -34,6 +42,11 @@ internal sealed class LspProcess : IDisposable
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start language server");
+        // Guarantees the server dies even if this process is killed ungracefully (crash, forced-close, a
+        // debugger session yanked away) — Dispose() below only covers a normal shutdown, and language-server
+        // processes left behind by an ungraceful exit never get cleaned up on their own (observed as csharp-ls
+        // instances accumulating across days, each competing for MSBuild/CPU and starving new sessions).
+        JobObject.Assign(_process);
 
         var thread = new Thread(ReadLoop) { IsBackground = true, Name = "LspStdout" };
         thread.Start();
@@ -115,6 +128,20 @@ internal sealed class LspProcess : IDisposable
             catch { }  // bad JSON or dispatch error — skip this message
         }
         Log("ReadLoop exited");
+        RaiseExitedAndTearDown();
+    }
+
+    /// <summary>Whatever ended the read loop, this connection can never receive another response or
+    /// notification — tear the process down so <see cref="IsRunning"/> reflects that immediately (previously
+    /// a dead-but-not-yet-exited process, or a broken pipe with the process still technically alive, left
+    /// <see cref="IsRunning"/> true forever, so nothing ever noticed the server had stopped talking), then let
+    /// the owner know so it can reconnect. A no-op if <see cref="Dispose"/> already claimed this exit (a
+    /// deliberate shutdown is not a failure and must not trigger a reconnect).</summary>
+    private void RaiseExitedAndTearDown()
+    {
+        if (Interlocked.Exchange(ref _exitRaised, 1) != 0) return;
+        try { if (!_process.HasExited) _process.Kill(); } catch { }
+        Exited?.Invoke();
     }
 
     private static int ReadContentLength(Stream stream)
@@ -216,6 +243,7 @@ internal sealed class LspProcess : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        Interlocked.Exchange(ref _exitRaised, 1);  // this is deliberate — suppress the Exited/reconnect path
         try { _process.Kill(); } catch { }
         _process.Dispose();
         lock (_pending)
