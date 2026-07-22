@@ -44,6 +44,11 @@ public sealed class LspManager : IEditorLspManager
     private int _completionSelection = -1;
     private int _completionScrollOffset = 0;
     private bool _completionVisible;
+    // Generation guard for completion requests. Two triggers can be in flight at once
+    // (the 300ms debounce and the immediate '.' trigger); without this, whichever
+    // response arrives *last* wins, so a stale keyword list can overwrite the newer
+    // member-access completion. Bumped on every request and on explicit hide.
+    private int _completionRequestSeq;
 
     private const int MaxVisibleCompletion = 10;
 
@@ -311,13 +316,23 @@ public sealed class LspManager : IEditorLspManager
 
         Log($"[LSP] completion request line={line} col={character}");
 
+        var seq = Interlocked.Increment(ref _completionRequestSeq);
         var items = await _currentClient.GetCompletionAsync(
             _currentUri, new LspPosition(line, character));
 
         Log($"[LSP] completion got {items.Count} items");
 
+        if (seq != Volatile.Read(ref _completionRequestSeq))
+        {
+            Log("[LSP] completion response discarded (superseded)");
+            return "";
+        }
+
         await _dispatcher.InvokeAsync(() =>
         {
+            // Re-check on the dispatcher thread: a newer request or an explicit
+            // HideCompletion may have happened while this apply was queued.
+            if (seq != Volatile.Read(ref _completionRequestSeq)) return;
             _rawCompletionItems = items;
             _completionItems = items;
             _completionSelection = items.Count > 0 ? 0 : -1;
@@ -398,6 +413,9 @@ public sealed class LspManager : IEditorLspManager
 
     public void HideCompletion()
     {
+        // Invalidate any in-flight completion request so a late response
+        // cannot re-open the popup after an explicit close.
+        Interlocked.Increment(ref _completionRequestSeq);
         if (!_completionVisible && _rawCompletionItems.Count == 0) return;
         _completionVisible = false;
         _rawCompletionItems = [];
