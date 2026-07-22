@@ -36,7 +36,10 @@ internal static class JobObject
             {
                 Marshal.StructureToPtr(extended, ptr, false);
                 if (!SetInformationJobObject(job, JobObjectInfoType.ExtendedLimitInformation, ptr, (uint)length))
+                {
+                    CloseHandle(job);
                     return IntPtr.Zero;
+                }
             }
             finally { Marshal.FreeHGlobal(ptr); }
 
@@ -93,4 +96,7 @@ internal static class JobObject
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
 }

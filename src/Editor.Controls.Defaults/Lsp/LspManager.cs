@@ -15,7 +15,7 @@ public sealed class LspManager : IEditorLspManager
     private readonly LspServerRegistry _registry;
     private readonly Dictionary<string, LspClient> _clients = new();
     private readonly object _docLock = new();
-    private readonly HashSet<string> _openDocuments = new();
+    private readonly Dictionary<string, string> _openDocuments = new(); // uri -> executable it was opened against
 
     private string? _currentUri;
     private LspClient? _currentClient;
@@ -192,12 +192,7 @@ public sealed class LspManager : IEditorLspManager
         {
             try
             {
-                client = new LspClient(def.Executable, def.Args, FindWorkspaceRoot(filePath));
-                client.DiagnosticsChanged += OnDiagnosticsChanged;
-                var executable = def.Executable;
-                var capturedClient = client;
-                client.Exited += () => OnClientExited(executable, capturedClient);
-                _clients[def.Executable] = client;
+                client = CreateClient(def, filePath);
                 _reconnectAttempts[def.Executable] = 0;
                 Log($"[LSP] Process started: {def.Executable}");
             }
@@ -215,12 +210,12 @@ public sealed class LspManager : IEditorLspManager
         _currentClient = client;
 
         bool alreadyOpen;
-        lock (_docLock) alreadyOpen = _openDocuments.Contains(uri);
+        lock (_docLock) alreadyOpen = _openDocuments.TryGetValue(uri, out var openOwner) && openOwner == def.Executable;
 
         if (isNew)
             _ = InitThenOpenAsync(client!, def.Executable, filePath, uri, def.LanguageId, text);
         else if (!alreadyOpen)
-            _ = OpenSafeAsync(client!, uri, def.LanguageId, text);
+            _ = OpenSafeAsync(client!, def.Executable, uri, def.LanguageId, text);
         else
         {
             _documentReady = true; // already open from a previous visit
@@ -730,7 +725,7 @@ public sealed class LspManager : IEditorLspManager
             return;
         }
 
-        await OpenSafeAsync(client, uri, languageId, text);
+        await OpenSafeAsync(client, executable, uri, languageId, text);
     }
 
     // ── Reconnection ────────────────────────────────────────────────────────
@@ -746,13 +741,28 @@ public sealed class LspManager : IEditorLspManager
 
     private void HandleClientExited(string executable, LspClient deadClient)
     {
-        if (_managerDisposed) return;
         // Stale event from a client we already replaced (a prior reconnect) or discarded — ignore.
         if (!_clients.TryGetValue(executable, out var tracked) || !ReferenceEquals(tracked, deadClient))
             return;
 
         _clients.Remove(executable);
         Log($"[LSP] {executable} exited unexpectedly");
+
+        // Every document this (now-dead) server was told about needs a fresh didOpen on whatever
+        // client eventually serves it next — otherwise a later reopen can land on a *different*,
+        // already-registered client for the same executable and skip didOpen, believing the doc
+        // is already open there.
+        lock (_docLock)
+        {
+            foreach (var staleUri in _openDocuments.Where(kv => kv.Value == executable).Select(kv => kv.Key).ToList())
+                _openDocuments.Remove(staleUri);
+        }
+
+        // Releases the process handle and resolves any request still awaiting a response on this
+        // connection (LspProcess.Dispose is the only thing that cancels LspProcess._pending) — without
+        // this, a hover/completion/etc. in flight at the moment of the crash would hang forever, and
+        // this dead client (already removed from _clients) would never be reached by LspManager.Dispose.
+        deadClient.Dispose();
 
         var wasCurrent = ReferenceEquals(_currentClient, deadClient);
         if (wasCurrent)
@@ -765,15 +775,17 @@ public sealed class LspManager : IEditorLspManager
 
         // Only worth reconnecting if the file that died is still the one being looked at, and the
         // registry still maps it to this same server (the user may have reassigned it via :LspAdd).
+        // A background file's server is not reconnected here — the next OnFileOpened for it will spin
+        // up a fresh client normally now that _clients/_openDocuments no longer reference the dead one.
         if (!wasCurrent || _currentFilePath == null || _currentUri == null) return;
         var ext = Path.GetExtension(_currentFilePath);
         var def = _registry.GetForExtension(ext);
         if (def == null || def.Executable != executable) return;
 
-        _ = ScheduleReconnectAsync(def, _currentFilePath, _currentUri, _currentText);
+        _ = ScheduleReconnectAsync(def, _currentFilePath, _currentUri);
     }
 
-    private async Task ScheduleReconnectAsync(LspServerDef def, string filePath, string uri, string text)
+    private async Task ScheduleReconnectAsync(LspServerDef def, string filePath, string uri)
     {
         var attempts = _reconnectAttempts.GetValueOrDefault(def.Executable);
         if (attempts >= MaxReconnectAttempts)
@@ -792,22 +804,27 @@ public sealed class LspManager : IEditorLspManager
         // still the active document; otherwise the next OnFileOpened for it will start fresh anyway.
         if (_currentFilePath != filePath || _currentUri != uri) return;
 
+        // Re-resolve rather than reuse the def captured at crash time: the user may have run
+        // :LspAdd/:LspRemove/:LspReset for this extension during the backoff, and a reconnect is
+        // functionally a re-open, which those ex-commands document as picking up config changes.
+        var freshDef = _registry.GetForExtension(Path.GetExtension(filePath));
+        if (freshDef == null) return;
+
+        // A normal (re)open already created (and is opening) a client for this executable while we
+        // were waiting — don't clobber it with a second, independently-opened connection.
+        if (_clients.ContainsKey(freshDef.Executable)) return;
+
         LspClient client;
         try
         {
-            client = new LspClient(def.Executable, def.Args, FindWorkspaceRoot(filePath));
+            client = CreateClient(freshDef, filePath);
         }
         catch (Exception ex)
         {
-            Log($"[LSP] Reconnect failed to start {def.Executable}: {ex.Message}");
+            Log($"[LSP] Reconnect failed to start {freshDef.Executable}: {ex.Message}");
             return;
         }
-        client.DiagnosticsChanged += OnDiagnosticsChanged;
-        var executable = def.Executable;
-        var capturedClient = client;
-        client.Exited += () => OnClientExited(executable, capturedClient);
-        _clients[def.Executable] = client;
-        Log($"[LSP] Process restarted: {def.Executable} (attempt {attempts + 1})");
+        Log($"[LSP] Process restarted: {freshDef.Executable} (attempt {attempts + 1})");
 
         await _dispatcher.InvokeAsync(() =>
         {
@@ -815,16 +832,33 @@ public sealed class LspManager : IEditorLspManager
                 _currentClient = client;
         });
 
-        await InitThenOpenAsync(client, def.Executable, filePath, uri, def.LanguageId, text);
+        // Read the live buffer now rather than a snapshot taken back when the crash was first detected —
+        // OnTextChanged keeps _currentText current even while disconnected, so this picks up anything the
+        // user typed during the backoff instead of replaying stale content via didOpen.
+        await InitThenOpenAsync(client, freshDef.Executable, filePath, uri, freshDef.LanguageId, _currentText);
     }
 
-    private async Task OpenSafeAsync(LspClient client, string uri, string languageId, string text)
+    /// <summary>Creates, wires, and registers an <see cref="LspClient"/> for <paramref name="def"/>. Shared by
+    /// the normal (re)open path and the crash-reconnect path so client construction/wiring can't drift
+    /// between them.</summary>
+    private LspClient CreateClient(LspServerDef def, string filePath)
+    {
+        var client = new LspClient(def.Executable, def.Args, FindWorkspaceRoot(filePath));
+        client.DiagnosticsChanged += OnDiagnosticsChanged;
+        var executable = def.Executable;
+        var capturedClient = client;
+        client.Exited += () => OnClientExited(executable, capturedClient);
+        _clients[def.Executable] = client;
+        return client;
+    }
+
+    private async Task OpenSafeAsync(LspClient client, string executable, string uri, string languageId, string text)
     {
         try
         {
             Log($"[LSP] didOpen uri={uri}");
             await client.OpenDocumentAsync(uri, languageId, text);
-            lock (_docLock) _openDocuments.Add(uri);
+            lock (_docLock) _openDocuments[uri] = executable;
 
             // Mark ready on the dispatcher thread
             await _dispatcher.InvokeAsync(() =>
@@ -833,6 +867,8 @@ public sealed class LspManager : IEditorLspManager
                 {
                     _documentReady = true;
                     StatusMessage?.Invoke("LSP: ready");
+                    StateChanged?.Invoke(); // mirrors the StateChanged fired on disconnect, so a
+                                             // reconnect's success is visible too, not just its failure
                     Log($"[LSP] document ready");
                 }
             });
