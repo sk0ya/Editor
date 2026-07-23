@@ -33,7 +33,11 @@ public interface IEditorLspManager : IDisposable
 
     void OnFileOpened(string? filePath, string text);
     void OnTextChanged(string text);
-    Task<string> RequestCompletionAsync(int line, int character);
+    /// <summary>
+    /// Returns "" on success (popup state applied), a status message on failure,
+    /// or null when the request was superseded and the caller must stay inert.
+    /// </summary>
+    Task<string?> RequestCompletionAsync(int line, int character);
     Task<string?> RequestHoverAsync(int line, int character);
     Task<(string FilePath, int Line, int Column)?> RequestDefinitionAsync(int line, int character);
     void MoveCompletionSelection(int delta);

@@ -38,8 +38,8 @@ internal sealed class NullLspManager : IEditorLspManager
     {
     }
 
-    public Task<string> RequestCompletionAsync(int line, int character) =>
-        Task.FromResult("LSP integration is not configured");
+    public Task<string?> RequestCompletionAsync(int line, int character) =>
+        Task.FromResult<string?>("LSP integration is not configured");
 
     public Task<string?> RequestHoverAsync(int line, int character) =>
         Task.FromResult<string?>(null);

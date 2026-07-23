@@ -44,15 +44,21 @@ public sealed class LspManager : IEditorLspManager
     private int _completionSelection = -1;
     private int _completionScrollOffset = 0;
     private bool _completionVisible;
-    // Generation guard for completion requests. Two triggers can be in flight at once
-    // (the 300ms debounce and the immediate '.' trigger); without this, whichever
-    // response arrives *last* wins, so a stale keyword list can overwrite the newer
-    // member-access completion. Bumped on every request and on explicit hide.
-    private int _completionRequestSeq;
+    // Supersession guard for completion requests (same pattern as _highlightCts).
+    // Two triggers can be in flight at once (the 300ms debounce and the immediate
+    // '.' trigger); without this, whichever response arrives *last* wins, so a
+    // stale keyword list can overwrite the newer member-access completion.
+    // Cancelled on every new request and on explicit hide, which also stops the
+    // superseded server round-trip instead of letting it run to be discarded.
+    private CancellationTokenSource? _completionCts;
 
     private const int MaxVisibleCompletion = 10;
 
     private LspSignatureHelp? _signatureHelp;
+    // Same last-writer-wins guard for signature help: '(' then ',' can have two
+    // requests in flight, and typing ')' (HideSignatureHelp) must keep a late
+    // response from re-showing the popup after the explicit close.
+    private CancellationTokenSource? _signatureHelpCts;
 
     private IReadOnlyList<LspCodeAction> _codeActions = [];
     private int _codeActionsSelection = 0;
@@ -141,6 +147,7 @@ public sealed class LspManager : IEditorLspManager
     public void OnFileOpened(string? filePath, string text)
     {
         HideCompletion();
+        HideSignatureHelp();
         HideCodeActions();
         _highlightCts?.Cancel();
         _highlightCts?.Dispose();
@@ -305,8 +312,12 @@ public sealed class LspManager : IEditorLspManager
         catch { }
     }
 
-    /// <summary>Trigger LSP completion at the given position. Returns a status message.</summary>
-    public async Task<string> RequestCompletionAsync(int line, int character)
+    /// <summary>
+    /// Trigger LSP completion at the given position. Returns "" on success (popup state
+    /// applied), a status message on failure, or null when the request was superseded —
+    /// a null result means the caller owns nothing and must not act on popup state.
+    /// </summary>
+    public async Task<string?> RequestCompletionAsync(int line, int character)
     {
         if (_currentClient?.IsRunning != true || _currentUri == null)
             return "LSP: no language server for this file type";
@@ -316,31 +327,48 @@ public sealed class LspManager : IEditorLspManager
 
         Log($"[LSP] completion request line={line} col={character}");
 
-        var seq = Interlocked.Increment(ref _completionRequestSeq);
-        var items = await _currentClient.GetCompletionAsync(
-            _currentUri, new LspPosition(line, character));
+        // Cancel any in-flight request so it is both discarded and stops working.
+        _completionCts?.Cancel();
+        _completionCts?.Dispose();
+        _completionCts = new CancellationTokenSource();
+        var ct = _completionCts.Token;
+
+        IReadOnlyList<LspCompletionItem> items;
+        try
+        {
+            items = await _currentClient.GetCompletionAsync(
+                _currentUri, new LspPosition(line, character), ct);
+        }
+        catch (OperationCanceledException)
+        {
+            Log("[LSP] completion request cancelled (superseded)");
+            return null;
+        }
 
         Log($"[LSP] completion got {items.Count} items");
 
-        if (seq != Volatile.Read(ref _completionRequestSeq))
+        if (ct.IsCancellationRequested)
         {
             Log("[LSP] completion response discarded (superseded)");
-            return "";
+            return null;
         }
 
+        bool applied = false;
         await _dispatcher.InvokeAsync(() =>
         {
             // Re-check on the dispatcher thread: a newer request or an explicit
             // HideCompletion may have happened while this apply was queued.
-            if (seq != Volatile.Read(ref _completionRequestSeq)) return;
+            if (ct.IsCancellationRequested) return;
             _rawCompletionItems = items;
             _completionItems = items;
             _completionSelection = items.Count > 0 ? 0 : -1;
             _completionScrollOffset = 0;
             _completionVisible = items.Count > 0;
+            applied = true;
             StateChanged?.Invoke();
         });
 
+        if (!applied) return null;
         return items.Count > 0 ? "" : "LSP: no completions at this position";
     }
 
@@ -413,9 +441,11 @@ public sealed class LspManager : IEditorLspManager
 
     public void HideCompletion()
     {
-        // Invalidate any in-flight completion request so a late response
+        // Cancel any in-flight completion request so a late response
         // cannot re-open the popup after an explicit close.
-        Interlocked.Increment(ref _completionRequestSeq);
+        _completionCts?.Cancel();
+        _completionCts?.Dispose();
+        _completionCts = null;
         if (!_completionVisible && _rawCompletionItems.Count == 0) return;
         _completionVisible = false;
         _rawCompletionItems = [];
@@ -429,10 +459,29 @@ public sealed class LspManager : IEditorLspManager
     public async Task RequestSignatureHelpAsync(int line, int character)
     {
         if (_currentClient?.IsRunning != true || _currentUri == null || !_documentReady) return;
-        var help = await _currentClient.GetSignatureHelpAsync(
-            _currentUri, new LspPosition(line, character));
+
+        // Cancel any in-flight request so it is both discarded and stops working.
+        _signatureHelpCts?.Cancel();
+        _signatureHelpCts?.Dispose();
+        _signatureHelpCts = new CancellationTokenSource();
+        var ct = _signatureHelpCts.Token;
+
+        LspSignatureHelp? help;
+        try
+        {
+            help = await _currentClient.GetSignatureHelpAsync(
+                _currentUri, new LspPosition(line, character), ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
         await _dispatcher.InvokeAsync(() =>
         {
+            // Re-check on the dispatcher thread: a newer request or an explicit
+            // HideSignatureHelp may have happened while this apply was queued.
+            if (ct.IsCancellationRequested) return;
             _signatureHelp = help?.Signatures.Count > 0 ? help : null;
             StateChanged?.Invoke();
         });
@@ -440,6 +489,11 @@ public sealed class LspManager : IEditorLspManager
 
     public void HideSignatureHelp()
     {
+        // Cancel any in-flight request so a late response cannot re-show
+        // the popup after an explicit close (e.g. typing ')').
+        _signatureHelpCts?.Cancel();
+        _signatureHelpCts?.Dispose();
+        _signatureHelpCts = null;
         if (_signatureHelp == null) return;
         _signatureHelp = null;
         StateChanged?.Invoke();
@@ -1103,6 +1157,10 @@ public sealed class LspManager : IEditorLspManager
         _managerDisposed = true;  // stop any in-flight ScheduleReconnectAsync from acting after we tear down
         _highlightCts?.Cancel();
         _highlightCts?.Dispose();
+        _completionCts?.Cancel();
+        _completionCts?.Dispose();
+        _signatureHelpCts?.Cancel();
+        _signatureHelpCts?.Dispose();
         _symbolDebounce?.Dispose();
         _semanticTokenDebounce?.Dispose();
         foreach (var c in _clients.Values) c.Dispose();

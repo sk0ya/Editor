@@ -4189,11 +4189,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
         else if (_engine.Mode != VimMode.Insert)
         {
-            if (hadCompletion)
-            {
-                _lspManager.HideCompletion();
-                _completionDebounce.Stop();
-            }
+            // Hide unconditionally: a completion request may still be in flight
+            // with no popup visible yet (e.g. Escape during the debounce round-trip),
+            // and its late response must not open the popup outside Insert mode.
+            _lspManager.HideCompletion();
+            _completionDebounce.Stop();
             _lspManager.HideSignatureHelp();
             _pathCompletionManager.Hide();
         }
@@ -4269,7 +4269,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private async Task TriggerCompletionAsync(int line, int col)
     {
         var msg = await _lspManager.RequestCompletionAsync(line, col);
-        if (!string.IsNullOrEmpty(msg))
+        if (msg == null)
+            return; // superseded — a newer request owns the popup state now
+        if (msg.Length > 0)
         {
             ActiveStatusBar.UpdateStatus(msg);
             return;
