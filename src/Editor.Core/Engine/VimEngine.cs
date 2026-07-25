@@ -1481,6 +1481,47 @@ public class VimEngine
     {
         if (CommandMutatesBuffer(cmd) && BlockedReadOnly(events)) return;
 
+        if (ShouldExecuteNormalCommandInTransaction(cmd))
+        {
+            _editTransactions.Execute(
+                events,
+                transaction =>
+                {
+                    var wasSuppressingSnapshot = _suppressSnapshot;
+                    _suppressSnapshot = true;
+                    try
+                    {
+                        ExecuteNormalCommandCore(cmd, events);
+                        transaction.Cursor = _cursor;
+                        return cmd;
+                    }
+                    finally
+                    {
+                        _suppressSnapshot = wasSuppressingSnapshot;
+                    }
+                },
+                new EditTransactionOptions(
+                    AllowCursorAtEndOfLine: CommandEntersInsertMode(cmd)));
+            return;
+        }
+
+        ExecuteNormalCommandCore(cmd, events);
+    }
+
+    private static bool ShouldExecuteNormalCommandInTransaction(ParsedCommand cmd)
+    {
+        if (!CommandMutatesBuffer(cmd))
+            return false;
+        if (cmd.Operator == "ys")
+            return false;
+        return cmd.Motion is not ("i" or "I" or "a" or "A" or "R" or "gi");
+    }
+
+    private static bool CommandEntersInsertMode(ParsedCommand cmd) =>
+        cmd.Operator == "c" || cmd.Motion is "s" or "S" or "C" or "o" or "O";
+
+    private void ExecuteNormalCommandCore(ParsedCommand cmd, List<VimEvent> events)
+    {
         if (cmd.Operator is null && !cmd.LinewiseForced &&
             _normalCommands.TryResolve(cmd.Motion, out var extensionHandler))
         {

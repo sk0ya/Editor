@@ -93,4 +93,20 @@ public class EditTransactionIntegrationTests
             events.Select(e => e.Type));
         Assert.Equal("abc", engine.CurrentBuffer.Text.GetText());
     }
+
+    [Fact]
+    public void LinewiseOperator_UsesOneTransactionAndPreservesEventOrder()
+    {
+        var engine = new VimEngine();
+        engine.SetText("one\ntwo");
+        engine.ProcessKey("d");
+
+        var events = engine.ProcessKey("d");
+        engine.ProcessKey("u");
+
+        Assert.Equal(
+            new[] { VimEventType.StatusMessage, VimEventType.TextChanged, VimEventType.CursorMoved },
+            events.Select(e => e.Type));
+        Assert.Equal("one\ntwo", engine.CurrentBuffer.Text.GetText());
+    }
 }

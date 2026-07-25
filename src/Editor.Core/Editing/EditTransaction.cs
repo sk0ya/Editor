@@ -60,6 +60,7 @@ public sealed class EditTransactionService(
         }
 
         var originalLines = current.Text.Snapshot();
+        const int eventStart = 0;
         var transaction = new EditTransaction(current.Text, originalCursor);
         object? repeatMetadata;
         try
@@ -89,9 +90,16 @@ public sealed class EditTransactionService(
         }
 
         syntax.Invalidate();
-        events.RemoveAll(e => e.Type is VimEventType.TextChanged or VimEventType.CursorMoved);
-        events.Add(VimEvent.TextChanged());
-        events.Add(VimEvent.CursorMoved(finalCursor));
+        var insertionIndex = events.FindIndex(
+            eventStart,
+            e => e.Type is VimEventType.TextChanged or VimEventType.CursorMoved);
+        if (insertionIndex < 0)
+            insertionIndex = events.Count;
+        for (var i = events.Count - 1; i >= eventStart; i--)
+            if (events[i].Type is VimEventType.TextChanged or VimEventType.CursorMoved)
+                events.RemoveAt(i);
+        events.Insert(insertionIndex, VimEvent.TextChanged());
+        events.Insert(insertionIndex + 1, VimEvent.CursorMoved(finalCursor));
         return new EditTransactionResult(true, true, finalCursor, repeatMetadata);
     }
 }
