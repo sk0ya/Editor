@@ -131,7 +131,45 @@ public sealed class CommandGrammar
                     $"Command sequence '{definition.Sequence}' is already registered."));
         }
 
+        var candidates = _definitions.Concat(additions).ToArray();
+        foreach (var definition in additions)
+        {
+            var shadow = candidates.FirstOrDefault(other =>
+                !ReferenceEquals(other, definition) &&
+                WouldShadow(other, definition));
+            if (shadow != null)
+                diagnostics.Add(new(definition.Sequence,
+                    $"Command sequence '{definition.Sequence}' is unreachable because " +
+                    $"'{shadow.Sequence}' completes first."));
+
+            var shadowed = candidates.FirstOrDefault(other =>
+                !ReferenceEquals(other, definition) &&
+                WouldShadow(definition, other));
+            if (shadowed != null)
+                diagnostics.Add(new(definition.Sequence,
+                    $"Command sequence '{definition.Sequence}' would make " +
+                    $"'{shadowed.Sequence}' unreachable."));
+        }
+
         return diagnostics;
+    }
+
+    private static bool WouldShadow(
+        CommandDefinition ancestor,
+        CommandDefinition descendant)
+    {
+        if (ancestor.Kind == CommandDefinitionKind.Prefix ||
+            descendant.Output != null ||
+            ancestor.Sequence.Length >= descendant.Sequence.Length ||
+            !descendant.Sequence.StartsWith(ancestor.Sequence, StringComparison.Ordinal))
+            return false;
+
+        static bool IsStandalone(CommandDefinitionKind kind) =>
+            kind is CommandDefinitionKind.Action or CommandDefinitionKind.Motion;
+
+        return IsStandalone(ancestor.Kind) && IsStandalone(descendant.Kind) ||
+               ancestor.Kind == CommandDefinitionKind.TextObject &&
+               descendant.Kind == CommandDefinitionKind.TextObject;
     }
 
     private static Node BuildTrie(IEnumerable<CommandDefinition> definitions)

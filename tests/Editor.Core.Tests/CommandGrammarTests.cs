@@ -48,6 +48,21 @@ public class CommandGrammarTests
     }
 
     [Fact]
+    public void Register_DetectsUnreachableDescendant()
+    {
+        var grammar = new CommandGrammar();
+        grammar.Register(new CommandDefinition(
+            "action.g", "g", CommandDefinitionKind.Action));
+
+        var diagnostics = grammar.Register(new CommandDefinition(
+            "action.gx", "gx", CommandDefinitionKind.Action));
+
+        Assert.Contains(diagnostics,
+            diagnostic => diagnostic.Message.Contains("unreachable"));
+        Assert.Equal(CommandGrammarMatchKind.None, grammar.Match("gx").Kind);
+    }
+
+    [Fact]
     public void Parser_AcceptsRegisteredPrefixCommandWithoutParserChanges()
     {
         var grammar = new CommandGrammar();
