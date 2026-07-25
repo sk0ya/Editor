@@ -12,7 +12,8 @@ public enum CommandDefinitionKind
 public sealed record CommandDefinition(
     string Id,
     string Sequence,
-    CommandDefinitionKind Kind);
+    CommandDefinitionKind Kind,
+    string? Output = null);
 
 public enum CommandGrammarMatchKind
 {
@@ -23,7 +24,8 @@ public enum CommandGrammarMatchKind
 
 public sealed record CommandGrammarMatch(
     CommandGrammarMatchKind Kind,
-    CommandDefinition? Definition = null);
+    CommandDefinition? Definition = null,
+    bool HasLongerMatches = false);
 
 public sealed record CommandGrammarDiagnostic(
     string Sequence,
@@ -82,10 +84,26 @@ public sealed class CommandGrammar
         }
 
         if (node.Definition is { Kind: not CommandDefinitionKind.Prefix } definition)
-            return new CommandGrammarMatch(CommandGrammarMatchKind.Exact, definition);
+            return new CommandGrammarMatch(
+                CommandGrammarMatchKind.Exact,
+                definition,
+                node.Children.Count > 0);
         return node.Children.Count > 0 || node.Definition?.Kind == CommandDefinitionKind.Prefix
             ? new CommandGrammarMatch(CommandGrammarMatchKind.Prefix, node.Definition)
             : new CommandGrammarMatch(CommandGrammarMatchKind.None);
+    }
+
+    public CommandDefinition? FindLongestPrefix(
+        string sequence,
+        CommandDefinitionKind kind)
+    {
+        lock (_gate)
+            return _definitions
+                .Where(definition =>
+                    definition.Kind == kind &&
+                    sequence.StartsWith(definition.Sequence, StringComparison.Ordinal))
+                .OrderByDescending(definition => definition.Sequence.Length)
+                .FirstOrDefault();
     }
 
     private List<CommandGrammarDiagnostic> Validate(
@@ -135,4 +153,67 @@ public sealed class CommandGrammar
         }
         return root;
     }
+
+    public static CommandGrammar CreateBuiltIn()
+    {
+        var grammar = new CommandGrammar();
+        var definitions = new List<CommandDefinition>();
+
+        void Add(
+            CommandDefinitionKind kind,
+            IEnumerable<string> sequences)
+        {
+            foreach (var sequence in sequences)
+                definitions.Add(new CommandDefinition(
+                    $"builtin.{kind.ToString().ToLowerInvariant()}.{EscapeId(sequence)}",
+                    sequence,
+                    kind));
+        }
+
+        Add(CommandDefinitionKind.Prefix, ["g", "z", "Z", "[", "]"]);
+        Add(CommandDefinitionKind.Operator,
+            ["d", "c", "y", ">", "<", "=", "gc", "gq", "gu", "gU", "g~", "ys"]);
+        Add(CommandDefinitionKind.TextObject,
+        [
+            "iw", "iW", "i(", "i)", "ib", "i{", "i}", "iB", "i[", "i]",
+            "i<", "i>", "i\"", "i'", "i`", "it", "is", "ip",
+            "aw", "aW", "a(", "a)", "ab", "a{", "a}", "aB", "a[", "a]",
+            "a<", "a>", "a\"", "a'", "a`", "at", "as", "ap"
+        ]);
+        Add(CommandDefinitionKind.Motion,
+        [
+            "h", "j", "k", "l", "w", "b", "e", "W", "B", "E",
+            "0", "^", "$", "G", "H", "M", "L", "{", "}", "%",
+            ";", ",", "n", "N", "*", "#", "gg", "ge", "gE", "gj", "gk",
+            "g_", "gn", "gN",
+            "[m", "]m", "[M", "]M", "[[", "]]", "[]", "][",
+            "[{", "]}", "[(", "])"
+        ]);
+        Add(CommandDefinitionKind.Action,
+        [
+            "~", "x", "X", "p", "P", "u", "\x12", ".", "J",
+            "a", "A", "i", "I", "o", "O", "s", "S", "C", "D", "Y", "U",
+            "R", "v", "V", "\x16",
+            "gt", "gT", "gd", "gr", "ga", "gf", "gx", "gv", "gi", "gJ",
+            "gp", "gP", "g;", "g,", "gch", "gct",
+            "zz", "zt", "zb", "za", "zc", "zo", "zM", "zR", "zf", "z=",
+            "zj", "zk", "zd", "zD", "zE", "zn", "zN", "ZZ", "ZQ"
+        ]);
+        definitions.AddRange(
+        [
+            new CommandDefinition("builtin.key.left", "Left", CommandDefinitionKind.Motion, "h"),
+            new CommandDefinition("builtin.key.right", "Right", CommandDefinitionKind.Motion, "l"),
+            new CommandDefinition("builtin.key.up", "Up", CommandDefinitionKind.Motion, "k"),
+            new CommandDefinition("builtin.key.down", "Down", CommandDefinitionKind.Motion, "j"),
+        ]);
+
+        var diagnostics = grammar.Register([.. definitions]);
+        if (diagnostics.Count > 0)
+            throw new InvalidOperationException(
+                string.Join("; ", diagnostics.Select(diagnostic => diagnostic.Message)));
+        return grammar;
+    }
+
+    private static string EscapeId(string sequence) =>
+        string.Join("_", sequence.Select(character => $"u{(int)character:x4}"));
 }

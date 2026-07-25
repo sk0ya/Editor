@@ -80,4 +80,62 @@ public class CommandGrammarTests
         Assert.Equal("d", result.Command!.Value.Operator);
         Assert.Equal("qx", result.Command.Value.Motion);
     }
+
+    [Fact]
+    public void Parser_PreservesLegacyUppercaseAction()
+    {
+        Assert.Equal(
+            CommandGrammarMatchKind.Exact,
+            CommandGrammar.CreateBuiltIn().Match("U").Kind);
+        var parser = new CommandParser();
+
+        var result = parser.Feed("U");
+
+        Assert.Equal(CommandState.Complete, result.State);
+        Assert.Equal("U", result.Command!.Value.Motion);
+    }
+
+    [Fact]
+    public void BuiltInDefinitions_AreAcceptedByParser()
+    {
+        var grammar = CommandGrammar.CreateBuiltIn();
+        foreach (var definition in grammar.Definitions.Where(definition =>
+                     definition.Kind is CommandDefinitionKind.Action or CommandDefinitionKind.Motion))
+        {
+            var parser = new CommandParser();
+            (CommandState State, ParsedCommand? Command) result = default;
+            if (definition.Output != null)
+            {
+                result = parser.Feed(definition.Sequence);
+            }
+            else
+            {
+                foreach (var key in definition.Sequence)
+                    result = parser.Feed(key.ToString());
+            }
+
+            Assert.True(
+                result.State == CommandState.Complete,
+                $"Built-in '{definition.Sequence}' did not complete.");
+        }
+    }
+
+    [Fact]
+    public void BuiltInTextObjectsComposeWithOperators()
+    {
+        var grammar = CommandGrammar.CreateBuiltIn();
+        foreach (var definition in grammar.Definitions.Where(definition =>
+                     definition.Kind == CommandDefinitionKind.TextObject))
+        {
+            var parser = new CommandParser();
+            parser.Feed("d");
+            (CommandState State, ParsedCommand? Command) result = default;
+            foreach (var key in definition.Sequence)
+                result = parser.Feed(key.ToString());
+
+            Assert.True(
+                result.State == CommandState.Complete,
+                $"Text object '{definition.Sequence}' did not complete.");
+        }
+    }
 }

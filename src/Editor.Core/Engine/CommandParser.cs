@@ -15,6 +15,7 @@ public class CommandParser
 {
     private readonly PendingInputController _pendingInput;
     private readonly CommandGrammar _grammar;
+    private readonly CommandGrammar _builtInGrammar = CommandGrammar.CreateBuiltIn();
     private string _buffer = "";
     private char? _pendingRegister;
     private char? _pendingFindChar;
@@ -107,12 +108,7 @@ public class CommandParser
         if (TryParseRegistered(rest, count, null, out var registered))
             return registered;
 
-        // Surround operations (must come before standard operator handling)
-        if (rest.StartsWith("ys"))
-        {
-            if (rest.Length == 2) return (CommandState.Incomplete, null);
-            return ParseMotion(rest[2..], count, "ys");
-        }
+        // Surround actions with literal arguments.
         if (rest.StartsWith("cs"))
         {
             if (rest.Length < 4) return (CommandState.Incomplete, null);
@@ -124,97 +120,14 @@ public class CommandParser
             return Finalize(count, null, rest[..3]); // motion = "ds{char}"
         }
 
-        // Check for operator
-        string? op = rest[0] switch
-        {
-            'd' or 'c' or 'y' or '>' or '<' or '=' => rest[0..1],
-            _ => null
-        };
-
-        // g and z are multi-key motion prefixes, not operators
-        if (rest.StartsWith("gg")) return Finalize(count, null, "gg");
-        if (rest == "g") return (CommandState.Incomplete, null);
-        if (rest.StartsWith("g") && rest.Length >= 2)
-        {
-            // gch — call hierarchy (must come before gc operator check)
-            if (rest[1] == 'c' && rest.Length >= 3 && rest[2] == 'h')
-                return Finalize(count, null, "gch");
-
-            // gct — type hierarchy (must come before gc operator check)
-            if (rest[1] == 'c' && rest.Length >= 3 && rest[2] == 't')
-                return Finalize(count, null, "gct");
-
-            // gc operator: gcc = linewise, gc{motion} = operator+motion
-            if (rest[1] == 'c')
-            {
-                if (rest.Length == 2) return (CommandState.Incomplete, null);
-                if (rest[2] == 'c') return Finalize(count, "gc", "gc", linewise: true);
-                return ParseMotion(rest[2..], count, "gc");
-            }
-            // gq operator: gqq = linewise, gq{motion} = range
-            if (rest[1] == 'q')
-            {
-                if (rest.Length == 2) return (CommandState.Incomplete, null);
-                if (rest[2] == 'q') return Finalize(count, "gq", "gq", linewise: true);
-                return ParseMotion(rest[2..], count, "gq");
-            }
-            // gu/gU/g~ operators: guu/gUU/g~~ = linewise, gu{motion}/gU{motion}/g~{motion} = range
-            if (rest[1] is 'u' or 'U' or '~')
-            {
-                char op2 = rest[1];
-                string opName = "g" + op2;
-                if (rest.Length == 2) return (CommandState.Incomplete, null);
-                if (rest[2] == op2) return Finalize(count, opName, opName, linewise: true);
-                return ParseMotion(rest[2..], count, opName);
-            }
-            return rest[1] switch
-            {
-                'e' => Finalize(count, null, "ge"),
-                'E' => Finalize(count, null, "gE"),
-                'j' => Finalize(count, null, "gj"),
-                'k' => Finalize(count, null, "gk"),
-                't' => Finalize(count, null, "gt"),
-                'T' => Finalize(count, null, "gT"),
-'d' => Finalize(count, null, "gd"),
-                'r' => Finalize(count, null, "gr"),
-                'a' => Finalize(count, null, "ga"),
-                'f' => Finalize(count, null, "gf"),
-                'x' => Finalize(count, null, "gx"),
-                '_' => Finalize(count, null, "g_"),
-                'v' => Finalize(count, null, "gv"),
-                'i' => Finalize(count, null, "gi"),
-                'J' => Finalize(count, null, "gJ"),
-                'p' => Finalize(count, null, "gp"),
-                'P' => Finalize(count, null, "gP"),
-                ';' => Finalize(count, null, "g;"),
-                ',' => Finalize(count, null, "g,"),
-                'n' => Finalize(count, null, "gn"),
-                'N' => Finalize(count, null, "gN"),
-                _ => (CommandState.Invalid, null)
-            };
-        }
-        if (rest == "z") return (CommandState.Incomplete, null);
-        if (rest.StartsWith("z") && rest.Length >= 2)
-            return FinalizeZMotion(rest[1], count);
-
-        // Z prefix: ZZ (save+quit) and ZQ (quit without saving)
-        if (rest == "Z") return (CommandState.Incomplete, null);
-        if (rest.StartsWith("Z"))
-        {
-            return rest[1] switch
-            {
-                'Z' => Finalize(count, null, "ZZ"),
-                'Q' => Finalize(count, null, "ZQ"),
-                _ => (CommandState.Invalid, null)
-            };
-        }
+        var op = FindOperator(rest)?.Sequence;
 
         if (op != null)
         {
-            string afterOp = rest[1..];
+            string afterOp = rest[op.Length..];
 
             // Double-operator: dd, cc, yy, >>, <<
-            if (afterOp.Length > 0 && afterOp[0].ToString() == op)
+            if (afterOp.Length > 0 && afterOp[0] == op[^1])
             {
                 return Finalize(count, op, op, linewise: true);
             }
@@ -223,9 +136,6 @@ public class CommandParser
 
             if (afterOp.Length == 0)
             {
-                // Special: gd, gw, gc etc.
-                if (op == "g" || op == "z")
-                    return (CommandState.Incomplete, null);
                 return (CommandState.Incomplete, null);
             }
 
@@ -247,35 +157,9 @@ public class CommandParser
                 if (afterOp.Length == 0)
                     return (CommandState.Incomplete, null);
 
-                if (afterOp.Length > 0 && afterOp[0].ToString() == op)
+                if (afterOp.Length > 0 && afterOp[0] == op[^1])
                     return Finalize(count, op, op, linewise: true);
             }
-
-            // g-prefix motions
-            if (op == "g")
-            {
-                return afterOp[0] switch
-                {
-                    'g' => Finalize(count, null, "gg"),
-                    'e' => Finalize(count, null, "ge"),
-                    'E' => Finalize(count, null, "gE"),
-                    'j' => Finalize(count, null, "gj"),
-                    'k' => Finalize(count, null, "gk"),
-                    't' => Finalize(count, null, "gt"),
-                    'T' => Finalize(count, null, "gT"),
-                    '_' => Finalize(count, null, "g_"),
-                    'v' => Finalize(count, null, "gv"),
-                    'i' => Finalize(count, null, "gi"),
-                    'J' => Finalize(count, null, "gJ"),
-                    ';' => Finalize(count, null, "g;"),
-                    ',' => Finalize(count, null, "g,"),
-                    _ => (CommandState.Invalid, null)
-                };
-            }
-
-            // z-prefix
-            if (op == "z")
-                return FinalizeZMotion(afterOp[0], count);
 
             // Motion after operator
             return ParseMotion(afterOp, count, op);
@@ -291,23 +175,8 @@ public class CommandParser
         if (TryParseRegistered(s, count, op, out var registered))
             return registered;
 
-        // Text objects for operators: iw/aw and all extensions
-        if (op != null && s is "i" or "a")
-            return (CommandState.Incomplete, null);
-        if (op != null && s.Length == 2 && (s[0] is 'i' or 'a'))
-        {
-            return s[1] switch
-            {
-                'w' or 'W' or
-                '(' or ')' or 'b' or
-                '{' or '}' or 'B' or
-                '[' or ']' or
-                '<' or '>' or
-                '"' or '\'' or '`' or
-                't' or 's' or 'p' => Finalize(count, op, s),
-                _ => (CommandState.Invalid, null)
-            };
-        }
+        if (op != null && s.Length >= 2 && s[0] is 'i' or 'a')
+            return (CommandState.Invalid, null);
 
         // Two-char motions
         if (s == "g" || s == "z") return (CommandState.Incomplete, null);
@@ -329,37 +198,15 @@ public class CommandParser
             return Finalize(count, op, s[0..1], findChar: s[1]);
         }
 
-        string motion = s switch
-        {
-            "Left" => "h",
-            "Right" => "l",
-            "Up" => "k",
-            "Down" => "j",
-            "h" or "j" or "k" or "l" or
-            "w" or "b" or "e" or "W" or "B" or "E" or
-            "0" or "^" or "$" or
-            "G" or "H" or "M" or "L" or
-            "{" or "}" or "%" or ";" or "," or
-            "~" or "x" or "X" or "p" or "P" or
-            "u" or "\x12" or  // Ctrl+R
-            "." or "n" or "N" or "*" or "#" or
-            "J" or "a" or "A" or "i" or "I" or
-            "o" or "O" or "s" or "S" or "C" or "D" or "Y" or
-            "r" or "R" or "m" or "`" or "'" or
-            "q" or "@" or
-            "v" or "V" or "\x16" // Ctrl+V
-            => s,
-            "gg" => "gg",
-            "zz" or "zt" or "zb" => s,
-            _ => s
-        };
-
         // r needs next char
         if (s == "r")
         {
             BeginPendingInput(new PendingInputState.ReplaceCharacter());
             return (CommandState.Incomplete, null);
         }
+
+        if (s.StartsWith("g") || s.StartsWith("z") || s.StartsWith("Z"))
+            return (CommandState.Invalid, null);
         if (s.Length == 2 && s[0] == 'r') return Finalize(count, op, s, findChar: s[1]);
 
         // m and ` and ' need next char
@@ -389,30 +236,8 @@ public class CommandParser
             return Finalize(count, op, s[..2]);
         }
 
-        return Finalize(count, op, motion);
+        return Finalize(count, op, s);
     }
-
-    private (CommandState, ParsedCommand?) FinalizeZMotion(char ch, int count) => ch switch
-    {
-        'z' => Finalize(count, null, "zz"),
-        't' => Finalize(count, null, "zt"),
-        'b' => Finalize(count, null, "zb"),
-        'a' => Finalize(count, null, "za"),
-        'c' => Finalize(count, null, "zc"),
-        'o' => Finalize(count, null, "zo"),
-        'M' => Finalize(count, null, "zM"),
-        'R' => Finalize(count, null, "zR"),
-        'f' => Finalize(count, null, "zf"),
-        '=' => Finalize(count, null, "z="),
-        'j' => Finalize(count, null, "zj"),
-        'k' => Finalize(count, null, "zk"),
-        'd' => Finalize(count, null, "zd"),
-        'D' => Finalize(count, null, "zD"),
-        'E' => Finalize(count, null, "zE"),
-        'n' => Finalize(count, null, "zn"),
-        'N' => Finalize(count, null, "zN"),
-        _ => (CommandState.Invalid, null)
-    };
 
     private (CommandState, ParsedCommand?) Finalize(int count = 1, string? op = null, string motion = "",
         bool linewise = false, char? findChar = null)
@@ -432,6 +257,8 @@ public class CommandParser
     {
         var match = _grammar.Match(sequence);
         if (match.Kind == CommandGrammarMatchKind.None)
+            match = _builtInGrammar.Match(sequence);
+        if (match.Kind == CommandGrammarMatchKind.None)
         {
             result = default;
             return false;
@@ -443,14 +270,35 @@ public class CommandParser
         }
 
         var definition = match.Definition!;
+        if (definition.Kind == CommandDefinitionKind.Operator)
+        {
+            result = default;
+            return false;
+        }
+
         var valid = op == null
             ? definition.Kind is CommandDefinitionKind.Action or CommandDefinitionKind.Motion
                 or CommandDefinitionKind.TextObject
             : definition.Kind is CommandDefinitionKind.Motion or CommandDefinitionKind.TextObject;
+        if (!valid && op != null && match.HasLongerMatches)
+        {
+            result = (CommandState.Incomplete, null);
+            return true;
+        }
         result = valid
-            ? Finalize(count, op, sequence)
+            ? Finalize(count, op, definition.Output ?? sequence)
             : (CommandState.Invalid, null);
         return true;
+    }
+
+    private CommandDefinition? FindOperator(string sequence)
+    {
+        var custom = _grammar.FindLongestPrefix(sequence, CommandDefinitionKind.Operator);
+        var builtIn = _builtInGrammar.FindLongestPrefix(
+            sequence, CommandDefinitionKind.Operator);
+        return custom is null || (builtIn?.Sequence.Length ?? 0) > custom.Sequence.Length
+            ? builtIn
+            : custom;
     }
 
     private void BeginPendingInput(PendingInputState state)
