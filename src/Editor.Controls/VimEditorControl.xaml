@@ -142,9 +142,10 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Breadcrumb bar (symbol path from cursor; collapsed unless `set breadcrumb`) -->
+        <!-- Keep the breadcrumb row reserved while enabled so async symbol analysis
+             does not move the editor canvas when the path first appears. -->
         <Border x:Name="BreadcrumbBar" Grid.Row="0"
-                Visibility="Collapsed"
+                Height="24"
                 Background="#21222C"
                 BorderBrush="#191A21"
                 BorderThickness="0,0,0,1">

@@ -788,7 +788,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     }
 
     /// <summary>Rebuilds the breadcrumb bar from the symbol path at the current cursor.
-    /// Collapses the bar when the feature is off or no symbol contains the cursor.</summary>
+    /// Collapses the bar only when the feature is off; an empty path keeps its row reserved.</summary>
     private void RefreshBreadcrumbBar()
     {
         if (!_engine.Options.Breadcrumb)
@@ -838,7 +838,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         if (segments.Count == 0)
         {
-            BreadcrumbBar.Visibility = Visibility.Collapsed;
+            // Symbol analysis is asynchronous. Keep the bar visible and empty so the
+            // editor canvas does not jump down when the first symbol path arrives.
+            BreadcrumbBar.Visibility = Visibility.Visible;
             return;
         }
 
