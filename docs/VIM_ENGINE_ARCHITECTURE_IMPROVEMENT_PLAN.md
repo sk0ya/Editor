@@ -193,7 +193,12 @@ MotionRequest
   CommandLine、Plainの独立controllerを導入した。controllerはbufferや相互参照を
   持たず、transactionで保護されたmode処理adapterだけを呼ぶ。入力dispatchと
   programmatic transitionはcoordinatorへ集約し、旧`Handle...` entry pointを削除した。
-- Phase 6 以降: 未着手。
+- Phase 6: 完了。`CommandDefinition`とtrie-backed `CommandGrammar`を導入し、
+  action、motion、operator、text object、prefixを登録定義へ移した。parser内の
+  command固有文字列switchを削除し、動的exact/prefix/operator-motionをparser変更
+  なしで追加可能にした。重複・到達不能登録とtyped incomplete/invalid diagnosticを
+  提供する。
+- Phase 7 以降: 未着手。
 
 ## Phase 0: ベースライン固定
 
