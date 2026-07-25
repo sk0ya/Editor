@@ -72,6 +72,53 @@ public class ModeCoordinatorTests
         Assert.Equal("a", received);
     }
 
+    [Fact]
+    public void TransitionTo_CentralizesProgrammaticTransitions()
+    {
+        ModeTransition? applied = null;
+        var coordinator = new ModeCoordinator(
+            [],
+            new PlainEditController((_, _) => ModeControllerResult.Handled),
+            (transition, _) => applied = transition);
+
+        coordinator.TransitionTo(
+            VimMode.Replace,
+            [],
+            suppressInsertAutocmd: true);
+
+        Assert.Equal(
+            new ModeTransition(VimMode.Replace, SuppressInsertAutocmd: true),
+            applied);
+    }
+
+    [Fact]
+    public void Controllers_DoNotReferenceBuffersOrOtherControllers()
+    {
+        var controllerTypes = new[]
+        {
+            typeof(NormalModeController),
+            typeof(InsertModeController),
+            typeof(ReplaceModeController),
+            typeof(VisualModeController),
+            typeof(CommandLineController),
+            typeof(PlainEditController),
+        };
+
+        foreach (var type in controllerTypes)
+        {
+            var dependencies = type.GetFields(
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Public)
+                .Select(field => field.FieldType)
+                .ToArray();
+            Assert.DoesNotContain(dependencies,
+                dependency => dependency.Name is "TextBuffer" or "BufferManager");
+            Assert.DoesNotContain(dependencies,
+                dependency => typeof(IModeController).IsAssignableFrom(dependency));
+        }
+    }
+
     private static ModeCoordinator CreateCoordinator(params IModeController[] controllers) =>
         new(
             controllers,

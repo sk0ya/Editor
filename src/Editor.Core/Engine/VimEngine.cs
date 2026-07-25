@@ -204,15 +204,15 @@ public class VimEngine
             () => !string.IsNullOrEmpty(_commandParser.Buffer), ProcessResolvedStroke);
         _modeCoordinator = new ModeCoordinator(
             [
-                new NormalModeController(AdaptModeHandler(HandleNormal)),
-                new InsertModeController(AdaptModeHandler(HandleInsert)),
-                new ReplaceModeController(AdaptModeHandler(HandleInsert)),
-                new VisualModeController(AdaptModeHandler(HandleVisual)),
-                new CommandLineController(AdaptModeHandler(HandleCommandLine)),
+                new NormalModeController(AdaptModeHandler(ProcessNormalModeInputCore)),
+                new InsertModeController(AdaptModeHandler(ProcessInsertModeInput)),
+                new ReplaceModeController(AdaptModeHandler(ProcessInsertModeInput)),
+                new VisualModeController(AdaptModeHandler(ProcessVisualModeInput)),
+                new CommandLineController(AdaptModeHandler(ProcessCommandLineModeInputCore)),
             ],
-            new PlainEditController(AdaptModeHandler(HandlePlainTextKey)),
+            new PlainEditController(AdaptModeHandler(ProcessPlainEditInput)),
             (transition, events) =>
-                ChangeMode(transition.Target, events, transition.SuppressInsertAutocmd));
+                ApplyModeTransition(transition.Target, events, transition.SuppressInsertAutocmd));
         _builtInNormalCommands = CreateBuiltInNormalCommands();
         _visualMotions = CreateVisualMotions();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
@@ -1250,7 +1250,7 @@ public class VimEngine
         {
             // Present an Insert-mode resting state to the host so it renders a
             // text caret and routes IME/text input here. Key *handling* while
-            // disabled is done entirely by HandlePlainTextKey via the gate in
+            // disabled is done entirely by PlainEditController via the gate in
             // ProcessStroke — this mode value is for the host's benefit only.
             _insertStart = _cursor;
             ChangeMode(VimMode.Insert, events);
@@ -1353,7 +1353,7 @@ public class VimEngine
     }
 
     // ─────────────── NORMAL MODE ───────────────
-    private void HandleNormal(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    private void ProcessNormalModeInputCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         // Ctrl+W two-key window prefix
         if (_ctrlWPending)
@@ -1393,7 +1393,7 @@ public class VimEngine
         // Ctrl keys
         if (ctrl)
         {
-            HandleNormalCtrl(key, events);
+            ProcessNormalControlInput(key, events);
             MaybeReturnToInsertAfterCtrlO(events);
             return;
         }
@@ -1429,7 +1429,7 @@ public class VimEngine
             ChangeMode(VimMode.Insert, events, suppressInsertAutocmd: true);
     }
 
-    private void HandleNormalCtrl(string key, List<VimEvent> events)
+    private void ProcessNormalControlInput(string key, List<VimEvent> events)
     {
         switch (key.ToLower())
         {
@@ -1888,13 +1888,13 @@ public class VimEngine
     }
 
     // ─────────────── INSERT MODE ───────────────
-    private void HandleInsert(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    private void ProcessInsertModeInput(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         _editTransactions.Execute(
             events,
             transaction =>
             {
-                HandleInsertCore(key, ctrl, shift, alt, events);
+                ProcessInsertModeInputCore(key, ctrl, shift, alt, events);
                 transaction.Cursor = _cursor;
                 return null;
             },
@@ -1904,7 +1904,7 @@ public class VimEngine
                 EnforceReadOnly: false));
     }
 
-    private void HandleInsertCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    private void ProcessInsertModeInputCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         _ctrlWPending = false;
         var buf = _bufferManager.Current.Text;
@@ -2286,13 +2286,13 @@ public class VimEngine
     // modes, no mappings/abbreviations, no Vim insert-mode Ctrl keys (W/U/R/K/X/O),
     // digraphs, completion sub-modes, or pastetoggle. Nothing here ever changes
     // _mode, so modal editing cannot leak back in.
-    private void HandlePlainTextKey(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    private void ProcessPlainEditInput(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         _editTransactions.Execute(
             events,
             transaction =>
             {
-                HandlePlainTextKeyCore(key, ctrl, shift, alt, events);
+                ProcessPlainEditInputCore(key, ctrl, shift, alt, events);
                 transaction.Cursor = _cursor;
                 return null;
             },
@@ -2302,7 +2302,7 @@ public class VimEngine
                 EnforceReadOnly: false));
     }
 
-    private void HandlePlainTextKeyCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    private void ProcessPlainEditInputCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
         bool hasSelection = PlainSelectionRange() is not null;
@@ -2606,11 +2606,11 @@ public class VimEngine
     }
 
     // ─────────────── VISUAL MODE ───────────────
-    private void HandleVisual(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    private void ProcessVisualModeInput(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         if (!VisualInputMutatesBuffer(key, ctrl))
         {
-            HandleVisualCore(key, ctrl, shift, alt, events);
+            ProcessVisualModeInputCore(key, ctrl, shift, alt, events);
             return;
         }
 
@@ -2622,7 +2622,7 @@ public class VimEngine
                 _suppressSnapshot = true;
                 try
                 {
-                    HandleVisualCore(key, ctrl, shift, alt, events);
+                    ProcessVisualModeInputCore(key, ctrl, shift, alt, events);
                     transaction.Cursor = _cursor;
                     return null;
                 }
@@ -2648,7 +2648,7 @@ public class VimEngine
             or "c" or "C" or "s" or "S" or ">" or "<" or "~";
     }
 
-    private void HandleVisualCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    private void ProcessVisualModeInputCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         _ctrlWPending = false;
         if (key == "Escape")
@@ -2739,7 +2739,7 @@ public class VimEngine
                 SelectAllVisualLine(events);
                 return;
             }
-            HandleNormalCtrl(key, events);
+            ProcessNormalControlInput(key, events);
             UpdateSelection(events);
             return;
         }
@@ -2978,7 +2978,7 @@ public class VimEngine
         motion is "Up" or "Down" or "k" or "j" or "gj" or "gk";
 
     // ─────────────── COMMAND LINE MODE ───────────────
-    private void HandleCommandLine(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    private void ProcessCommandLineModeInputCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         bool isSearch = _mode == VimMode.SearchForward || _mode == VimMode.SearchBackward;
 
@@ -3261,7 +3261,16 @@ public class VimEngine
     // (temporarily drop to Normal for one command, then return to Insert) — real Vim's
     // i_CTRL-O never fires InsertLeave/InsertEnter for that round trip since the user
     // never conceptually left Insert mode.
-    private void ChangeMode(VimMode newMode, List<VimEvent> events, bool suppressInsertAutocmd = false)
+    private void ChangeMode(
+        VimMode newMode,
+        List<VimEvent> events,
+        bool suppressInsertAutocmd = false) =>
+        _modeCoordinator.TransitionTo(newMode, events, suppressInsertAutocmd);
+
+    private void ApplyModeTransition(
+        VimMode newMode,
+        List<VimEvent> events,
+        bool suppressInsertAutocmd = false)
     {
         var oldMode = _mode;
         _keyInput.Clear();

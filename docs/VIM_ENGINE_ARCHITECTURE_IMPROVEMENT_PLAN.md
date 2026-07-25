@@ -189,7 +189,11 @@ MotionRequest
   Normal、Visual、Operatorのtarget計算を共通化した。operator固有の`cw`/`dw`、
   find、inclusive/exclusive、linewise metadataもserviceが解決し、fold/display
   awareな`IMotionOverride`拡張点を提供する。
-- Phase 5 以降: 未着手。
+- Phase 5: 完了。`ModeCoordinator`とNormal、Insert、Replace、Visual、
+  CommandLine、Plainの独立controllerを導入した。controllerはbufferや相互参照を
+  持たず、transactionで保護されたmode処理adapterだけを呼ぶ。入力dispatchと
+  programmatic transitionはcoordinatorへ集約し、旧`Handle...` entry pointを削除した。
+- Phase 6 以降: 未着手。
 
 ## Phase 0: ベースライン固定
 

@@ -102,6 +102,12 @@ public sealed class ModeCoordinator
     public void DispatchPlain(ModeKeyInput input, List<VimEvent> events) =>
         Apply(_plain.Handle(input, events), events);
 
+    public void TransitionTo(
+        VimMode target,
+        List<VimEvent> events,
+        bool suppressInsertAutocmd = false) =>
+        _transition(new ModeTransition(target, suppressInsertAutocmd), events);
+
     private void Apply(ModeControllerResult result, List<VimEvent> events)
     {
         if (result.Transition is { } transition)
