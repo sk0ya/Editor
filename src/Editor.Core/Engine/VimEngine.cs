@@ -40,6 +40,9 @@ public class VimEngine
     private readonly NormalCommandExecutor _normalCmdExecutor;
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
+    private readonly VimKeyBindingRegistry _keyBindings;
+    private readonly KeyInputPipeline _keyInput;
+    private readonly VimModeDispatcher _modeDispatcher;
 
     private VimMode _mode = VimMode.Normal;
     private bool _vimEnabled = true;
@@ -104,7 +107,6 @@ public class VimEngine
     private CursorPosition _lastVisualStart;
     private CursorPosition _lastVisualEnd;
     private VimMode _lastVisualMode = VimMode.Visual;
-    private readonly List<VimKeyStroke> _pendingMappedInput = [];
 
     public VimMode Mode => _mode;
 
@@ -128,6 +130,7 @@ public class VimEngine
     public SyntaxEngine Syntax => _syntaxEngine;
     public ExCommandProcessor ExProcessor => _exProcessor;
     public bool FoldsDisabled => _foldDisabled;
+    public VimKeyBindingRegistry KeyBindings => _keyBindings;
 
     /// <summary>Executes a registered synchronous or asynchronous command from a raw Ex line.</summary>
     public ValueTask<EditorCommandResult?> ExecuteExtensionCommandAsync(string rawCommand,
@@ -187,7 +190,8 @@ public class VimEngine
     }
 
     public VimEngine(VimConfig? config = null, SyntaxLanguageRegistry? syntaxLanguages = null,
-        EditorCommandRegistry? commands = null, IServiceProvider? services = null)
+        EditorCommandRegistry? commands = null, IServiceProvider? services = null,
+        VimKeyBindingRegistry? keyBindings = null)
     {
         _config = config ?? new VimConfig();
         _bufferManager = new BufferManager();
@@ -198,6 +202,10 @@ public class VimEngine
         _macroManager = new MacroManager();
         _syntaxEngine = new SyntaxEngine(syntaxLanguages);
         _commandParser = new CommandParser();
+        _keyBindings = keyBindings ?? VimKeyBindingRegistry.Default;
+        _keyInput = new KeyInputPipeline(this, _keyBindings, () => _mode, GetMapsForMode,
+            () => !string.IsNullOrEmpty(_commandParser.Buffer), ProcessResolvedStroke);
+        _modeDispatcher = new VimModeDispatcher(HandleNormal, HandleInsert, HandleVisual, HandleCommandLine);
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
             _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames, _config.Functions,
             commandRegistry: commands, services: services);
@@ -408,7 +416,7 @@ public class VimEngine
 
         // Clear any pending modal state regardless of direction.
         _commandParser.Reset();
-        _pendingMappedInput.Clear();
+        _keyInput.Clear();
         if (_selection != null)
         {
             _selection = null;
@@ -463,7 +471,7 @@ public class VimEngine
     // holding the prefix waiting for the next key. The host arms a 'timeoutlen'
     // timer while this is set so a dangling prefix is eventually emitted as
     // literal text (Vim's 'timeout' behaviour) instead of being swallowed.
-    public bool HasPendingMappedInput => _pendingMappedInput.Count > 0;
+    public bool HasPendingMappedInput => _keyInput.HasPendingInput;
 
     // Flush a half-typed mapping prefix as literal input. Called by the host
     // when the 'timeoutlen' timer fires with no further key. No-op if nothing
@@ -471,8 +479,7 @@ public class VimEngine
     public IReadOnlyList<VimEvent> FlushPendingMappings()
     {
         var events = new List<VimEvent>();
-        if (_pendingMappedInput.Count > 0)
-            FlushPendingMappedInput(events);
+        _keyInput.Flush(events);
         return events;
     }
 
@@ -489,9 +496,11 @@ public class VimEngine
             return;
         }
 
-        if (allowMapping && TryApplyMapping(stroke, events))
-            return;
+        _keyInput.Process(stroke, events, allowMapping);
+    }
 
+    private void ProcessResolvedStroke(VimKeyStroke stroke, List<VimEvent> events)
+    {
         var modeBefore = _mode;
 
         // Macro recording
@@ -504,54 +513,6 @@ public class VimEngine
         _repeatTracker.TrackPendingVisualRepeat(stroke, modeBefore, _mode, events);
     }
 
-    private bool TryApplyMapping(VimKeyStroke stroke, List<VimEvent> events)
-    {
-        var maps = GetMapsForMode(_mode);
-        if ((maps == null || maps.Count == 0) && _pendingMappedInput.Count == 0)
-            return false;
-
-        _pendingMappedInput.Add(stroke);
-
-        while (_pendingMappedInput.Count > 0)
-        {
-            maps = GetMapsForMode(_mode);
-            if (maps == null || maps.Count == 0)
-            {
-                FlushPendingMappedInput(events);
-                return true;
-            }
-
-            var match = KeyMappingResolver.ResolveMapMatch(maps, _pendingMappedInput);
-            if (match.HasExactMatch)
-            {
-                if (match.HasLongerPrefix)
-                    return true;
-
-                _pendingMappedInput.Clear();
-                foreach (var mappedStroke in KeyMappingResolver.ParseMappingSequence(match.MappedValue ?? ""))
-                    ProcessStroke(mappedStroke, events, allowMapping: false);
-                return true;
-            }
-
-            if (match.HasPrefix)
-                return true;
-
-            var literal = _pendingMappedInput[0];
-            _pendingMappedInput.RemoveAt(0);
-            ProcessStroke(literal, events, allowMapping: false);
-
-            // If the command parser is now mid-sequence (e.g. buffer == "g" after
-            // flushing the first 'g'), the remaining pending keys must also be
-            // dispatched immediately as literals.  Without this, a user map that
-            // starts with 'g' (like nnoremap gf …) causes the second 'g' of 'gg'
-            // to be re-held as a potential map prefix, requiring an extra keypress.
-            if (!string.IsNullOrEmpty(_commandParser.Buffer))
-                FlushPendingMappedInput(events);
-        }
-
-        return true;
-    }
-
     private Dictionary<string, string>? GetMapsForMode(VimMode mode) => mode switch
     {
         VimMode.Normal => _config.NormalMaps,
@@ -559,16 +520,6 @@ public class VimEngine
         VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock => _config.VisualMaps,
         _ => null
     };
-
-    private void FlushPendingMappedInput(List<VimEvent> events)
-    {
-        while (_pendingMappedInput.Count > 0)
-        {
-            var literal = _pendingMappedInput[0];
-            _pendingMappedInput.RemoveAt(0);
-            ProcessStroke(literal, events, allowMapping: false);
-        }
-    }
 
     private void ProcessKeyInternal(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
@@ -581,26 +532,7 @@ public class VimEngine
             return;
         }
 
-        switch (_mode)
-        {
-            case VimMode.Normal:
-                HandleNormal(key, ctrl, shift, alt, events);
-                break;
-            case VimMode.Insert:
-            case VimMode.Replace:
-                HandleInsert(key, ctrl, shift, alt, events);
-                break;
-            case VimMode.Visual:
-            case VimMode.VisualLine:
-            case VimMode.VisualBlock:
-                HandleVisual(key, ctrl, shift, alt, events);
-                break;
-            case VimMode.Command:
-            case VimMode.SearchForward:
-            case VimMode.SearchBackward:
-                HandleCommandLine(key, ctrl, shift, alt, events);
-                break;
-        }
+        _modeDispatcher.Dispatch(_mode, key, ctrl, shift, alt, events);
     }
 
     // ─────────────── NORMAL MODE ───────────────
@@ -2939,7 +2871,7 @@ public class VimEngine
     private void ChangeMode(VimMode newMode, List<VimEvent> events, bool suppressInsertAutocmd = false)
     {
         var oldMode = _mode;
-        _pendingMappedInput.Clear();
+        _keyInput.Clear();
         if (newMode != VimMode.VisualBlock)
         {
             _visualBlockToLineEnd = false;

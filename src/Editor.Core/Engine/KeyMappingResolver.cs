@@ -6,7 +6,7 @@ namespace Editor.Core.Engine;
 /// Pure key-mapping resolution helpers: parsing a map LHS/RHS (<c>nnoremap</c> etc.)
 /// into <see cref="VimKeyStroke"/> sequences and matching accumulated input against
 /// the configured maps. Stateless — <see cref="VimEngine"/> owns the pending-input
-/// buffer and drives these from <c>TryApplyMapping</c>.
+/// buffers and drives these through <see cref="KeyInputPipeline"/>.
 /// </summary>
 public static class KeyMappingResolver
 {
@@ -48,7 +48,7 @@ public static class KeyMappingResolver
         return new MapMatch(
             HasExactMatch: exactLength >= 0,
             HasPrefix: hasPrefix,
-            HasLongerPrefix: hasLongerPrefix,
+            HasLongerPrefix: exactLength >= 0 && (hasLongerPrefix || hasPrefix),
             MappedValue: mappedValue);
     }
 
@@ -66,7 +66,7 @@ public static class KeyMappingResolver
         return true;
     }
 
-    private static bool AreSameStroke(VimKeyStroke left, VimKeyStroke right) =>
+    internal static bool AreSameStroke(VimKeyStroke left, VimKeyStroke right) =>
         left.Ctrl == right.Ctrl &&
         left.Alt == right.Alt &&
         string.Equals(left.Key, right.Key, StringComparison.Ordinal) &&
