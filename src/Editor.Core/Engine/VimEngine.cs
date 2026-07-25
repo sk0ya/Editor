@@ -43,7 +43,7 @@ public class VimEngine
     private readonly VimKeyBindingRegistry _keyBindings;
     private readonly NormalCommandRegistry _normalCommands;
     private readonly KeyInputPipeline _keyInput;
-    private readonly VimModeDispatcher _modeDispatcher;
+    private readonly ModeCoordinator _modeCoordinator;
     private readonly BuiltInNormalCommandDispatcher _builtInNormalCommands;
     private readonly VisualMotionDispatcher _visualMotions;
     private readonly PendingInputController _pendingInput = new();
@@ -202,7 +202,17 @@ public class VimEngine
         _normalCommands = normalCommands ?? NormalCommandRegistry.Default;
         _keyInput = new KeyInputPipeline(this, _keyBindings, () => _mode, GetMapsForMode,
             () => !string.IsNullOrEmpty(_commandParser.Buffer), ProcessResolvedStroke);
-        _modeDispatcher = new VimModeDispatcher(HandleNormal, HandleInsert, HandleVisual, HandleCommandLine);
+        _modeCoordinator = new ModeCoordinator(
+            [
+                new NormalModeController(AdaptModeHandler(HandleNormal)),
+                new InsertModeController(AdaptModeHandler(HandleInsert)),
+                new ReplaceModeController(AdaptModeHandler(HandleInsert)),
+                new VisualModeController(AdaptModeHandler(HandleVisual)),
+                new CommandLineController(AdaptModeHandler(HandleCommandLine)),
+            ],
+            new PlainEditController(AdaptModeHandler(HandlePlainTextKey)),
+            (transition, events) =>
+                ChangeMode(transition.Target, events, transition.SuppressInsertAutocmd));
         _builtInNormalCommands = CreateBuiltInNormalCommands();
         _visualMotions = CreateVisualMotions();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
@@ -242,6 +252,14 @@ public class VimEngine
         dispatcher.SetFallback(ExecuteOperatorMotion);
         return dispatcher;
     }
+
+    private static Func<ModeKeyInput, List<VimEvent>, ModeControllerResult> AdaptModeHandler(
+        Action<string, bool, bool, bool, List<VimEvent>> handler) =>
+        (input, events) =>
+        {
+            handler(input.Key, input.Ctrl, input.Shift, input.Alt, events);
+            return ModeControllerResult.Handled;
+        };
 
     private VisualMotionDispatcher CreateVisualMotions()
     {
@@ -1286,7 +1304,9 @@ public class VimEngine
         // individual exits, which leaked modal behaviour (e.g. Ctrl+A → Visual).
         if (!_vimEnabled)
         {
-            HandlePlainTextKey(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt, events);
+            _modeCoordinator.DispatchPlain(
+                new ModeKeyInput(stroke.Key, stroke.Ctrl, stroke.Shift, stroke.Alt),
+                events);
             return;
         }
 
@@ -1326,7 +1346,10 @@ public class VimEngine
             return;
         }
 
-        _modeDispatcher.Dispatch(_mode, key, ctrl, shift, alt, events);
+        _modeCoordinator.Dispatch(
+            _mode,
+            new ModeKeyInput(key, ctrl, shift, alt),
+            events);
     }
 
     // ─────────────── NORMAL MODE ───────────────
