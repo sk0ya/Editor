@@ -48,6 +48,7 @@ public class VimEngine
     private readonly VisualMotionDispatcher _visualMotions;
     private readonly PendingInputController _pendingInput = new();
     private readonly IEditTransactionService _editTransactions;
+    private readonly IMotionService _motionService;
 
     private VimMode _mode = VimMode.Normal;
     private bool _vimEnabled = true;
@@ -195,6 +196,7 @@ public class VimEngine
             _bufferManager, _markManager, _syntaxEngine,
             () => _cursor, cursor => _cursor = cursor,
             () => _suppressSnapshot, EmitStatus);
+        _motionService = new MotionService(_bufferManager);
         _commandParser = new CommandParser(_pendingInput);
         _keyBindings = keyBindings ?? VimKeyBindingRegistry.Default;
         _normalCommands = normalCommands ?? NormalCommandRegistry.Default;
@@ -259,22 +261,14 @@ public class VimEngine
 
     private void RegisterVisualCursorMotions(VisualMotionDispatcher motions)
     {
-        RegisterVisualCalculatedMotion(motions, ["Left", "h"],
-            (m, count) => m.MoveLeft(_cursor, count), sticky: true);
-        RegisterVisualCalculatedMotion(motions, ["Right", "l"],
-            (m, count) => m.MoveRight(_cursor, count), sticky: true);
-        RegisterVisualCalculatedMotion(motions, ["w"],
-            (m, count) => m.WordForward(_cursor, count, false));
-        RegisterVisualCalculatedMotion(motions, ["W"],
-            (m, count) => m.WordForward(_cursor, count, true));
-        RegisterVisualCalculatedMotion(motions, ["b"],
-            (m, count) => m.WordBackward(_cursor, count, false));
-        RegisterVisualCalculatedMotion(motions, ["B"],
-            (m, count) => m.WordBackward(_cursor, count, true));
-        RegisterVisualCalculatedMotion(motions, ["e"],
-            (m, count) => m.WordEnd(_cursor, count, false));
-        RegisterVisualCalculatedMotion(motions, ["E"],
-            (m, count) => m.WordEnd(_cursor, count, true));
+        RegisterVisualCalculatedMotion(motions, ["Left", "h"], sticky: true);
+        RegisterVisualCalculatedMotion(motions, ["Right", "l"], sticky: true);
+        RegisterVisualCalculatedMotion(motions, ["w"]);
+        RegisterVisualCalculatedMotion(motions, ["W"]);
+        RegisterVisualCalculatedMotion(motions, ["b"]);
+        RegisterVisualCalculatedMotion(motions, ["B"]);
+        RegisterVisualCalculatedMotion(motions, ["e"]);
+        RegisterVisualCalculatedMotion(motions, ["E"]);
         motions.Register(["Up", "k"], (cmd, _) => { MoveVerticalCursor(-cmd.Count); return true; });
         motions.Register(["Down", "j", "gj"], (cmd, _) => { MoveVerticalCursor(cmd.Count); return true; });
         motions.Register("gk", (cmd, _) => { MoveVerticalCursor(-cmd.Count); return true; });
@@ -309,9 +303,9 @@ public class VimEngine
         });
         motions.Register("g_", (cmd, _) =>
         {
-            var result = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
-                .Calculate("g_", _cursor, cmd.Count);
-            if (result.HasValue) _cursor = result.Value.Target;
+            var result = _motionService.Calculate(new MotionRequest(
+                "g_", _cursor, cmd.Count, MotionApplication.Visual));
+            if (result != null) _cursor = result.Target;
             return true;
         });
         motions.Register("gg", (_, _) =>
@@ -344,9 +338,9 @@ public class VimEngine
         motions.Register("}", (cmd, _) => RepeatVisualParagraph(cmd.Count, backwards: false));
         motions.Register("%", (_, _) =>
         {
-            var engine = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
-            var match = MatchBracket(CurrentBuffer.Text, engine);
-            if (match.HasValue) _cursor = match.Value;
+            var result = _motionService.Calculate(new MotionRequest(
+                "%", _cursor, Application: MotionApplication.Visual));
+            if (result != null) _cursor = result.Target;
             return true;
         });
         motions.Register("H", (cmd, _) => SetVisualScreenPosition(Math.Max(0, cmd.Count - 1)));
@@ -362,13 +356,20 @@ public class VimEngine
     private void RegisterVisualCalculatedMotion(
         VisualMotionDispatcher motions,
         IEnumerable<string> keys,
-        Func<MotionEngine, int, CursorPosition> calculate,
         bool sticky = false)
     {
         motions.Register(keys, (cmd, _) =>
         {
-            var engine = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
-            _cursor = calculate(engine, cmd.Count);
+            var result = _motionService.Calculate(new MotionRequest(
+                cmd.Motion!,
+                _cursor,
+                cmd.Count,
+                MotionApplication.Visual,
+                ViewportTopLine: _viewportTopLine,
+                ViewportVisibleLines: _viewportVisibleLines));
+            if (result == null)
+                return false;
+            _cursor = result.Target;
             if (sticky) SetPreferredColumn(_cursor.Column);
             return true;
         });
@@ -398,10 +399,17 @@ public class VimEngine
     private bool ExecuteVisualFindMotion(ParsedCommand cmd, List<VimEvent> events)
     {
         if (!cmd.FindChar.HasValue) return false;
-        bool forward = cmd.Motion is "f" or "t";
-        bool before = cmd.Motion is "t" or "T";
-        var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
-        _cursor = motion.FindChar(_cursor, cmd.FindChar.Value, forward, before, cmd.Count);
+        var result = _motionService.Calculate(new MotionRequest(
+            cmd.Motion!,
+            _cursor,
+            cmd.Count,
+            MotionApplication.Visual,
+            FindCharacter: cmd.FindChar,
+            ViewportTopLine: _viewportTopLine,
+            ViewportVisibleLines: _viewportVisibleLines));
+        if (result == null)
+            return false;
+        _cursor = result.Target;
         return true;
     }
 
@@ -415,10 +423,15 @@ public class VimEngine
 
     private bool ExecuteVisualStructuralJump(ParsedCommand cmd, List<VimEvent> events)
     {
-        var result = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
-            .Calculate(cmd.Motion!, _cursor, cmd.Count);
-        if (result.HasValue && result.Value.Target != _cursor)
-            _cursor = result.Value.Target;
+        var result = _motionService.Calculate(new MotionRequest(
+            cmd.Motion!,
+            _cursor,
+            cmd.Count,
+            MotionApplication.Visual,
+            ViewportTopLine: _viewportTopLine,
+            ViewportVisibleLines: _viewportVisibleLines));
+        if (result != null && result.Target != _cursor)
+            _cursor = result.Target;
         return true;
     }
 
@@ -553,8 +566,10 @@ public class VimEngine
         commands.Register("a", (cmd, events) =>
         {
             _repeatTracker.BeginInsertRepeat(cmd);
-            var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
-            _cursor = motion.MoveRight(_cursor, 1, true);
+            var result = _motionService.Calculate(new MotionRequest(
+                "l", _cursor, AllowEndOfLine: true));
+            if (result != null)
+                _cursor = result.Target;
             EmitCursor(events);
             EnterInsertMode(false, events);
         });
@@ -597,14 +612,14 @@ public class VimEngine
 
     private void RegisterMovementCommands(BuiltInNormalCommandDispatcher commands)
     {
-        RegisterCalculatedMotion(commands, "h", (m, count) => m.MoveLeft(_cursor, count), sticky: true);
-        RegisterCalculatedMotion(commands, "l", (m, count) => m.MoveRight(_cursor, count), sticky: true);
-        RegisterCalculatedMotion(commands, "w", (m, count) => m.WordForward(_cursor, count, false));
-        RegisterCalculatedMotion(commands, "W", (m, count) => m.WordForward(_cursor, count, true));
-        RegisterCalculatedMotion(commands, "b", (m, count) => m.WordBackward(_cursor, count, false));
-        RegisterCalculatedMotion(commands, "B", (m, count) => m.WordBackward(_cursor, count, true));
-        RegisterCalculatedMotion(commands, "e", (m, count) => m.WordEnd(_cursor, count, false));
-        RegisterCalculatedMotion(commands, "E", (m, count) => m.WordEnd(_cursor, count, true));
+        RegisterCalculatedMotion(commands, "h", sticky: true);
+        RegisterCalculatedMotion(commands, "l", sticky: true);
+        RegisterCalculatedMotion(commands, "w");
+        RegisterCalculatedMotion(commands, "W");
+        RegisterCalculatedMotion(commands, "b");
+        RegisterCalculatedMotion(commands, "B");
+        RegisterCalculatedMotion(commands, "e");
+        RegisterCalculatedMotion(commands, "E");
         commands.Register("j", (cmd, events) => MoveVertical(cmd.Count, events));
         commands.Register("k", (cmd, events) => MoveVertical(-cmd.Count, events));
         commands.Register("gj", (cmd, events) => MoveVertical(cmd.Count, events));
@@ -670,13 +685,20 @@ public class VimEngine
     private void RegisterCalculatedMotion(
         BuiltInNormalCommandDispatcher commands,
         string key,
-        Func<MotionEngine, int, CursorPosition> calculate,
         bool sticky = false)
     {
         commands.Register(key, (cmd, events) =>
         {
-            var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
-            MoveCursor(calculate(motion, cmd.Count), events);
+            var result = _motionService.Calculate(new MotionRequest(
+                key,
+                _cursor,
+                cmd.Count,
+                MotionApplication.Normal,
+                ViewportTopLine: _viewportTopLine,
+                ViewportVisibleLines: _viewportVisibleLines));
+            if (result == null)
+                return;
+            MoveCursor(result.Target, events);
             if (sticky) SetPreferredColumn(_cursor.Column);
         });
     }
@@ -727,9 +749,8 @@ public class VimEngine
         commands.Register("}", (_, events) => MoveCursor(ParagraphForward(), events));
         commands.Register("%", (_, events) =>
         {
-            var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
-            var match = MatchBracket(CurrentBuffer.Text, motion);
-            if (match.HasValue) MoveCursor(match.Value, events);
+            var result = _motionService.Calculate(new MotionRequest("%", _cursor));
+            if (result != null) MoveCursor(result.Target, events);
         });
         commands.Register("H", (cmd, events) =>
             MoveCursor(ScreenPosition(Math.Max(0, cmd.Count - 1)), events));
@@ -759,11 +780,11 @@ public class VimEngine
     private void ExecuteSectionOrBlockJump(ParsedCommand cmd, List<VimEvent> events)
     {
         bool isSection = cmd.Motion is "[[" or "]]" or "[]" or "][";
-        var result = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
-            .Calculate(cmd.Motion!, _cursor, cmd.Count);
-        if (!result.HasValue || result.Value.Target == _cursor) return;
+        var result = _motionService.Calculate(new MotionRequest(
+            cmd.Motion!, _cursor, cmd.Count, MotionApplication.Normal));
+        if (result == null || result.Target == _cursor) return;
         if (isSection) _markManager.AddJump(_cursor);
-        MoveCursor(result.Value.Target, events);
+        MoveCursor(result.Target, events);
     }
 
     private void ExecuteFoldCommand(ParsedCommand cmd, List<VimEvent> events)
@@ -792,8 +813,9 @@ public class VimEngine
         commands.Register("X", (cmd, events) =>
         {
             _repeatTracker.SetRepeatChange(cmd);
-            var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
-            var start = motion.MoveLeft(_cursor, cmd.Count);
+            var result = _motionService.Calculate(new MotionRequest("h", _cursor, cmd.Count));
+            if (result == null) return;
+            var start = result.Target;
             if (start.Column < _cursor.Column)
                 _cursor = _clipboardOps.ExecuteDelete(
                     start, _cursor with { Column = _cursor.Column - 1 },
@@ -840,9 +862,11 @@ public class VimEngine
     {
         _repeatTracker.BeginInsertRepeat(cmd);
         var start = _cursor;
-        var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
+        var result = _motionService.Calculate(new MotionRequest(
+            "l", _cursor, cmd.Count, AllowEndOfLine: true));
+        if (result == null) return;
         _cursor = _clipboardOps.ExecuteDelete(
-            _cursor, motion.MoveRight(_cursor, cmd.Count), false, events, cmd.Register ?? '"');
+            _cursor, result.Target, false, events, cmd.Register ?? '"');
         _cursor = CurrentBuffer.Text.ClampCursor(start, true);
         EmitCursor(events);
         EnterInsertMode(false, events);
@@ -1308,9 +1332,6 @@ public class VimEngine
     // ─────────────── NORMAL MODE ───────────────
     private void HandleNormal(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
-        var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
-
         // Ctrl+W two-key window prefix
         if (_ctrlWPending)
         {
@@ -1387,9 +1408,6 @@ public class VimEngine
 
     private void HandleNormalCtrl(string key, List<VimEvent> events)
     {
-        var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
-
         switch (key.ToLower())
         {
             case "d": ScrollHalfPage(true, events); break;
@@ -1403,7 +1421,13 @@ public class VimEngine
             case "i": { var jf = _markManager.JumpForward(); if (jf.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(jf.Value, events); } break; }
             case "v": EnterVisualMode(VimMode.VisualBlock, events); break;
             case "w": _ctrlWPending = true; EmitStatus(events, "^W"); break;
-            case "h": MoveCursor(motion.MoveLeft(_cursor, 1), events); SetPreferredColumn(_cursor.Column); break;
+            case "h":
+            {
+                var result = _motionService.Calculate(new MotionRequest("h", _cursor));
+                if (result != null) MoveCursor(result.Target, events);
+                SetPreferredColumn(_cursor.Column);
+                break;
+            }
             case "j": MoveVertical(1, events); break;
             case "m": MoveLineAndFirstNonBlank(1, events); break;
             case "a":
@@ -1555,7 +1579,6 @@ public class VimEngine
         }
 
         var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
         int count = cmd.Count;
 
         // Double-operator: dd, cc, yy, >>, << (linewise on current line(s))
@@ -1662,8 +1685,18 @@ public class VimEngine
             () => _mode,
             () => CurrentBuffer.FilePath,
             (requestedMotion, requestedCount) =>
-                new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
-                    .Calculate(requestedMotion, _cursor, requestedCount),
+            {
+                var result = _motionService.Calculate(new MotionRequest(
+                    requestedMotion,
+                    _cursor,
+                    requestedCount,
+                    MotionApplication.Normal,
+                    ViewportTopLine: _viewportTopLine,
+                    ViewportVisibleLines: _viewportVisibleLines));
+                return result == null
+                    ? null
+                    : new Motion(result.Target, result.Type, result.Shape == MotionShape.Linewise);
+            },
             mutation => ExecuteEdit(events, mutation),
             cursor => MoveCursor(cursor, events),
             name => _registerManager.Get(name),
@@ -1672,8 +1705,6 @@ public class VimEngine
     private void ExecuteOperatorMotion(ParsedCommand cmd, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
-        motion.SetViewport(_viewportTopLine, _viewportVisibleLines);
 
         // Text objects
         if (cmd.Motion?.Length == 2 && (cmd.Motion[0] is 'i' or 'a'))
@@ -1703,9 +1734,18 @@ public class VimEngine
         // f/F/t/T find
         if (cmd.Motion is "f" or "F" or "t" or "T" && cmd.FindChar.HasValue)
         {
-            bool fwd = cmd.Motion is "f" or "t";
-            bool before = cmd.Motion is "t" or "T";
-            var found = motion.FindChar(_cursor, cmd.FindChar.Value, fwd, before, cmd.Count);
+            var findResult = _motionService.Calculate(new MotionRequest(
+                cmd.Motion,
+                _cursor,
+                cmd.Count,
+                MotionApplication.Operator,
+                cmd.Operator,
+                cmd.FindChar,
+                _viewportTopLine,
+                _viewportVisibleLines));
+            if (findResult == null)
+                return;
+            var found = findResult.Target;
 
             if (cmd.Operator == null)
             {
@@ -1719,31 +1759,23 @@ public class VimEngine
             return;
         }
 
-        // Calculate motion target
         var motionName = cmd.Motion ?? "";
-
-        // cw / cW behave like ce / cE when the cursor is on a non-blank (Vim special
-        // case): the trailing whitespace after the word must be preserved.
-        if (cmd.Operator == "c" && motionName is "w" or "W")
-        {
-            var lineText = buf.GetLine(_cursor.Line);
-            if (_cursor.Column < lineText.Length && !char.IsWhiteSpace(lineText[_cursor.Column]))
-                motionName = motionName == "w" ? "e" : "E";
-        }
-
-        // `dw`/`dW` (and other operators over w/W) extend over the whole last word of a
-        // line, unlike the cursor-movement `w` which stops on its last character. Use the
-        // unclamped operator word-end so the exclusive delete covers the word.
-        var mot = (cmd.Operator != null && motionName is "w" or "W")
-            ? motion.WordForwardOperatorEnd(_cursor, Math.Max(1, cmd.Count), motionName == "W")
-            : motion.Calculate(motionName, _cursor, cmd.Count);
+        var mot = _motionService.Calculate(new MotionRequest(
+            motionName,
+            _cursor,
+            cmd.Count,
+            MotionApplication.Operator,
+            cmd.Operator,
+            cmd.FindChar,
+            _viewportTopLine,
+            _viewportVisibleLines));
         if (mot == null) return;
 
-        bool linewise = mot.Value.Type == MotionType.Linewise || cmd.LinewiseForced;
+        bool linewise = mot.Shape == MotionShape.Linewise || cmd.LinewiseForced;
 
         if (cmd.Operator == null)
         {
-            MoveCursor(mot.Value.Target, events);
+            MoveCursor(mot.Target, events);
             return;
         }
 
@@ -1751,14 +1783,14 @@ public class VimEngine
         else if (cmd.Operator is "d" or "<" or ">" or "=" or "gu" or "gU" or "g~") _repeatTracker.SetRepeatChange(cmd);
 
         var opFrom = _cursor;
-        var opTo = mot.Value.Target;
+        var opTo = mot.Target;
 
         // ExecuteOperator deletes inclusively (through the char at the far endpoint).
         // An exclusive motion must NOT include that character, so step the far endpoint
         // back one position. At column 0 this moves to the end of the previous line —
         // matching Vim's exclusive-to-inclusive rule and keeping `dw` on the last word
         // of a line from joining the following line.
-        if (!linewise && mot.Value.Type == MotionType.Exclusive)
+        if (!linewise && mot.Type == MotionType.Exclusive)
         {
             var (lo, hi) = ComparePositions(opFrom, opTo) <= 0 ? (opFrom, opTo) : (opTo, opFrom);
             if (lo == hi) return; // empty motion — nothing to operate on
@@ -2105,14 +2137,16 @@ public class VimEngine
                 _insertedText?.Append('\n');
                 break;
             case "Left":
-                var ml = new MotionEngine(buf, _bufferManager.Current.FilePath);
-                _cursor = ml.MoveLeft(_cursor);
+                var leftResult = _motionService.Calculate(new MotionRequest(
+                    "h", _cursor, Application: MotionApplication.Normal));
+                if (leftResult != null) _cursor = leftResult.Target;
                 SetPreferredColumn(_cursor.Column);
                 EmitCursor(events);
                 break;
             case "Right":
-                var mr = new MotionEngine(buf, _bufferManager.Current.FilePath);
-                _cursor = mr.MoveRight(_cursor, 1, true);
+                var rightResult = _motionService.Calculate(new MotionRequest(
+                    "l", _cursor, Application: MotionApplication.Normal, AllowEndOfLine: true));
+                if (rightResult != null) _cursor = rightResult.Target;
                 SetPreferredColumn(_cursor.Column);
                 EmitCursor(events);
                 break;
@@ -2286,8 +2320,19 @@ public class VimEngine
         {
             // Cursor movement: with Shift it extends the selection, otherwise it
             // ends the current edit run and drops any selection.
-            case "Left":  PlainMoveCaret(new MotionEngine(buf, _bufferManager.Current.FilePath).MoveLeft(_cursor), shift, events); return;
-            case "Right": PlainMoveCaret(new MotionEngine(buf, _bufferManager.Current.FilePath).MoveRight(_cursor, 1, true), shift, events); return;
+            case "Left":
+                PlainMoveCaret(
+                    _motionService.Calculate(new MotionRequest("h", _cursor))?.Target ?? _cursor,
+                    shift,
+                    events);
+                return;
+            case "Right":
+                PlainMoveCaret(
+                    _motionService.Calculate(new MotionRequest(
+                        "l", _cursor, AllowEndOfLine: true))?.Target ?? _cursor,
+                    shift,
+                    events);
+                return;
             case "Up":    PlainMoveVertical(-1, shift, events); return;
             case "Down":  PlainMoveVertical(1, shift, events); return;
             case "Home":  PlainMoveCaret(_cursor with { Column = 0 }, shift, events); return;
@@ -2899,8 +2944,6 @@ public class VimEngine
     {
         if (cmd.Operator != null) return false;
 
-        var buf = _bufferManager.Current.Text;
-        var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
         int count = Math.Max(1, cmd.Count);
         if (_mode == VimMode.VisualBlock && cmd.Motion != "$" && !PreservesVisualBlockLineEnd(cmd.Motion))
             _visualBlockToLineEnd = false;
@@ -3709,12 +3752,6 @@ public class VimEngine
         while (line < buf.LineCount && !string.IsNullOrWhiteSpace(buf.GetLine(line)))
             line++;
         return new CursorPosition(Math.Min(line, buf.LineCount - 1), 0);
-    }
-
-    private CursorPosition? MatchBracket(TextBuffer buf, MotionEngine motion)
-    {
-        var mot = motion.Calculate("%", _cursor);
-        return mot?.Target;
     }
 
     private CursorPosition ScreenPosition(int offsetFromTop)

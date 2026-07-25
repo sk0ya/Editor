@@ -25,7 +25,8 @@ public sealed record MotionRequest(
     string? Operator = null,
     char? FindCharacter = null,
     int ViewportTopLine = 0,
-    int ViewportVisibleLines = 25);
+    int ViewportVisibleLines = 25,
+    bool AllowEndOfLine = false);
 
 public sealed record MotionResult(
     CursorPosition Start,
@@ -82,6 +83,12 @@ public sealed class MotionService(BufferManager buffers) : IMotionService
                 request.Start,
                 Math.Max(1, request.Count),
                 motionName == "W");
+        }
+        else if (request.AllowEndOfLine && motionName is "l" or "Right")
+        {
+            motion = new Motion(
+                engine.MoveRight(request.Start, Math.Max(1, request.Count), true),
+                MotionType.Exclusive);
         }
         else
         {
