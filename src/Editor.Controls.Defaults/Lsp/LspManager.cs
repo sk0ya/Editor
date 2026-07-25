@@ -13,6 +13,7 @@ public sealed class LspManager : IEditorLspManager
 {
     private readonly Dispatcher _dispatcher;
     private readonly LspServerRegistry _registry;
+    private readonly Func<IReadOnlyList<string>>? _workspaceFoldersProvider;
     private readonly Dictionary<string, LspClient> _clients = new();
     private readonly object _docLock = new();
     private readonly Dictionary<string, string> _openDocuments = new(); // uri -> executable it was opened against
@@ -138,10 +139,14 @@ public sealed class LspManager : IEditorLspManager
     /// A compatibility registry is created when none is supplied. Applications
     /// should pass the shared registry owned by their <see cref="VimEngineServices"/>.
     /// </summary>
-    public LspManager(Dispatcher dispatcher, LspServerRegistry? registry = null)
+    public LspManager(
+        Dispatcher dispatcher,
+        LspServerRegistry? registry = null,
+        Func<IReadOnlyList<string>>? workspaceFoldersProvider = null)
     {
         _dispatcher = dispatcher;
         _registry = registry ?? LspServerRegistry.Default;
+        _workspaceFoldersProvider = workspaceFoldersProvider;
     }
 
     /// <summary>Call when a file is opened or the active buffer changes.</summary>
@@ -786,8 +791,12 @@ public sealed class LspManager : IEditorLspManager
         try
         {
             var rootUri = PathToUri(FindWorkspaceRoot(filePath));
-            Log($"[LSP] initialize rootUri={rootUri}");
-            await client.InitializeAsync(rootUri);
+            var workspaceFolders = _workspaceFoldersProvider?.Invoke();
+            Log($"[LSP] initialize rootUri={rootUri} workspaceFolders=" +
+                (workspaceFolders is { Count: > 0 }
+                    ? string.Join(" | ", workspaceFolders)
+                    : "(fallback)"));
+            await client.InitializeAsync(rootUri, workspaceFolders);
             Log($"[LSP] initialize OK");
             _reconnectAttempts[executable] = 0;  // a clean initialize proves the server is healthy again
         }

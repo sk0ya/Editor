@@ -33,10 +33,18 @@ public sealed class LspClient : ILspClient
     }
 
     public async Task InitializeAsync(string rootUri)
+        => await InitializeAsync(rootUri, workspaceFolderPaths: null);
+
+    /// <summary>
+    /// LSP サーバーを初期化する。ホストが実際のワークスペースフォルダーを所有する場合は
+    /// <paramref name="workspaceFolderPaths"/> に全件を渡す。未指定時だけ単一ルートへフォールバックする。
+    /// </summary>
+    public async Task InitializeAsync(
+        string rootUri, IReadOnlyList<string>? workspaceFolderPaths)
     {
         // サーバーが後から workspace/workspaceFolders を要求してきたときに同じ一覧を返せるよう、
         // initialize を送る前に LspProcess 側へ渡しておく。
-        var workspaceFolders = CreateWorkspaceFolders(rootUri);
+        var workspaceFolders = CreateWorkspaceFolders(rootUri, workspaceFolderPaths);
         _process.WorkspaceFolders = workspaceFolders;
 
         var result = await _process.SendRequestAsync("initialize", new
@@ -130,19 +138,35 @@ public sealed class LspClient : ILspClient
     /// <summary>
     /// <c>--autoLoadProjects</c> を使う Roslyn 等は <c>rootUri</c> だけでなく
     /// <c>workspaceFolders</c> を見てプロジェクトを自動ロードする。
-    /// 単一ルートのエディタなので、初期化対象のルートを1件のワークスペースとして通知する。
+    /// ホスト提供の実フォルダー一覧を優先し、単体利用など一覧が無い場合だけ
+    /// 初期化対象のルートを1件のワークスペースとして通知する。
     /// </summary>
-    internal static LspWorkspaceFolder[] CreateWorkspaceFolders(string rootUri)
+    internal static LspWorkspaceFolder[] CreateWorkspaceFolders(
+        string rootUri, IReadOnlyList<string>? workspaceFolderPaths = null)
     {
-        var name = rootUri;
-        if (Uri.TryCreate(rootUri, UriKind.Absolute, out var uri) && uri.IsFile)
+        var paths = workspaceFolderPaths?
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (paths is { Length: > 0 })
+            return paths.Select(path => CreateWorkspaceFolder(new Uri(path).AbsoluteUri)).ToArray();
+
+        return [CreateWorkspaceFolder(rootUri)];
+    }
+
+    private static LspWorkspaceFolder CreateWorkspaceFolder(string uriText)
+    {
+        var name = uriText;
+        if (Uri.TryCreate(uriText, UriKind.Absolute, out var uri) && uri.IsFile)
         {
             var path = uri.LocalPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             name = Path.GetFileName(path);
             if (string.IsNullOrWhiteSpace(name))
                 name = path;
         }
-        return [new LspWorkspaceFolder(rootUri, name)];
+        return new LspWorkspaceFolder(uriText, name);
     }
 
     private static string[] ParseStringArray(JsonElement el, string propName)
@@ -663,7 +687,8 @@ public sealed class LspClient : ILspClient
             var first = result.Value.EnumerateArray().FirstOrDefault();
             if (first.ValueKind == JsonValueKind.Undefined) return null;
             return ParseHierarchyItem<CallHierarchyItem>(first,
-                (name, kind, itemUri, range, sel) => new CallHierarchyItem(name, kind, itemUri, range, sel));
+                (name, kind, itemUri, range, sel, data) =>
+                    new CallHierarchyItem(name, kind, itemUri, range, sel, data));
         }
         catch { return null; }
     }
@@ -675,7 +700,8 @@ public sealed class LspClient : ILspClient
         {
             var result = await _process.SendRequestAsync("callHierarchy/incomingCalls", new
             {
-                item = SerializeHierarchyItem(item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange)
+                item = SerializeHierarchyItem(
+                    item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange, item.Data)
             }, ct);
             if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
             var list = new List<CallHierarchyIncomingCall>();
@@ -683,7 +709,7 @@ public sealed class LspClient : ILspClient
             {
                 if (!el.TryGetProperty("from", out var fromEl)) continue;
                 var from = ParseHierarchyItem<CallHierarchyItem>(fromEl,
-                    (name, kind, u, r, s) => new CallHierarchyItem(name, kind, u, r, s));
+                    (name, kind, u, r, s, data) => new CallHierarchyItem(name, kind, u, r, s, data));
                 if (from is null) continue;
                 var ranges = ParseFromRanges(el);
                 list.Add(new CallHierarchyIncomingCall(from, ranges));
@@ -700,7 +726,8 @@ public sealed class LspClient : ILspClient
         {
             var result = await _process.SendRequestAsync("callHierarchy/outgoingCalls", new
             {
-                item = SerializeHierarchyItem(item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange)
+                item = SerializeHierarchyItem(
+                    item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange, item.Data)
             }, ct);
             if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
             var list = new List<CallHierarchyOutgoingCall>();
@@ -708,7 +735,7 @@ public sealed class LspClient : ILspClient
             {
                 if (!el.TryGetProperty("to", out var toEl)) continue;
                 var to = ParseHierarchyItem<CallHierarchyItem>(toEl,
-                    (name, kind, u, r, s) => new CallHierarchyItem(name, kind, u, r, s));
+                    (name, kind, u, r, s, data) => new CallHierarchyItem(name, kind, u, r, s, data));
                 if (to is null) continue;
                 var ranges = ParseFromRanges(el);
                 list.Add(new CallHierarchyOutgoingCall(to, ranges));
@@ -732,7 +759,8 @@ public sealed class LspClient : ILspClient
             var first = result.Value.EnumerateArray().FirstOrDefault();
             if (first.ValueKind == JsonValueKind.Undefined) return null;
             return ParseHierarchyItem<TypeHierarchyItem>(first,
-                (name, kind, itemUri, range, sel) => new TypeHierarchyItem(name, kind, itemUri, range, sel));
+                (name, kind, itemUri, range, sel, data) =>
+                    new TypeHierarchyItem(name, kind, itemUri, range, sel, data));
         }
         catch { return null; }
     }
@@ -744,7 +772,8 @@ public sealed class LspClient : ILspClient
         {
             var result = await _process.SendRequestAsync("typeHierarchy/supertypes", new
             {
-                item = SerializeHierarchyItem(item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange)
+                item = SerializeHierarchyItem(
+                    item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange, item.Data)
             }, ct);
             if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
             return ParseTypeHierarchyItems(result.Value);
@@ -759,7 +788,8 @@ public sealed class LspClient : ILspClient
         {
             var result = await _process.SendRequestAsync("typeHierarchy/subtypes", new
             {
-                item = SerializeHierarchyItem(item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange)
+                item = SerializeHierarchyItem(
+                    item.Name, item.Kind, item.Uri, item.Range, item.SelectionRange, item.Data)
             }, ct);
             if (result is null || result.Value.ValueKind != JsonValueKind.Array) return null;
             return ParseTypeHierarchyItems(result.Value);
@@ -768,7 +798,7 @@ public sealed class LspClient : ILspClient
     }
 
     private static T? ParseHierarchyItem<T>(JsonElement el,
-        Func<string, int, string, LspRange, LspRange, T> factory) where T : class
+        Func<string, int, string, LspRange, LspRange, JsonElement?, T> factory) where T : class
     {
         if (!el.TryGetProperty("name", out var nameEl)) return null;
         var name = nameEl.GetString() ?? "";
@@ -780,7 +810,8 @@ public sealed class LspClient : ILspClient
         var sel = el.TryGetProperty("selectionRange", out var selEl)
             ? ParseRange(selEl)
             : range;
-        return factory(name, kind, itemUri, range, sel);
+        var data = el.TryGetProperty("data", out var dataEl) ? dataEl.Clone() : (JsonElement?)null;
+        return factory(name, kind, itemUri, range, sel, data);
     }
 
     private static TypeHierarchyItem[] ParseTypeHierarchyItems(JsonElement array)
@@ -789,7 +820,7 @@ public sealed class LspClient : ILspClient
         foreach (var el in array.EnumerateArray())
         {
             var item = ParseHierarchyItem<TypeHierarchyItem>(el,
-                (name, kind, u, r, s) => new TypeHierarchyItem(name, kind, u, r, s));
+                (name, kind, u, r, s, data) => new TypeHierarchyItem(name, kind, u, r, s, data));
             if (item is not null) list.Add(item);
         }
         return [.. list];
@@ -805,7 +836,8 @@ public sealed class LspClient : ILspClient
         return [.. list];
     }
 
-    private static object SerializeHierarchyItem(string name, int kind, string uri, LspRange range, LspRange selRange) =>
+    internal static object SerializeHierarchyItem(
+        string name, int kind, string uri, LspRange range, LspRange selRange, JsonElement? data) =>
         new
         {
             name,
@@ -820,7 +852,8 @@ public sealed class LspClient : ILspClient
             {
                 start = new { line = selRange.Start.Line, character = selRange.Start.Character },
                 end   = new { line = selRange.End.Line,   character = selRange.End.Character }
-            }
+            },
+            data
         };
 
     private void OnNotification(string method, JsonElement @params)

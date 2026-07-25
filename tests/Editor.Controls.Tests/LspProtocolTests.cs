@@ -17,6 +17,23 @@ public sealed class LspProtocolTests
     }
 
     [Fact]
+    public void Initialize_workspace_folders_use_all_host_provided_roots()
+    {
+        var folders = LspClient.CreateWorkspaceFolders(
+            "file:///C:/Projects/Loomo",
+            [@"C:\Projects\Loomo", @"C:\Projects\Editor"]);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(folders));
+
+        Assert.Equal(2, json.RootElement.GetArrayLength());
+        Assert.Equal("file:///C:/Projects/Loomo",
+            json.RootElement[0].GetProperty("uri").GetString());
+        Assert.Equal("Loomo", json.RootElement[0].GetProperty("name").GetString());
+        Assert.Equal("file:///C:/Projects/Editor",
+            json.RootElement[1].GetProperty("uri").GetString());
+        Assert.Equal("Editor", json.RootElement[1].GetProperty("name").GetString());
+    }
+
+    [Fact]
     public void Workspace_configuration_returns_one_value_for_each_requested_item()
     {
         using var json = JsonDocument.Parse(
@@ -68,5 +85,24 @@ public sealed class LspProtocolTests
 
         Assert.Null(LspProcess.CreateServerRequestResult(
             "client/registerCapability", json.RootElement));
+    }
+
+    [Fact]
+    public void Hierarchy_followup_preserves_server_data()
+    {
+        using var source = JsonDocument.Parse("""{"textDocument":{"uri":"file:///a.cs"},"position":{"line":4,"character":2}}""");
+        var range = new Editor.Core.Lsp.LspRange(
+            new Editor.Core.Lsp.LspPosition(4, 0),
+            new Editor.Core.Lsp.LspPosition(8, 1));
+
+        var item = LspClient.SerializeHierarchyItem(
+            "Run", 6, "file:///a.cs", range, range,
+            source.RootElement.Clone());
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(item));
+
+        var data = json.RootElement.GetProperty("data");
+        Assert.Equal("file:///a.cs",
+            data.GetProperty("textDocument").GetProperty("uri").GetString());
+        Assert.Equal(4, data.GetProperty("position").GetProperty("line").GetInt32());
     }
 }

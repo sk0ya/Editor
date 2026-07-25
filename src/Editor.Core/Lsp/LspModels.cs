@@ -223,12 +223,24 @@ public record DocumentSymbol(
     DocumentSymbol[]? Children);
 
 // Call hierarchy
-public record CallHierarchyItem(string Name, int Kind, string Uri, LspRange Range, LspRange SelectionRange);
+public record CallHierarchyItem(
+    string Name,
+    int Kind,
+    string Uri,
+    LspRange Range,
+    LspRange SelectionRange,
+    JsonElement? Data = null);
 public record CallHierarchyIncomingCall(CallHierarchyItem From, LspRange[] FromRanges);
 public record CallHierarchyOutgoingCall(CallHierarchyItem To, LspRange[] FromRanges);
 
 // Type hierarchy
-public record TypeHierarchyItem(string Name, int Kind, string Uri, LspRange Range, LspRange SelectionRange);
+public record TypeHierarchyItem(
+    string Name,
+    int Kind,
+    string Uri,
+    LspRange Range,
+    LspRange SelectionRange,
+    JsonElement? Data = null);
 
 // Semantic tokens
 public record SemanticTokensLegend(string[] TokenTypes, string[] TokenModifiers);
