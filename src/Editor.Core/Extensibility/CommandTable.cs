@@ -40,13 +40,25 @@ public sealed class CommandTable<TKey, TContext, TResult>
     private long _nextId;
     private volatile CommandTableSnapshot<TKey, TContext, TResult> _snapshot =
         new([], []);
+    private bool _dirty;
 
     public CommandTable(IEqualityComparer<TKey>? comparer = null)
     {
         _comparer = comparer ?? EqualityComparer<TKey>.Default;
     }
 
-    public CommandTableSnapshot<TKey, TContext, TResult> Snapshot => _snapshot;
+    public CommandTableSnapshot<TKey, TContext, TResult> Snapshot
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_dirty)
+                    RebuildSnapshot();
+                return _snapshot;
+            }
+        }
+    }
 
     public IDisposable RegisterExact(
         string id,
@@ -71,7 +83,7 @@ public sealed class CommandTable<TKey, TContext, TResult>
         TContext context,
         out Func<TContext, TResult> handler)
     {
-        foreach (var entry in _snapshot.Entries)
+        foreach (var entry in Snapshot.Entries)
         {
             var matches = entry.IsExact
                 ? entry.Key is not null && _comparer.Equals(entry.Key, key)
@@ -95,7 +107,7 @@ public sealed class CommandTable<TKey, TContext, TResult>
         {
             var entry = candidate with { RegistrationId = ++_nextId };
             _entries.Add(entry);
-            RebuildSnapshot();
+            _dirty = true;
             return new Registration(() => Remove(entry.RegistrationId));
         }
     }
@@ -105,7 +117,7 @@ public sealed class CommandTable<TKey, TContext, TResult>
         lock (_gate)
         {
             _entries.RemoveAll(entry => entry.RegistrationId == registrationId);
-            RebuildSnapshot();
+            _dirty = true;
         }
     }
 
@@ -125,22 +137,25 @@ public sealed class CommandTable<TKey, TContext, TResult>
             .ToArray();
 
         var diagnostics = new List<CommandTableDiagnostic>();
+        var exactWinners = new Dictionary<TKey, CommandTableEntry<TKey, TContext, TResult>>(
+            _comparer);
         foreach (var entry in activeById.Where(entry => entry.IsExact))
         {
-            var winner = activeById.FirstOrDefault(other =>
-                other.IsExact &&
-                other.Key is not null &&
-                entry.Key is not null &&
-                _comparer.Equals(other.Key, entry.Key));
-            if (winner != null && winner.RegistrationId != entry.RegistrationId)
+            if (entry.Key is null)
+                continue;
+            if (!exactWinners.TryAdd(entry.Key, entry))
+            {
+                var winner = exactWinners[entry.Key];
                 diagnostics.Add(new(entry.Id,
                     $"Exact registration is shadowed by '{winner.Id}' in layer {winner.Layer}.",
                     IsUnreachable: true));
+            }
         }
 
         _snapshot = new CommandTableSnapshot<TKey, TContext, TResult>(
             activeById,
             diagnostics);
+        _dirty = false;
     }
 
     private sealed class Registration(Action remove) : IDisposable

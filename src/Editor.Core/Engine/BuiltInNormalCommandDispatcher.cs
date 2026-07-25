@@ -13,9 +13,12 @@ internal sealed class BuiltInNormalCommandDispatcher
     internal delegate void LegacyHandler(ParsedCommand command, List<VimEvent> events);
     internal delegate bool Pattern(ParsedCommand command);
 
-    private readonly Dictionary<string, Handler> _exact = new(StringComparer.Ordinal);
-    private readonly List<(Pattern Matches, Handler Handler)> _patterns = [];
-    private Handler? _fallback;
+    private readonly CommandTable<
+        string,
+        (INormalCommandContext Context, List<VimEvent> Events),
+        bool> _table = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _exact = new(StringComparer.Ordinal);
+    private int _patternPriority;
 
     public BuiltInNormalCommandDispatcher Register(string motion, LegacyHandler handler)
         => Register([motion], handler);
@@ -26,14 +29,34 @@ internal sealed class BuiltInNormalCommandDispatcher
     public BuiltInNormalCommandDispatcher RegisterContext(IEnumerable<string> motions, Handler handler)
     {
         foreach (var motion in motions)
-            if (!_exact.TryAdd(motion, handler))
+        {
+            if (!_exact.Add(motion))
                 throw new InvalidOperationException($"Built-in Normal command '{motion}' is already registered.");
+            _table.RegisterExact(
+                $"normal.builtin.{MotionId(motion)}",
+                motion,
+                execution =>
+                {
+                    handler(execution.Context, execution.Events);
+                    return true;
+                },
+                CommandLayer.BuiltIn);
+        }
         return this;
     }
 
     public BuiltInNormalCommandDispatcher RegisterPatternContext(Pattern matches, Handler handler)
     {
-        _patterns.Add((matches, handler));
+        _table.RegisterPattern(
+            $"normal.builtin.pattern.{_patternPriority}",
+            (_, execution) => matches(execution.Context.Command),
+            execution =>
+            {
+                handler(execution.Context, execution.Events);
+                return true;
+            },
+            CommandLayer.BuiltIn,
+            priority: -_patternPriority++);
         return this;
     }
 
@@ -42,7 +65,16 @@ internal sealed class BuiltInNormalCommandDispatcher
 
     public BuiltInNormalCommandDispatcher SetFallbackContext(Handler handler)
     {
-        _fallback = handler;
+        _table.RegisterPattern(
+            "normal.builtin.fallback",
+            (_, _) => true,
+            execution =>
+            {
+                handler(execution.Context, execution.Events);
+                return true;
+            },
+            CommandLayer.BuiltIn,
+            priority: int.MinValue);
         return this;
     }
 
@@ -51,20 +83,12 @@ internal sealed class BuiltInNormalCommandDispatcher
 
     public void Dispatch(INormalCommandContext context, List<VimEvent> events)
     {
-        var command = context.Command;
-        if (command.Motion is { } motion && _exact.TryGetValue(motion, out var handler))
-        {
-            handler(context, events);
-            return;
-        }
-
-        foreach (var candidate in _patterns)
-        {
-            if (!candidate.Matches(command)) continue;
-            candidate.Handler(context, events);
-            return;
-        }
-
-        _fallback?.Invoke(context, events);
+        var execution = (context, events);
+        if (context.Command.Motion is { } motion &&
+            _table.TryResolve(motion, execution, out var handler))
+            handler(execution);
     }
+
+    private static string MotionId(string motion) =>
+        string.Join("_", motion.Select(character => ((int)character).ToString("x4")));
 }
