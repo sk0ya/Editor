@@ -2,6 +2,22 @@ namespace Editor.Core.Engine;
 
 public enum CommandState { Incomplete, Complete, Invalid }
 
+public enum CommandParseDiagnosticCode
+{
+    InvalidInput
+}
+
+public sealed record CommandParseDiagnostic(
+    CommandParseDiagnosticCode Code,
+    string Input,
+    string Message);
+
+public sealed record CommandParseResult(
+    CommandState State,
+    ParsedCommand? Command,
+    CommandGrammarMatch? PendingGrammar,
+    CommandParseDiagnostic? Diagnostic);
+
 public record struct ParsedCommand(
     int Count,
     string? Operator,       // d, c, y, >, <, =, g, z
@@ -87,6 +103,21 @@ public class CommandParser
 
         _buffer += key;
         return TryParse();
+    }
+
+    public CommandParseResult FeedDetailed(string key)
+    {
+        var (state, command) = Feed(key);
+        var grammarMatch = state == CommandState.Incomplete
+            ? MatchCurrentGrammar()
+            : null;
+        var diagnostic = state == CommandState.Invalid
+            ? new CommandParseDiagnostic(
+                CommandParseDiagnosticCode.InvalidInput,
+                _buffer,
+                "Input does not match a registered command definition.")
+            : null;
+        return new CommandParseResult(state, command, grammarMatch, diagnostic);
     }
 
     private (CommandState, ParsedCommand?) TryParse()
@@ -299,6 +330,24 @@ public class CommandParser
         return custom is null || (builtIn?.Sequence.Length ?? 0) > custom.Sequence.Length
             ? builtIn
             : custom;
+    }
+
+    private CommandGrammarMatch? MatchCurrentGrammar()
+    {
+        var sequence = _buffer;
+        if (_pendingRegister.HasValue && sequence.Length >= 2)
+            sequence = sequence[2..];
+        var countLength = 0;
+        while (countLength < sequence.Length &&
+               char.IsDigit(sequence[countLength]) &&
+               !(countLength == 0 && sequence[countLength] == '0'))
+            countLength++;
+        sequence = sequence[countLength..];
+
+        var match = _grammar.Match(sequence);
+        if (match.Kind == CommandGrammarMatchKind.None)
+            match = _builtInGrammar.Match(sequence);
+        return match.Kind == CommandGrammarMatchKind.None ? null : match;
     }
 
     private void BeginPendingInput(PendingInputState state)

@@ -138,4 +138,32 @@ public class CommandGrammarTests
                 $"Text object '{definition.Sequence}' did not complete.");
         }
     }
+
+    [Fact]
+    public void FeedDetailed_ReturnsTypedIncompleteGrammar()
+    {
+        var grammar = new CommandGrammar();
+        grammar.Register(
+            new CommandDefinition("prefix.z", "z", CommandDefinitionKind.Prefix),
+            new CommandDefinition("action.zx", "zx", CommandDefinitionKind.Action));
+        var parser = new CommandParser(grammar: grammar);
+
+        var result = parser.FeedDetailed("z");
+
+        Assert.Equal(CommandState.Incomplete, result.State);
+        Assert.Equal(CommandGrammarMatchKind.Prefix, result.PendingGrammar!.Kind);
+        Assert.Null(result.Diagnostic);
+    }
+
+    [Fact]
+    public void FeedDetailed_ReturnsTypedInvalidDiagnostic()
+    {
+        var parser = new CommandParser();
+        parser.Feed("z");
+
+        var result = parser.FeedDetailed("?");
+
+        Assert.Equal(CommandState.Invalid, result.State);
+        Assert.Equal(CommandParseDiagnosticCode.InvalidInput, result.Diagnostic!.Code);
+    }
 }
