@@ -202,7 +202,12 @@ MotionRequest
   key bindingの解決を統合した。built-in、extension、userの明示layer、
   priority、replace stack、exact/pattern順序を共通化し、immutable snapshotと
   shadowing diagnosticを提供する。
-- Phase 8 以降: 未着手。
+- Phase 8: 完了。`VimEngineServices`にkey binding、Normal/Ex command、
+  edit assist、syntax、LSP、formatter、clipboard factory、host serviceを集約した。
+  engine既定値はisolated、Controls既定値はapplication単位の明示sharedとした。
+  従来の`Default`はfresh instanceを返す互換factoryへ縮小し、mutable singletonを
+  排除した。
+- Phase 9 以降: 未着手。
 
 ## Phase 0: ベースライン固定
 
