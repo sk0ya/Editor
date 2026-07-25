@@ -46,6 +46,7 @@ public class VimEngine
     private readonly VimModeDispatcher _modeDispatcher;
     private readonly BuiltInNormalCommandDispatcher _builtInNormalCommands;
     private readonly VisualMotionDispatcher _visualMotions;
+    private readonly PendingInputController _pendingInput = new();
 
     private VimMode _mode = VimMode.Normal;
     private bool _vimEnabled = true;
@@ -82,11 +83,6 @@ public class VimEngine
     private bool _visualBlockToLineEnd;   // Ctrl+V $ — selected lines extend to their own EOL
     private int _visualBlockLineEndStartColumn;
     private bool _pendingInsertReturn;    // Ctrl+O in Insert mode — return to Insert after one Normal command
-    private bool _awaitingInsertRegister; // Ctrl+R in Insert mode — waiting for register name
-    private bool _awaitingExprRegister;   // Ctrl+R = in Insert mode — accumulating expression
-    private string _exprBuffer = "";      // accumulated expression input
-    private char? _digraphPendingChar;     // non-null = awaiting digraph input; holds first char once entered (null char = awaiting first)
-    private bool _ctrlXPending;           // Ctrl+X sub-mode: waiting for F (file) or L (line)
     private char _ctrlXMode;              // 'f' = file-path, 'l' = whole-line, '\0' = keyword
     private CursorPosition _surroundStart, _surroundEnd;
     private bool _surroundLinewise;
@@ -135,6 +131,7 @@ public class VimEngine
     public bool FoldsDisabled => _foldDisabled;
     public VimKeyBindingRegistry KeyBindings => _keyBindings;
     public NormalCommandRegistry NormalCommands => _normalCommands;
+    public PendingInputState PendingInput => _pendingInput.Current;
 
     /// <summary>Executes a registered synchronous or asynchronous command from a raw Ex line.</summary>
     public ValueTask<EditorCommandResult?> ExecuteExtensionCommandAsync(string rawCommand,
@@ -1174,6 +1171,11 @@ public class VimEngine
         // Clear any pending modal state regardless of direction.
         _commandParser.Reset();
         _keyInput.Clear();
+        bool pendingInputHasPrompt = _pendingInput.Current
+            is PendingInputState.ExpressionRegister or PendingInputState.Digraph;
+        _pendingInput.Cancel();
+        if (pendingInputHasPrompt)
+            events.Add(VimEvent.CommandLineChanged(""));
         if (_selection != null)
         {
             _selection = null;
@@ -1794,13 +1796,12 @@ public class VimEngine
             return;
         }
 
-        if (_awaitingInsertRegister)
+        if (_pendingInput.Current is PendingInputState.InsertRegister)
         {
-            _awaitingInsertRegister = false;
+            _pendingInput.Cancel();
             if (key == "=")
             {
-                _awaitingExprRegister = true;
-                _exprBuffer = "";
+                _pendingInput.Begin(new PendingInputState.ExpressionRegister(""));
                 events.Add(VimEvent.CommandLineChanged("="));
                 return;
             }
@@ -1810,21 +1811,18 @@ public class VimEngine
             return;
         }
 
-        if (_awaitingExprRegister)
+        if (_pendingInput.Current is PendingInputState.ExpressionRegister expressionRegister)
         {
             switch (key)
             {
                 case "Escape":
-                    _awaitingExprRegister = false;
-                    _exprBuffer = "";
+                    _pendingInput.Cancel();
                     events.Add(VimEvent.CommandLineChanged(""));
                     return;
                 case "Return":
-                    _awaitingExprRegister = false;
-                    var expr = _exprBuffer;
-                    _exprBuffer = "";
+                    _pendingInput.Cancel();
                     events.Add(VimEvent.CommandLineChanged(""));
-                    var result = ExpressionEvaluator.Evaluate(expr);
+                    var result = ExpressionEvaluator.Evaluate(expressionRegister.Expression);
                     if (result != null)
                     {
                         Snapshot();
@@ -1832,35 +1830,38 @@ public class VimEngine
                     }
                     return;
                 case "Back":
-                    if (_exprBuffer.Length > 0)
-                        _exprBuffer = _exprBuffer[..^1];
-                    events.Add(VimEvent.CommandLineChanged("=" + _exprBuffer));
+                    var shortened = expressionRegister.Expression.Length > 0
+                        ? expressionRegister.Expression[..^1]
+                        : "";
+                    _pendingInput.Begin(new PendingInputState.ExpressionRegister(shortened));
+                    events.Add(VimEvent.CommandLineChanged("=" + shortened));
                     return;
                 default:
                     if (key.Length == 1 && !ctrl)
                     {
-                        _exprBuffer += key;
-                        events.Add(VimEvent.CommandLineChanged("=" + _exprBuffer));
+                        var extended = expressionRegister.Expression + key;
+                        _pendingInput.Begin(new PendingInputState.ExpressionRegister(extended));
+                        events.Add(VimEvent.CommandLineChanged("=" + extended));
                     }
                     return;
             }
         }
 
-        if (_digraphPendingChar.HasValue)
+        if (_pendingInput.Current is PendingInputState.Digraph digraph)
         {
-            if (key == "Escape") { _digraphPendingChar = null; events.Add(VimEvent.CommandLineChanged("")); return; }
+            if (key == "Escape") { _pendingInput.Cancel(); events.Add(VimEvent.CommandLineChanged("")); return; }
             if (key.Length != 1) return; // ignore non-printable keys while in digraph input
-            if (_digraphPendingChar.Value == '\0')
+            if (!digraph.FirstCharacter.HasValue)
             {
                 // Received first char — store it and prompt for second
-                _digraphPendingChar = key[0];
+                _pendingInput.Begin(new PendingInputState.Digraph(key[0]));
                 events.Add(VimEvent.CommandLineChanged($"^K {key}"));
             }
             else
             {
                 // Received second char — look up and insert
-                var digraphKey = new string([_digraphPendingChar.Value, key[0]]);
-                _digraphPendingChar = null;
+                var digraphKey = new string([digraph.FirstCharacter.Value, key[0]]);
+                _pendingInput.Cancel();
                 events.Add(VimEvent.CommandLineChanged(""));
                 var ch = DiGraphs.Lookup(digraphKey);
                 if (ch != null) { Snapshot(); InsertTextAtCursor(ch, events); }
@@ -1871,16 +1872,16 @@ public class VimEngine
 
         if (ctrl && (key.ToLower() == "n" || key.ToLower() == "p"))
         {
-            _ctrlXPending = false;
+            _pendingInput.Cancel();
             _ctrlXMode = '\0';
             _cursor = _kwCompletionOps.CycleKeyword(_cursor, key.ToLower() == "n" ? +1 : -1, events);
             return;
         }
 
         // Ctrl+X sub-mode: waiting for the completion type key
-        if (_ctrlXPending)
+        if (_pendingInput.Current is PendingInputState.InsertCompletion)
         {
-            _ctrlXPending = false;
+            _pendingInput.Cancel();
             if (ctrl)
             {
                 switch (key.ToLower())
@@ -1951,15 +1952,15 @@ public class VimEngine
                     PasteAtCursorInsertMode(events);
                     return;
                 case "x": // Ctrl+X = enter sub-completion mode (Ctrl+X Ctrl+F / Ctrl+X Ctrl+L)
-                    _ctrlXPending = true;
+                    _pendingInput.Begin(new PendingInputState.InsertCompletion());
                     EmitStatus(events, "^X");
                     return;
                 case "r": // Ctrl+R {reg} = insert register contents
-                    _awaitingInsertRegister = true;
+                    _pendingInput.Begin(new PendingInputState.InsertRegister());
                     EmitStatus(events, "\"");
                     return;
                 case "k": // Ctrl+K {a}{b} = insert digraph
-                    _digraphPendingChar = '\0';
+                    _pendingInput.Begin(new PendingInputState.Digraph(null));
                     events.Add(VimEvent.CommandLineChanged("^K"));
                     return;
                 case ";": // Ctrl+; — insert current date (yyyy/MM/dd)
@@ -2973,11 +2974,7 @@ public class VimEngine
         _registerManager.SetLastInserted(_insertedText?.ToString() ?? "");
         _insertedText = null;
         _blockInsertOps.Clear();
-        _awaitingInsertRegister = false;
-        _awaitingExprRegister = false;
-        _exprBuffer = "";
-        _digraphPendingChar = null;
-        _ctrlXPending = false;
+        _pendingInput.Cancel();
         _ctrlXMode = '\0';
         _kwCompletionOps.Reset();
         ChangeMode(VimMode.Normal, events);
@@ -3061,6 +3058,8 @@ public class VimEngine
     {
         var oldMode = _mode;
         _keyInput.Clear();
+        if (oldMode != newMode)
+            _pendingInput.Cancel();
         if (newMode != VimMode.VisualBlock)
         {
             _visualBlockToLineEnd = false;
