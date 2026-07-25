@@ -59,3 +59,38 @@ public class EditTransactionServiceTests
         new(buffers, new MarkManager(), new SyntaxEngine(), getCursor, setCursor,
             () => false, (events, message) => events.Add(VimEvent.StatusMessage(message)));
 }
+
+public class EditTransactionIntegrationTests
+{
+    [Fact]
+    public void InsertCharacters_KeepSessionUndoAndEmitOneChangePairPerKey()
+    {
+        var engine = new VimEngine();
+        engine.ProcessKey("i");
+
+        var firstEvents = engine.ProcessKey("a");
+        var secondEvents = engine.ProcessKey("b");
+        engine.ProcessKey("Escape");
+        engine.ProcessKey("u");
+
+        Assert.Equal(new[] { VimEventType.TextChanged, VimEventType.CursorMoved },
+            firstEvents.Select(e => e.Type));
+        Assert.Equal(new[] { VimEventType.TextChanged, VimEventType.CursorMoved },
+            secondEvents.Select(e => e.Type));
+        Assert.Equal("", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void PasteText_UsesOneTransactionAndOneUndoStep()
+    {
+        var engine = new VimEngine();
+        engine.SetText("abc");
+
+        var events = engine.PasteText("XY");
+        engine.ProcessKey("u");
+
+        Assert.Equal(new[] { VimEventType.TextChanged, VimEventType.CursorMoved },
+            events.Select(e => e.Type));
+        Assert.Equal("abc", engine.CurrentBuffer.Text.GetText());
+    }
+}

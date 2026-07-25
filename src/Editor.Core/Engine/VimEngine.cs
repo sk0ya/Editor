@@ -47,6 +47,7 @@ public class VimEngine
     private readonly BuiltInNormalCommandDispatcher _builtInNormalCommands;
     private readonly VisualMotionDispatcher _visualMotions;
     private readonly PendingInputController _pendingInput = new();
+    private readonly IEditTransactionService _editTransactions;
 
     private VimMode _mode = VimMode.Normal;
     private bool _vimEnabled = true;
@@ -190,6 +191,10 @@ public class VimEngine
         _markManager = new MarkManager();
         _macroManager = new MacroManager();
         _syntaxEngine = new SyntaxEngine(syntaxLanguages);
+        _editTransactions = new EditTransactionService(
+            _bufferManager, _markManager, _syntaxEngine,
+            () => _cursor, cursor => _cursor = cursor,
+            () => _suppressSnapshot, EmitStatus);
         _commandParser = new CommandParser(_pendingInput);
         _keyBindings = keyBindings ?? VimKeyBindingRegistry.Default;
         _normalCommands = normalCommands ?? NormalCommandRegistry.Default;
@@ -993,12 +998,14 @@ public class VimEngine
 
         if (_mode == VimMode.Insert)
         {
-            Snapshot();
-            InsertTextAtCursor(text, events);
+            ExecuteEdit(events, tx =>
+                tx.Cursor = _clipboardOps.InsertCharacterwiseText(
+                    tx.Buffer, tx.Cursor.Line, tx.Cursor.Column, text));
         }
         else
         {
-            _cursor = _clipboardOps.PasteRawText(_cursor, text, after, events);
+            ExecuteEdit(events, tx =>
+                tx.Cursor = _clipboardOps.PasteRawText(tx.Cursor, text, after));
         }
         return events;
     }
@@ -1967,10 +1974,12 @@ public class VimEngine
                     char? pairClose = GetAutoPairClose(prevChar);
                     if (pairClose.HasValue && _cursor.Column < lineBack.Length && lineBack[_cursor.Column] == pairClose.Value)
                     {
-                        buf.DeleteChar(_cursor.Line, _cursor.Column); // delete close first
-                        buf.DeleteChar(_cursor.Line, _cursor.Column - 1); // then open
-                        _cursor = _cursor with { Column = _cursor.Column - 1 };
-                        EmitText(events);
+                        ExecuteEdit(events, tx =>
+                        {
+                            tx.Buffer.DeleteChar(tx.Cursor.Line, tx.Cursor.Column); // delete close first
+                            tx.Buffer.DeleteChar(tx.Cursor.Line, tx.Cursor.Column - 1); // then open
+                            tx.Cursor = tx.Cursor with { Column = tx.Cursor.Column - 1 };
+                        }, createUndoSnapshot: false);
                         break;
                     }
                 }
@@ -1982,8 +1991,14 @@ public class VimEngine
             {
                 var delLine = buf.GetLine(_cursor.Line);
                 if (_cursor.Column < delLine.Length)
-                    buf.DeleteRange(_cursor.Line, _cursor.Column, GraphemeCluster.NextBoundary(delLine, _cursor.Column, 1));
-                EmitText(events);
+                {
+                    ExecuteEdit(events, tx =>
+                        tx.Buffer.DeleteRange(
+                            tx.Cursor.Line,
+                            tx.Cursor.Column,
+                            GraphemeCluster.NextBoundary(delLine, tx.Cursor.Column, 1)),
+                        createUndoSnapshot: false);
+                }
                 break;
             }
             case "Return":
@@ -2018,17 +2033,22 @@ public class VimEngine
                 if (_config.Options.ExpandTab)
                 {
                     var spaces = new string(' ', _config.Options.TabStop);
-                    buf.InsertText(_cursor.Line, _cursor.Column, spaces);
-                    _cursor = _cursor with { Column = _cursor.Column + spaces.Length };
+                    ExecuteEdit(events, tx =>
+                    {
+                        tx.Buffer.InsertText(tx.Cursor.Line, tx.Cursor.Column, spaces);
+                        tx.Cursor = tx.Cursor with { Column = tx.Cursor.Column + spaces.Length };
+                    }, createUndoSnapshot: false);
                     _insertedText?.Append(spaces);
                 }
                 else
                 {
-                    buf.InsertChar(_cursor.Line, _cursor.Column, '\t');
-                    _cursor = _cursor with { Column = _cursor.Column + 1 };
+                    ExecuteEdit(events, tx =>
+                    {
+                        tx.Buffer.InsertChar(tx.Cursor.Line, tx.Cursor.Column, '\t');
+                        tx.Cursor = tx.Cursor with { Column = tx.Cursor.Column + 1 };
+                    }, createUndoSnapshot: false);
                     _insertedText?.Append('\t');
                 }
-                EmitText(events);
                 break;
             default:
                 if (key.Length == 1)
@@ -2057,10 +2077,12 @@ public class VimEngine
                         char? pairClose = GetAutoPairClose(ch);
                         if (pairClose.HasValue)
                         {
-                            buf.InsertChar(_cursor.Line, _cursor.Column, ch);
-                            buf.InsertChar(_cursor.Line, _cursor.Column + 1, pairClose.Value);
-                            _cursor = _cursor with { Column = _cursor.Column + 1 };
-                            EmitText(events);
+                            ExecuteEdit(events, tx =>
+                            {
+                                tx.Buffer.InsertChar(tx.Cursor.Line, tx.Cursor.Column, ch);
+                                tx.Buffer.InsertChar(tx.Cursor.Line, tx.Cursor.Column + 1, pairClose.Value);
+                                tx.Cursor = tx.Cursor with { Column = tx.Cursor.Column + 1 };
+                            }, createUndoSnapshot: false);
                             break;
                         }
                     }
@@ -2078,15 +2100,25 @@ public class VimEngine
 
                     if (_mode == VimMode.Replace)
                     {
-                        if (_cursor.Column < buf.GetLineLength(_cursor.Line))
-                            buf.DeleteChar(_cursor.Line, _cursor.Column);
+                        ExecuteEdit(events, tx =>
+                        {
+                            if (tx.Cursor.Column < tx.Buffer.GetLineLength(tx.Cursor.Line))
+                                tx.Buffer.DeleteChar(tx.Cursor.Line, tx.Cursor.Column);
+                            tx.Buffer.InsertChar(tx.Cursor.Line, tx.Cursor.Column, key[0]);
+                            tx.Cursor = tx.Cursor with { Column = tx.Cursor.Column + 1 };
+                        }, createUndoSnapshot: false);
                     }
-                    buf.InsertChar(_cursor.Line, _cursor.Column, key[0]);
-                    _cursor = _cursor with { Column = _cursor.Column + 1 };
+                    else
+                    {
+                        ExecuteEdit(events, tx =>
+                        {
+                            tx.Buffer.InsertChar(tx.Cursor.Line, tx.Cursor.Column, key[0]);
+                            tx.Cursor = tx.Cursor with { Column = tx.Cursor.Column + 1 };
+                        }, createUndoSnapshot: false);
+                    }
                     // Expand abbreviation when a non-word character is typed as trigger
                     if (!MotionEngine.IsWordChar(key[0]))
                         TryExpandAbbreviation(buf, events, triggerCharAlreadyInserted: true);
-                    EmitText(events);
                 }
                 break;
         }
@@ -3691,6 +3723,21 @@ public class VimEngine
         _markManager.AddChange(_cursor);
         _markManager.SetMark('.', _cursor);
     }
+
+    private EditTransactionResult ExecuteEdit(
+        List<VimEvent> events,
+        Action<EditTransaction> mutation,
+        bool createUndoSnapshot = true) =>
+        _editTransactions.Execute(
+            events,
+            transaction =>
+            {
+                mutation(transaction);
+                return null;
+            },
+            new EditTransactionOptions(
+                createUndoSnapshot,
+                AllowCursorAtEndOfLine: _mode is VimMode.Insert or VimMode.Replace || !_vimEnabled));
 
     // ─────────────── Event helpers ───────────────
     private void EmitCursor(List<VimEvent> events) => events.Add(VimEvent.CursorMoved(_cursor));

@@ -18,11 +18,16 @@ public sealed record EditTransactionResult(
     CursorPosition Cursor,
     object? RepeatMetadata = null);
 
+public sealed record EditTransactionOptions(
+    bool CreateUndoSnapshot = true,
+    bool AllowCursorAtEndOfLine = false);
+
 public interface IEditTransactionService
 {
     EditTransactionResult Execute(
         List<VimEvent> events,
-        Func<EditTransaction, object?> mutation);
+        Func<EditTransaction, object?> mutation,
+        EditTransactionOptions? options = null);
 }
 
 /// <summary>
@@ -40,7 +45,8 @@ public sealed class EditTransactionService(
 {
     public EditTransactionResult Execute(
         List<VimEvent> events,
-        Func<EditTransaction, object?> mutation)
+        Func<EditTransaction, object?> mutation,
+        EditTransactionOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(mutation);
@@ -68,12 +74,14 @@ public sealed class EditTransactionService(
         }
 
         var changed = !originalLines.SequenceEqual(current.Text.Snapshot());
-        var finalCursor = current.Text.ClampCursor(transaction.Cursor);
+        var finalCursor = current.Text.ClampCursor(
+            transaction.Cursor,
+            options?.AllowCursorAtEndOfLine ?? false);
         setCursor(finalCursor);
         if (!changed)
             return new EditTransactionResult(true, false, finalCursor, repeatMetadata);
 
-        if (!suppressSnapshot())
+        if ((options?.CreateUndoSnapshot ?? true) && !suppressSnapshot())
         {
             current.Undo.Snapshot(originalLines, originalCursor);
             marks.AddChange(originalCursor);

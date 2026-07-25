@@ -128,14 +128,22 @@ public sealed class ClipboardEditOps(
     public CursorPosition PasteRawText(CursorPosition cursor, string text, bool after, List<VimEvent> events)
     {
         snapshot();
+        var result = PasteRawText(cursor, text, after);
+        emitTextAt(events, result);
+        return result;
+    }
+
+    /// <summary>
+    /// Low-level raw paste used inside an edit transaction. Does not snapshot or emit events.
+    /// </summary>
+    public CursorPosition PasteRawText(CursorPosition cursor, string text, bool after)
+    {
         var buf = bufferManager.Current.Text;
         var start = after
             ? new CursorPosition(cursor.Line, Math.Min(cursor.Column + 1, buf.GetLineLength(cursor.Line)))
             : cursor;
         var end = InsertCharacterwiseText(buf, start.Line, start.Column, text);
-        var result = CursorOnLastInsertedChar(buf, start, end);
-        emitTextAt(events, result);
-        return result;
+        return CursorOnLastInsertedChar(buf, start, end);
     }
 
     public CursorPosition PasteBefore(CursorPosition cursor, char register, List<VimEvent> events, bool cursorAfterPaste = false)
