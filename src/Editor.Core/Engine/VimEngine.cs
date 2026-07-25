@@ -1595,13 +1595,15 @@ public class VimEngine
 
     private void ExecuteNormalCommandCore(ParsedCommand cmd, List<VimEvent> events)
     {
-        if (cmd.Operator is null && !cmd.LinewiseForced &&
-            _normalCommands.TryResolve(cmd.Motion, out var extensionHandler))
+        if (cmd.Operator is null && !cmd.LinewiseForced)
         {
             var context = CreateNormalCommandContext(cmd, events);
-            var result = extensionHandler(context);
-            if (result is not null) events.AddRange(result);
-            return;
+            if (_normalCommands.TryResolve(cmd.Motion, context, out var extensionHandler))
+            {
+                var result = extensionHandler(context);
+                if (result is not null) events.AddRange(result);
+                return;
+            }
         }
 
         var buf = _bufferManager.Current.Text;

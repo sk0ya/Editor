@@ -82,6 +82,11 @@ public sealed class NormalCommandRegistry
 
     private readonly object _gate = new();
     private readonly List<Entry> _entries = [];
+    private readonly CommandTable<
+        string,
+        INormalCommandContext,
+        IReadOnlyList<VimEvent>> _table = new(StringComparer.Ordinal);
+    private readonly List<IDisposable> _tableRegistrations = [];
     private long _nextId;
 
     public static NormalCommandRegistry Default { get; } = new();
@@ -110,6 +115,7 @@ public sealed class NormalCommandRegistry
             var stable = descriptor with { Motions = Array.AsReadOnly(descriptor.Motions.ToArray()) };
             var entry = new Entry(++_nextId, stable, handler);
             _entries.Add(entry);
+            RebuildTable();
             return new Registration(() => Remove(entry));
         }
     }
@@ -126,7 +132,13 @@ public sealed class NormalCommandRegistry
         }
     }
 
-    internal bool TryResolve(string? motion, out NormalCommandHandler handler)
+    public IReadOnlyList<CommandTableDiagnostic> Diagnostics =>
+        _table.Snapshot.Diagnostics;
+
+    internal bool TryResolve(
+        string? motion,
+        INormalCommandContext context,
+        out NormalCommandHandler handler)
     {
         if (motion is null)
         {
@@ -134,14 +146,10 @@ public sealed class NormalCommandRegistry
             return false;
         }
 
-        lock (_gate)
+        if (_table.TryResolve(motion, context, out var resolved))
         {
-            foreach (var entry in ActiveEntries())
-            {
-                if (!entry.Descriptor.Motions.Contains(motion, StringComparer.Ordinal)) continue;
-                handler = entry.Handler;
-                return true;
-            }
+            handler = commandContext => resolved(commandContext);
+            return true;
         }
 
         handler = null!;
@@ -158,8 +166,32 @@ public sealed class NormalCommandRegistry
 
     private void Remove(Entry entry)
     {
-        lock (_gate) _entries.RemoveAll(e => e.Id == entry.Id);
+        lock (_gate)
+        {
+            _entries.RemoveAll(e => e.Id == entry.Id);
+            RebuildTable();
+        }
     }
+
+    private void RebuildTable()
+    {
+        foreach (var registration in _tableRegistrations)
+            registration.Dispose();
+        _tableRegistrations.Clear();
+        // Register oldest first so the command table's newest-registration
+        // tiebreaker preserves the registry's existing newest-wins behavior.
+        foreach (var entry in ActiveEntries().Reverse())
+            foreach (var motion in entry.Descriptor.Motions)
+                _tableRegistrations.Add(_table.RegisterExact(
+                    $"{entry.Descriptor.Id}\0{motion}",
+                    motion,
+                    context => entry.Handler(context),
+                    CommandLayer.Extension,
+                    RegistrationPriority(entry.Id)));
+    }
+
+    private static int RegistrationPriority(long registrationId) =>
+        registrationId >= int.MaxValue ? int.MaxValue : (int)registrationId;
 
     private sealed class Registration(Action action) : IDisposable
     {

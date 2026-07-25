@@ -198,7 +198,11 @@ MotionRequest
   command固有文字列switchを削除し、動的exact/prefix/operator-motionをparser変更
   なしで追加可能にした。重複・到達不能登録とtyped incomplete/invalid diagnosticを
   提供する。
-- Phase 7 以降: 未着手。
+- Phase 7: 完了。`CommandTable<TKey, TContext, TResult>`へNormal、Visual、
+  key bindingの解決を統合した。built-in、extension、userの明示layer、
+  priority、replace stack、exact/pattern順序を共通化し、immutable snapshotと
+  shadowing diagnosticを提供する。
+- Phase 8 以降: 未着手。
 
 ## Phase 0: ベースライン固定
 

@@ -59,6 +59,10 @@ public sealed class VimKeyBindingRegistry
 
     private readonly object _gate = new();
     private readonly List<Entry> _entries = [];
+    private readonly CommandTable<string, VimMode, Entry> _table =
+        new(StringComparer.Ordinal);
+    private readonly List<IDisposable> _tableRegistrations = [];
+    private volatile Entry[] _activeSnapshot = [];
     private long _nextId;
 
     public static VimKeyBindingRegistry Default { get; } = new();
@@ -93,6 +97,7 @@ public sealed class VimKeyBindingRegistry
 
             var entry = new Entry(++_nextId, descriptor, strokes, handler);
             _entries.Add(entry);
+            RebuildTable();
             return new Registration(() => Remove(entry));
         }
     }
@@ -110,28 +115,28 @@ public sealed class VimKeyBindingRegistry
         }
     }
 
+    public IReadOnlyList<CommandTableDiagnostic> Diagnostics =>
+        _table.Snapshot.Diagnostics;
+
     internal Match Resolve(VimMode mode, IReadOnlyList<VimKeyStroke> input)
     {
-        lock (_gate)
+        var canonical = Canonical(input);
+        Entry? exact = null;
+        if (_table.TryResolve($"{mode}|{canonical}", mode, out var exactHandler))
+            exact = exactHandler(mode);
+
+        bool prefix = false;
+        foreach (var entry in _activeSnapshot.Reverse())
         {
-            Entry? exact = null;
-            bool prefix = false;
-            bool longer = false;
-
-            foreach (var entry in ActiveEntries(mode))
-            {
-                if (!StartsWith(entry.Strokes, input)) continue;
-                if (entry.Strokes.Count == input.Count)
-                    exact ??= entry;
-                else
-                {
-                    prefix = true;
-                    if (exact is not null) longer = true;
-                }
-            }
-
-            return new Match(exact, prefix, exact is not null && (longer || prefix));
+            if ((entry.Descriptor.Modes & ToModeSet(mode)) == 0 ||
+                entry.Strokes.Count <= input.Count ||
+                !StartsWith(entry.Strokes, input))
+                continue;
+            prefix = true;
+            break;
         }
+
+        return new Match(exact, prefix, exact is not null && prefix);
     }
 
     private IEnumerable<Entry> ActiveEntries(VimMode mode)
@@ -168,8 +173,53 @@ public sealed class VimKeyBindingRegistry
 
     private void Remove(Entry entry)
     {
-        lock (_gate) _entries.RemoveAll(e => e.Id == entry.Id);
+        lock (_gate)
+        {
+            _entries.RemoveAll(e => e.Id == entry.Id);
+            RebuildTable();
+        }
     }
+
+    private void RebuildTable()
+    {
+        foreach (var registration in _tableRegistrations)
+            registration.Dispose();
+        _tableRegistrations.Clear();
+        _activeSnapshot = ActiveEntriesForAllModes().ToArray();
+        foreach (var entry in _activeSnapshot)
+            foreach (var mode in EnumerateModes(entry.Descriptor.Modes))
+            {
+                var key = $"{mode}|{Canonical(entry.Strokes)}";
+                _tableRegistrations.Add(_table.RegisterExact(
+                    $"{entry.Descriptor.Id}\0{mode}",
+                    key,
+                    _ => entry,
+                    CommandLayer.Extension,
+                    RegistrationPriority(entry.Id)));
+            }
+    }
+
+    private IEnumerable<Entry> ActiveEntriesForAllModes()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = _entries.Count - 1; i >= 0; i--)
+            if (seen.Add(_entries[i].Descriptor.Id))
+                yield return _entries[i];
+    }
+
+    private static IEnumerable<VimMode> EnumerateModes(VimModeSet modes)
+    {
+        foreach (var mode in Enum.GetValues<VimMode>())
+            if ((modes & ToModeSet(mode)) != 0)
+                yield return mode;
+    }
+
+    private static string Canonical(IReadOnlyList<VimKeyStroke> strokes) =>
+        string.Join("|", strokes.Select(stroke =>
+            $"{stroke.Ctrl}:{stroke.Shift}:{stroke.Alt}:{stroke.Key.Length}:{stroke.Key}"));
+
+    private static int RegistrationPriority(long registrationId) =>
+        registrationId >= int.MaxValue ? int.MaxValue : (int)registrationId;
 
     private sealed class Registration(Action action) : IDisposable
     {

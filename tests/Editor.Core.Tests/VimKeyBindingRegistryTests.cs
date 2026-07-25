@@ -78,6 +78,23 @@ public class VimKeyBindingRegistryTests
     }
 
     [Fact]
+    public void NewerDistinctBinding_WinsSharedKeyAndReportsShadowing()
+    {
+        var bindings = new VimKeyBindingRegistry();
+        bindings.Register(new("test.first", VimModeSet.Normal, "x"),
+            _ => [VimEvent.StatusMessage("first")]);
+        bindings.Register(new("test.second", VimModeSet.Normal, "x"),
+            _ => [VimEvent.StatusMessage("second")]);
+        var engine = CreateEngine("abc", bindings);
+
+        Assert.Equal("second",
+            Assert.IsType<StatusMessageEvent>(engine.ProcessKey("x").Single()).Message);
+        Assert.Contains(bindings.Diagnostics,
+            diagnostic => diagnostic.Id.StartsWith("test.first", StringComparison.Ordinal) &&
+                diagnostic.IsUnreachable);
+    }
+
+    [Fact]
     public void FlushPendingMappings_ReplaysIncompleteBindingLiterally()
     {
         var bindings = new VimKeyBindingRegistry();

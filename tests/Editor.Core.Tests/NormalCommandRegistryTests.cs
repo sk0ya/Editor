@@ -44,6 +44,23 @@ public class NormalCommandRegistryTests
     }
 
     [Fact]
+    public void NewerDistinctRegistration_WinsSharedMotionAndReportsShadowing()
+    {
+        var commands = new NormalCommandRegistry();
+        commands.Register(new("test.first", ["x"]),
+            _ => [VimEvent.StatusMessage("first")]);
+        commands.Register(new("test.second", ["x"]),
+            _ => [VimEvent.StatusMessage("second")]);
+        var engine = CreateEngine("abc", commands);
+
+        Assert.Equal("second",
+            Assert.IsType<StatusMessageEvent>(engine.ProcessKey("x").Single()).Message);
+        Assert.Contains(commands.Diagnostics,
+            diagnostic => diagnostic.Id.StartsWith("test.first", StringComparison.Ordinal) &&
+                diagnostic.IsUnreachable);
+    }
+
+    [Fact]
     public void UnregisteredCommand_UsesBuiltInDispatcher()
     {
         var engine = CreateEngine("abc", new NormalCommandRegistry());
