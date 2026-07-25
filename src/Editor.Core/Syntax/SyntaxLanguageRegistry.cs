@@ -12,7 +12,7 @@ public sealed class SyntaxLanguageRegistry
     private readonly object _gate = new();
     private readonly Dictionary<string, List<Entry>> _byName = new(StringComparer.OrdinalIgnoreCase);
     private long _nextId;
-    public static SyntaxLanguageRegistry Default { get; } = CreateDefault();
+    public static SyntaxLanguageRegistry Default => CreateDefault();
 
     public IDisposable Register(SyntaxLanguageDescriptor descriptor, Func<ISyntaxLanguage> factory, RegistrationPolicy policy = RegistrationPolicy.Reject)
     {
@@ -36,7 +36,7 @@ public sealed class SyntaxLanguageRegistry
     private IEnumerable<Entry> Active() => _byName.Values.Where(x => x.Count > 0).Select(x => x[^1]);
     private void Remove(Entry e) { lock (_gate) { if (!_byName.TryGetValue(e.Descriptor.Name, out var list)) return; list.RemoveAll(x => x.Id == e.Id); if (list.Count == 0) _byName.Remove(e.Descriptor.Name); } }
     private static string Normalize(string extension) => extension.StartsWith('.') ? extension : "." + extension;
-    private static SyntaxLanguageRegistry CreateDefault()
+    public static SyntaxLanguageRegistry CreateDefault()
     {
         var r = new SyntaxLanguageRegistry();
         Add<CSharpSyntax>(r); Add<PythonSyntax>(r); Add<XmlSyntax>(r); Add<MarkdownSyntax>(r); Add<JavaScriptSyntax>(r); Add<TypeScriptSyntax>(r); Add<RustSyntax>(r); Add<JsonSyntax>(r); Add<TomlSyntax>(r); Add<YamlSyntax>(r); Add<ShellSyntax>(r); Add<CssSyntax>(r); Add<SqlSyntax>(r); Add<CppSyntax>(r); Add<GoSyntax>(r); Add<BatchSyntax>(r); Add<PowerShellSyntax>(r); Add<LuaSyntax>(r); Add<RubySyntax>(r); return r;

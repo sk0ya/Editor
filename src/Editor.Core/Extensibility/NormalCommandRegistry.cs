@@ -89,7 +89,7 @@ public sealed class NormalCommandRegistry
     private readonly List<IDisposable> _tableRegistrations = [];
     private long _nextId;
 
-    public static NormalCommandRegistry Default { get; } = new();
+    public static NormalCommandRegistry Default => new();
 
     public IDisposable Register(
         NormalCommandDescriptor descriptor,

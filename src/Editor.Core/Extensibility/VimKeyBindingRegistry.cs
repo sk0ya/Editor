@@ -65,7 +65,7 @@ public sealed class VimKeyBindingRegistry
     private volatile Entry[] _activeSnapshot = [];
     private long _nextId;
 
-    public static VimKeyBindingRegistry Default { get; } = new();
+    public static VimKeyBindingRegistry Default => new();
 
     internal bool IsEmpty
     {

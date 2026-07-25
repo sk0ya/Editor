@@ -8,7 +8,7 @@ namespace Editor.Core.Engine.ExCommands;
 /// Handles LSP-triggered ex commands (:Format, :Rename, :Symbols, :CallHierarchy, :TypeHierarchy)
 /// and the :Lsp*/:Fmt* server/formatter configuration commands.
 /// </summary>
-public class LspCommands(LspServerRegistry lspRegistry)
+public class LspCommands(LspServerRegistry lspRegistry, FormatterRegistry formatterRegistry)
 {
     /// <param name="formatRange">
     /// Resolved 0-based inclusive line range of the ex range prefix, or null when the command had none.
@@ -188,9 +188,9 @@ public class LspCommands(LspServerRegistry lspRegistry)
             : new ExResult(false, $"LSP: nothing to reset for {ext}");
     }
 
-    private static string FormatFormatters()
+    private string FormatFormatters()
     {
-        var entries = FormatterRegistry.Default.List();
+        var entries = formatterRegistry.List();
         if (entries.Count == 0)
             return "(no formatters configured) — :FmtSet <ext> <cmd>, or run :Format to auto-detect";
 
@@ -202,7 +202,7 @@ public class LspCommands(LspServerRegistry lspRegistry)
         return "Formatters (extension → command, stdin→stdout):\n" + string.Join('\n', lines);
     }
 
-    private static ExResult ExecuteFmtSet(string rest)
+    private ExResult ExecuteFmtSet(string rest)
     {
         var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length < 2)
@@ -214,19 +214,19 @@ public class LspCommands(LspServerRegistry lspRegistry)
 
         var executable = parts[1];
         var args = parts.Length > 2 ? parts[2..] : [];
-        FormatterRegistry.Default.Set(ext, new FormatterDef(executable, args));
+        formatterRegistry.Set(ext, new FormatterDef(executable, args));
 
         var argsText = args.Length > 0 ? " " + string.Join(' ', args) : "";
         return new ExResult(true, $"Format: {ext} → {executable}{argsText}");
     }
 
-    private static ExResult ExecuteFmtRemove(string rest)
+    private ExResult ExecuteFmtRemove(string rest)
     {
         var ext = FormatterRegistry.NormalizeExt(rest.Trim());
         if (ext.Length == 0)
             return new ExResult(false, "Usage: :FmtRemove <ext>");
 
-        return FormatterRegistry.Default.Remove(ext)
+        return formatterRegistry.Remove(ext)
             ? new ExResult(true, $"Format: removed {ext}")
             : new ExResult(false, $"Format: no formatter configured for {ext}");
     }

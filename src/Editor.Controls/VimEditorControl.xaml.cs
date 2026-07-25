@@ -649,7 +649,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         options ??= new VimEditorControlOptions();
 
         var config = options.ConfigFactory?.Invoke() ?? VimConfig.LoadDefault();
-        _engine = new VimEngine(config, options.SyntaxLanguages, options.Commands, options.CommandServices);
+        _engine = new VimEngine(
+            config,
+            options.SyntaxLanguages,
+            options.Commands,
+            options.CommandServices,
+            engineServices: options.EngineServices);
         _engine.VerticalColumnResolver = Canvas.ResolveVerticalColumn;
         _engine.SetClipboardProvider(options.ClipboardProviderFactory?.Invoke() ?? new WpfClipboardProvider());
         _imagePasteHandler = new ImagePasteHandler { Options = options.ImagePasteOptions ?? new Editor.Core.Editing.ImagePasteOptions() };
@@ -4470,7 +4475,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         var scope = lines is null ? "document" : "selection";
 
         // 1) A configured CLI formatter for this extension wins over LSP.
-        var def = FormatterRegistry.Default.GetForExtension(ext);
+        var def = _engine.Services.Formatters.GetForExtension(ext);
         if (def is not null)
         {
             await RunCliFormatterAsync(def, filePath, original, registeredFor: null, lines);
@@ -4531,7 +4536,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             return;
         }
         if (registeredFor is not null)
-            FormatterRegistry.Default.Set(registeredFor, def);
+            _engine.Services.Formatters.Set(registeredFor, def);
 
         var output = PreserveEol(input, result.Output ?? "");
         // A formatter normally emits a trailing newline; keep it out of the splice so a range format

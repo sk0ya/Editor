@@ -18,6 +18,7 @@ namespace Editor.Core.Engine;
 
 public class VimEngine
 {
+    private readonly VimEngineServices _services;
     private readonly BufferManager _bufferManager;
     private readonly RegisterManager _registerManager;
     private readonly MarkManager _markManager;
@@ -39,7 +40,7 @@ public class VimEngine
     private readonly VisualEditOps _visualEditOps;
     private readonly NormalCommandExecutor _normalCmdExecutor;
     private readonly SpellChecker _spellChecker = new();
-    private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
+    private readonly EditAssistRegistry _editAssists;
     private readonly VimKeyBindingRegistry _keyBindings;
     private readonly NormalCommandRegistry _normalCommands;
     private readonly KeyInputPipeline _keyInput;
@@ -122,6 +123,7 @@ public class VimEngine
     public bool FoldsDisabled => _foldDisabled;
     public VimKeyBindingRegistry KeyBindings => _keyBindings;
     public NormalCommandRegistry NormalCommands => _normalCommands;
+    public VimEngineServices Services => _services;
     public PendingInputState PendingInput => _pendingInput.Current;
 
     /// <summary>Executes a registered synchronous or asynchronous command from a raw Ex line.</summary>
@@ -184,8 +186,10 @@ public class VimEngine
     public VimEngine(VimConfig? config = null, SyntaxLanguageRegistry? syntaxLanguages = null,
         EditorCommandRegistry? commands = null, IServiceProvider? services = null,
         VimKeyBindingRegistry? keyBindings = null, NormalCommandRegistry? normalCommands = null,
-        CommandGrammar? commandGrammar = null)
+        CommandGrammar? commandGrammar = null, VimEngineServices? engineServices = null)
     {
+        engineServices ??= VimEngineServices.CreateIsolated();
+        _services = engineServices;
         _config = config ?? new VimConfig();
         _bufferManager = new BufferManager();
         _bufferManager.BufferWillWrite += (_, path) => _autocmdRunner.RunAutocmds("BufWritePre", path);
@@ -193,16 +197,17 @@ public class VimEngine
         _registerManager = new RegisterManager(_config.Options);
         _markManager = new MarkManager();
         _macroManager = new MacroManager();
-        _syntaxEngine = new SyntaxEngine(syntaxLanguages);
+        _syntaxEngine = new SyntaxEngine(syntaxLanguages ?? engineServices.SyntaxLanguages);
+        _editAssists = engineServices.EditAssists;
         _editTransactions = new EditTransactionService(
             _bufferManager, _markManager, _syntaxEngine,
             () => _cursor, cursor => _cursor = cursor,
             () => _suppressSnapshot, EmitStatus);
         _motionService = new MotionService(_bufferManager);
-        _commandGrammar = commandGrammar ?? new CommandGrammar();
+        _commandGrammar = commandGrammar ?? engineServices.CommandGrammar;
         _commandParser = new CommandParser(_pendingInput, _commandGrammar);
-        _keyBindings = keyBindings ?? VimKeyBindingRegistry.Default;
-        _normalCommands = normalCommands ?? NormalCommandRegistry.Default;
+        _keyBindings = keyBindings ?? engineServices.KeyBindings;
+        _normalCommands = normalCommands ?? engineServices.NormalCommands;
         _keyInput = new KeyInputPipeline(this, _keyBindings, () => _mode, GetMapsForMode,
             () => !string.IsNullOrEmpty(_commandParser.Buffer), ProcessResolvedStroke);
         _modeCoordinator = new ModeCoordinator(
@@ -220,7 +225,13 @@ public class VimEngine
         _visualMotions = CreateVisualMotions();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
             _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames, _config.Functions,
-            commandRegistry: commands, services: services);
+            lspRegistry: engineServices.LspServers,
+            formatterRegistry: engineServices.Formatters,
+            commandRegistry: commands ?? engineServices.EditorCommands,
+            services: services ?? engineServices.CommandServices);
+        var clipboardProvider = engineServices.ClipboardProviderFactory?.Invoke();
+        if (clipboardProvider is not null)
+            _registerManager.SetClipboardProvider(clipboardProvider);
         _autocmdRunner = new AutocmdRunner(_config, _exProcessor, () => _cursor);
         _foldCommands = new Commands.FoldCommands(_bufferManager);
         _fileNavCommands = new Commands.FileNavCommands(_bufferManager);

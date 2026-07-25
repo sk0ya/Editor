@@ -135,7 +135,8 @@ public sealed class LspManager : IEditorLspManager
 
     /// <summary>
     /// Creates the manager. <paramref name="registry"/> supplies the extension→server table; when null the
-    /// process-wide <see cref="LspServerRegistry.Default"/> is used so <c>:Lsp*</c> ex-command changes apply live.
+    /// A compatibility registry is created when none is supplied. Applications
+    /// should pass the shared registry owned by their <see cref="VimEngineServices"/>.
     /// </summary>
     public LspManager(Dispatcher dispatcher, LspServerRegistry? registry = null)
     {

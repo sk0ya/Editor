@@ -45,26 +45,24 @@ public sealed class FormatterRegistry
     }
 
     private static readonly object _defaultGate = new();
-    private static FormatterRegistry? _default;
+    private static string? _defaultStorePath = DefaultStorePath();
 
     /// <summary>
-    /// The process-wide registry shared by the running editor and the <c>:Fmt*</c> ex commands.
-    /// First access (lazily) creates one persisting to <see cref="DefaultStorePath"/>; a host can override
-    /// that location by calling <see cref="ConfigureDefault"/> at startup (before any editor control is built).
+    /// Compatibility factory for a registry using the configured default store path.
+    /// Each access returns a fresh instance; share an instance through
+    /// <see cref="VimEngineServices"/> when shared mutable state is intended.
     /// </summary>
     public static FormatterRegistry Default
     {
-        get { lock (_defaultGate) return _default ??= new FormatterRegistry(DefaultStorePath()); }
+        get { lock (_defaultGate) return new FormatterRegistry(_defaultStorePath); }
     }
 
     /// <summary>
-    /// Replace the process-wide <see cref="Default"/> registry so it persists to <paramref name="storePath"/>
-    /// (pass null for an in-memory, non-persisting Default). Lets a host keep formatter config inside its own
-    /// data folder instead of <c>%APPDATA%/sk0ya.Editor</c>. Call once at startup, before opening any editor control.
+    /// Configures the store path used by the compatibility <see cref="Default"/> factory.
     /// </summary>
     public static void ConfigureDefault(string? storePath)
     {
-        lock (_defaultGate) _default = new FormatterRegistry(storePath);
+        lock (_defaultGate) _defaultStorePath = storePath;
     }
 
     /// <summary>The default persisted config path when no host override is set: <c>%APPDATA%/sk0ya.Editor/formatters.json</c>.</summary>

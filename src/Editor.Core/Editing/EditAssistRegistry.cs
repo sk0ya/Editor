@@ -14,8 +14,8 @@ public sealed class EditAssistRegistry
         new HtmlTagEditAssist(),
     };
 
-    /// <summary>Process-wide default registry used by <c>VimEngine</c>.</summary>
-    public static EditAssistRegistry Default { get; } = new();
+    /// <summary>Creates a fresh registry containing the built-in assists.</summary>
+    public static EditAssistRegistry Default => new();
 
     /// <summary>Adds an assist, giving it priority over previously registered ones.</summary>
     public void Register(IEditAssist assist) => _assists.Insert(0, assist);

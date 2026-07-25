@@ -22,7 +22,7 @@ public sealed class EditorCommandRegistry
     private readonly object _gate = new();
     private readonly Dictionary<string, List<Entry>> _entries = new(StringComparer.OrdinalIgnoreCase);
     private long _nextId;
-    public static EditorCommandRegistry Default { get; } = new();
+    public static EditorCommandRegistry Default => new();
 
     public IDisposable Register(EditorCommandDescriptor descriptor, EditorCommandHandler handler, RegistrationPolicy policy = RegistrationPolicy.Reject)
         => RegisterCore(descriptor with { IsAsync = false }, handler, null, policy);

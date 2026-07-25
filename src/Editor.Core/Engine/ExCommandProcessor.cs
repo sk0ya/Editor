@@ -52,7 +52,8 @@ public class ExCommandProcessor
         Dictionary<string, string>? visualMaps = null, Dictionary<string, string>? variables = null,
         IReadOnlyList<string>? scriptNames = null,
         Dictionary<string, VimFunctionDefinition>? functions = null,
-        LspServerRegistry? lspRegistry = null, EditorCommandRegistry? commandRegistry = null,
+        LspServerRegistry? lspRegistry = null, FormatterRegistry? formatterRegistry = null,
+        EditorCommandRegistry? commandRegistry = null,
         IServiceProvider? services = null)
     {
         _bufferManager = bufferManager;
@@ -64,7 +65,9 @@ public class ExCommandProcessor
         _insertMaps = insertMaps ?? [];
         _visualMaps = visualMaps ?? [];
         _scriptNames = scriptNames ?? [];
-        _lspCommands = new ExCommands.LspCommands(lspRegistry ?? LspServerRegistry.Default);
+        _lspCommands = new ExCommands.LspCommands(
+            lspRegistry ?? new LspServerRegistry(),
+            formatterRegistry ?? new FormatterRegistry());
         _fileOpsCommands = new ExCommands.FileOpsCommands(bufferManager, options);
         _rangeResolver = new ExCommands.RangeResolver(markManager);
         _substituteCommands = new ExCommands.SubstituteCommands(bufferManager, options, _rangeResolver,
@@ -74,7 +77,7 @@ public class ExCommandProcessor
             functions ?? new Dictionary<string, VimFunctionDefinition>(StringComparer.OrdinalIgnoreCase),
             Execute, ExecuteNoHistory);
         _registerMarkCommands = new ExCommands.RegisterMarkCommands(bufferManager, markManager, registerManager, _rangeResolver);
-        _commandRegistry = commandRegistry ?? EditorCommandRegistry.Default;
+        _commandRegistry = commandRegistry ?? new EditorCommandRegistry();
         _services = services;
     }
 

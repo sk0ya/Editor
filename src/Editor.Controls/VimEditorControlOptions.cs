@@ -6,6 +6,7 @@ using Editor.Core.Editing;
 using Editor.Core.Registers;
 using Editor.Core.Extensibility;
 using Editor.Core.Syntax;
+using Editor.Core.Engine;
 
 namespace Editor.Controls;
 
@@ -18,6 +19,7 @@ public sealed class VimEditorControlOptions
     public SyntaxLanguageRegistry? SyntaxLanguages { get; init; }
     public EditorCommandRegistry? Commands { get; init; }
     public IServiceProvider? CommandServices { get; init; }
+    public VimEngineServices? EngineServices { get; init; }
 
     /// <summary>
     /// Rules for saving a pasted clipboard image and the Markdown link written in its place
