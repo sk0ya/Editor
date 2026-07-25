@@ -52,6 +52,19 @@ public class TextBuffer
         Version++;
     }
 
+    /// <summary>
+    /// Replaces the document as an edit, preserving the saved baseline so the result remains
+    /// modified and can participate in an outer undo transaction.
+    /// </summary>
+    public void ReplaceAll(string text)
+    {
+        var replacement = SplitLines(text);
+        if (_lines.SequenceEqual(replacement))
+            return;
+        _lines = replacement;
+        MarkModified();
+    }
+
     // Insert a character at position
     public void InsertChar(int line, int col, char ch)
     {

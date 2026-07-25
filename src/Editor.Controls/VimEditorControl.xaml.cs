@@ -4491,8 +4491,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (edits.Count > 0)
         {
             var formatted = ApplyTextEdits(original, edits);
-            _engine.SetText(formatted);
-            UpdateAll();
+            ProcessVimEvents(_engine.ApplyExternalText(formatted));
             _lspManager.OnTextChanged(formatted);
             ActiveStatusBar.UpdateStatus($"Format: {scope} formatted");
             return;
@@ -4548,8 +4547,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             ActiveStatusBar.UpdateStatus($"Format: no changes — {def.Executable}{where}");
             return;
         }
-        _engine.SetText(formatted);
-        UpdateAll();
+        ProcessVimEvents(_engine.ApplyExternalText(formatted));
         _lspManager.OnTextChanged(formatted);
         ActiveStatusBar.UpdateStatus($"Format:{scope} formatted with {def.Executable}{where}");
     }
@@ -5042,8 +5040,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             if (string.Equals(localPath, currentPath, StringComparison.OrdinalIgnoreCase))
             {
                 var text = ApplyTextEdits(_engine.CurrentBuffer.Text.GetText(), fileEdits);
-                _engine.SetText(text);
-                UpdateAll();
+                ProcessVimEvents(_engine.ApplyExternalText(text));
                 _lspManager.OnTextChanged(text);
             }
             else if (fileEdits.Count > 0)

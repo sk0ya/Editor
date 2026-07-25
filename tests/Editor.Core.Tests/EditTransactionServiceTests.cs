@@ -125,4 +125,22 @@ public class EditTransactionIntegrationTests
         Assert.Single(events, e => e.Type == VimEventType.CursorMoved);
         Assert.Equal("abcd", engine.CurrentBuffer.Text.GetText());
     }
+
+    [Fact]
+    public void ExternalText_IsUndoableAndPreservesSavedBaseline()
+    {
+        var engine = new VimEngine();
+        engine.SetText("before");
+        engine.CurrentBuffer.Text.MarkSaved();
+
+        var events = engine.ApplyExternalText("after");
+
+        Assert.Equal(new[] { VimEventType.TextChanged, VimEventType.CursorMoved },
+            events.Select(e => e.Type));
+        Assert.True(engine.CurrentBuffer.Text.IsModified);
+        Assert.Equal(new[] { "before" }, engine.CurrentBuffer.Text.SavedLines);
+
+        engine.ProcessKey("u");
+        Assert.Equal("before", engine.CurrentBuffer.Text.GetText());
+    }
 }

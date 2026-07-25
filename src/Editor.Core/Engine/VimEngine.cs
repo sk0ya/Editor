@@ -1075,6 +1075,22 @@ public class VimEngine
         SetPreferredColumn(col);
     }
 
+    /// <summary>
+    /// Applies formatter, LSP, or other host-produced text as one undoable edit.
+    /// Unlike <see cref="SetText"/>, this preserves the saved-file baseline.
+    /// </summary>
+    public IReadOnlyList<VimEvent> ApplyExternalText(string text)
+    {
+        var events = new List<VimEvent>();
+        ExecuteEdit(events, transaction =>
+        {
+            transaction.Buffer.ReplaceAll(text);
+            transaction.Cursor = _cursor;
+        });
+        SetPreferredColumn(_cursor.Column);
+        return events;
+    }
+
     // Move cursor to an arbitrary position (used for mouse click).
     public IReadOnlyList<VimEvent> SetCursorPosition(CursorPosition pos)
     {
