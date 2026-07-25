@@ -609,9 +609,9 @@ public class VimEngine
         commands.Register("k", (cmd, events) => MoveVertical(-cmd.Count, events));
         commands.Register("gj", (cmd, events) => MoveVertical(cmd.Count, events));
         commands.Register("gk", (cmd, events) => MoveVertical(-cmd.Count, events));
-        commands.Register("0", (_, events) =>
+        commands.RegisterContext(["0"], (context, _) =>
         {
-            MoveCursor(_cursor with { Column = 0 }, events);
+            context.MoveCursor(context.Cursor with { Column = 0 });
             SetPreferredColumn(0);
         });
         commands.Register("^", (_, events) =>
@@ -619,11 +619,11 @@ public class VimEngine
         commands.Register("$", (_, events) => GoToLineEnd(false, events));
         commands.Register(["ge", "gE"], (cmd, events) =>
             MoveCursor(new TextObjectEngine(CurrentBuffer.Text).WordEndBackward(_cursor, cmd.Count), events));
-        commands.Register("g_", (cmd, events) =>
+        commands.RegisterContext(["g_"], (context, _) =>
         {
-            var result = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
-                .Calculate("g_", _cursor, cmd.Count);
-            if (result.HasValue) MoveCursor(result.Value.Target, events);
+            var result = context.CalculateMotion("g_", context.Command.Count);
+            if (result.HasValue)
+                context.MoveCursor(result.Value.Target);
         });
         commands.Register("gg", (_, events) =>
         {
@@ -1548,20 +1548,7 @@ public class VimEngine
         if (cmd.Operator is null && !cmd.LinewiseForced &&
             _normalCommands.TryResolve(cmd.Motion, out var extensionHandler))
         {
-            var context = new NormalCommandContext(
-                cmd,
-                CurrentBuffer.Text,
-                () => _cursor,
-                () => _selection,
-                () => _mode,
-                () => CurrentBuffer.FilePath,
-                (requestedMotion, requestedCount) =>
-                    new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
-                        .Calculate(requestedMotion, _cursor, requestedCount),
-                mutation => ExecuteEdit(events, mutation),
-                cursor => MoveCursor(cursor, events),
-                name => _registerManager.Get(name),
-                (name, value) => _registerManager.SetYank(name, value));
+            var context = CreateNormalCommandContext(cmd, events);
             var result = extensionHandler(context);
             if (result is not null) events.AddRange(result);
             return;
@@ -1661,8 +1648,26 @@ public class VimEngine
             return;
         }
 
-        _builtInNormalCommands.Dispatch(cmd, events);
+        _builtInNormalCommands.Dispatch(CreateNormalCommandContext(cmd, events), events);
     }
+
+    private INormalCommandContext CreateNormalCommandContext(
+        ParsedCommand command,
+        List<VimEvent> events) =>
+        new NormalCommandContext(
+            command,
+            CurrentBuffer.Text,
+            () => _cursor,
+            () => _selection,
+            () => _mode,
+            () => CurrentBuffer.FilePath,
+            (requestedMotion, requestedCount) =>
+                new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
+                    .Calculate(requestedMotion, _cursor, requestedCount),
+            mutation => ExecuteEdit(events, mutation),
+            cursor => MoveCursor(cursor, events),
+            name => _registerManager.Get(name),
+            (name, value) => _registerManager.SetYank(name, value));
 
     private void ExecuteOperatorMotion(ParsedCommand cmd, List<VimEvent> events)
     {
