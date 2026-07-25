@@ -1,4 +1,5 @@
 using Editor.Core.Buffer;
+using Editor.Core.Extensibility;
 using Editor.Core.Models;
 
 namespace Editor.Core.Engine;
@@ -42,15 +43,35 @@ public interface IMotionService
 }
 
 /// <summary>
+/// Extension point for fold-aware or display-line-aware motion calculation.
+/// Returning true prevents the logical-line backend from recalculating the motion.
+/// </summary>
+public interface IMotionOverride
+{
+    bool TryCalculate(
+        MotionRequest request,
+        INormalBufferView buffer,
+        out MotionResult? result);
+}
+
+/// <summary>
 /// Shared motion calculation entry point for Normal, Visual, and operator applications.
 /// Mode-specific code applies the returned result but does not recalculate the target.
 /// </summary>
-public sealed class MotionService(BufferManager buffers) : IMotionService
+public sealed class MotionService(
+    BufferManager buffers,
+    IEnumerable<IMotionOverride>? overrides = null) : IMotionService
 {
+    private readonly IMotionOverride[] _overrides = overrides?.ToArray() ?? [];
+
     public MotionResult? Calculate(MotionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         var buffer = buffers.Current.Text;
+        foreach (var motionOverride in _overrides)
+            if (motionOverride.TryCalculate(request, buffer, out var overridden))
+                return overridden;
+
         var engine = new MotionEngine(buffer, buffers.Current.FilePath);
         engine.SetViewport(request.ViewportTopLine, request.ViewportVisibleLines);
 
