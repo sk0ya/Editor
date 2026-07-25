@@ -185,7 +185,11 @@ MotionRequest
   `VimEngine`本体を参照しない。bufferはread-only viewとして公開し、変更は
   contextのtransaction capabilityに限定した。cursor、motion、registerも限定能力
   として提供し、handlerをengineなしで単体テスト可能にした。
-- Phase 4 以降: 未着手。
+- Phase 4: 完了。`MotionRequest`、`MotionResult`、`MotionService`を導入し、
+  Normal、Visual、Operatorのtarget計算を共通化した。operator固有の`cw`/`dw`、
+  find、inclusive/exclusive、linewise metadataもserviceが解決し、fold/display
+  awareな`IMotionOverride`拡張点を提供する。
+- Phase 5 以降: 未着手。
 
 ## Phase 0: ベースライン固定
 
