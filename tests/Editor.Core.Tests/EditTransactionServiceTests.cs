@@ -52,6 +52,26 @@ public class EditTransactionServiceTests
         Assert.Equal(new CursorPosition(0, 1), cursor);
     }
 
+    [Fact]
+    public void Execute_WhenRollbackRequested_LeavesNoPartialEdit()
+    {
+        var buffers = new BufferManager();
+        buffers.Current.Text.SetText("abc");
+        var cursor = CursorPosition.Zero;
+        var service = CreateService(buffers, () => cursor, value => cursor = value);
+
+        var result = service.Execute([], tx =>
+        {
+            tx.Buffer.DeleteChar(0, 0);
+            tx.Rollback();
+            return null;
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("abc", buffers.Current.Text.GetText());
+        Assert.Equal(CursorPosition.Zero, cursor);
+    }
+
     private static EditTransactionService CreateService(
         BufferManager buffers,
         Func<CursorPosition> getCursor,
@@ -142,5 +162,20 @@ public class EditTransactionIntegrationTests
 
         engine.ProcessKey("u");
         Assert.Equal("before", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void DeferredSurround_SnapshotsWhenCharacterCompletes()
+    {
+        var engine = new VimEngine();
+        engine.SetText("word");
+        engine.ProcessKey("y");
+        engine.ProcessKey("s");
+        engine.ProcessKey("w");
+
+        engine.ProcessKey(")");
+        engine.ProcessKey("u");
+
+        Assert.Equal("word", engine.CurrentBuffer.Text.GetText());
     }
 }

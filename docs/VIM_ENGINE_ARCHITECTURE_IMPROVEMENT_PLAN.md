@@ -177,7 +177,11 @@ MotionRequest
   `PendingInputState` と `PendingInputController` へ移行し、旧 `_awaiting...`
   フラグを削除済み。parser が所有する register、find、mark、replace の待機も
   同じ controller から観測・キャンセルできる。
-- Phase 2 以降: 未着手。
+- Phase 2: 完了。`IEditTransactionService` を導入し、Normal、Insert/Replace、
+  Visual、Plain、Ex、deferred surround、paste、formatter/LSP外部変更を共通境界へ
+  移行済み。read-only、rollback、snapshot、cursor clamp、syntax invalidation、
+  repeat metadata、イベント重複排除をtransactionが管理する。
+- Phase 3 以降: 未着手。
 
 ## Phase 0: ベースライン固定
 

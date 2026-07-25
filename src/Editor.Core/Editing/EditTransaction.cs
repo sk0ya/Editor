@@ -10,6 +10,10 @@ public sealed class EditTransaction(TextBuffer buffer, CursorPosition cursor)
 {
     public TextBuffer Buffer { get; } = buffer;
     public CursorPosition Cursor { get; set; } = cursor;
+    public bool CreateUndoSnapshot { get; set; } = true;
+    public bool RollbackRequested { get; private set; }
+
+    public void Rollback() => RollbackRequested = true;
 }
 
 public sealed record EditTransactionResult(
@@ -20,7 +24,8 @@ public sealed record EditTransactionResult(
 
 public sealed record EditTransactionOptions(
     bool CreateUndoSnapshot = true,
-    bool AllowCursorAtEndOfLine = false);
+    bool AllowCursorAtEndOfLine = false,
+    bool EnforceReadOnly = true);
 
 public interface IEditTransactionService
 {
@@ -53,7 +58,7 @@ public sealed class EditTransactionService(
 
         var current = buffers.Current;
         var originalCursor = getCursor();
-        if (current.IsBinary)
+        if ((options?.EnforceReadOnly ?? true) && current.IsBinary)
         {
             emitStatus(events, "E21: Cannot make changes (binary file is read-only)");
             return new EditTransactionResult(false, false, originalCursor);
@@ -62,6 +67,7 @@ public sealed class EditTransactionService(
         var originalLines = current.Text.Snapshot();
         const int eventStart = 0;
         var transaction = new EditTransaction(current.Text, originalCursor);
+        transaction.CreateUndoSnapshot = options?.CreateUndoSnapshot ?? true;
         object? repeatMetadata;
         try
         {
@@ -74,6 +80,21 @@ public sealed class EditTransactionService(
             throw;
         }
 
+        if (transaction.RollbackRequested)
+        {
+            current.Text.RestoreSnapshot(originalLines);
+            setCursor(originalCursor);
+            for (var i = events.Count - 1; i >= eventStart; i--)
+                if (events[i].Type is VimEventType.TextChanged or VimEventType.CursorMoved)
+                    events.RemoveAt(i);
+            return new EditTransactionResult(false, false, originalCursor, repeatMetadata);
+        }
+
+        // Buffer-navigation Ex commands may switch BufferManager.Current without editing the
+        // buffer that opened this transaction. Cursor ownership then belongs to the new buffer.
+        if (!ReferenceEquals(buffers.Current, current))
+            return new EditTransactionResult(true, false, getCursor(), repeatMetadata);
+
         var changed = !originalLines.SequenceEqual(current.Text.Snapshot());
         var finalCursor = current.Text.ClampCursor(
             transaction.Cursor,
@@ -82,7 +103,7 @@ public sealed class EditTransactionService(
         if (!changed)
             return new EditTransactionResult(true, false, finalCursor, repeatMetadata);
 
-        if ((options?.CreateUndoSnapshot ?? true) && !suppressSnapshot())
+        if (transaction.CreateUndoSnapshot && !suppressSnapshot())
         {
             current.Undo.Snapshot(originalLines, originalCursor);
             marks.AddChange(originalCursor);

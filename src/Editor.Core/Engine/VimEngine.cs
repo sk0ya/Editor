@@ -1325,8 +1325,15 @@ public class VimEngine
         {
             _pendingInput.Cancel();
             if (key.Length == 1)
-                _cursor = _textTransform.ApplySurround(
-                    surround.Start, surround.End, surround.Linewise, key[0], events);
+            {
+                _editTransactions.Execute(events, transaction =>
+                {
+                    _cursor = _textTransform.ApplySurround(
+                        surround.Start, surround.End, surround.Linewise, key[0], events);
+                    transaction.Cursor = _cursor;
+                    return null;
+                });
+            }
             return;
         }
 
@@ -1591,7 +1598,6 @@ public class VimEngine
                     return;
                 case "ys":
                     // yss{char}: surround current line(s) — await surround char
-                    Snapshot();
                     _pendingInput.Begin(new PendingInputState.Surround(
                         new CursorPosition(_cursor.Line, 0),
                         new CursorPosition(endLine, buf.GetLine(endLine).TrimEnd().Length - 1),
@@ -1809,6 +1815,22 @@ public class VimEngine
 
     // ─────────────── INSERT MODE ───────────────
     private void HandleInsert(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    {
+        _editTransactions.Execute(
+            events,
+            transaction =>
+            {
+                HandleInsertCore(key, ctrl, shift, alt, events);
+                transaction.Cursor = _cursor;
+                return null;
+            },
+            new EditTransactionOptions(
+                CreateUndoSnapshot: false,
+                AllowCursorAtEndOfLine: true,
+                EnforceReadOnly: false));
+    }
+
+    private void HandleInsertCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         _ctrlWPending = false;
         var buf = _bufferManager.Current.Text;
@@ -2189,6 +2211,22 @@ public class VimEngine
     // digraphs, completion sub-modes, or pastetoggle. Nothing here ever changes
     // _mode, so modal editing cannot leak back in.
     private void HandlePlainTextKey(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    {
+        _editTransactions.Execute(
+            events,
+            transaction =>
+            {
+                HandlePlainTextKeyCore(key, ctrl, shift, alt, events);
+                transaction.Cursor = _cursor;
+                return null;
+            },
+            new EditTransactionOptions(
+                CreateUndoSnapshot: false,
+                AllowCursorAtEndOfLine: true,
+                EnforceReadOnly: false));
+    }
+
+    private void HandlePlainTextKeyCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
         bool hasSelection = PlainSelectionRange() is not null;
@@ -3678,21 +3716,35 @@ public class VimEngine
             return;
         }
         if (_normalCmdExecutor.TryExecute(cmdLine, events)) return;
-        var preLines = CurrentBuffer.Text.Snapshot();
-        var preCursor = _cursor;
-        var result = _exProcessor.Execute(cmdLine, _cursor);
-        _registerManager.SetCurrentFileName(_bufferManager.Current.FilePath); // "%" — reflect buffer switches (:bn/:bp/:b/:bd)
-        if (!result.Success) EmitStatus(events, "E: " + result.Message);
-        else if (result.Message != null) EmitStatus(events, result.Message);
-        if (result.BufferRestored)
-        {
-            _cursor = CurrentBuffer.Text.ClampCursor(result.RestoredCursor ?? _cursor);
-            CurrentBuffer.Folds.Clear();
-            EmitText(events);
-            events.Add(VimEvent.FoldsChanged());
-        }
-        else if (result.TextModified) { CurrentBuffer.Undo.Snapshot(preLines, preCursor); EmitText(events); }
-        if (result.Event != null) events.Add(result.Event);
+        _editTransactions.Execute(
+            events,
+            transaction =>
+            {
+                var result = _exProcessor.Execute(cmdLine, _cursor);
+                _registerManager.SetCurrentFileName(_bufferManager.Current.FilePath); // "%" — reflect buffer switches (:bn/:bp/:b/:bd)
+                if (!result.Success)
+                {
+                    EmitStatus(events, "E: " + result.Message);
+                    transaction.Rollback();
+                }
+                else if (result.Message != null)
+                {
+                    EmitStatus(events, result.Message);
+                }
+
+                transaction.CreateUndoSnapshot = result.TextModified && !result.BufferRestored;
+                if (result.BufferRestored)
+                {
+                    _cursor = CurrentBuffer.Text.ClampCursor(result.RestoredCursor ?? _cursor);
+                    CurrentBuffer.Folds.Clear();
+                    events.Add(VimEvent.FoldsChanged());
+                }
+                transaction.Cursor = _cursor;
+                if (result.Event != null)
+                    events.Add(result.Event);
+                return result;
+            },
+            new EditTransactionOptions(EnforceReadOnly: false));
     }
 
     private void SwitchToAlternateBuffer(List<VimEvent> events)
