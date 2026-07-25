@@ -1,8 +1,9 @@
 using Editor.Core.Models;
+using Editor.Core.Extensibility;
 
 namespace Editor.Core.Buffer;
 
-public class TextBuffer
+public class TextBuffer : INormalBufferView
 {
     private List<string> _lines;
     private bool _modified;

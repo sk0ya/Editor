@@ -1,5 +1,7 @@
 using Editor.Core.Engine;
+using Editor.Core.Editing;
 using Editor.Core.Models;
+using Editor.Core.Registers;
 
 namespace Editor.Core.Extensibility;
 
@@ -10,10 +12,62 @@ public sealed record NormalCommandDescriptor(
     string? DisplayName = null,
     string? Description = null);
 
-/// <summary>State passed to a registered Normal-mode command handler.</summary>
-public sealed record NormalCommandContext(VimEngine Engine, ParsedCommand Command);
+/// <summary>Read-only buffer capability exposed to Normal command extensions.</summary>
+public interface INormalBufferView
+{
+    int LineCount { get; }
+    string GetLine(int index);
+    int GetLineLength(int index);
+    string GetText();
+}
 
-public delegate IReadOnlyList<VimEvent> NormalCommandHandler(NormalCommandContext context);
+/// <summary>
+/// Capabilities available to a Normal command. Buffer changes can only be made through
+/// <see cref="Edit"/>, which preserves the engine's undo and event invariants.
+/// </summary>
+public interface INormalCommandContext
+{
+    ParsedCommand Command { get; }
+    INormalBufferView Buffer { get; }
+    CursorPosition Cursor { get; }
+    Selection? Selection { get; }
+    VimMode Mode { get; }
+    string? FilePath { get; }
+
+    Motion? CalculateMotion(string motion, int count = 1);
+    EditTransactionResult Edit(Action<EditTransaction> mutation);
+    void MoveCursor(CursorPosition cursor);
+    Register GetRegister(char name);
+    void SetRegister(char name, Register value);
+}
+
+internal sealed class NormalCommandContext(
+    ParsedCommand command,
+    INormalBufferView buffer,
+    Func<CursorPosition> getCursor,
+    Func<Selection?> getSelection,
+    Func<VimMode> getMode,
+    Func<string?> getFilePath,
+    Func<string, int, Motion?> calculateMotion,
+    Func<Action<EditTransaction>, EditTransactionResult> edit,
+    Action<CursorPosition> moveCursor,
+    Func<char, Register> getRegister,
+    Action<char, Register> setRegister) : INormalCommandContext
+{
+    public ParsedCommand Command { get; } = command;
+    public INormalBufferView Buffer { get; } = buffer;
+    public CursorPosition Cursor => getCursor();
+    public Selection? Selection => getSelection();
+    public VimMode Mode => getMode();
+    public string? FilePath => getFilePath();
+    public Motion? CalculateMotion(string motion, int count = 1) => calculateMotion(motion, count);
+    public EditTransactionResult Edit(Action<EditTransaction> mutation) => edit(mutation);
+    public void MoveCursor(CursorPosition cursor) => moveCursor(cursor);
+    public Register GetRegister(char name) => getRegister(name);
+    public void SetRegister(char name, Register value) => setRegister(name, value);
+}
+
+public delegate IReadOnlyList<VimEvent> NormalCommandHandler(INormalCommandContext context);
 
 /// <summary>
 /// Thread-safe registry for parsed Normal-mode commands. Registrations are

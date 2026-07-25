@@ -1548,7 +1548,21 @@ public class VimEngine
         if (cmd.Operator is null && !cmd.LinewiseForced &&
             _normalCommands.TryResolve(cmd.Motion, out var extensionHandler))
         {
-            var result = extensionHandler(new NormalCommandContext(this, cmd));
+            var context = new NormalCommandContext(
+                cmd,
+                CurrentBuffer.Text,
+                () => _cursor,
+                () => _selection,
+                () => _mode,
+                () => CurrentBuffer.FilePath,
+                (requestedMotion, requestedCount) =>
+                    new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
+                        .Calculate(requestedMotion, _cursor, requestedCount),
+                mutation => ExecuteEdit(events, mutation),
+                cursor => MoveCursor(cursor, events),
+                name => _registerManager.Get(name),
+                (name, value) => _registerManager.SetYank(name, value));
+            var result = extensionHandler(context);
             if (result is not null) events.AddRange(result);
             return;
         }
