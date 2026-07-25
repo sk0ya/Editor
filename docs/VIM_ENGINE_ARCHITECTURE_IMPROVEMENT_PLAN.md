@@ -181,7 +181,11 @@ MotionRequest
   Visual、Plain、Ex、deferred surround、paste、formatter/LSP外部変更を共通境界へ
   移行済み。read-only、rollback、snapshot、cursor clamp、syntax invalidation、
   repeat metadata、イベント重複排除をtransactionが管理する。
-- Phase 3 以降: 未着手。
+- Phase 3: 完了。公開・組み込みNormal handlerは`INormalCommandContext`を受け取り、
+  `VimEngine`本体を参照しない。bufferはread-only viewとして公開し、変更は
+  contextのtransaction capabilityに限定した。cursor、motion、registerも限定能力
+  として提供し、handlerをengineなしで単体テスト可能にした。
+- Phase 4 以降: 未着手。
 
 ## Phase 0: ベースライン固定
 
