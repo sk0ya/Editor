@@ -41,8 +41,11 @@ public class VimEngine
     private readonly SpellChecker _spellChecker = new();
     private readonly EditAssistRegistry _editAssists = EditAssistRegistry.Default;
     private readonly VimKeyBindingRegistry _keyBindings;
+    private readonly NormalCommandRegistry _normalCommands;
     private readonly KeyInputPipeline _keyInput;
     private readonly VimModeDispatcher _modeDispatcher;
+    private readonly BuiltInNormalCommandDispatcher _builtInNormalCommands;
+    private readonly VisualMotionDispatcher _visualMotions;
 
     private VimMode _mode = VimMode.Normal;
     private bool _vimEnabled = true;
@@ -131,6 +134,7 @@ public class VimEngine
     public ExCommandProcessor ExProcessor => _exProcessor;
     public bool FoldsDisabled => _foldDisabled;
     public VimKeyBindingRegistry KeyBindings => _keyBindings;
+    public NormalCommandRegistry NormalCommands => _normalCommands;
 
     /// <summary>Executes a registered synchronous or asynchronous command from a raw Ex line.</summary>
     public ValueTask<EditorCommandResult?> ExecuteExtensionCommandAsync(string rawCommand,
@@ -191,7 +195,7 @@ public class VimEngine
 
     public VimEngine(VimConfig? config = null, SyntaxLanguageRegistry? syntaxLanguages = null,
         EditorCommandRegistry? commands = null, IServiceProvider? services = null,
-        VimKeyBindingRegistry? keyBindings = null)
+        VimKeyBindingRegistry? keyBindings = null, NormalCommandRegistry? normalCommands = null)
     {
         _config = config ?? new VimConfig();
         _bufferManager = new BufferManager();
@@ -203,9 +207,12 @@ public class VimEngine
         _syntaxEngine = new SyntaxEngine(syntaxLanguages);
         _commandParser = new CommandParser();
         _keyBindings = keyBindings ?? VimKeyBindingRegistry.Default;
+        _normalCommands = normalCommands ?? NormalCommandRegistry.Default;
         _keyInput = new KeyInputPipeline(this, _keyBindings, () => _mode, GetMapsForMode,
             () => !string.IsNullOrEmpty(_commandParser.Buffer), ProcessResolvedStroke);
         _modeDispatcher = new VimModeDispatcher(HandleNormal, HandleInsert, HandleVisual, HandleCommandLine);
+        _builtInNormalCommands = CreateBuiltInNormalCommands();
+        _visualMotions = CreateVisualMotions();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
             _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames, _config.Functions,
             commandRegistry: commands, services: services);
@@ -230,6 +237,756 @@ public class VimEngine
         _normalCmdExecutor = new NormalCommandExecutor(_bufferManager, _exProcessor, _commandParser,
             () => _cursor, cursor => _cursor = cursor, () => _mode, mode => _mode = mode,
             suppress => _suppressSnapshot = suppress, ProcessStroke, ProcessKeyInternal, EmitText, EmitCursor);
+    }
+
+    private BuiltInNormalCommandDispatcher CreateBuiltInNormalCommands()
+    {
+        var dispatcher = new BuiltInNormalCommandDispatcher();
+        RegisterModeAndSessionCommands(dispatcher);
+        RegisterMovementCommands(dispatcher);
+        RegisterNavigationFeatureCommands(dispatcher);
+        RegisterEditingCommands(dispatcher);
+        RegisterPendingAndMacroCommands(dispatcher);
+        dispatcher.SetFallback(ExecuteOperatorMotion);
+        return dispatcher;
+    }
+
+    private VisualMotionDispatcher CreateVisualMotions()
+    {
+        var motions = new VisualMotionDispatcher();
+        RegisterVisualCursorMotions(motions);
+        RegisterVisualSearchMotions(motions);
+        RegisterVisualFoldMotions(motions);
+        motions.RegisterPattern(
+            cmd => cmd.Motion is { Length: 2 } value && value[0] == 'r',
+            (cmd, events) =>
+            {
+                _visualEditOps.ExecuteVisualReplace(cmd.Motion![1], events);
+                return true;
+            });
+        return motions;
+    }
+
+    private void RegisterVisualCursorMotions(VisualMotionDispatcher motions)
+    {
+        RegisterVisualCalculatedMotion(motions, ["Left", "h"],
+            (m, count) => m.MoveLeft(_cursor, count), sticky: true);
+        RegisterVisualCalculatedMotion(motions, ["Right", "l"],
+            (m, count) => m.MoveRight(_cursor, count), sticky: true);
+        RegisterVisualCalculatedMotion(motions, ["w"],
+            (m, count) => m.WordForward(_cursor, count, false));
+        RegisterVisualCalculatedMotion(motions, ["W"],
+            (m, count) => m.WordForward(_cursor, count, true));
+        RegisterVisualCalculatedMotion(motions, ["b"],
+            (m, count) => m.WordBackward(_cursor, count, false));
+        RegisterVisualCalculatedMotion(motions, ["B"],
+            (m, count) => m.WordBackward(_cursor, count, true));
+        RegisterVisualCalculatedMotion(motions, ["e"],
+            (m, count) => m.WordEnd(_cursor, count, false));
+        RegisterVisualCalculatedMotion(motions, ["E"],
+            (m, count) => m.WordEnd(_cursor, count, true));
+        motions.Register(["Up", "k"], (cmd, _) => { MoveVerticalCursor(-cmd.Count); return true; });
+        motions.Register(["Down", "j", "gj"], (cmd, _) => { MoveVerticalCursor(cmd.Count); return true; });
+        motions.Register("gk", (cmd, _) => { MoveVerticalCursor(-cmd.Count); return true; });
+        motions.Register("0", (_, _) =>
+        {
+            _cursor = _cursor with { Column = 0 };
+            SetPreferredColumn(0);
+            return true;
+        });
+        motions.Register("^", (_, _) =>
+        {
+            _cursor = _cursor with { Column = GetFirstNonBlank() };
+            SetPreferredColumn(_cursor.Column);
+            return true;
+        });
+        motions.Register("$", (_, _) =>
+        {
+            _cursor = _cursor with { Column = Math.Max(0, GetLineLength() - 1) };
+            SetPreferredColumn(_cursor.Column);
+            if (_mode == VimMode.VisualBlock)
+            {
+                _visualBlockToLineEnd = true;
+                _visualBlockLineEndStartColumn = _visualStart.Column;
+            }
+            return true;
+        });
+        motions.Register(["ge", "gE"], (cmd, _) =>
+        {
+            _cursor = new TextObjectEngine(CurrentBuffer.Text)
+                .WordEndBackward(_cursor, cmd.Count);
+            return true;
+        });
+        motions.Register("g_", (cmd, _) =>
+        {
+            var result = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
+                .Calculate("g_", _cursor, cmd.Count);
+            if (result.HasValue) _cursor = result.Value.Target;
+            return true;
+        });
+        motions.Register("gg", (_, _) =>
+        {
+            _cursor = CursorPosition.Zero;
+            SetPreferredColumn(0);
+            return true;
+        });
+        motions.Register("G", (cmd, _) =>
+        {
+            int line = cmd.Count == 1 ? CurrentBuffer.Text.LineCount - 1 : cmd.Count - 1;
+            _cursor = new CursorPosition(
+                Math.Clamp(line, 0, CurrentBuffer.Text.LineCount - 1), 0);
+            SetPreferredColumn(0);
+            return true;
+        });
+        motions.Register("+", (cmd, _) => MoveVisualLine(cmd.Count));
+        motions.Register("-", (cmd, _) => MoveVisualLine(-cmd.Count));
+        motions.Register("_", (cmd, _) => MoveVisualLine(Math.Max(0, cmd.Count - 1)));
+        motions.Register("|", (cmd, _) =>
+        {
+            _cursor = _cursor with
+            {
+                Column = Math.Clamp(cmd.Count - 1, 0, Math.Max(0, GetLineLength() - 1))
+            };
+            SetPreferredColumn(_cursor.Column);
+            return true;
+        });
+        motions.Register("{", (cmd, _) => RepeatVisualParagraph(cmd.Count, backwards: true));
+        motions.Register("}", (cmd, _) => RepeatVisualParagraph(cmd.Count, backwards: false));
+        motions.Register("%", (_, _) =>
+        {
+            var engine = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
+            var match = MatchBracket(CurrentBuffer.Text, engine);
+            if (match.HasValue) _cursor = match.Value;
+            return true;
+        });
+        motions.Register("H", (cmd, _) => SetVisualScreenPosition(Math.Max(0, cmd.Count - 1)));
+        motions.Register("M", (_, _) => SetVisualScreenPosition(_viewportVisibleLines / 2));
+        motions.Register("L", (cmd, _) =>
+            SetVisualScreenPosition(Math.Max(0, _viewportVisibleLines - cmd.Count)));
+        motions.Register(["f", "F", "t", "T"], ExecuteVisualFindMotion);
+        motions.Register(["[m", "]m", "[M", "]M"], ExecuteVisualMethodJump);
+        motions.Register(["[[", "]]", "[]", "][", "[{", "]}", "[(", "])"],
+            ExecuteVisualStructuralJump);
+    }
+
+    private void RegisterVisualCalculatedMotion(
+        VisualMotionDispatcher motions,
+        IEnumerable<string> keys,
+        Func<MotionEngine, int, CursorPosition> calculate,
+        bool sticky = false)
+    {
+        motions.Register(keys, (cmd, _) =>
+        {
+            var engine = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
+            _cursor = calculate(engine, cmd.Count);
+            if (sticky) SetPreferredColumn(_cursor.Column);
+            return true;
+        });
+    }
+
+    private bool MoveVisualLine(int delta)
+    {
+        int line = Math.Clamp(_cursor.Line + delta, 0, CurrentBuffer.Text.LineCount - 1);
+        _cursor = new CursorPosition(line, GetFirstNonBlank(line));
+        SetPreferredColumn(_cursor.Column);
+        return true;
+    }
+
+    private bool RepeatVisualParagraph(int count, bool backwards)
+    {
+        for (int i = 0; i < count; i++)
+            _cursor = backwards ? ParagraphBackward() : ParagraphForward();
+        return true;
+    }
+
+    private bool SetVisualScreenPosition(int row)
+    {
+        _cursor = ScreenPosition(row);
+        return true;
+    }
+
+    private bool ExecuteVisualFindMotion(ParsedCommand cmd, List<VimEvent> events)
+    {
+        if (!cmd.FindChar.HasValue) return false;
+        bool forward = cmd.Motion is "f" or "t";
+        bool before = cmd.Motion is "t" or "T";
+        var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
+        _cursor = motion.FindChar(_cursor, cmd.FindChar.Value, forward, before, cmd.Count);
+        return true;
+    }
+
+    private bool ExecuteVisualMethodJump(ParsedCommand cmd, List<VimEvent> events)
+    {
+        bool forward = cmd.Motion![0] == ']';
+        bool end = cmd.Motion[1] == 'M';
+        MethodJump(forward, end, cmd.Count, events);
+        return true;
+    }
+
+    private bool ExecuteVisualStructuralJump(ParsedCommand cmd, List<VimEvent> events)
+    {
+        var result = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
+            .Calculate(cmd.Motion!, _cursor, cmd.Count);
+        if (result.HasValue && result.Value.Target != _cursor)
+            _cursor = result.Value.Target;
+        return true;
+    }
+
+    private void RegisterVisualSearchMotions(VisualMotionDispatcher motions)
+    {
+        motions.Register(";", (cmd, events) => RepeatVisualSearchAction(
+            cmd.Count, () => _searchOps.RepeatFind(_cursor, false, events)));
+        motions.Register(",", (cmd, events) => RepeatVisualSearchAction(
+            cmd.Count, () => _searchOps.RepeatFind(_cursor, true, events)));
+        motions.Register("n", (cmd, events) => RepeatVisualSearchAction(
+            cmd.Count, () => _searchOps.SearchNext(_cursor, true, events)));
+        motions.Register("N", (cmd, events) => RepeatVisualSearchAction(
+            cmd.Count, () => _searchOps.SearchNext(_cursor, false, events)));
+        motions.Register("gn", (_, _) => SelectVisualSearchMatch(forward: true));
+        motions.Register("gN", (_, _) => SelectVisualSearchMatch(forward: false));
+        motions.Register("*", (_, events) =>
+        {
+            _searchOps.SearchWordUnderCursor(_cursor, true, events);
+            return true;
+        });
+        motions.Register("#", (_, events) =>
+        {
+            _searchOps.SearchWordUnderCursor(_cursor, false, events);
+            return true;
+        });
+    }
+
+    private static bool RepeatVisualSearchAction(int count, Action action)
+    {
+        for (int i = 0; i < count; i++) action();
+        return true;
+    }
+
+    private bool SelectVisualSearchMatch(bool forward)
+    {
+        var match = _searchOps.FindGnMatch(_cursor, forward);
+        if (match.HasValue)
+            _cursor = forward ? match.Value.End : match.Value.Start;
+        return true;
+    }
+
+    private void RegisterVisualFoldMotions(VisualMotionDispatcher motions)
+    {
+        motions.Register("za", (_, events) => ChangeVisualFold(
+            () => CurrentBuffer.Folds.ToggleFold(_cursor.Line), events));
+        motions.Register("zo", (_, events) => ChangeVisualFold(
+            () => CurrentBuffer.Folds.OpenFold(_cursor.Line), events));
+        motions.Register("zc", (_, events) => ChangeVisualFold(
+            () => CurrentBuffer.Folds.CloseFold(_cursor.Line), events));
+        motions.Register("zM", (_, events) => ChangeVisualFold(
+            CurrentBuffer.Folds.CloseAll, events));
+        motions.Register("zR", (_, events) => ChangeVisualFold(
+            CurrentBuffer.Folds.OpenAll, events));
+        motions.Register("zj", (_, events) => MoveToVisualFoldBoundary(
+            CurrentBuffer.Folds.NextFoldStart(_cursor.Line), events));
+        motions.Register("zk", (_, events) => MoveToVisualFoldBoundary(
+            CurrentBuffer.Folds.PrevFoldStart(_cursor.Line), events));
+        motions.Register("[z", (_, events) => MoveToVisualFoldBoundary(
+            CurrentBuffer.Folds.CurrentFoldStart(_cursor.Line), events));
+        motions.Register("]z", (_, events) => MoveToVisualFoldBoundary(
+            CurrentBuffer.Folds.CurrentFoldEnd(_cursor.Line), events));
+        motions.Register("zd", (_, events) =>
+        {
+            CurrentBuffer.Folds.DeleteFold(_cursor.Line);
+            events.Add(VimEvent.FoldsChanged());
+            ExitVisualMode(events);
+            return false;
+        });
+        motions.Register("zD", (_, events) =>
+        {
+            CurrentBuffer.Folds.DeleteFoldsAt(_cursor.Line);
+            events.Add(VimEvent.FoldsChanged());
+            ExitVisualMode(events);
+            return false;
+        });
+        motions.Register("zE", (_, events) => ChangeVisualFold(
+            CurrentBuffer.Folds.Clear, events));
+        motions.Register("zn", (_, events) =>
+        {
+            _foldDisabled = true;
+            events.Add(VimEvent.FoldsChanged());
+            return true;
+        });
+        motions.Register("zN", (_, events) =>
+        {
+            _foldDisabled = false;
+            events.Add(VimEvent.FoldsChanged());
+            return true;
+        });
+        motions.Register("zf", (_, events) => CreateVisualFold(events));
+    }
+
+    private static bool ChangeVisualFold(Action change, List<VimEvent> events)
+    {
+        change();
+        events.Add(VimEvent.FoldsChanged());
+        return false;
+    }
+
+    private bool MoveToVisualFoldBoundary(int line, List<VimEvent> events)
+    {
+        if (line >= 0) MoveCursor(new CursorPosition(line, 0), events);
+        return false;
+    }
+
+    private bool CreateVisualFold(List<VimEvent> events)
+    {
+        if (_selection != null)
+        {
+            int start = Math.Min(_selection.Value.Start.Line, _selection.Value.End.Line);
+            int end = Math.Max(_selection.Value.Start.Line, _selection.Value.End.Line);
+            if (end > start) CurrentBuffer.Folds.CreateFold(start, end);
+            events.Add(VimEvent.FoldsChanged());
+            ExitVisualMode(events);
+        }
+        return false;
+    }
+
+    private void RegisterModeAndSessionCommands(BuiltInNormalCommandDispatcher commands)
+    {
+        commands.Register("i", (cmd, events) =>
+        {
+            _repeatTracker.BeginInsertRepeat(cmd);
+            EnterInsertMode(false, events);
+        });
+        commands.Register("I", (cmd, events) =>
+        {
+            _repeatTracker.BeginInsertRepeat(cmd);
+            GoToLineStart(events);
+            EnterInsertMode(false, events);
+        });
+        commands.Register("a", (cmd, events) =>
+        {
+            _repeatTracker.BeginInsertRepeat(cmd);
+            var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
+            _cursor = motion.MoveRight(_cursor, 1, true);
+            EmitCursor(events);
+            EnterInsertMode(false, events);
+        });
+        commands.Register("A", (cmd, events) =>
+        {
+            _repeatTracker.BeginInsertRepeat(cmd);
+            GoToLineEnd(true, events);
+            EnterInsertMode(false, events);
+        });
+        commands.Register("o", (cmd, events) =>
+        {
+            _repeatTracker.BeginInsertRepeat(cmd);
+            OpenLineBelow(events);
+            EnterInsertMode(false, events);
+        });
+        commands.Register("O", (cmd, events) =>
+        {
+            _repeatTracker.BeginInsertRepeat(cmd);
+            OpenLineAbove(events);
+            EnterInsertMode(false, events);
+        });
+        commands.Register("R", (cmd, events) =>
+        {
+            _repeatTracker.BeginInsertRepeat(cmd);
+            EnterReplaceMode(events);
+        });
+        commands.Register("v", (_, events) => EnterVisualMode(VimMode.Visual, events));
+        commands.Register("V", (_, events) => EnterVisualMode(VimMode.VisualLine, events));
+        commands.Register(":", (_, events) => EnterCommandMode(events));
+        commands.Register("/", (_, events) => EnterSearchMode(true, events));
+        commands.Register("?", (_, events) => EnterSearchMode(false, events));
+        commands.Register("ZZ", (_, events) =>
+        {
+            var result = _exProcessor.Execute("wq", _cursor);
+            if (!result.Success) EmitStatus(events, result.Message ?? "");
+            else if (result.Event != null) events.Add(result.Event);
+        });
+        commands.Register("ZQ", (_, events) => events.Add(VimEvent.WindowCloseRequested(true)));
+    }
+
+    private void RegisterMovementCommands(BuiltInNormalCommandDispatcher commands)
+    {
+        RegisterCalculatedMotion(commands, "h", (m, count) => m.MoveLeft(_cursor, count), sticky: true);
+        RegisterCalculatedMotion(commands, "l", (m, count) => m.MoveRight(_cursor, count), sticky: true);
+        RegisterCalculatedMotion(commands, "w", (m, count) => m.WordForward(_cursor, count, false));
+        RegisterCalculatedMotion(commands, "W", (m, count) => m.WordForward(_cursor, count, true));
+        RegisterCalculatedMotion(commands, "b", (m, count) => m.WordBackward(_cursor, count, false));
+        RegisterCalculatedMotion(commands, "B", (m, count) => m.WordBackward(_cursor, count, true));
+        RegisterCalculatedMotion(commands, "e", (m, count) => m.WordEnd(_cursor, count, false));
+        RegisterCalculatedMotion(commands, "E", (m, count) => m.WordEnd(_cursor, count, true));
+        commands.Register("j", (cmd, events) => MoveVertical(cmd.Count, events));
+        commands.Register("k", (cmd, events) => MoveVertical(-cmd.Count, events));
+        commands.Register("gj", (cmd, events) => MoveVertical(cmd.Count, events));
+        commands.Register("gk", (cmd, events) => MoveVertical(-cmd.Count, events));
+        commands.Register("0", (_, events) =>
+        {
+            MoveCursor(_cursor with { Column = 0 }, events);
+            SetPreferredColumn(0);
+        });
+        commands.Register("^", (_, events) =>
+            MoveCursor(_cursor with { Column = GetFirstNonBlank() }, events));
+        commands.Register("$", (_, events) => GoToLineEnd(false, events));
+        commands.Register(["ge", "gE"], (cmd, events) =>
+            MoveCursor(new TextObjectEngine(CurrentBuffer.Text).WordEndBackward(_cursor, cmd.Count), events));
+        commands.Register("g_", (cmd, events) =>
+        {
+            var result = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
+                .Calculate("g_", _cursor, cmd.Count);
+            if (result.HasValue) MoveCursor(result.Value.Target, events);
+        });
+        commands.Register("gg", (_, events) =>
+        {
+            _markManager.SetMark('\'', _cursor);
+            MoveCursor(CursorPosition.Zero, events);
+        });
+        commands.Register("G", (cmd, events) =>
+        {
+            int line = cmd.Count == 1 ? CurrentBuffer.Text.LineCount - 1 : cmd.Count - 1;
+            _markManager.SetMark('\'', _cursor);
+            MoveCursor(new CursorPosition(
+                Math.Clamp(line, 0, CurrentBuffer.Text.LineCount - 1), 0), events);
+        });
+        commands.Register("gt", (cmd, events) =>
+        {
+            for (int i = 0; i < cmd.Count; i++) events.Add(VimEvent.NextTabRequested());
+        });
+        commands.Register("gT", (cmd, events) =>
+        {
+            for (int i = 0; i < cmd.Count; i++) events.Add(VimEvent.PrevTabRequested());
+        });
+        commands.Register("gv", (_, events) =>
+        {
+            _visualStart = CurrentBuffer.Text.ClampCursor(_lastVisualStart);
+            _cursor = CurrentBuffer.Text.ClampCursor(_lastVisualEnd);
+            ChangeMode(_lastVisualMode, events);
+            UpdateSelection(events);
+        });
+        commands.Register("gi", (_, events) =>
+        {
+            MoveCursor(CurrentBuffer.Text.ClampCursor(_lastInsertPos), events);
+            EnterInsertMode(false, events);
+        });
+        commands.Register("g;", (cmd, events) => NavigateChangeList(cmd.Count, backwards: true, events));
+        commands.Register("g,", (cmd, events) => NavigateChangeList(cmd.Count, backwards: false, events));
+        commands.Register("gJ", (cmd, events) =>
+        {
+            _repeatTracker.SetRepeatChange(cmd);
+            _cursor = _textTransform.JoinLinesNoSpace(_cursor, cmd.Count, events);
+        });
+        commands.Register(["gn", "gN"], ExecuteSearchMatchSelection);
+    }
+
+    private void RegisterCalculatedMotion(
+        BuiltInNormalCommandDispatcher commands,
+        string key,
+        Func<MotionEngine, int, CursorPosition> calculate,
+        bool sticky = false)
+    {
+        commands.Register(key, (cmd, events) =>
+        {
+            var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
+            MoveCursor(calculate(motion, cmd.Count), events);
+            if (sticky) SetPreferredColumn(_cursor.Column);
+        });
+    }
+
+    private void NavigateChangeList(int count, bool backwards, List<VimEvent> events)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            var position = backwards ? _markManager.ChangeBack() : _markManager.ChangeForward();
+            if (position.HasValue) MoveCursor(CurrentBuffer.Text.ClampCursor(position.Value), events);
+        }
+    }
+
+    private void ExecuteSearchMatchSelection(ParsedCommand cmd, List<VimEvent> events)
+    {
+        var match = _searchOps.FindGnMatch(_cursor, cmd.Motion == "gn");
+        if (!match.HasValue) return;
+        _visualStart = match.Value.Start;
+        _cursor = match.Value.End;
+        ChangeMode(VimMode.Visual, events);
+        UpdateSelection(events);
+    }
+
+    private void RegisterNavigationFeatureCommands(BuiltInNormalCommandDispatcher commands)
+    {
+        commands.Register(["gd", "gr", "ga", "gch", "gct"],
+            (cmd, events) => _lspTriggerCommands.TryHandle(cmd.Motion!, events));
+        commands.Register(["gf", "gx"],
+            (cmd, events) => _fileNavCommands.TryHandle(cmd.Motion!, _cursor, events));
+        commands.Register("]s", (cmd, events) => NavigateSpellError(true, cmd.Count, events));
+        commands.Register("[s", (cmd, events) => NavigateSpellError(false, cmd.Count, events));
+        commands.Register("]c", (_, events) => events.Add(VimEvent.HunkNavigateRequested(true)));
+        commands.Register("[c", (_, events) => events.Add(VimEvent.HunkNavigateRequested(false)));
+        commands.Register("[m", (cmd, events) => MethodJump(false, false, cmd.Count, events));
+        commands.Register("]m", (cmd, events) => MethodJump(true, false, cmd.Count, events));
+        commands.Register("[M", (cmd, events) => MethodJump(false, true, cmd.Count, events));
+        commands.Register("]M", (cmd, events) => MethodJump(true, true, cmd.Count, events));
+        commands.Register(["[[", "]]", "[]", "][", "[{", "]}", "[(", "])"],
+            ExecuteSectionOrBlockJump);
+        commands.Register("F2", (_, events) => events.Add(VimEvent.LspRenameRequested()));
+        commands.Register("K", (_, events) => events.Add(VimEvent.LspHoverRequested()));
+        commands.Register("+", (cmd, events) => MoveLineAndFirstNonBlank(cmd.Count, events));
+        commands.Register("-", (cmd, events) => MoveLineAndFirstNonBlank(-cmd.Count, events));
+        commands.Register("_", (cmd, events) =>
+            MoveLineAndFirstNonBlank(Math.Max(0, cmd.Count - 1), events));
+        commands.Register("|", (cmd, events) => MoveToColumn(cmd.Count, events));
+        commands.Register("{", (_, events) => MoveCursor(ParagraphBackward(), events));
+        commands.Register("}", (_, events) => MoveCursor(ParagraphForward(), events));
+        commands.Register("%", (_, events) =>
+        {
+            var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
+            var match = MatchBracket(CurrentBuffer.Text, motion);
+            if (match.HasValue) MoveCursor(match.Value, events);
+        });
+        commands.Register("H", (cmd, events) =>
+            MoveCursor(ScreenPosition(Math.Max(0, cmd.Count - 1)), events));
+        commands.Register("M", (_, events) =>
+            MoveCursor(ScreenPosition(_viewportVisibleLines / 2), events));
+        commands.Register("L", (cmd, events) =>
+            MoveCursor(ScreenPosition(Math.Max(0, _viewportVisibleLines - cmd.Count)), events));
+        commands.Register(";", (_, events) => _searchOps.RepeatFind(_cursor, false, events));
+        commands.Register(",", (_, events) => _searchOps.RepeatFind(_cursor, true, events));
+        commands.Register("n", (_, events) => _searchOps.SearchNext(_cursor, true, events));
+        commands.Register("N", (_, events) => _searchOps.SearchNext(_cursor, false, events));
+        commands.Register("*", (_, events) => _searchOps.SearchWordUnderCursor(_cursor, true, events));
+        commands.Register("#", (_, events) => _searchOps.SearchWordUnderCursor(_cursor, false, events));
+        commands.Register("zz", (_, events) =>
+            events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Center)));
+        commands.Register("zt", (_, events) =>
+            events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Top)));
+        commands.Register("zb", (_, events) =>
+            events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Bottom)));
+        commands.Register("z=", (_, events) => ShowSpellSuggestions(events));
+        commands.Register(
+            ["za", "zo", "zc", "zM", "zR", "zf", "zj", "zk", "[z", "]z",
+             "zd", "zD", "zE", "zn", "zN"],
+            ExecuteFoldCommand);
+    }
+
+    private void ExecuteSectionOrBlockJump(ParsedCommand cmd, List<VimEvent> events)
+    {
+        bool isSection = cmd.Motion is "[[" or "]]" or "[]" or "][";
+        var result = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath)
+            .Calculate(cmd.Motion!, _cursor, cmd.Count);
+        if (!result.HasValue || result.Value.Target == _cursor) return;
+        if (isSection) _markManager.AddJump(_cursor);
+        MoveCursor(result.Value.Target, events);
+    }
+
+    private void ExecuteFoldCommand(ParsedCommand cmd, List<VimEvent> events)
+    {
+        _foldCommands.TryHandle(cmd.Motion!, _cursor, cmd.Count, events, out var result);
+        if (result.DirectCursor.HasValue)
+        {
+            _cursor = result.DirectCursor.Value;
+            EmitCursor(events);
+        }
+        if (result.MoveCursor.HasValue) MoveCursor(result.MoveCursor.Value, events);
+        if (result.FoldDisabled.HasValue) _foldDisabled = result.FoldDisabled.Value;
+    }
+
+    private void RegisterEditingCommands(BuiltInNormalCommandDispatcher commands)
+    {
+        commands.Register("x", (cmd, events) =>
+        {
+            _repeatTracker.SetRepeatChange(cmd);
+            int boundary = GraphemeCluster.NextBoundary(
+                CurrentBuffer.Text.GetLine(_cursor.Line), _cursor.Column, cmd.Count);
+            var end = _cursor with { Column = Math.Max(_cursor.Column, boundary - 1) };
+            _cursor = _clipboardOps.ExecuteDelete(
+                _cursor, end, false, events, cmd.Register ?? '"');
+        });
+        commands.Register("X", (cmd, events) =>
+        {
+            _repeatTracker.SetRepeatChange(cmd);
+            var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
+            var start = motion.MoveLeft(_cursor, cmd.Count);
+            if (start.Column < _cursor.Column)
+                _cursor = _clipboardOps.ExecuteDelete(
+                    start, _cursor with { Column = _cursor.Column - 1 },
+                    false, events, cmd.Register ?? '"');
+        });
+        commands.Register("s", ExecuteSubstituteCharacters);
+        commands.Register("S", (cmd, events) =>
+        {
+            _repeatTracker.BeginInsertRepeat(cmd);
+            _cursor = _clipboardOps.DeleteLines(
+                _cursor.Line, _cursor.Line, events, cmd.Register ?? '"');
+            EnterInsertMode(false, events);
+        });
+        commands.Register("D", (cmd, events) => DeleteToLineEnd(cmd, enterInsert: false, events));
+        commands.Register("C", (cmd, events) => DeleteToLineEnd(cmd, enterInsert: true, events));
+        commands.Register("Y", (cmd, events) =>
+            _clipboardOps.YankLines(
+                _cursor.Line, _cursor.Line + cmd.Count - 1, cmd.Register ?? '"', events));
+        commands.Register("p", (cmd, events) => ExecutePaste(cmd, after: true, cursorAfter: false, events));
+        commands.Register("P", (cmd, events) => ExecutePaste(cmd, after: false, cursorAfter: false, events));
+        commands.Register("gp", (cmd, events) => ExecutePaste(cmd, after: true, cursorAfter: true, events));
+        commands.Register("gP", (cmd, events) => ExecutePaste(cmd, after: false, cursorAfter: true, events));
+        commands.Register("]p", (cmd, events) => ExecuteIndentedPaste(cmd, after: true, events));
+        commands.Register("[p", (cmd, events) => ExecuteIndentedPaste(cmd, after: false, events));
+        commands.Register(["u", "U"], (_, events) => ExecuteUndo(events));
+        commands.Register("\x12", (_, events) => ExecuteRedo(events));
+        commands.Register("\x16", (_, events) => EnterVisualMode(VimMode.VisualBlock, events));
+        commands.Register(".", (cmd, events) => _repeatTracker.RepeatLastChange(cmd.Count, events));
+        commands.Register("J", (cmd, events) =>
+        {
+            _repeatTracker.SetRepeatChange(cmd);
+            _textTransform.JoinLines(_cursor, cmd.Count, events);
+        });
+        commands.Register("~", (cmd, events) =>
+        {
+            _repeatTracker.SetRepeatChange(cmd);
+            _cursor = _textTransform.ToggleCase(_cursor, cmd.Count, events);
+        });
+        commands.Register(">>", (cmd, events) => ExecuteLineIndent(cmd, indent: true, events));
+        commands.Register("<<", (cmd, events) => ExecuteLineIndent(cmd, indent: false, events));
+    }
+
+    private void ExecuteSubstituteCharacters(ParsedCommand cmd, List<VimEvent> events)
+    {
+        _repeatTracker.BeginInsertRepeat(cmd);
+        var start = _cursor;
+        var motion = new MotionEngine(CurrentBuffer.Text, CurrentBuffer.FilePath);
+        _cursor = _clipboardOps.ExecuteDelete(
+            _cursor, motion.MoveRight(_cursor, cmd.Count), false, events, cmd.Register ?? '"');
+        _cursor = CurrentBuffer.Text.ClampCursor(start, true);
+        EmitCursor(events);
+        EnterInsertMode(false, events);
+    }
+
+    private void DeleteToLineEnd(ParsedCommand cmd, bool enterInsert, List<VimEvent> events)
+    {
+        if (enterInsert) _repeatTracker.BeginInsertRepeat(cmd);
+        else _repeatTracker.SetRepeatChange(cmd);
+        var start = _cursor;
+        int end = GetLineLength() - 1;
+        if (end >= _cursor.Column)
+            _cursor = _clipboardOps.ExecuteDelete(
+                _cursor, _cursor with { Column = end }, false, events, cmd.Register ?? '"');
+        if (!enterInsert) return;
+        _cursor = CurrentBuffer.Text.ClampCursor(start, true);
+        EmitCursor(events);
+        EnterInsertMode(false, events);
+    }
+
+    private void ExecutePaste(
+        ParsedCommand cmd, bool after, bool cursorAfter, List<VimEvent> events)
+    {
+        _repeatTracker.SetRepeatChange(cmd);
+        _cursor = after
+            ? _clipboardOps.PasteAfter(_cursor, cmd.Register ?? '"', events, cursorAfter)
+            : _clipboardOps.PasteBefore(_cursor, cmd.Register ?? '"', events, cursorAfter);
+    }
+
+    private void ExecuteIndentedPaste(ParsedCommand cmd, bool after, List<VimEvent> events)
+    {
+        _repeatTracker.SetRepeatChange(cmd);
+        _cursor = _clipboardOps.ExecuteIndentedPaste(
+            _cursor, after, cmd.Register ?? '"', _config.Options.TabStop, events);
+    }
+
+    private void ExecuteLineIndent(ParsedCommand cmd, bool indent, List<VimEvent> events)
+    {
+        _repeatTracker.SetRepeatChange(cmd);
+        Snapshot();
+        _textTransform.IndentRange(_cursor.Line, _cursor.Line, indent, events);
+    }
+
+    private void RegisterPendingAndMacroCommands(BuiltInNormalCommandDispatcher commands)
+    {
+        commands.Register("r", (_, _) => _pendingReplaceChar = null);
+        commands.Register("m", (_, _) => _awaitingMark = true);
+        commands.Register("`", (_, _) => _awaitingMarkJump = true);
+        commands.Register("'", (_, _) => _awaitingMarkJumpLine = true);
+        commands.Register("q:", (_, events) => OpenLastCommandHistory(events));
+        commands.Register(["q/", "q?"], OpenLastSearchHistory);
+        commands.RegisterPattern(IsPrefixedCommand('r'), ExecuteReplaceCharacterCommand);
+        commands.RegisterPattern(IsPrefixedCommand('m'), ExecuteSetMarkCommand);
+        commands.RegisterPattern(IsPrefixedCommand('`'), ExecuteMarkJumpCommand);
+        commands.RegisterPattern(IsPrefixedCommand('\''), ExecuteLineMarkJumpCommand);
+        commands.RegisterPattern(IsPrefixedCommand('q'), ExecuteMacroRecordCommand);
+        commands.RegisterPattern(IsPrefixedCommand('@'), ExecuteMacroPlaybackCommand);
+    }
+
+    private static BuiltInNormalCommandDispatcher.Pattern IsPrefixedCommand(char prefix) =>
+        cmd => cmd.Motion is { Length: 2 } motion && motion[0] == prefix;
+
+    private void ExecuteReplaceCharacterCommand(ParsedCommand cmd, List<VimEvent> events)
+    {
+        _repeatTracker.SetRepeatChange(cmd);
+        _cursor = _textTransform.ExecuteReplace(_cursor, cmd.Motion![1], events);
+    }
+
+    private void ExecuteSetMarkCommand(ParsedCommand cmd, List<VimEvent> events) =>
+        _markManager.SetMark(cmd.Motion![1], _cursor);
+
+    private void ExecuteMarkJumpCommand(ParsedCommand cmd, List<VimEvent> events)
+    {
+        char key = cmd.Motion![1] == '`' ? '\'' : cmd.Motion[1];
+        var mark = _markManager.GetMark(key);
+        if (!mark.HasValue) return;
+        _markManager.SetMark('\'', _cursor);
+        MoveCursor(mark.Value, events);
+    }
+
+    private void ExecuteLineMarkJumpCommand(ParsedCommand cmd, List<VimEvent> events)
+    {
+        var mark = _markManager.GetMark(cmd.Motion![1]);
+        if (!mark.HasValue) return;
+        _markManager.SetMark('\'', _cursor);
+        MoveCursor(mark.Value with { Column = 0 }, events);
+    }
+
+    private void OpenLastCommandHistory(List<VimEvent> events)
+    {
+        _exProcessor.ResetHistoryIndex();
+        string command = _exProcessor.LastCommand ?? "";
+        EnterCommandMode(events);
+        if (command.Length == 0) return;
+        _cmdLine = command;
+        EmitCmdLine(events);
+    }
+
+    private void OpenLastSearchHistory(ParsedCommand cmd, List<VimEvent> events)
+    {
+        _exProcessor.ResetSearchHistoryIndex();
+        var history = _exProcessor.SearchHistory;
+        string pattern = history.Count > 0 ? history[0] : "";
+        EnterSearchMode(cmd.Motion == "q/", events);
+        if (pattern.Length == 0) return;
+        _cmdLine = pattern;
+        EmitCmdLine(events);
+    }
+
+    private void ExecuteMacroRecordCommand(ParsedCommand cmd, List<VimEvent> events)
+    {
+        char register = cmd.Motion![1];
+        if (_macroManager.IsRecording) _macroManager.StopRecording();
+        else _macroManager.StartRecording(register);
+        EmitStatus(events, _macroManager.IsRecording ? $"recording @{register}" : "");
+    }
+
+    private void ExecuteMacroPlaybackCommand(ParsedCommand cmd, List<VimEvent> events)
+    {
+        char register = cmd.Motion![1];
+        if (register != ':')
+        {
+            PlayMacro(register, cmd.Count, events);
+            return;
+        }
+
+        var lastCommand = _exProcessor.LastCommand;
+        if (lastCommand == null)
+        {
+            EmitStatus(events, "E80: Error while processing command");
+            return;
+        }
+        for (int i = 0; i < cmd.Count; i++)
+            ExecuteExCommand(lastCommand, events);
     }
 
     public void SetClipboardProvider(IClipboardProvider provider)
@@ -750,6 +1507,14 @@ public class VimEngine
     {
         if (CommandMutatesBuffer(cmd) && BlockedReadOnly(events)) return;
 
+        if (cmd.Operator is null && !cmd.LinewiseForced &&
+            _normalCommands.TryResolve(cmd.Motion, out var extensionHandler))
+        {
+            var result = extensionHandler(new NormalCommandContext(this, cmd));
+            if (result is not null) events.AddRange(result);
+            return;
+        }
+
         var buf = _bufferManager.Current.Text;
         var motion = new MotionEngine(buf, _bufferManager.Current.FilePath);
         int count = cmd.Count;
@@ -845,379 +1610,7 @@ public class VimEngine
             return;
         }
 
-        switch (cmd.Motion)
-        {
-            // Mode transitions
-            case "i":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                EnterInsertMode(false, events);
-                break;
-            case "I":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                _cursor = motion.FindChar(_cursor, ' ', false, false);
-                GoToLineStart(events);
-                EnterInsertMode(false, events);
-                break;
-            case "a":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                _cursor = motion.MoveRight(_cursor, 1, true);
-                EmitCursor(events);
-                EnterInsertMode(false, events);
-                break;
-            case "A":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                GoToLineEnd(true, events);
-                EnterInsertMode(false, events);
-                break;
-            case "o":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                OpenLineBelow(events);
-                EnterInsertMode(false, events);
-                break;
-            case "O":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                OpenLineAbove(events);
-                EnterInsertMode(false, events);
-                break;
-            case "R":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                EnterReplaceMode(events);
-                break;
-            case "v": EnterVisualMode(VimMode.Visual, events); break;
-            case "V": EnterVisualMode(VimMode.VisualLine, events); break;
-            case ":": EnterCommandMode(events); break;
-            case "/": EnterSearchMode(true, events); break;
-            case "?": EnterSearchMode(false, events); break;
-
-            // ZZ: save and quit (equivalent to :wq)
-            case "ZZ":
-            {
-                var result = _exProcessor.Execute("wq", _cursor);
-                if (!result.Success) EmitStatus(events, result.Message ?? "");
-                else if (result.Event != null) events.Add(result.Event);
-                break;
-            }
-            // ZQ: quit without saving (equivalent to :q!)
-            case "ZQ":
-                events.Add(VimEvent.WindowCloseRequested(true));
-                break;
-
-            // Movement
-            case "h": MoveCursor(motion.MoveLeft(_cursor, count), events); SetPreferredColumn(_cursor.Column); break;
-            case "l": MoveCursor(motion.MoveRight(_cursor, count), events); SetPreferredColumn(_cursor.Column); break;
-            case "j": MoveVertical(count, events); break;
-            case "k": MoveVertical(-count, events); break;
-            case "0": MoveCursor(_cursor with { Column = 0 }, events); SetPreferredColumn(0); break;
-            case "^": var fnb = GetFirstNonBlank(); MoveCursor(_cursor with { Column = fnb }, events); break;
-            case "$": GoToLineEnd(false, events); break;
-            case "w": MoveCursor(motion.WordForward(_cursor, count, false), events); break;
-            case "W": MoveCursor(motion.WordForward(_cursor, count, true), events); break;
-            case "b": MoveCursor(motion.WordBackward(_cursor, count, false), events); break;
-            case "B": MoveCursor(motion.WordBackward(_cursor, count, true), events); break;
-            case "e": MoveCursor(motion.WordEnd(_cursor, count, false), events); break;
-            case "E": MoveCursor(motion.WordEnd(_cursor, count, true), events); break;
-            case "ge": MoveCursor(new TextObjectEngine(buf).WordEndBackward(_cursor, count), events); break;
-            case "gE": MoveCursor(new TextObjectEngine(buf).WordEndBackward(_cursor, count), events); break;
-            case "gj": MoveVertical(count, events); break;
-            case "gk": MoveVertical(-count, events); break;
-            case "g_":
-                var g_m = motion.Calculate("g_", _cursor, count);
-                if (g_m.HasValue) MoveCursor(g_m.Value.Target, events);
-                break;
-            case "gg": _markManager.SetMark('\'', _cursor); MoveCursor(new CursorPosition(0, 0), events); break;
-            case "G":
-                var lastLine = count == 1 ? buf.LineCount - 1 : count - 1;
-                _markManager.SetMark('\'', _cursor);
-                MoveCursor(new CursorPosition(Math.Clamp(lastLine, 0, buf.LineCount - 1), 0), events);
-                break;
-            case "gt":
-                for (int i = 0; i < count; i++)
-                    events.Add(VimEvent.NextTabRequested());
-                break;
-            case "gT":
-                for (int i = 0; i < count; i++)
-                    events.Add(VimEvent.PrevTabRequested());
-                break;
-            case "gv":
-                _visualStart = buf.ClampCursor(_lastVisualStart);
-                _cursor = buf.ClampCursor(_lastVisualEnd);
-                ChangeMode(_lastVisualMode, events);
-                UpdateSelection(events);
-                break;
-            case "gi":
-                MoveCursor(_bufferManager.Current.Text.ClampCursor(_lastInsertPos), events);
-                EnterInsertMode(false, events);
-                break;
-            case "g;":
-            {
-                for (int i = 0; i < count; i++)
-                {
-                    var cp = _markManager.ChangeBack();
-                    if (cp.HasValue) MoveCursor(buf.ClampCursor(cp.Value), events);
-                }
-                break;
-            }
-            case "g,":
-            {
-                for (int i = 0; i < count; i++)
-                {
-                    var cp = _markManager.ChangeForward();
-                    if (cp.HasValue) MoveCursor(buf.ClampCursor(cp.Value), events);
-                }
-                break;
-            }
-            case "gJ":
-                _repeatTracker.SetRepeatChange(cmd);
-                _cursor = _textTransform.JoinLinesNoSpace(_cursor, count, events);
-                break;
-            case "gn":
-            case "gN":
-            {
-                if (cmd.Operator != null)
-                {
-                    ExecuteOperatorMotion(cmd, events);
-                    break;
-                }
-                bool gnForward = cmd.Motion == "gn";
-                var gnMatch = _searchOps.FindGnMatch(_cursor, gnForward);
-                if (gnMatch.HasValue)
-                {
-                    _visualStart = gnMatch.Value.Start;
-                    _cursor = gnMatch.Value.End;
-                    ChangeMode(VimMode.Visual, events);
-                    UpdateSelection(events);
-                }
-                break;
-            }
-            case "gd":
-            case "gr":
-            case "ga":
-            case "gch":
-            case "gct":
-                _lspTriggerCommands.TryHandle(cmd.Motion, events);
-                break;
-            case "gf":
-            case "gx":
-                _fileNavCommands.TryHandle(cmd.Motion, _cursor, events);
-                break;
-            case "]s": NavigateSpellError(true, count, events); break;
-            case "[s": NavigateSpellError(false, count, events); break;
-            case "]c": events.Add(VimEvent.HunkNavigateRequested(true)); break;
-            case "[c": events.Add(VimEvent.HunkNavigateRequested(false)); break;
-            case "[m": MethodJump(false, false, count, events); break;
-            case "]m": MethodJump(true,  false, count, events); break;
-            case "[M": MethodJump(false, true,  count, events); break;
-            case "]M": MethodJump(true,  true,  count, events); break;
-            case "[[": case "]]": case "[]": case "][":
-            case "[{": case "]}": case "[(": case "])":
-            {
-                bool isSection = cmd.Motion is "[[" or "]]" or "[]" or "][";
-                var m = new MotionEngine(buf, _bufferManager.Current.FilePath).Calculate(cmd.Motion, _cursor, count);
-                if (m.HasValue && m.Value.Target != _cursor)
-                {
-                    if (isSection) _markManager.AddJump(_cursor);
-                    MoveCursor(m.Value.Target, events);
-                }
-                break;
-            }
-            case "F2":
-                events.Add(VimEvent.LspRenameRequested());
-                break;
-            case "K":
-                events.Add(VimEvent.LspHoverRequested());
-                break;
-            case "+":
-                MoveLineAndFirstNonBlank(count, events);
-                break;
-            case "-":
-                MoveLineAndFirstNonBlank(-count, events);
-                break;
-            case "_":
-                MoveLineAndFirstNonBlank(Math.Max(0, count - 1), events);
-                break;
-            case "|":
-                MoveToColumn(count, events);
-                break;
-            case "{": MoveCursor(ParagraphBackward(), events); break;
-            case "}": MoveCursor(ParagraphForward(), events); break;
-            case "%": var mb = MatchBracket(buf, motion); if (mb.HasValue) MoveCursor(mb.Value, events); break;
-            case "H": MoveCursor(ScreenPosition(Math.Max(0, count - 1)), events); break;
-            case "M": MoveCursor(ScreenPosition(_viewportVisibleLines / 2), events); break;
-            case "L": MoveCursor(ScreenPosition(Math.Max(0, _viewportVisibleLines - count)), events); break;
-            case ";": _searchOps.RepeatFind(_cursor, false, events); break;
-            case ",": _searchOps.RepeatFind(_cursor, true, events); break;
-            case "n": _searchOps.SearchNext(_cursor, true, events); break;
-            case "N": _searchOps.SearchNext(_cursor, false, events); break;
-            case "*": _searchOps.SearchWordUnderCursor(_cursor, true, events); break;
-            case "#": _searchOps.SearchWordUnderCursor(_cursor, false, events); break;
-            case "zz": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Center)); break;
-            case "zt": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Top)); break;
-            case "zb": events.Add(VimEvent.ViewportAlignRequested(ViewportAlign.Bottom)); break;
-            case "z=":
-                ShowSpellSuggestions(events);
-                break;
-            case "za": case "zo": case "zc": case "zM": case "zR": case "zf":
-            case "zj": case "zk": case "[z": case "]z": case "zd": case "zD": case "zE": case "zn": case "zN":
-            {
-                _foldCommands.TryHandle(cmd.Motion, _cursor, count, events, out var foldResult);
-                if (foldResult.DirectCursor.HasValue) { _cursor = foldResult.DirectCursor.Value; EmitCursor(events); }
-                if (foldResult.MoveCursor.HasValue) MoveCursor(foldResult.MoveCursor.Value, events);
-                if (foldResult.FoldDisabled.HasValue) _foldDisabled = foldResult.FoldDisabled.Value;
-                break;
-            }
-
-            // Editing
-            case "x":
-                _repeatTracker.SetRepeatChange(cmd);
-                // Delete [count] chars (grapheme clusters) from cursor position
-                var xBoundary = GraphemeCluster.NextBoundary(buf.GetLine(_cursor.Line), _cursor.Column, count);
-                var xEnd = _cursor with { Column = Math.Max(_cursor.Column, xBoundary - 1) };
-                _cursor = _clipboardOps.ExecuteDelete(_cursor, xEnd, false, events, cmd.Register ?? '"');
-                break;
-            case "X":
-                _repeatTracker.SetRepeatChange(cmd);
-                // Delete [count] chars before cursor
-                var xStart = motion.MoveLeft(_cursor, count);
-                if (xStart.Column < _cursor.Column) _cursor = _clipboardOps.ExecuteDelete(xStart, _cursor with { Column = _cursor.Column - 1 }, false, events, cmd.Register ?? '"');
-                break;
-            case "s":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                var sStart = _cursor;
-                _cursor = _clipboardOps.ExecuteDelete(_cursor, motion.MoveRight(_cursor, count), false, events, cmd.Register ?? '"');
-                _cursor = _bufferManager.Current.Text.ClampCursor(sStart, true);
-                EmitCursor(events);
-                EnterInsertMode(false, events);
-                break;
-            case "S":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                _cursor = _clipboardOps.DeleteLines(_cursor.Line, _cursor.Line, events, cmd.Register ?? '"');
-                EnterInsertMode(false, events);
-                break;
-            case "D":
-                _repeatTracker.SetRepeatChange(cmd);
-                var eol = GetLineLength() - 1;
-                if (eol >= _cursor.Column) _cursor = _clipboardOps.ExecuteDelete(_cursor, _cursor with { Column = eol }, false, events, cmd.Register ?? '"');
-                break;
-            case "C":
-                _repeatTracker.BeginInsertRepeat(cmd);
-                var cStart = _cursor;
-                var ceol = GetLineLength() - 1;
-                if (ceol >= _cursor.Column) _cursor = _clipboardOps.ExecuteDelete(_cursor, _cursor with { Column = ceol }, false, events, cmd.Register ?? '"');
-                _cursor = _bufferManager.Current.Text.ClampCursor(cStart, true);
-                EmitCursor(events);
-                EnterInsertMode(false, events);
-                break;
-            case "Y": _clipboardOps.YankLines(_cursor.Line, _cursor.Line + count - 1, cmd.Register ?? '"', events); break;
-            case "p":
-                _repeatTracker.SetRepeatChange(cmd);
-                _cursor = _clipboardOps.PasteAfter(_cursor, cmd.Register ?? '"', events);
-                break;
-            case "P":
-                _repeatTracker.SetRepeatChange(cmd);
-                _cursor = _clipboardOps.PasteBefore(_cursor, cmd.Register ?? '"', events);
-                break;
-            case "gp":
-                _repeatTracker.SetRepeatChange(cmd);
-                _cursor = _clipboardOps.PasteAfter(_cursor, cmd.Register ?? '"', events, cursorAfterPaste: true);
-                break;
-            case "gP":
-                _repeatTracker.SetRepeatChange(cmd);
-                _cursor = _clipboardOps.PasteBefore(_cursor, cmd.Register ?? '"', events, cursorAfterPaste: true);
-                break;
-            case "]p":
-                _repeatTracker.SetRepeatChange(cmd);
-                _cursor = _clipboardOps.ExecuteIndentedPaste(_cursor, after: true, cmd.Register ?? '"', _config.Options.TabStop, events);
-                break;
-            case "[p":
-                _repeatTracker.SetRepeatChange(cmd);
-                _cursor = _clipboardOps.ExecuteIndentedPaste(_cursor, after: false, cmd.Register ?? '"', _config.Options.TabStop, events);
-                break;
-            case "u": ExecuteUndo(events); break;
-            case "U": ExecuteUndo(events); break;
-            case "\x12": ExecuteRedo(events); break;
-            case "\x16": EnterVisualMode(VimMode.VisualBlock, events); break;
-            case ".": _repeatTracker.RepeatLastChange(count, events); break;
-            case "J":
-                _repeatTracker.SetRepeatChange(cmd);
-                _textTransform.JoinLines(_cursor, count, events);
-                break;
-            case "~":
-                _repeatTracker.SetRepeatChange(cmd);
-                _cursor = _textTransform.ToggleCase(_cursor, count, events);
-                break;
-            case ">>":
-                _repeatTracker.SetRepeatChange(cmd);
-                Snapshot();
-                _textTransform.IndentRange(_cursor.Line, _cursor.Line, true, events);
-                break;
-            case "<<":
-                _repeatTracker.SetRepeatChange(cmd);
-                Snapshot();
-                _textTransform.IndentRange(_cursor.Line, _cursor.Line, false, events);
-                break;
-
-            // r: replace char (needs next input)
-            case var r when r?.StartsWith('r') == true && r.Length == 2:
-                _repeatTracker.SetRepeatChange(cmd);
-                _cursor = _textTransform.ExecuteReplace(_cursor, r[1], events);
-                break;
-            case "r": _pendingReplaceChar = null; /* wait */ break;
-
-            // Marks
-            case var m when m?.StartsWith('m') == true && m.Length == 2:
-                _markManager.SetMark(m[1], _cursor);
-                break;
-            case "m": _awaitingMark = true; break;
-            case var tick when tick?.StartsWith('`') == true && tick.Length == 2:
-                var mk = _markManager.GetMark(tick[1] == '`' ? '\'' : tick[1]); if (mk.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(mk.Value, events); } break;
-            case "`": _awaitingMarkJump = true; break;
-            case var apos when apos?.StartsWith('\'') == true && apos.Length == 2:
-                var mk2 = _markManager.GetMark(apos[1]); if (mk2.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(mk2.Value with { Column = 0 }, events); } break;
-            case "'": _awaitingMarkJumpLine = true; break;
-
-            // q: / q/ / q? — open command/search history in command line
-            case "q:":
-            {
-                _exProcessor.ResetHistoryIndex();
-                var qcCmd = _exProcessor.LastCommand ?? "";
-                EnterCommandMode(events);
-                if (qcCmd.Length > 0) { _cmdLine = qcCmd; EmitCmdLine(events); }
-                break;
-            }
-            case "q/":
-            case "q?":
-            {
-                _exProcessor.ResetSearchHistoryIndex();
-                var qsLastSearch = _exProcessor.SearchHistory;
-                var qsPattern = qsLastSearch.Count > 0 ? qsLastSearch[0] : "";
-                EnterSearchMode(cmd.Motion == "q/", events);
-                if (qsPattern.Length > 0) { _cmdLine = qsPattern; EmitCmdLine(events); }
-                break;
-            }
-
-            // Macros
-            case var q when q?.StartsWith('q') == true && q.Length == 2:
-                if (_macroManager.IsRecording) _macroManager.StopRecording();
-                else _macroManager.StartRecording(q[1]);
-                EmitStatus(events, _macroManager.IsRecording ? $"recording @{q[1]}" : "");
-                break;
-            case var at when at?.StartsWith('@') == true && at.Length == 2:
-                if (at[1] == ':')
-                {
-                    var lastCmd = _exProcessor.LastCommand;
-                    if (lastCmd == null) { EmitStatus(events, "E80: Error while processing command"); break; }
-                    for (int i = 0; i < count; i++)
-                        ExecuteExCommand(lastCmd, events);
-                }
-                else
-                    PlayMacro(at[1], count, events);
-                break;
-
-            // Operator + motion commands
-            default:
-                ExecuteOperatorMotion(cmd, events);
-                break;
-        }
+        _builtInNormalCommands.Dispatch(cmd, events);
     }
 
     private void ExecuteOperatorMotion(ParsedCommand cmd, List<VimEvent> events)
@@ -2365,211 +2758,7 @@ public class VimEngine
         if (_mode == VimMode.VisualBlock && cmd.Motion != "$" && !PreservesVisualBlockLineEnd(cmd.Motion))
             _visualBlockToLineEnd = false;
 
-        switch (cmd.Motion)
-        {
-            case "Left":
-            case "h":
-                _cursor = motion.MoveLeft(_cursor, count);
-                SetPreferredColumn(_cursor.Column);
-                return true;
-            case "Right":
-            case "l":
-                _cursor = motion.MoveRight(_cursor, count);
-                SetPreferredColumn(_cursor.Column);
-                return true;
-            case "Up":
-            case "k":
-                MoveVerticalCursor(-count);
-                return true;
-            case "Down":
-            case "j":
-                MoveVerticalCursor(count);
-                return true;
-            case "0":
-                _cursor = _cursor with { Column = 0 };
-                SetPreferredColumn(0);
-                return true;
-            case "^":
-                _cursor = _cursor with { Column = GetFirstNonBlank() };
-                SetPreferredColumn(_cursor.Column);
-                return true;
-            case "$":
-                _cursor = _cursor with { Column = Math.Max(0, GetLineLength() - 1) };
-                SetPreferredColumn(_cursor.Column);
-                if (_mode == VimMode.VisualBlock)
-                {
-                    _visualBlockToLineEnd = true;
-                    _visualBlockLineEndStartColumn = _visualStart.Column;
-                }
-                return true;
-            case "w":
-                _cursor = motion.WordForward(_cursor, count, false);
-                return true;
-            case "W":
-                _cursor = motion.WordForward(_cursor, count, true);
-                return true;
-            case "b":
-                _cursor = motion.WordBackward(_cursor, count, false);
-                return true;
-            case "B":
-                _cursor = motion.WordBackward(_cursor, count, true);
-                return true;
-            case "e":
-                _cursor = motion.WordEnd(_cursor, count, false);
-                return true;
-            case "E":
-                _cursor = motion.WordEnd(_cursor, count, true);
-                return true;
-            case "ge":
-                _cursor = new TextObjectEngine(buf).WordEndBackward(_cursor, count);
-                return true;
-            case "gE":
-                _cursor = new TextObjectEngine(buf).WordEndBackward(_cursor, count);
-                return true;
-            case "gj":
-                MoveVerticalCursor(count);
-                return true;
-            case "gk":
-                MoveVerticalCursor(-count);
-                return true;
-            case "g_":
-                var g_vm = motion.Calculate("g_", _cursor, count);
-                if (g_vm.HasValue) _cursor = g_vm.Value.Target;
-                return true;
-            case "gg":
-                _cursor = new CursorPosition(0, 0);
-                SetPreferredColumn(0);
-                return true;
-            case "G":
-                var targetLine = count == 1 ? buf.LineCount - 1 : count - 1;
-                _cursor = new CursorPosition(Math.Clamp(targetLine, 0, buf.LineCount - 1), 0);
-                SetPreferredColumn(0);
-                return true;
-            case "+":
-                var downLine = Math.Clamp(_cursor.Line + count, 0, buf.LineCount - 1);
-                _cursor = new CursorPosition(downLine, GetFirstNonBlank(downLine));
-                SetPreferredColumn(_cursor.Column);
-                return true;
-            case "-":
-                var upLine = Math.Clamp(_cursor.Line - count, 0, buf.LineCount - 1);
-                _cursor = new CursorPosition(upLine, GetFirstNonBlank(upLine));
-                SetPreferredColumn(_cursor.Column);
-                return true;
-            case "_":
-                var underLine = Math.Clamp(_cursor.Line + Math.Max(0, count - 1), 0, buf.LineCount - 1);
-                _cursor = new CursorPosition(underLine, GetFirstNonBlank(underLine));
-                SetPreferredColumn(_cursor.Column);
-                return true;
-            case "|":
-                _cursor = _cursor with { Column = Math.Clamp(count - 1, 0, Math.Max(0, GetLineLength() - 1)) };
-                SetPreferredColumn(_cursor.Column);
-                return true;
-            case "{":
-                for (int i = 0; i < count; i++)
-                    _cursor = ParagraphBackward();
-                return true;
-            case "}":
-                for (int i = 0; i < count; i++)
-                    _cursor = ParagraphForward();
-                return true;
-            case "%":
-                var mb = MatchBracket(buf, motion);
-                if (mb.HasValue)
-                    _cursor = mb.Value;
-                return true;
-            case "H":
-                _cursor = ScreenPosition(Math.Max(0, count - 1));
-                return true;
-            case "M":
-                _cursor = ScreenPosition(_viewportVisibleLines / 2);
-                return true;
-            case "L":
-                _cursor = ScreenPosition(Math.Max(0, _viewportVisibleLines - count));
-                return true;
-            case ";":
-                for (int i = 0; i < count; i++)
-                    _searchOps.RepeatFind(_cursor, false, events);
-                return true;
-            case ",":
-                for (int i = 0; i < count; i++)
-                    _searchOps.RepeatFind(_cursor, true, events);
-                return true;
-            case "n":
-                for (int i = 0; i < count; i++)
-                    _searchOps.SearchNext(_cursor, true, events);
-                return true;
-            case "N":
-                for (int i = 0; i < count; i++)
-                    _searchOps.SearchNext(_cursor, false, events);
-                return true;
-            case "gn":
-            {
-                var gnm = _searchOps.FindGnMatch(_cursor, true);
-                if (gnm.HasValue) _cursor = gnm.Value.End;
-                return true;
-            }
-            case "gN":
-            {
-                var gnm = _searchOps.FindGnMatch(_cursor, false);
-                if (gnm.HasValue) _cursor = gnm.Value.Start;
-                return true;
-            }
-            case "*":
-                _searchOps.SearchWordUnderCursor(_cursor, true, events);
-                return true;
-            case "#":
-                _searchOps.SearchWordUnderCursor(_cursor, false, events);
-                return true;
-            case "f":
-            case "F":
-            case "t":
-            case "T":
-                if (!cmd.FindChar.HasValue) return false;
-                bool fwd = cmd.Motion is "f" or "t";
-                bool before = cmd.Motion is "t" or "T";
-                _cursor = motion.FindChar(_cursor, cmd.FindChar.Value, fwd, before, count);
-                return true;
-            case var r when r?.StartsWith('r') == true && r.Length == 2:
-                _visualEditOps.ExecuteVisualReplace(r[1], events);
-                return true;
-            case "za": CurrentBuffer.Folds.ToggleFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); return false;
-            case "zo": CurrentBuffer.Folds.OpenFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); return false;
-            case "zc": CurrentBuffer.Folds.CloseFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); return false;
-            case "zM": CurrentBuffer.Folds.CloseAll(); events.Add(VimEvent.FoldsChanged()); return false;
-            case "zR": CurrentBuffer.Folds.OpenAll(); events.Add(VimEvent.FoldsChanged()); return false;
-            case "zj": { int next = CurrentBuffer.Folds.NextFoldStart(_cursor.Line); if (next >= 0) MoveCursor(new CursorPosition(next, 0), events); return false; }
-            case "zk": { int prev = CurrentBuffer.Folds.PrevFoldStart(_cursor.Line); if (prev >= 0) MoveCursor(new CursorPosition(prev, 0), events); return false; }
-            case "[z": { int fs = CurrentBuffer.Folds.CurrentFoldStart(_cursor.Line); if (fs >= 0) MoveCursor(new CursorPosition(fs, 0), events); return false; }
-            case "]z": { int fe = CurrentBuffer.Folds.CurrentFoldEnd(_cursor.Line); if (fe >= 0) MoveCursor(new CursorPosition(fe, 0), events); return false; }
-            case "[m": MethodJump(false, false, count, events); return true;
-            case "]m": MethodJump(true,  false, count, events); return true;
-            case "[M": MethodJump(false, true,  count, events); return true;
-            case "]M": MethodJump(true,  true,  count, events); return true;
-            case "[[": case "]]": case "[]": case "][":
-            { var sm = new MotionEngine(_bufferManager.Current.Text, _bufferManager.Current.FilePath).Calculate(cmd.Motion, _cursor, count); if (sm.HasValue && sm.Value.Target != _cursor) _cursor = sm.Value.Target; return true; }
-            case "[{": case "]}": case "[(": case "])":
-            { var bm = new MotionEngine(_bufferManager.Current.Text, _bufferManager.Current.FilePath).Calculate(cmd.Motion, _cursor, count); if (bm.HasValue && bm.Value.Target != _cursor) _cursor = bm.Value.Target; return true; }
-            case "zd": CurrentBuffer.Folds.DeleteFold(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
-            case "zD": CurrentBuffer.Folds.DeleteFoldsAt(_cursor.Line); events.Add(VimEvent.FoldsChanged()); ExitVisualMode(events); return false;
-            case "zE": CurrentBuffer.Folds.Clear(); events.Add(VimEvent.FoldsChanged()); return false;
-            case "zn": _foldDisabled = true; events.Add(VimEvent.FoldsChanged()); return true;
-            case "zN": _foldDisabled = false; events.Add(VimEvent.FoldsChanged()); return true;
-            case "zf":
-            {
-                if (_selection != null)
-                {
-                    var selStart = Math.Min(_selection.Value.Start.Line, _selection.Value.End.Line);
-                    var selEnd = Math.Max(_selection.Value.Start.Line, _selection.Value.End.Line);
-                    if (selEnd > selStart)
-                        CurrentBuffer.Folds.CreateFold(selStart, selEnd);
-                    events.Add(VimEvent.FoldsChanged());
-                    ExitVisualMode(events);
-                }
-                return false;
-            }
-            default:
-                return false;
-        }
+        return _visualMotions.Dispatch(cmd, events);
     }
 
     private static bool PreservesVisualBlockLineEnd(string motion) =>
