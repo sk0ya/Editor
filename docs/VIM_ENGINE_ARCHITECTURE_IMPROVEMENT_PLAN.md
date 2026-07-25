@@ -207,7 +207,10 @@ MotionRequest
   engine既定値はisolated、Controls既定値はapplication単位の明示sharedとした。
   従来の`Default`はfresh instanceを返す互換factoryへ縮小し、mutable singletonを
   排除した。
-- Phase 9 以降: 未着手。
+- Phase 9: 完了。公開`VimEngine`を114行の調停facadeへ縮小し、実装詳細を
+  internal sealed runtimeへ隔離した。facadeのprivate stateはruntime参照一つだけで、
+  command実装を持たない。公開互換境界を文書化し、reflection-based architecture
+  testでruntimeの非公開性とfacadeの所有関係を固定した。
 
 ## Phase 0: ベースライン固定
 
