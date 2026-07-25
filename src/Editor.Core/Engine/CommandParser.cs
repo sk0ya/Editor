@@ -14,6 +14,7 @@ public record struct ParsedCommand(
 public class CommandParser
 {
     private readonly PendingInputController _pendingInput;
+    private readonly CommandGrammar _grammar;
     private string _buffer = "";
     private char? _pendingRegister;
     private char? _pendingFindChar;
@@ -28,9 +29,12 @@ public class CommandParser
 
     public string Buffer => _buffer;
 
-    public CommandParser(PendingInputController? pendingInput = null)
+    public CommandParser(
+        PendingInputController? pendingInput = null,
+        CommandGrammar? grammar = null)
     {
         _pendingInput = pendingInput ?? new PendingInputController();
+        _grammar = grammar ?? new CommandGrammar();
     }
 
     public void Reset()
@@ -100,6 +104,8 @@ public class CommandParser
         string rest = working[i..];
 
         if (rest.Length == 0) return (CommandState.Incomplete, null);
+        if (TryParseRegistered(rest, count, null, out var registered))
+            return registered;
 
         // Surround operations (must come before standard operator handling)
         if (rest.StartsWith("ys"))
@@ -282,6 +288,8 @@ public class CommandParser
     private (CommandState, ParsedCommand?) ParseMotion(string s, int count, string? op)
     {
         if (s.Length == 0) return (CommandState.Incomplete, null);
+        if (TryParseRegistered(s, count, op, out var registered))
+            return registered;
 
         // Text objects for operators: iw/aw and all extensions
         if (op != null && s is "i" or "a")
@@ -415,6 +423,35 @@ public class CommandParser
     }
 
     private (CommandState, ParsedCommand?) Finalize() => Finalize(1, null, _buffer);
+
+    private bool TryParseRegistered(
+        string sequence,
+        int count,
+        string? op,
+        out (CommandState State, ParsedCommand? Command) result)
+    {
+        var match = _grammar.Match(sequence);
+        if (match.Kind == CommandGrammarMatchKind.None)
+        {
+            result = default;
+            return false;
+        }
+        if (match.Kind == CommandGrammarMatchKind.Prefix)
+        {
+            result = (CommandState.Incomplete, null);
+            return true;
+        }
+
+        var definition = match.Definition!;
+        var valid = op == null
+            ? definition.Kind is CommandDefinitionKind.Action or CommandDefinitionKind.Motion
+                or CommandDefinitionKind.TextObject
+            : definition.Kind is CommandDefinitionKind.Motion or CommandDefinitionKind.TextObject;
+        result = valid
+            ? Finalize(count, op, sequence)
+            : (CommandState.Invalid, null);
+        return true;
+    }
 
     private void BeginPendingInput(PendingInputState state)
     {

@@ -49,6 +49,7 @@ public class VimEngine
     private readonly PendingInputController _pendingInput = new();
     private readonly IEditTransactionService _editTransactions;
     private readonly IMotionService _motionService;
+    private readonly CommandGrammar _commandGrammar;
 
     private VimMode _mode = VimMode.Normal;
     private bool _vimEnabled = true;
@@ -182,7 +183,8 @@ public class VimEngine
 
     public VimEngine(VimConfig? config = null, SyntaxLanguageRegistry? syntaxLanguages = null,
         EditorCommandRegistry? commands = null, IServiceProvider? services = null,
-        VimKeyBindingRegistry? keyBindings = null, NormalCommandRegistry? normalCommands = null)
+        VimKeyBindingRegistry? keyBindings = null, NormalCommandRegistry? normalCommands = null,
+        CommandGrammar? commandGrammar = null)
     {
         _config = config ?? new VimConfig();
         _bufferManager = new BufferManager();
@@ -197,7 +199,8 @@ public class VimEngine
             () => _cursor, cursor => _cursor = cursor,
             () => _suppressSnapshot, EmitStatus);
         _motionService = new MotionService(_bufferManager);
-        _commandParser = new CommandParser(_pendingInput);
+        _commandGrammar = commandGrammar ?? new CommandGrammar();
+        _commandParser = new CommandParser(_pendingInput, _commandGrammar);
         _keyBindings = keyBindings ?? VimKeyBindingRegistry.Default;
         _normalCommands = normalCommands ?? NormalCommandRegistry.Default;
         _keyInput = new KeyInputPipeline(this, _keyBindings, () => _mode, GetMapsForMode,

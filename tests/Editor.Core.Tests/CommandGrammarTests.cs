@@ -46,4 +46,38 @@ public class CommandGrammarTests
 
         Assert.Equal(CommandGrammarMatchKind.None, grammar.Match("bb").Kind);
     }
+
+    [Fact]
+    public void Parser_AcceptsRegisteredPrefixCommandWithoutParserChanges()
+    {
+        var grammar = new CommandGrammar();
+        grammar.Register(
+            new CommandDefinition("prefix.z", "z", CommandDefinitionKind.Prefix),
+            new CommandDefinition("action.zx", "zx", CommandDefinitionKind.Action));
+        var parser = new CommandParser(grammar: grammar);
+
+        var first = parser.Feed("z");
+        var second = parser.Feed("x");
+
+        Assert.Equal(CommandState.Incomplete, first.State);
+        Assert.Equal(CommandState.Complete, second.State);
+        Assert.Equal("zx", second.Command!.Value.Motion);
+    }
+
+    [Fact]
+    public void Parser_ComposesRegisteredMotionWithOperator()
+    {
+        var grammar = new CommandGrammar();
+        grammar.Register(
+            new CommandDefinition("motion.qx", "qx", CommandDefinitionKind.Motion));
+        var parser = new CommandParser(grammar: grammar);
+
+        parser.Feed("d");
+        parser.Feed("q");
+        var result = parser.Feed("x");
+
+        Assert.Equal(CommandState.Complete, result.State);
+        Assert.Equal("d", result.Command!.Value.Operator);
+        Assert.Equal("qx", result.Command.Value.Motion);
+    }
 }

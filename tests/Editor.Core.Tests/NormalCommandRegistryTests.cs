@@ -114,6 +114,29 @@ public class NormalCommandRegistryTests
             property => property.PropertyType == typeof(VimEngine));
     }
 
+    [Fact]
+    public void RegisteredPrefixCommand_ExecutesWithoutParserSourceChange()
+    {
+        var grammar = new CommandGrammar();
+        grammar.Register(
+            new CommandDefinition("prefix.z", "z", CommandDefinitionKind.Prefix),
+            new CommandDefinition("test.zx", "zx", CommandDefinitionKind.Action));
+        var commands = new NormalCommandRegistry();
+        commands.Register(new("test.zx", ["zx"]),
+            _ => [VimEvent.StatusMessage("dynamic")]);
+        var engine = new VimEngine(
+            new VimConfig(),
+            normalCommands: commands,
+            commandGrammar: grammar);
+        engine.SetText("abc");
+
+        engine.ProcessKey("z");
+        var events = engine.ProcessKey("x");
+
+        Assert.Equal("dynamic",
+            Assert.IsType<StatusMessageEvent>(events.Single()).Message);
+    }
+
     private static VimEngine CreateEngine(string text, NormalCommandRegistry commands)
     {
         var engine = new VimEngine(new VimConfig(), normalCommands: commands);
