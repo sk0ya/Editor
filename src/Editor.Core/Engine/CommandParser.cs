@@ -13,11 +13,11 @@ public record struct ParsedCommand(
 
 public class CommandParser
 {
+    private readonly PendingInputController _pendingInput;
     private string _buffer = "";
     private char? _pendingRegister;
     private char? _pendingFindChar;
-    private bool _awaitingFindChar;
-    private bool _awaitingRegister;
+    private bool _ownsPendingInput;
     private char? _lastFindChar;
     private bool _lastFindForward;
     private bool _lastFindBefore;
@@ -28,25 +28,29 @@ public class CommandParser
 
     public string Buffer => _buffer;
 
+    public CommandParser(PendingInputController? pendingInput = null)
+    {
+        _pendingInput = pendingInput ?? new PendingInputController();
+    }
+
     public void Reset()
     {
         _buffer = "";
         _pendingRegister = null;
         _pendingFindChar = null;
-        _awaitingFindChar = false;
-        _awaitingRegister = false;
+        CancelPendingInput();
     }
 
     public (CommandState State, ParsedCommand? Command) Feed(string key)
     {
         // Awaiting find char (f/F/t/T)
-        if (_awaitingFindChar)
+        if (_ownsPendingInput && _pendingInput.Current is PendingInputState.FindCharacter)
         {
             if (key.Length == 1)
             {
                 _pendingFindChar = key[0];
                 _lastFindChar = key[0];
-                _awaitingFindChar = false;
+                CancelPendingInput();
                 _buffer += key;
                 return TryParse();
             }
@@ -55,12 +59,12 @@ public class CommandParser
         }
 
         // Awaiting register name ("x)
-        if (_awaitingRegister)
+        if (_ownsPendingInput && _pendingInput.Current is PendingInputState.NormalRegister)
         {
             if (key.Length == 1)
             {
                 _pendingRegister = key[0];
-                _awaitingRegister = false;
+                CancelPendingInput();
                 _buffer += key;
                 return (CommandState.Incomplete, null);
             }
@@ -71,7 +75,7 @@ public class CommandParser
         // Register prefix
         if (key == "\"" && string.IsNullOrEmpty(_buffer))
         {
-            _awaitingRegister = true;
+            BeginPendingInput(new PendingInputState.NormalRegister());
             _buffer += key;
             return (CommandState.Incomplete, null);
         }
@@ -305,7 +309,7 @@ public class CommandParser
         {
             if (s.Length < 2)
             {
-                _awaitingFindChar = true;
+                BeginPendingInput(new PendingInputState.FindCharacter(s[0]));
                 // Remember direction
                 _lastFindForward = s[0] is 'f' or 't';
                 _lastFindBefore = s[0] is 't' or 'T';
@@ -343,11 +347,24 @@ public class CommandParser
         };
 
         // r needs next char
-        if (s == "r") return (CommandState.Incomplete, null);
+        if (s == "r")
+        {
+            BeginPendingInput(new PendingInputState.ReplaceCharacter());
+            return (CommandState.Incomplete, null);
+        }
         if (s.Length == 2 && s[0] == 'r') return Finalize(count, op, s, findChar: s[1]);
 
         // m and ` and ' need next char
-        if (s is "m" or "`" or "'") return (CommandState.Incomplete, null);
+        if (s == "m")
+        {
+            BeginPendingInput(new PendingInputState.SetMark());
+            return (CommandState.Incomplete, null);
+        }
+        if (s is "`" or "'")
+        {
+            BeginPendingInput(new PendingInputState.JumpToMark(s == "'"));
+            return (CommandState.Incomplete, null);
+        }
         if (s.Length == 2 && s[0] is 'm' or '`' or '\'') return Finalize(count, op, s);
 
         // @ and q need register
@@ -398,4 +415,18 @@ public class CommandParser
     }
 
     private (CommandState, ParsedCommand?) Finalize() => Finalize(1, null, _buffer);
+
+    private void BeginPendingInput(PendingInputState state)
+    {
+        _pendingInput.Begin(state);
+        _ownsPendingInput = true;
+    }
+
+    private void CancelPendingInput()
+    {
+        if (!_ownsPendingInput)
+            return;
+        _pendingInput.Cancel();
+        _ownsPendingInput = false;
+    }
 }

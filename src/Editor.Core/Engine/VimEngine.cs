@@ -68,24 +68,12 @@ public class VimEngine
     private string[] _completions = [];     // Tab completion candidates
     private int _completionIndex = -1;      // Currently selected completion (-1 = none)
 
-    private char? _pendingReplaceChar;
-    private bool _awaitingMark;
-    private bool _awaitingMarkJump;
-    private bool _awaitingMarkJumpLine;
     private bool _ctrlWPending;
-    private char _awaitingVisualTextObj;  // 'i' or 'a' when pending text object in Visual mode
-    private int _awaitingVisualTextObjCount = 1;
-    private bool _discardingUnsupportedVisualTextObj;
-    private bool _awaitingSurroundChar;   // ys{motion} — waiting for the surround character
-    private bool _awaitingBlockReplace;   // Visual Block r — waiting for the replacement character
-    private bool _awaitingVisualRegister; // Visual mode " — waiting for the register name
     private char? _visualPendingRegister; // Register selected via " for the next visual operator
     private bool _visualBlockToLineEnd;   // Ctrl+V $ — selected lines extend to their own EOL
     private int _visualBlockLineEndStartColumn;
     private bool _pendingInsertReturn;    // Ctrl+O in Insert mode — return to Insert after one Normal command
     private char _ctrlXMode;              // 'f' = file-path, 'l' = whole-line, '\0' = keyword
-    private CursorPosition _surroundStart, _surroundEnd;
-    private bool _surroundLinewise;
     private bool _foldDisabled;
     private int _preferredColumn = 0; // Sticky column for j/k
     private int _preferredLine = 0;
@@ -202,7 +190,7 @@ public class VimEngine
         _markManager = new MarkManager();
         _macroManager = new MacroManager();
         _syntaxEngine = new SyntaxEngine(syntaxLanguages);
-        _commandParser = new CommandParser();
+        _commandParser = new CommandParser(_pendingInput);
         _keyBindings = keyBindings ?? VimKeyBindingRegistry.Default;
         _normalCommands = normalCommands ?? NormalCommandRegistry.Default;
         _keyInput = new KeyInputPipeline(this, _keyBindings, () => _mode, GetMapsForMode,
@@ -895,10 +883,10 @@ public class VimEngine
 
     private void RegisterPendingAndMacroCommands(BuiltInNormalCommandDispatcher commands)
     {
-        commands.Register("r", (_, _) => _pendingReplaceChar = null);
-        commands.Register("m", (_, _) => _awaitingMark = true);
-        commands.Register("`", (_, _) => _awaitingMarkJump = true);
-        commands.Register("'", (_, _) => _awaitingMarkJumpLine = true);
+        commands.Register("r", (_, _) => _pendingInput.Begin(new PendingInputState.ReplaceCharacter()));
+        commands.Register("m", (_, _) => _pendingInput.Begin(new PendingInputState.SetMark()));
+        commands.Register("`", (_, _) => _pendingInput.Begin(new PendingInputState.JumpToMark(false)));
+        commands.Register("'", (_, _) => _pendingInput.Begin(new PendingInputState.JumpToMark(true)));
         commands.Register("q:", (_, events) => OpenLastCommandHistory(events));
         commands.Register(["q/", "q?"], OpenLastSearchHistory);
         commands.RegisterPattern(IsPrefixedCommand('r'), ExecuteReplaceCharacterCommand);
@@ -1309,36 +1297,13 @@ public class VimEngine
             return;
         }
 
-        // Awaiting pending chars
-        if (_awaitingMark)
+        // Awaiting pending chars handled outside CommandParser.
+        if (_pendingInput.Current is PendingInputState.Surround surround)
         {
-            // '.' and '\'' are auto-managed; block user from clobbering them via m'/m.
-            if (key[0] != '\'' && key[0] != '.')
-                _markManager.SetMark(key[0], _cursor);
-            _awaitingMark = false;
-            EmitCursor(events);
-            return;
-        }
-        if (_awaitingMarkJump)
-        {
-            var markKey = key[0] == '`' ? '\'' : key[0]; // `` → jump-from mark
-            var m = _markManager.GetMark(markKey);
-            if (m.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(m.Value, events); }
-            _awaitingMarkJump = false;
-            return;
-        }
-        if (_awaitingMarkJumpLine)
-        {
-            var m = _markManager.GetMark(key[0]);
-            if (m.HasValue) { _markManager.SetMark('\'', _cursor); MoveCursor(m.Value with { Column = 0 }, events); }
-            _awaitingMarkJumpLine = false;
-            return;
-        }
-        if (_pendingReplaceChar.HasValue) { _cursor = _textTransform.ExecuteReplace(_cursor, key[0], events); _pendingReplaceChar = null; return; }
-        if (_awaitingSurroundChar)
-        {
-            _awaitingSurroundChar = false;
-            if (key.Length == 1) _cursor = _textTransform.ApplySurround(_surroundStart, _surroundEnd, _surroundLinewise, key[0], events);
+            _pendingInput.Cancel();
+            if (key.Length == 1)
+                _cursor = _textTransform.ApplySurround(
+                    surround.Start, surround.End, surround.Linewise, key[0], events);
             return;
         }
 
@@ -1563,10 +1528,10 @@ public class VimEngine
                 case "ys":
                     // yss{char}: surround current line(s) — await surround char
                     Snapshot();
-                    _surroundStart = new CursorPosition(_cursor.Line, 0);
-                    _surroundEnd = new CursorPosition(endLine, buf.GetLine(endLine).TrimEnd().Length - 1);
-                    _surroundLinewise = true;
-                    _awaitingSurroundChar = true;
+                    _pendingInput.Begin(new PendingInputState.Surround(
+                        new CursorPosition(_cursor.Line, 0),
+                        new CursorPosition(endLine, buf.GetLine(endLine).TrimEnd().Length - 1),
+                        true));
                     return;
                 case "gu":
                     _repeatTracker.SetRepeatChange(cmd);
@@ -1770,10 +1735,7 @@ public class VimEngine
             case "gc": _textTransform.ToggleCommentLines(start.Line, end.Line, events); break;
             case "gq": _cursor = _textTransform.FormatText(_cursor, start.Line, end.Line, events); break;
             case "ys":
-                _surroundStart = start;
-                _surroundEnd = end;
-                _surroundLinewise = linewise;
-                _awaitingSurroundChar = true;
+                _pendingInput.Begin(new PendingInputState.Surround(start, end, linewise));
                 return;
             case "gu": _textTransform.ApplyCaseConversion(start, end, linewise, CaseConversion.Lower, events); break;
             case "gU": _textTransform.ApplyCaseConversion(start, end, linewise, CaseConversion.Upper, events); break;
@@ -2436,24 +2398,22 @@ public class VimEngine
         if (key == "Escape")
         {
             _commandParser.Reset();
-            _discardingUnsupportedVisualTextObj = false;
             ExitVisualMode(events);
             return;
         }
 
-        if (_discardingUnsupportedVisualTextObj && !ctrl)
+        if (_pendingInput.Current is PendingInputState.UnsupportedVisualTextObject && !ctrl)
         {
-            _discardingUnsupportedVisualTextObj = false;
+            _pendingInput.Cancel();
             return;
         }
 
         // Second char of visual text object (e.g. viw, va", vi{)
-        if (_awaitingVisualTextObj != '\0' && !ctrl)
+        if (_pendingInput.Current is PendingInputState.VisualTextObject visualTextObject && !ctrl)
         {
-            char prefix = _awaitingVisualTextObj;
-            _awaitingVisualTextObj = '\0';
-            int count = Math.Max(1, _awaitingVisualTextObjCount);
-            _awaitingVisualTextObjCount = 1;
+            _pendingInput.Cancel();
+            char prefix = visualTextObject.Prefix;
+            int count = Math.Max(1, visualTextObject.Count);
             string textObj = prefix.ToString() + key;
             var range = new TextObjectEngine(_bufferManager.Current.Text).GetRange(textObj, _cursor, count);
             if (range != null)
@@ -2465,25 +2425,25 @@ public class VimEngine
             return;
         }
 
-        if (_awaitingBlockReplace)
+        if (_pendingInput.Current is PendingInputState.VisualBlockReplace)
         {
-            _awaitingBlockReplace = false;
+            _pendingInput.Cancel();
             if (key.Length == 1)
                 ExecuteBlockReplace(key[0], events);
             return;
         }
 
         // Register prefix: "x selects register x for the next visual operator.
-        if (_awaitingVisualRegister && !ctrl)
+        if (_pendingInput.Current is PendingInputState.VisualRegister && !ctrl)
         {
-            _awaitingVisualRegister = false;
+            _pendingInput.Cancel();
             if (key.Length == 1)
                 _visualPendingRegister = key[0];
             return;
         }
         if (key == "\"" && !ctrl)
         {
-            _awaitingVisualRegister = true;
+            _pendingInput.Begin(new PendingInputState.VisualRegister());
             return;
         }
 
@@ -2535,12 +2495,12 @@ public class VimEngine
             _commandParser.Reset();
             if (_mode == VimMode.Visual)
             {
-                _awaitingVisualTextObj = key[0];
-                _awaitingVisualTextObjCount = visualTextObjectCount;
+                _pendingInput.Begin(
+                    new PendingInputState.VisualTextObject(key[0], visualTextObjectCount));
             }
             else
             {
-                _discardingUnsupportedVisualTextObj = true;
+                _pendingInput.Begin(new PendingInputState.UnsupportedVisualTextObject());
             }
             return;
         }
@@ -2601,12 +2561,11 @@ public class VimEngine
                 {
                     if (_mode == VimMode.Visual)
                     {
-                        _awaitingVisualTextObj = 'i';
-                        _awaitingVisualTextObjCount = 1;
+                        _pendingInput.Begin(new PendingInputState.VisualTextObject('i', 1));
                     }
                     else
                     {
-                        _discardingUnsupportedVisualTextObj = true;
+                        _pendingInput.Begin(new PendingInputState.UnsupportedVisualTextObject());
                     }
                     return;
                 }
@@ -2622,12 +2581,11 @@ public class VimEngine
             case "a":
                 if (_mode == VimMode.Visual)
                 {
-                    _awaitingVisualTextObj = 'a';
-                    _awaitingVisualTextObjCount = 1;
+                    _pendingInput.Begin(new PendingInputState.VisualTextObject('a', 1));
                 }
                 else
                 {
-                    _discardingUnsupportedVisualTextObj = true;
+                    _pendingInput.Begin(new PendingInputState.UnsupportedVisualTextObject());
                 }
                 return;
             // Operators on selection
@@ -2677,7 +2635,7 @@ public class VimEngine
                 if (_mode == VimMode.VisualBlock)
                 {
                     _commandParser.Reset();
-                    _awaitingBlockReplace = true;
+                    _pendingInput.Begin(new PendingInputState.VisualBlockReplace());
                     EmitStatus(events, "r");
                     return;
                 }
@@ -2991,10 +2949,7 @@ public class VimEngine
 
     private void ExitVisualMode(List<VimEvent> events)
     {
-        _awaitingVisualTextObj = '\0';
-        _awaitingVisualTextObjCount = 1;
-        _discardingUnsupportedVisualTextObj = false;
-        _awaitingVisualRegister = false;
+        _pendingInput.Cancel();
         _visualPendingRegister = null;
         _lastVisualStart = _visualStart;
         _lastVisualEnd = _cursor;
@@ -3031,9 +2986,7 @@ public class VimEngine
     {
         int start = Math.Min(_visualStart.Line, _cursor.Line) + 1;
         int end = Math.Max(_visualStart.Line, _cursor.Line) + 1;
-        _awaitingVisualTextObj = '\0';
-        _awaitingVisualTextObjCount = 1;
-        _discardingUnsupportedVisualTextObj = false;
+        _pendingInput.Cancel();
         _selection = null;
         events.Add(VimEvent.SelectionChanged(null));
         _cmdLine = $"{start},{end}";
@@ -3647,7 +3600,8 @@ public class VimEngine
     {
         var register = _visualPendingRegister ?? '"';
         _visualPendingRegister = null;
-        _awaitingVisualRegister = false;
+        if (_pendingInput.Current is PendingInputState.VisualRegister)
+            _pendingInput.Cancel();
         return register;
     }
 

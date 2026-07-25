@@ -1,3 +1,5 @@
+using Editor.Core.Models;
+
 namespace Editor.Core.Engine;
 
 /// <summary>
@@ -12,6 +14,19 @@ public abstract record PendingInputState
     public sealed record ExpressionRegister(string Expression) : PendingInputState;
     public sealed record Digraph(char? FirstCharacter) : PendingInputState;
     public sealed record InsertCompletion : PendingInputState;
+    public sealed record ReplaceCharacter : PendingInputState;
+    public sealed record SetMark : PendingInputState;
+    public sealed record JumpToMark(bool Linewise) : PendingInputState;
+    public sealed record Surround(
+        CursorPosition Start,
+        CursorPosition End,
+        bool Linewise) : PendingInputState;
+    public sealed record VisualTextObject(char Prefix, int Count) : PendingInputState;
+    public sealed record VisualBlockReplace : PendingInputState;
+    public sealed record VisualRegister : PendingInputState;
+    public sealed record UnsupportedVisualTextObject : PendingInputState;
+    public sealed record NormalRegister : PendingInputState;
+    public sealed record FindCharacter(char Motion) : PendingInputState;
 }
 
 /// <summary>Owns pending-input transitions and cancellation.</summary>

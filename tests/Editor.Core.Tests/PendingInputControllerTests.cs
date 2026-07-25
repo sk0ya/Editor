@@ -119,6 +119,53 @@ public class VimEnginePendingInputTests
         Assert.IsType<PendingInputState.None>(engine.PendingInput);
     }
 
+    [Theory]
+    [InlineData("r", typeof(PendingInputState.ReplaceCharacter))]
+    [InlineData("m", typeof(PendingInputState.SetMark))]
+    [InlineData("`", typeof(PendingInputState.JumpToMark))]
+    [InlineData("'", typeof(PendingInputState.JumpToMark))]
+    [InlineData("\"", typeof(PendingInputState.NormalRegister))]
+    [InlineData("f", typeof(PendingInputState.FindCharacter))]
+    public void NormalPrefix_ExposesExclusivePendingState(string key, Type stateType)
+    {
+        var engine = CreateEngine("abc");
+
+        engine.ProcessKey(key);
+
+        Assert.IsType(stateType, engine.PendingInput);
+    }
+
+    [Theory]
+    [InlineData("r", "x")]
+    [InlineData("m", "a")]
+    [InlineData("`", "a")]
+    [InlineData("'", "a")]
+    [InlineData("\"", "a")]
+    [InlineData("f", "b")]
+    public void NormalPrefix_CompletionClearsPendingState(string prefix, string completion)
+    {
+        var engine = CreateEngine("abc");
+        engine.ProcessKey(prefix);
+
+        engine.ProcessKey(completion);
+
+        Assert.IsType<PendingInputState.None>(engine.PendingInput);
+    }
+
+    [Fact]
+    public void VisualPendingStates_AreCancelledWhenVisualModeExits()
+    {
+        var engine = CreateEngine("word");
+        engine.ProcessKey("v");
+        engine.ProcessKey("i");
+        Assert.IsType<PendingInputState.VisualTextObject>(engine.PendingInput);
+
+        engine.ProcessKey("Escape");
+
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        Assert.IsType<PendingInputState.None>(engine.PendingInput);
+    }
+
     private static VimEngine CreateEngine(string text = "")
     {
         var engine = new VimEngine();

@@ -172,8 +172,11 @@ MotionRequest
 
 ### 進捗（2026-07-25）
 
-- Phase 0: Core の既存テスト 1151 件をベースラインとして確認済み。pending input の状態・イベント列を固定する特性テストを追加中。
-- Phase 1: 着手済み。Insert モードの register、expression register、digraph、Ctrl+X completion の待機状態を `PendingInputState` と `PendingInputController` へ移行済み。
+- Phase 0: 完了。Core の既存動作を特性テストで固定し、全テスト成功を確認済み。
+- Phase 1: 完了。Normal、Insert、Visual の排他的な文字入力待ちを
+  `PendingInputState` と `PendingInputController` へ移行し、旧 `_awaiting...`
+  フラグを削除済み。parser が所有する register、find、mark、replace の待機も
+  同じ controller から観測・キャンセルできる。
 - Phase 2 以降: 未着手。
 
 ## Phase 0: ベースライン固定
