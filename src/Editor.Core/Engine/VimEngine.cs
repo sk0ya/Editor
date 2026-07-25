@@ -2467,6 +2467,48 @@ public class VimEngine
     // ─────────────── VISUAL MODE ───────────────
     private void HandleVisual(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
+        if (!VisualInputMutatesBuffer(key, ctrl))
+        {
+            HandleVisualCore(key, ctrl, shift, alt, events);
+            return;
+        }
+
+        _editTransactions.Execute(
+            events,
+            transaction =>
+            {
+                var wasSuppressingSnapshot = _suppressSnapshot;
+                _suppressSnapshot = true;
+                try
+                {
+                    HandleVisualCore(key, ctrl, shift, alt, events);
+                    transaction.Cursor = _cursor;
+                    return null;
+                }
+                finally
+                {
+                    _suppressSnapshot = wasSuppressingSnapshot;
+                }
+            },
+            new EditTransactionOptions(AllowCursorAtEndOfLine: key is "c" or "C" or "s" or "S"));
+    }
+
+    private bool VisualInputMutatesBuffer(string key, bool ctrl)
+    {
+        if (_pendingInput.Current is PendingInputState.VisualBlockReplace)
+            return true;
+        if (ctrl && key.Equals("x", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (_commandParser.Buffer == "g" && key is "c" or "u" or "U" or "~")
+            return true;
+        if (_commandParser.Buffer == "r" && key.Length == 1)
+            return true;
+        return !ctrl && key is "d" or "x" or "X" or "D" or "p" or "P"
+            or "c" or "C" or "s" or "S" or ">" or "<" or "~";
+    }
+
+    private void HandleVisualCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
+    {
         _ctrlWPending = false;
         if (key == "Escape")
         {

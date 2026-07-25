@@ -109,4 +109,20 @@ public class EditTransactionIntegrationTests
             events.Select(e => e.Type));
         Assert.Equal("one\ntwo", engine.CurrentBuffer.Text.GetText());
     }
+
+    [Fact]
+    public void VisualDelete_UsesOneTransactionAndOneUndoStep()
+    {
+        var engine = new VimEngine();
+        engine.SetText("abcd");
+        engine.ProcessKey("v");
+        engine.ProcessKey("l");
+
+        var events = engine.ProcessKey("d");
+        engine.ProcessKey("u");
+
+        Assert.Single(events, e => e.Type == VimEventType.TextChanged);
+        Assert.Single(events, e => e.Type == VimEventType.CursorMoved);
+        Assert.Equal("abcd", engine.CurrentBuffer.Text.GetText());
+    }
 }
