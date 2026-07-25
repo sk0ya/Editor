@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 using Editor.Core.Lsp;
 
@@ -33,6 +34,11 @@ public sealed class LspClient : ILspClient
 
     public async Task InitializeAsync(string rootUri)
     {
+        // サーバーが後から workspace/workspaceFolders を要求してきたときに同じ一覧を返せるよう、
+        // initialize を送る前に LspProcess 側へ渡しておく。
+        var workspaceFolders = CreateWorkspaceFolders(rootUri);
+        _process.WorkspaceFolders = workspaceFolders;
+
         var result = await _process.SendRequestAsync("initialize", new
         {
             processId = Environment.ProcessId,
@@ -80,10 +86,13 @@ public sealed class LspClient : ILspClient
                 workspace = new
                 {
                     symbol = new { },
-                    diagnostics = new { refreshSupport = false }
+                    diagnostics = new { refreshSupport = false },
+                    // これを宣言しないと InitializeParams.workspaceFolders は無視される
+                    // (Roslyn / rust-analyzer はフォルダを取り込む前にこの capability を見る)。
+                    workspaceFolders = true
                 }
             },
-            workspaceFolders = (object?)null
+            workspaceFolders
         });
         _process.SendNotification("initialized", new { });
 
@@ -116,6 +125,24 @@ public sealed class LspClient : ILspClient
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// <c>--autoLoadProjects</c> を使う Roslyn 等は <c>rootUri</c> だけでなく
+    /// <c>workspaceFolders</c> を見てプロジェクトを自動ロードする。
+    /// 単一ルートのエディタなので、初期化対象のルートを1件のワークスペースとして通知する。
+    /// </summary>
+    internal static LspWorkspaceFolder[] CreateWorkspaceFolders(string rootUri)
+    {
+        var name = rootUri;
+        if (Uri.TryCreate(rootUri, UriKind.Absolute, out var uri) && uri.IsFile)
+        {
+            var path = uri.LocalPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            name = Path.GetFileName(path);
+            if (string.IsNullOrWhiteSpace(name))
+                name = path;
+        }
+        return [new LspWorkspaceFolder(rootUri, name)];
     }
 
     private static string[] ParseStringArray(JsonElement el, string propName)

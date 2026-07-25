@@ -25,6 +25,13 @@ internal sealed class LspProcess : IDisposable
 
     public bool IsRunning => !_disposed && !_process.HasExited;
 
+    /// <summary>
+    /// initialize で通知したワークスペースフォルダ。サーバーが後から
+    /// <c>workspace/workspaceFolders</c> を要求してきたときに同じ内容を返すために保持する
+    /// (null を返すと「フォルダなし」の意味になり、initialize の内容と矛盾する)。
+    /// </summary>
+    public LspWorkspaceFolder[]? WorkspaceFolders { get; set; }
+
     public LspProcess(string executable, IEnumerable<string> args, string? workingDir = null)
     {
         var psi = new ProcessStartInfo
@@ -219,11 +226,12 @@ internal sealed class LspProcess : IDisposable
 
                 // Server-to-client REQUEST (has id + method, no result/error):
                 // we MUST send a response or the server will block.
-                if (hasId && idProp.ValueKind == JsonValueKind.Number)
+                // JSON-RPC 2.0 の id は number でも string でもよいので、受け取った値をそのまま返す。
+                if (hasId && (idProp.ValueKind == JsonValueKind.Number || idProp.ValueKind == JsonValueKind.String))
                 {
-                    var reqId = idProp.GetInt32();
-                    Log($"responding to server request id={reqId} method={methodProp.GetString()}");
-                    SendResponse(reqId);
+                    Log($"responding to server request id={idProp} method={methodProp.GetString()}");
+                    SendResponse(idProp, CreateServerRequestResult(
+                        methodProp.GetString() ?? "", @params, WorkspaceFolders));
                 }
 
                 NotificationReceived?.Invoke(methodProp.GetString() ?? "", @params);
@@ -232,10 +240,43 @@ internal sealed class LspProcess : IDisposable
         catch { }
     }
 
-    /// <summary>Send a successful null response to a server-initiated request.</summary>
-    private void SendResponse(int id)
+    /// <summary>
+    /// サーバーからの要求に対する最小応答を作る。
+    /// workspace/configuration は要求した item と同数の値を返す必要があり、null 応答では
+    /// Roslyn/Razor 側が配列として扱えず初期化に失敗する。
+    /// </summary>
+    internal static object? CreateServerRequestResult(
+        string method, JsonElement @params, LspWorkspaceFolder[]? workspaceFolders = null)
     {
-        try { WriteMessage(JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = (object?)null })); }
+        switch (method)
+        {
+            case "workspace/configuration":
+                if (@params.ValueKind == JsonValueKind.Object
+                    && @params.TryGetProperty("items", out var items)
+                    && items.ValueKind == JsonValueKind.Array)
+                    return new object?[items.GetArrayLength()];
+                return null;
+
+            // initialize で通知したものと同じ一覧を返す。null は「フォルダなし」を意味し、
+            // ここで再同期するサーバーはルートを失ってプロジェクトの読み込みを止めてしまう。
+            case "workspace/workspaceFolders":
+                return workspaceFolders;
+
+            // 結果型は applied (bool) が必須。null だとサーバー側でデシリアライズに失敗する。
+            // 現状クライアント側で編集を適用する経路がないので、未適用として返す。
+            case "workspace/applyEdit":
+                return new { applied = false };
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>Send a successful response to a server-initiated request.</summary>
+    /// <param name="id">受信した id をそのまま返す (number / string のいずれもあり得る)。</param>
+    private void SendResponse(JsonElement id, object? result)
+    {
+        try { WriteMessage(JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result })); }
         catch { }
     }
 
