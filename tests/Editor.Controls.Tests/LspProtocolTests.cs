@@ -105,4 +105,39 @@ public sealed class LspProtocolTests
             data.GetProperty("textDocument").GetProperty("uri").GetString());
         Assert.Equal(4, data.GetProperty("position").GetProperty("line").GetInt32());
     }
+
+    [Fact]
+    public void Incremental_sync_replaces_the_previous_whole_document_with_a_valid_range()
+    {
+        var change = LspClient.CreateContentChange(2, "first\r\nsecond", "updated");
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(change));
+
+        var range = json.RootElement.GetProperty("range");
+        Assert.Equal(0, range.GetProperty("start").GetProperty("line").GetInt32());
+        Assert.Equal(0, range.GetProperty("start").GetProperty("character").GetInt32());
+        Assert.Equal(1, range.GetProperty("end").GetProperty("line").GetInt32());
+        Assert.Equal(6, range.GetProperty("end").GetProperty("character").GetInt32());
+        Assert.Equal("first\r\nsecond".Length, json.RootElement.GetProperty("rangeLength").GetInt32());
+        Assert.Equal("updated", json.RootElement.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public void Full_sync_keeps_the_range_less_change_shape()
+    {
+        var change = LspClient.CreateContentChange(1, "before", "after");
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(change));
+
+        Assert.False(json.RootElement.TryGetProperty("range", out _));
+        Assert.Equal("after", json.RootElement.GetProperty("text").GetString());
+    }
+
+    [Theory]
+    [InlineData("""{"textDocumentSync":2}""", 2)]
+    [InlineData("""{"textDocumentSync":{"change":2}}""", 2)]
+    [InlineData("""{}""", 1)]
+    public void Initialize_reads_the_server_text_document_sync_kind(string jsonText, int expected)
+    {
+        using var json = JsonDocument.Parse(jsonText);
+        Assert.Equal(expected, LspClient.ParseTextDocumentSyncKind(json.RootElement));
+    }
 }

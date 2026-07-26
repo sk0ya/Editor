@@ -8,6 +8,9 @@ namespace Editor.Controls.Lsp;
 public sealed class LspClient : ILspClient
 {
     private readonly LspProcess _process;
+    private readonly object _documentGate = new();
+    private readonly Dictionary<string, string> _documentTexts = new(StringComparer.OrdinalIgnoreCase);
+    private int _textDocumentSyncKind = 1;
 
     public event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
 
@@ -109,6 +112,7 @@ public sealed class LspClient : ILspClient
             result.Value.ValueKind == JsonValueKind.Object &&
             result.Value.TryGetProperty("capabilities", out var caps))
         {
+            _textDocumentSyncKind = ParseTextDocumentSyncKind(caps);
             if (caps.TryGetProperty("foldingRangeProvider", out var frp))
                 SupportsFoldingRange = frp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("workspaceSymbolProvider", out var wsp))
@@ -181,6 +185,7 @@ public sealed class LspClient : ILspClient
 
     public Task OpenDocumentAsync(string uri, string languageId, string text)
     {
+        lock (_documentGate) _documentTexts[uri] = text;
         _process.SendNotification("textDocument/didOpen", new
         {
             textDocument = new { uri, languageId, version = 1, text }
@@ -190,18 +195,59 @@ public sealed class LspClient : ILspClient
 
     public Task ChangeDocumentAsync(string uri, int version, string text)
     {
+        string previousText;
+        lock (_documentGate)
+        {
+            previousText = _documentTexts.GetValueOrDefault(uri, "");
+            _documentTexts[uri] = text;
+        }
         _process.SendNotification("textDocument/didChange", new
         {
             textDocument = new { uri, version },
-            contentChanges = new[] { new { text } }
+            contentChanges = new[] { CreateContentChange(_textDocumentSyncKind, previousText, text) }
         });
         return Task.CompletedTask;
     }
 
     public Task CloseDocumentAsync(string uri)
     {
+        lock (_documentGate) _documentTexts.Remove(uri);
         _process.SendNotification("textDocument/didClose", new { textDocument = new { uri } });
         return Task.CompletedTask;
+    }
+
+    internal static int ParseTextDocumentSyncKind(JsonElement capabilities)
+    {
+        if (!capabilities.TryGetProperty("textDocumentSync", out var sync))
+            return 1;
+        if (sync.ValueKind == JsonValueKind.Number && sync.TryGetInt32(out var numeric))
+            return numeric;
+        if (sync.ValueKind == JsonValueKind.Object &&
+            sync.TryGetProperty("change", out var change) &&
+            change.TryGetInt32(out var nested))
+            return nested;
+        return 1;
+    }
+
+    internal static object CreateContentChange(int syncKind, string previousText, string text)
+    {
+        if (syncKind != 2)
+            return new { text };
+
+        var normalized = previousText.Replace("\r\n", "\n").Replace('\r', '\n');
+        var lastNewline = normalized.LastIndexOf('\n');
+        var endLine = lastNewline < 0 ? 0 : normalized.Count(c => c == '\n');
+        var endCharacter = lastNewline < 0 ? normalized.Length : normalized.Length - lastNewline - 1;
+        return new
+        {
+            range = new
+            {
+                start = new { line = 0, character = 0 },
+                end = new { line = endLine, character = endCharacter }
+            },
+            rangeLength = previousText.Length,
+            text
+        };
     }
 
     public async Task<IReadOnlyList<LspCompletionItem>> GetCompletionAsync(

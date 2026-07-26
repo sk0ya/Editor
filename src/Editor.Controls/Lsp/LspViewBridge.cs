@@ -351,7 +351,11 @@ public sealed class LspViewBridge : IEditorLspView
         _completionCts?.Cancel();
         _completionCts?.Dispose();
         _completionCts = new CancellationTokenSource();
-        var ct = _completionCts.Token;
+        var requestCts = _completionCts;
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            requestCts.Token, timeoutCts.Token);
+        var ct = linkedCts.Token;
 
         IReadOnlyList<LspCompletionItem> items;
         try
@@ -360,8 +364,12 @@ public sealed class LspViewBridge : IEditorLspView
         }
         catch (OperationCanceledException)
         {
-            Log("[LSP] completion request cancelled (superseded)");
-            return null;
+            if (!ReferenceEquals(_completionCts, requestCts))
+                return null;
+            if (!timeoutCts.IsCancellationRequested)
+                return null;
+            Log("[LSP] completion request timed out");
+            return "LSP: completion request timed out";
         }
 
         Log($"[LSP] completion got {items.Count} items");
