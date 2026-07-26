@@ -49,7 +49,6 @@ public class VimEngineServicesTests
         Assert.NotSame(EditorCommandRegistry.Default, EditorCommandRegistry.Default);
         Assert.NotSame(EditAssistRegistry.Default, EditAssistRegistry.Default);
         Assert.NotSame(SyntaxLanguageRegistry.Default, SyntaxLanguageRegistry.Default);
-        Assert.NotSame(LspServerRegistry.Default, LspServerRegistry.Default);
         Assert.NotSame(FormatterRegistry.Default, FormatterRegistry.Default);
     }
 }

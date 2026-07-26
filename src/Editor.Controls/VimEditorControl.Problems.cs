@@ -19,7 +19,7 @@ public partial class VimEditorControl
         get
         {
             Dispatcher.VerifyAccess();
-            var result = _lspManager.CurrentDiagnostics.Select(static d => new EditorDiagnostic(
+            var result = _lspView.CurrentDiagnostics.Select(static d => new EditorDiagnostic(
                 new(new(d.Range.Start.Line, d.Range.Start.Character), new(d.Range.End.Line, d.Range.End.Character)),
                 d.Message,
                 d.Severity switch
@@ -115,7 +115,7 @@ public partial class VimEditorControl
                 _ => DiagnosticSeverity.Hint,
             },
             d.Source));
-        Canvas.SetDiagnostics(_lspManager.CurrentDiagnostics.Concat(host).ToArray());
+        Canvas.SetDiagnostics(_lspView.CurrentDiagnostics.Concat(host).ToArray());
     }
 
     private static EditorDiagnostic ValidateDiagnostic(EditorDiagnostic diagnostic)

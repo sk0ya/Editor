@@ -7,9 +7,16 @@ namespace Editor.Core.Engine.ExCommands;
 /// <summary>
 /// Handles LSP-triggered ex commands (:Format, :Rename, :Symbols, :CallHierarchy, :TypeHierarchy)
 /// and the :Lsp*/:Fmt* server/formatter configuration commands.
+///
+/// <para>The <c>:Lsp*</c> commands are only an input frontend: they edit whatever extension→server
+/// table the host injected as <paramref name="lspServerAdmin"/> — the same one the host's settings UI
+/// and its <see cref="ILspWorkspace"/> use. With no host table injected they report that they are
+/// unavailable, rather than writing to a private table nobody reads.</para>
 /// </summary>
-public class LspCommands(LspServerRegistry lspRegistry, FormatterRegistry formatterRegistry)
+public class LspCommands(ILspServerAdmin? lspServerAdmin, FormatterRegistry formatterRegistry)
 {
+    private const string NoAdmin = "LSP: server configuration is not available in this host";
+
     /// <param name="formatRange">
     /// Resolved 0-based inclusive line range of the ex range prefix, or null when the command had none.
     /// Only <c>:Format</c> uses it — `:'&lt;,'&gt;Format` formats just the selected lines.
@@ -126,7 +133,9 @@ public class LspCommands(LspServerRegistry lspRegistry, FormatterRegistry format
 
     private string FormatLspServers()
     {
-        var entries = lspRegistry.List();
+        if (lspServerAdmin is null) return NoAdmin;
+
+        var entries = lspServerAdmin.List();
         if (entries.Count == 0)
             return "(no language servers configured)";
 
@@ -148,11 +157,13 @@ public class LspCommands(LspServerRegistry lspRegistry, FormatterRegistry format
 
     private ExResult ExecuteLspAdd(string rest)
     {
+        if (lspServerAdmin is null) return new ExResult(false, NoAdmin);
+
         var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length < 2)
             return new ExResult(false, "Usage: :LspAdd <ext> <executable> [args...]");
 
-        var ext = LspServerRegistry.NormalizeExt(parts[0]);
+        var ext = LspExtensions.NormalizeExt(parts[0]);
         if (ext.Length == 0)
             return new ExResult(false, "E474: invalid extension");
 
@@ -160,31 +171,35 @@ public class LspCommands(LspServerRegistry lspRegistry, FormatterRegistry format
         var args = parts.Length > 2 ? parts[2..] : [];
         // languageId is derived from the extension (".cs" → "cs"); servers key off the executable, not this id.
         var languageId = ext.TrimStart('.');
-        lspRegistry.Set(ext, new LspServerDef(executable, args, languageId));
+        lspServerAdmin.Set(ext, new LspServerDef(executable, args, languageId));
 
         var argsText = args.Length > 0 ? " " + string.Join(' ', args) : "";
-        return new ExResult(true, $"LSP: {ext} → {executable}{argsText} (reopen the file to apply)");
+        return new ExResult(true, $"LSP: {ext} → {executable}{argsText}");
     }
 
     private ExResult ExecuteLspRemove(string rest)
     {
-        var ext = LspServerRegistry.NormalizeExt(rest.Trim());
+        if (lspServerAdmin is null) return new ExResult(false, NoAdmin);
+
+        var ext = LspExtensions.NormalizeExt(rest.Trim());
         if (ext.Length == 0)
             return new ExResult(false, "Usage: :LspRemove <ext>");
 
-        return lspRegistry.Remove(ext)
-            ? new ExResult(true, $"LSP: removed {ext} (reopen the file to apply)")
+        return lspServerAdmin.Remove(ext)
+            ? new ExResult(true, $"LSP: removed {ext}")
             : new ExResult(false, $"LSP: no server configured for {ext}");
     }
 
     private ExResult ExecuteLspReset(string rest)
     {
-        var ext = LspServerRegistry.NormalizeExt(rest.Trim());
+        if (lspServerAdmin is null) return new ExResult(false, NoAdmin);
+
+        var ext = LspExtensions.NormalizeExt(rest.Trim());
         if (ext.Length == 0)
             return new ExResult(false, "Usage: :LspReset <ext>");
 
-        return lspRegistry.Reset(ext)
-            ? new ExResult(true, $"LSP: reset {ext} to its built-in default (reopen the file to apply)")
+        return lspServerAdmin.Reset(ext)
+            ? new ExResult(true, $"LSP: reset {ext} to its built-in default")
             : new ExResult(false, $"LSP: nothing to reset for {ext}");
     }
 

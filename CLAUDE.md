@@ -82,12 +82,29 @@ The layout is: Title bar (30 px) → main area with Activity Bar (48 px vertical
 
 ## LSP (Language Server Protocol)
 
-LSP support lives in two layers:
+**The editor does not own an LSP session — the host does.** The split is "processes and protocol are
+workspace-scoped, UI state is view-scoped":
 
-- **`Editor.Core/Lsp/`** — `ILspClient`, `LspModels`, `LspServerRegistry` (extension → server command map; pure .NET, no WPF)
-- **`Editor.Controls.Defaults/Lsp/`** — `LspProcess` (JSON-RPC 2.0 over stdio), `LspClient` (implements `ILspClient`), `LspManager` (bridges `VimEditorControl` with LSP)
+- **`Editor.Core/Lsp/`** — the contracts. `ILspWorkspace` (the host's session: server pooling,
+  `initialize`, document reference counting, `workspace/symbol`, workspace diagnostics, call/type
+  hierarchy), `ILspDocument` (one handle on one open URI — document-scope requests + `didChange`),
+  `ILspServerAdmin` (write access to the extension→server table), plus `ILspClient`, `LspModels`,
+  `LspServerDef`/`LspServerEntry`/`LspExtensions`. Pure .NET, no WPF.
+- **`Editor.Controls/Lsp/`** — `IEditorLspView` and `LspViewBridge`: one per `VimEditorControl`,
+  holding **only** view state (completion / signature-help / code-action popups, breadcrumb, folding,
+  inlay hints, semantic tokens, highlights) over a single `ILspDocument` handle. `NullLspView` is used
+  when no host supplied a workspace.
+- **`Editor.Controls.Defaults/Lsp/`** — reusable protocol parts a host implementation builds on:
+  `LspProcess` (JSON-RPC 2.0 over stdio), `LspClient` (implements `ILspClient`), `JobObject`.
 
-`LspManager` is owned by `VimEditorControl`. It starts/shares language server processes per executable, syncs documents, and fires `StateChanged` to update `EditorCanvas` diagnostics and completion popup.
+Enable LSP by passing `VimEditorControlOptions.LspWorkspace` (and `LspServerAdmin` for the `:Lsp*`
+commands). `VimEditorControlDefaults.CreateOptions()` deliberately supplies **neither** — a standalone
+editor runs with LSP off, because a session needs workspace roots and a process lifetime policy that
+only a host can define.
+
+**Threading contract:** `ILspWorkspace` / `ILspDocument` events fire on **background threads** (the
+JSON-RPC read loop). Marshalling to a dispatcher is the subscriber's job — `LspViewBridge` is what does
+it for the control, and every member/event of `IEditorLspView` is dispatcher-thread only.
 
 **Key bindings:**
 - `K` (Normal mode) — hover info shown in status bar
@@ -96,17 +113,22 @@ LSP support lives in two layers:
 - `Tab`/`Enter` — insert selected completion item
 - `Escape` — dismiss completion
 
-**Built-in servers** (auto-detected by file extension, must be installed separately):
-`csharp-ls` (.cs), `pylsp` (.py), `typescript-language-server` (.ts/.js), `rust-analyzer` (.rs), `gopls` (.go), `clangd` (.c/.cpp), `lua-language-server` (.lua), `solargraph` (.rb), `marksman` (.md/.markdown)
-
-**Server registry & user configuration:** the extension→server map is `LspServerRegistry` (`Editor.Core/Lsp/LspServerRegistry.cs`). It layers user changes (additions, replacements, hidden built-ins) over the built-in table and **persists them as JSON** to `%APPDATA%/sk0ya.Editor/lsp-servers.json`, so the configured set survives restarts. `LspServerRegistry.Default` is the process-wide singleton shared by `LspManager` (which resolves servers through it) and the ex commands below; `LspManager(dispatcher, registry?)` and `ExCommandProcessor(..., lspRegistry?)` both default to it (tests inject an in-memory instance by passing a registry with no store path). The editor owns this config — hosts only **enable** LSP by supplying `VimEditorControlOptions.LspManagerFactory` (`VimEditorControlDefaults.CreateOptions()` wires `new LspManager(d)`).
+**Server table & user configuration:** the extension→server map is **not** in this repo. It belongs to
+the host, reached through `ILspServerAdmin`, because the executable is inseparable from the things a
+host owns anyway (install commands, PATH detection, the settings UI). There is no `LspServerRegistry`
+and no process-wide default — a "compatibility factory that news up an instance per access" is exactly
+the trap that produced three divergent registries before this was split.
 
 **Managing servers (user-facing, ex commands):**
 - `:Lsp` / `:LspList` — show the effective extension→command table (built-in / custom / removed).
 - `:LspAdd <ext> <executable> [args...]` — register or replace a server (e.g. `:LspAdd .zig zls`).
 - `:LspRemove <ext>` — drop a custom server, or hide a built-in.
 - `:LspReset <ext>` — discard user changes for an extension, restoring the built-in default.
-Changes apply to a file when it is (re)opened. Adding a new built-in default still means adding an entry to `LspServerRegistry`'s `Builtins` table.
+
+These are an **input frontend only**: they delegate to the injected `ILspServerAdmin`, so they act on
+the very table the host's settings UI and its `ILspWorkspace` use. With no admin injected they answer
+"LSP: server configuration is not available in this host". Whether a change takes effect immediately
+or on reopen is the host implementation's call.
 
 **Diagnostics** are rendered as wavy underlines on `EditorCanvas`. Colors are defined on `EditorTheme` (`DiagnosticError`, `DiagnosticWarning`, `DiagnosticInfo`, `DiagnosticHint`).
 
@@ -114,9 +136,9 @@ Changes apply to a file when it is (re)opened. Adding a new built-in default sti
 
 `:Format` (also the "Format Document" context-menu item) is handled by `VimEditorControl.HandleFormatDocumentAsync`. It is **not** LSP-only — many text-LSP servers (e.g. `marksman`) never implement `textDocument/formatting`, so there is a CLI-formatter layer alongside it:
 
-**Range/selection formatting:** `:Format` accepts an ex range — `:'<,'>Format`, `:10,20Format`, `:%Format`. Pressing `:` in Visual mode prefills the line range, so selecting text and typing `:Format` formats just the selection ("Format Selection" in the context menu does the same). The range travels as `FormatDocumentRequestedEvent(StartLine, EndLine)` (0-based inclusive, null = whole document). LSP uses `textDocument/rangeFormatting` (`IEditorLspManager.RequestRangeFormattingAsync`); when the server doesn't advertise `documentRangeFormattingProvider` the request is **refused rather than widened** to the whole document. CLI formatters are stdin→stdout over a whole document, so a range format feeds the formatter only the selected lines, dedented to column 0 and re-indented afterwards (otherwise the formatter flattens a nested block). That slicing lives in `Editor.Core/Formatting/LineRangeText.cs` (pure, tested in `LineRangeTextTests`).
+**Range/selection formatting:** `:Format` accepts an ex range — `:'<,'>Format`, `:10,20Format`, `:%Format`. Pressing `:` in Visual mode prefills the line range, so selecting text and typing `:Format` formats just the selection ("Format Selection" in the context menu does the same). The range travels as `FormatDocumentRequestedEvent(StartLine, EndLine)` (0-based inclusive, null = whole document). LSP uses `textDocument/rangeFormatting` (`IEditorLspView.RequestRangeFormattingAsync`); when the server doesn't advertise `documentRangeFormattingProvider` the request is **refused rather than widened** to the whole document. CLI formatters are stdin→stdout over a whole document, so a range format feeds the formatter only the selected lines, dedented to column 0 and re-indented afterwards (otherwise the formatter flattens a nested block). That slicing lives in `Editor.Core/Formatting/LineRangeText.cs` (pure, tested in `LineRangeTextTests`).
 
-- **`Editor.Core/Formatting/FormatterRegistry.cs`** — extension→CLI-formatter map (`FormatterDef(Executable, Args)`, **stdin→stdout** convention; `{file}` in `Args` is replaced with the current path). Pure .NET, no WPF. Mirrors `LspServerRegistry` (`Default` singleton, `ConfigureDefault(path)`, JSON persistence to `%APPDATA%/sk0ya.Editor/formatters.json`) but ships **no built-in active mappings**.
+- **`Editor.Core/Formatting/FormatterRegistry.cs`** — extension→CLI-formatter map (`FormatterDef(Executable, Args)`, **stdin→stdout** convention; `{file}` in `Args` is replaced with the current path). Pure .NET, no WPF. Has a `Default` factory + `ConfigureDefault(path)` and JSON persistence to `%APPDATA%/sk0ya.Editor/formatters.json`, but ships **no built-in active mappings**. It still carries the same host-ownership defect the LSP table was split out for (see the Loomo design docs §30.9) — a later change moves it to the host too.
 - **`Editor.Core/Formatting/KnownFormatters.cs`** — suggestion-only candidate catalog per extension (prettier/dprint/black/rustfmt/gofmt/…), **never auto-activated**.
 - **`Editor.Controls/Formatting/FormatterRunner.cs`** — runs the formatter as a one-shot child process (buffer → stdin, stdout → buffer, UTF-8/no-BOM, timeout). A non-zero exit or launch failure returns an error and leaves the buffer **untouched**. `IsOnPath` probes PATH (+PATHEXT).
 

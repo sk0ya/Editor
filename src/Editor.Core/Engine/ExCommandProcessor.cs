@@ -52,7 +52,7 @@ public class ExCommandProcessor
         Dictionary<string, string>? visualMaps = null, Dictionary<string, string>? variables = null,
         IReadOnlyList<string>? scriptNames = null,
         Dictionary<string, VimFunctionDefinition>? functions = null,
-        LspServerRegistry? lspRegistry = null, FormatterRegistry? formatterRegistry = null,
+        ILspServerAdmin? lspServerAdmin = null, FormatterRegistry? formatterRegistry = null,
         EditorCommandRegistry? commandRegistry = null,
         IServiceProvider? services = null)
     {
@@ -66,7 +66,7 @@ public class ExCommandProcessor
         _visualMaps = visualMaps ?? [];
         _scriptNames = scriptNames ?? [];
         _lspCommands = new ExCommands.LspCommands(
-            lspRegistry ?? new LspServerRegistry(),
+            lspServerAdmin,
             formatterRegistry ?? new FormatterRegistry());
         _fileOpsCommands = new ExCommands.FileOpsCommands(bufferManager, options);
         _rangeResolver = new ExCommands.RangeResolver(markManager);

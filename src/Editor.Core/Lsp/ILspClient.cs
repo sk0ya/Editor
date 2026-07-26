@@ -25,7 +25,15 @@ public interface ILspClient : IDisposable
     SemanticTokensLegend? SemanticTokensLegend { get; }
     event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
 
+    /// <summary>プロセス/接続が <see cref="IDisposable.Dispose"/> 以外の理由で死んだとき1回だけ発火する。
+    /// ホスト側のプールがこれを見て作り直す。</summary>
+    event Action? Exited;
+
     Task InitializeAsync(string rootUri);
+
+    /// <summary>マルチルート初期化。ホストが実フォルダー一覧を持つ場合は全件渡す
+    /// （<c>--autoLoadProjects</c> の Roslyn 等は rootUri ではなく workspaceFolders を見る）。</summary>
+    Task InitializeAsync(string rootUri, IReadOnlyList<string>? workspaceFolderPaths);
     Task OpenDocumentAsync(string uri, string languageId, string text);
     Task ChangeDocumentAsync(string uri, int version, string text);
     Task CloseDocumentAsync(string uri);

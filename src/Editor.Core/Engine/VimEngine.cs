@@ -24,7 +24,8 @@ public class VimEngine
         VimKeyBindingRegistry? keyBindings = null,
         NormalCommandRegistry? normalCommands = null,
         CommandGrammar? commandGrammar = null,
-        VimEngineServices? engineServices = null)
+        VimEngineServices? engineServices = null,
+        Lsp.ILspServerAdmin? lspServerAdmin = null)
     {
         _runtime = new VimEngineRuntime(
             this,
@@ -35,7 +36,8 @@ public class VimEngine
             keyBindings,
             normalCommands,
             commandGrammar,
-            engineServices);
+            engineServices,
+            lspServerAdmin);
     }
 
     public Func<int, int, int, int, int>? VerticalColumnResolver

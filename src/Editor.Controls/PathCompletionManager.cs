@@ -18,7 +18,7 @@ namespace Editor.Controls;
 public sealed class PathCompletionManager(
     VimEngine engine,
     EditorCanvas canvas,
-    IEditorLspManager lspManager,
+    IEditorLspView lspManager,
     Action<string, bool, bool, bool> processKey)
 {
     private List<LspCompletionItem> _items = [];

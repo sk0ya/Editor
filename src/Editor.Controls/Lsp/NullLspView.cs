@@ -1,10 +1,11 @@
-using System.Threading;
 using Editor.Core.Lsp;
 
 namespace Editor.Controls.Lsp;
 
-internal sealed class NullLspManager : IEditorLspManager
+/// <summary>The view used when no host injected an <see cref="ILspWorkspace"/> — LSP is simply off.</summary>
+internal sealed class NullLspView : IEditorLspView
 {
+    public ILspDocument? Document => null;
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => [];
     public IReadOnlyList<LspCompletionItem> CompletionItems => [];
     public int CompletionSelection => -1;
@@ -19,7 +20,6 @@ internal sealed class NullLspManager : IEditorLspManager
     public bool IsDocumentReady => false;
     public bool ServerSupportsFoldingRange => false;
     public bool ServerSupportsRangeFormatting => false;
-    public bool ServerSupportsWorkspaceDiagnostics => false;
     public string? CurrentUri => null;
 
     public event Action<string>? StatusMessage { add { } remove { } }
@@ -111,27 +111,6 @@ internal sealed class NullLspManager : IEditorLspManager
     {
     }
 
-    public Task<IReadOnlyList<LspSymbolInformation>> GetWorkspaceSymbolsAsync(string query, bool isClass, CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<LspSymbolInformation>>([]);
-
-    public Task<CallHierarchyItem?> PrepareCallHierarchyAsync(int line, int character) =>
-        Task.FromResult<CallHierarchyItem?>(null);
-
-    public Task<CallHierarchyIncomingCall[]?> GetIncomingCallsAsync(CallHierarchyItem item) =>
-        Task.FromResult<CallHierarchyIncomingCall[]?>(null);
-
-    public Task<CallHierarchyOutgoingCall[]?> GetOutgoingCallsAsync(CallHierarchyItem item) =>
-        Task.FromResult<CallHierarchyOutgoingCall[]?>(null);
-
-    public Task<TypeHierarchyItem?> PrepareTypeHierarchyAsync(int line, int character) =>
-        Task.FromResult<TypeHierarchyItem?>(null);
-
-    public Task<TypeHierarchyItem[]?> GetSupertypesAsync(TypeHierarchyItem item) =>
-        Task.FromResult<TypeHierarchyItem[]?>(null);
-
-    public Task<TypeHierarchyItem[]?> GetSubtypesAsync(TypeHierarchyItem item) =>
-        Task.FromResult<TypeHierarchyItem[]?>(null);
-
     public Task RequestDocumentHighlightAsync(string uri, int line, int character) => Task.CompletedTask;
 
     public void ClearDocumentHighlights()
@@ -160,9 +139,6 @@ internal sealed class NullLspManager : IEditorLspManager
     public void RequestSemanticTokens()
     {
     }
-
-    public Task<LspWorkspaceDiagnosticResult?> RequestWorkspaceDiagnosticsAsync(CancellationToken ct = default) =>
-        Task.FromResult<LspWorkspaceDiagnosticResult?>(null);
 
     public void Dispose()
     {

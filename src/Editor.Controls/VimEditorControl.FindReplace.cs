@@ -218,7 +218,7 @@ public partial class VimEditorControl
 
         _engine.CurrentBuffer.Undo.Snapshot(preLines, preCursor);
         UpdateAll();
-        _lspManager.OnTextChanged(buf.GetText());
+        _lspView.OnTextChanged(buf.GetText());
         BufferChanged?.Invoke(this, EventArgs.Empty);
 
         RecomputeFindMatches(jumpToNearest: true);
@@ -258,7 +258,7 @@ public partial class VimEditorControl
 
         _engine.CurrentBuffer.Undo.Snapshot(preLines, preCursor);
         UpdateAll();
-        _lspManager.OnTextChanged(buf.GetText());
+        _lspView.OnTextChanged(buf.GetText());
         BufferChanged?.Invoke(this, EventArgs.Empty);
         ActiveStatusBar.UpdateStatus($"Replaced {count} occurrence(s)");
 

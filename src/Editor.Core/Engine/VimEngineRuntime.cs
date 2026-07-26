@@ -186,7 +186,8 @@ internal sealed class VimEngineRuntime
     internal VimEngineRuntime(VimEngine owner, VimConfig? config = null, SyntaxLanguageRegistry? syntaxLanguages = null,
         EditorCommandRegistry? commands = null, IServiceProvider? services = null,
         VimKeyBindingRegistry? keyBindings = null, NormalCommandRegistry? normalCommands = null,
-        CommandGrammar? commandGrammar = null, VimEngineServices? engineServices = null)
+        CommandGrammar? commandGrammar = null, VimEngineServices? engineServices = null,
+        Lsp.ILspServerAdmin? lspServerAdmin = null)
     {
         engineServices ??= VimEngineServices.CreateIsolated();
         _services = engineServices;
@@ -225,7 +226,7 @@ internal sealed class VimEngineRuntime
         _visualMotions = CreateVisualMotions();
         _exProcessor = new ExCommandProcessor(_bufferManager, _config.Options, _markManager, _config.Abbreviations, _registerManager,
             _config.NormalMaps, _config.InsertMaps, _config.VisualMaps, _config.Variables, _config.ScriptNames, _config.Functions,
-            lspRegistry: engineServices.LspServers,
+            lspServerAdmin: lspServerAdmin,
             formatterRegistry: engineServices.Formatters,
             commandRegistry: commands ?? engineServices.EditorCommands,
             services: services ?? engineServices.CommandServices);

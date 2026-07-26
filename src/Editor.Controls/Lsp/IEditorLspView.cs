@@ -1,11 +1,26 @@
-using System.Threading;
-using System.Windows.Threading;
 using Editor.Core.Lsp;
 
 namespace Editor.Controls.Lsp;
 
-public interface IEditorLspManager : IDisposable
+/// <summary>
+/// The editor control's <b>view</b> onto LSP: popup state (completion, signature help, code actions),
+/// breadcrumb, folding/inlay/semantic-token plumbing, and dispatcher-thread marshalling of everything
+/// the session pushes at it. One instance per <see cref="VimEditorControl"/>.
+///
+/// <para>It owns no processes and no protocol state — those belong to the host's
+/// <see cref="ILspWorkspace"/>, from which this view takes a single <see cref="ILspDocument"/> handle
+/// for the buffer it is showing. Workspace-scope queries (symbol search, workspace diagnostics,
+/// call/type hierarchy) are deliberately absent here: ask the workspace, not a tab.</para>
+///
+/// <para><b>Threading:</b> unlike <see cref="ILspWorkspace"/>, every member and event of this interface
+/// is dispatcher-thread only. The implementation is what marshals the workspace's background-thread
+/// events onto the UI thread.</para>
+/// </summary>
+public interface IEditorLspView : IDisposable
 {
+    /// <summary>The document handle for the buffer currently shown, or null when the file has no server.</summary>
+    ILspDocument? Document { get; }
+
     IReadOnlyList<LspDiagnostic> CurrentDiagnostics { get; }
     IReadOnlyList<LspCompletionItem> CompletionItems { get; }
     int CompletionSelection { get; }
@@ -20,7 +35,6 @@ public interface IEditorLspManager : IDisposable
     bool IsDocumentReady { get; }
     bool ServerSupportsFoldingRange { get; }
     bool ServerSupportsRangeFormatting { get; }
-    bool ServerSupportsWorkspaceDiagnostics { get; }
     string? CurrentUri { get; }
 
     event Action<string>? StatusMessage;
@@ -62,13 +76,6 @@ public interface IEditorLspManager : IDisposable
     IReadOnlyList<BreadcrumbSegment> GetBreadcrumbSegments(int line, int col);
     void UpdateBreadcrumb(int line, int col);
     void ClearBreadcrumb();
-    Task<IReadOnlyList<LspSymbolInformation>> GetWorkspaceSymbolsAsync(string query, bool isClass, CancellationToken ct = default);
-    Task<CallHierarchyItem?> PrepareCallHierarchyAsync(int line, int character);
-    Task<CallHierarchyIncomingCall[]?> GetIncomingCallsAsync(CallHierarchyItem item);
-    Task<CallHierarchyOutgoingCall[]?> GetOutgoingCallsAsync(CallHierarchyItem item);
-    Task<TypeHierarchyItem?> PrepareTypeHierarchyAsync(int line, int character);
-    Task<TypeHierarchyItem[]?> GetSupertypesAsync(TypeHierarchyItem item);
-    Task<TypeHierarchyItem[]?> GetSubtypesAsync(TypeHierarchyItem item);
     Task RequestDocumentHighlightAsync(string uri, int line, int character);
     void ClearDocumentHighlights();
     Task<LspSelectionRange?> RequestSelectionRangeAsync(int line, int character);
@@ -77,5 +84,4 @@ public interface IEditorLspManager : IDisposable
     void RequestInlayHints(int startLine, int endLine);
     void SetSemanticTokensEnabled(bool enabled);
     void RequestSemanticTokens();
-    Task<LspWorkspaceDiagnosticResult?> RequestWorkspaceDiagnosticsAsync(CancellationToken ct = default);
 }
