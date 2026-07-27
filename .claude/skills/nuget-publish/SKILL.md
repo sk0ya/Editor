@@ -6,6 +6,7 @@ description: Bump the NuGet package version and publish the Editor package to nu
 # NuGet Publish
 
 Bump the version and publish the Editor package to nuget.org. Just do it — don't ask about scope, keys, or CI.
+The one thing that stops you is an **empty release**: see step 1.
 
 ## Package layout (one published package, all DLLs bundled)
 
@@ -27,21 +28,36 @@ binaries contain that work but the recorded commit points at the *previous* comm
 to sources that don't match the shipped IL, and the package looks like it was built from a stale state.
 This is unfixable after pushing, because a NuGet version can never be re-uploaded.
 
-1. **Find current version**: grep `<Version>` in the three `.csproj` files. They should all match.
-2. **Bump**: increment patch version (e.g. 1.0.29 → 1.0.30) in **all three** `.csproj` files via Edit (kept in sync so assembly versions match), even though only Defaults is packed. Use a higher bump only if the user specifies (minor/major).
-3. **Commit everything** (`git status --short` must come back empty afterwards) — the bump plus any other
+1. **Never publish a version-bump-only release.** A release must ship actual work. Before touching any
+   version number, check that there is something to release:
+   ```
+   git status --short
+   git log --oneline "$(git log -1 --format=%H --grep='^Bump NuGet package to')..HEAD"
+   ```
+   If **both** come back empty, the previous release already shipped everything on `main` and this one
+   would contain nothing but a `<Version>` change. **Stop and say so** — don't bump, don't pack, don't
+   push. Tell the user the last published version and that the tree has no unreleased changes, and ask
+   what they want in the release. Republishing identical bits under a new number burns a version
+   number that can never be reused and makes the version history lie about what changed.
+
+   Proceed only when there is real content: uncommitted work in the tree, or commits on `main` since
+   the last bump commit. (If the user explicitly says they want a bump-only republish anyway — e.g. to
+   recover from a bad upload — that's their call: say it's empty once, then do it.)
+2. **Find current version**: grep `<Version>` in the three `.csproj` files. They should all match.
+3. **Bump**: increment patch version (e.g. 1.0.29 → 1.0.30) in **all three** `.csproj` files via Edit (kept in sync so assembly versions match), even though only Defaults is packed. Use a higher bump only if the user specifies (minor/major).
+4. **Commit everything** (`git status --short` must come back empty afterwards) — the bump plus any other
    pending work that will end up in this release:
    ```
    git add -A && git commit -m "Bump NuGet package to <VER>"
    ```
    End the commit message with the `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer.
    Don't `git push` yet — that comes after nuget.org accepts the package.
-4. **Pack** only the Defaults project:
+5. **Pack** only the Defaults project:
    ```
    dotnet pack src/Editor.Controls.Defaults/Editor.Controls.Defaults.csproj -c Release
    ```
    Output lands at `src/Editor.Controls.Defaults/bin/Release/sk0ya.Editor.Controls.<VER>.nupkg`.
-5. **Verify the package before pushing** — the recorded commit must be the commit from step 3:
+6. **Verify the package before pushing** — the recorded commit must be the commit from step 4:
    ```powershell
    $ver="<VER>"; $sp="$env:TEMP\nupkg-check"; Remove-Item -Recurse -Force $sp -ErrorAction SilentlyContinue
    Expand-Archive "src/Editor.Controls.Defaults/bin/Release/sk0ya.Editor.Controls.$ver.nupkg" $sp
@@ -53,13 +69,13 @@ This is unfixable after pushing, because a NuGet version can never be re-uploade
    Check: nuspec version = `<VER>`; `repository commit=` **equals `git rev-parse HEAD`**; all three DLLs
    present with `ProductVersion` = `<VER>+<HEAD>`; dependency group empty.
    If the commit doesn't match, **stop** — commit the stray changes, re-pack, and re-verify.
-6. **Push** to nuget.org using the `NUGET_API_KEY` env var:
+7. **Push** to nuget.org using the `NUGET_API_KEY` env var:
    ```
    dotnet nuget push src/Editor.Controls.Defaults/bin/Release/sk0ya.Editor.Controls.<VER>.nupkg --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY
    ```
    Replace `<VER>` with the new version.
-7. **Push the commit**: `git push`.
-8. **Report** the new version and confirm the push succeeded ("Created" / "パッケージがプッシュされました") plus the commit hash.
+8. **Push the commit**: `git push`.
+9. **Report** the new version and confirm the push succeeded ("Created" / "パッケージがプッシュされました") plus the commit hash.
 
 ## Notes
 
