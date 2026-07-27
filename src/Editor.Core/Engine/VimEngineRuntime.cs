@@ -1126,7 +1126,7 @@ internal sealed class VimEngineRuntime
         var buf = CurrentBuffer.Text;
         int line = Math.Clamp(old.Line, 0, buf.LineCount - 1);
         int lineLen = buf.GetLine(line).Length;
-        int maxCol = _mode == VimMode.Insert ? lineLen : Math.Max(0, lineLen - 1);
+        int maxCol = _mode is VimMode.Insert or VimMode.Replace ? lineLen : Math.Max(0, lineLen - 1);
         int col = Math.Clamp(old.Column, 0, maxCol);
         _cursor = new CursorPosition(line, col);
         SetPreferredColumn(col);
@@ -1154,7 +1154,7 @@ internal sealed class VimEngineRuntime
         var buf = CurrentBuffer;
         int line = Math.Clamp(pos.Line, 0, buf.Text.LineCount - 1);
         int lineLen = buf.Text.GetLine(line).Length;
-        bool insertMode = _mode == VimMode.Insert;
+        bool insertMode = _mode is VimMode.Insert or VimMode.Replace;
         int maxCol = insertMode ? lineLen : Math.Max(0, lineLen - 1);
         int col = Math.Clamp(pos.Column, 0, maxCol);
         _cursor = new CursorPosition(line, col);
@@ -2078,6 +2078,8 @@ internal sealed class VimEngineRuntime
                 case "o": // Ctrl+O — execute one Normal command then return to Insert
                     _pendingInsertReturn = true;
                     ChangeMode(VimMode.Normal, events, suppressInsertAutocmd: true);
+                    _cursor = CurrentBuffer.Text.ClampCursor(_cursor);
+                    EmitCursor(events);
                     return;
                 case "j": InsertNewline(events); return;
                 case "m": InsertNewline(events); return;
@@ -3207,6 +3209,7 @@ internal sealed class VimEngineRuntime
         _ctrlXMode = '\0';
         _kwCompletionOps.Reset();
         ChangeMode(VimMode.Normal, events);
+        EmitCursor(events);
     }
 
     private void EnterVisualMode(VimMode visualMode, List<VimEvent> events)
@@ -3314,7 +3317,8 @@ internal sealed class VimEngineRuntime
 
     private void MoveCursor(CursorPosition pos, List<VimEvent> events)
     {
-        _cursor = _bufferManager.Current.Text.ClampCursor(pos, _mode == VimMode.Insert);
+        _cursor = _bufferManager.Current.Text.ClampCursor(
+            pos, _mode is VimMode.Insert or VimMode.Replace);
         SetPreferredColumn(_cursor.Column);
         EmitCursor(events);
     }

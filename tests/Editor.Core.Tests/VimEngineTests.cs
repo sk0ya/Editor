@@ -107,6 +107,73 @@ public class VimEngineTests
         Assert.Contains(events, e => e.Type == VimEventType.ModeChanged);
     }
 
+    [Fact]
+    public void Escape_FromInsertAtEndOfLine_ReturnsCursorToLastCharacter()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("A");
+        Assert.Equal(new CursorPosition(0, 5), engine.Cursor);
+
+        var events = engine.ProcessKey("Escape");
+
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        Assert.Equal(new CursorPosition(0, 4), engine.Cursor);
+        Assert.Contains(events, e => e.Type == VimEventType.ModeChanged);
+        Assert.Contains(events, e => e is CursorMovedEvent { Position.Column: 4 });
+    }
+
+    [Fact]
+    public void I_AfterLeavingInsertAtEndOfLine_InsertsBeforeLastCharacter()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("A");
+        engine.ProcessKey("Escape");
+
+        engine.ProcessKey("i");
+        engine.ProcessKey("X");
+
+        Assert.Equal("hellXo", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(new CursorPosition(0, 5), engine.Cursor);
+    }
+
+    [Fact]
+    public void ReplaceMode_SetCursorPosition_AllowsEndOfLineColumn()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("R");
+
+        var events = engine.SetCursorPosition(new CursorPosition(0, 5));
+
+        Assert.Equal(new CursorPosition(0, 5), engine.Cursor);
+        Assert.Contains(events, e => e is CursorMovedEvent { Position.Column: 5 });
+    }
+
+    [Fact]
+    public void ReplaceMode_SetText_PreservesEndOfLineColumn()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("R");
+        engine.SetCursorPosition(new CursorPosition(0, 5));
+
+        engine.SetText("hello!");
+
+        Assert.Equal(new CursorPosition(0, 5), engine.Cursor);
+    }
+
+    [Fact]
+    public void InsertCtrlO_FromEndOfLine_ExecutesNormalCommandOnLastCharacter()
+    {
+        var engine = CreateEngine("hello");
+        engine.ProcessKey("A");
+
+        engine.ProcessKey("o", ctrl: true);
+        engine.ProcessKey("x");
+
+        Assert.Equal("hell", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Equal(new CursorPosition(0, 3), engine.Cursor);
+    }
+
     // The s/C/cw insert-entry commands reposition the cursor with an insert-mode clamp
     // after ExecuteDelete already emitted a normal-mode-clamped CursorMoved. They must
     // re-emit the final cursor so the UI caret lands at the insert position (mirrors the

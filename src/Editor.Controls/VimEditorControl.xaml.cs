@@ -5481,6 +5481,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                     if (IsImeTextInputMode(me.Mode))
                         AssertImeStoreFocus();
                     ActiveStatusBar.UpdateMode(me.Mode, _engine.VimEnabled, _engine.Options.ShowMode);
+                    // Mode transitions can also change which cursor columns are valid
+                    // (Insert/Replace allow EOL; Normal does not). Re-read the engine cursor
+                    // here as a safety net so the canvas cannot retain a pre-transition EOL
+                    // caret even if a transition-specific CursorMoved event is omitted.
+                    Canvas.SetCursor(_engine.Cursor);
                     Canvas.SetMode(me.Mode);
                     ModeChanged?.Invoke(this, new ModeChangedEventArgs(me.Mode));
                     break;
