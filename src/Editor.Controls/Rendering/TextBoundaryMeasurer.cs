@@ -19,13 +19,34 @@ internal static class TextBoundaryMeasurer
         using var formatter = TextFormatter.Create();
         var runProperties = new RunProperties(typeface, fontSize, pixelsPerDip);
         var source = new StringTextSource(text, runProperties);
-        // WPF caps paragraph widths at roughly 3.58 million DIPs. This is effectively
-        // unbounded for an editor line while remaining valid for TextFormatter.
-        using var line = formatter.FormatLine(source, 0, 1_000_000,
-            new ParagraphProperties(runProperties), null);
+        var paragraphProperties = new ParagraphProperties(runProperties);
 
-        for (int i = 1; i <= text.Length; i++)
-            boundaries[i] = line.GetDistanceFromCharacterHit(new CharacterHit(i, 0));
+        // One TextLine does not necessarily cover the whole string: even with NoWrap,
+        // TextFormatter stops at the paragraph width, so a very long line (a minified bundle,
+        // a base64 data URL) comes back truncated - and asking a truncated line for a character
+        // beyond its end throws ("cpFirst must be greater than or equal to 1"). Format
+        // successive lines from where the previous one ended and accumulate their widths.
+        int start = 0;
+        double offset = 0;
+        while (start < text.Length)
+        {
+            // WPF caps paragraph widths at roughly 3.58 million DIPs. This is effectively
+            // unbounded for an editor line while remaining valid for TextFormatter.
+            using var line = formatter.FormatLine(source, start, 1_000_000,
+                paragraphProperties, null);
+            // line.Length counts the end-of-paragraph run on the final chunk, so clamp to the text.
+            int end = Math.Min(start + line.Length, text.Length);
+            if (end <= start)
+                break;      // no progress (should not happen): leave the rest at the last width
+            for (int i = start + 1; i <= end; i++)
+                boundaries[i] = offset + line.GetDistanceFromCharacterHit(new CharacterHit(i, 0));
+            offset = boundaries[end];
+            start = end;
+        }
+        // Anything left unmeasured (the break above) keeps the last measured width, which
+        // degrades placement instead of throwing.
+        for (int i = start + 1; i <= text.Length; i++)
+            boundaries[i] = offset;
 
         return boundaries;
     }
