@@ -86,6 +86,7 @@ public class SnippetManager
 
         // Build the expanded text, collecting tab stop positions as we go.
         var tabStops = new Dictionary<int, (int absLine, int absCol, int len)>();
+        var placeholderDefaults = new Dictionary<int, string>();
 
         var sb = new StringBuilder();
         int currentLine = insertLine;
@@ -108,6 +109,10 @@ public class SnippetManager
                 if (colonIdx >= 0)
                     defaultText = fullStop[(colonIdx + 1)..^1]; // strip trailing }
             }
+            if (defaultText.Length > 0)
+                placeholderDefaults.TryAdd(stopIdx, defaultText);
+            else if (placeholderDefaults.TryGetValue(stopIdx, out var mirroredDefault))
+                defaultText = mirroredDefault;
 
             int stopLine = currentLine;
             int stopCol  = currentCol;

@@ -35,6 +35,7 @@ public interface IEditorLspView : IDisposable
     bool IsDocumentReady { get; }
     bool ServerSupportsFoldingRange { get; }
     bool ServerSupportsRangeFormatting { get; }
+    IReadOnlyList<string> CompletionTriggerCharacters => ["."];
     string? CurrentUri { get; }
 
     event Action<string>? StatusMessage;
@@ -58,6 +59,7 @@ public interface IEditorLspView : IDisposable
     LspCompletionItem? GetSelectedCompletion();
     void FilterCompletion(string prefix);
     void HideCompletion();
+    void RecordCompletionAccepted(LspCompletionItem item) { }
     Task RequestSignatureHelpAsync(int line, int character);
     void HideSignatureHelp();
     Task<LspWorkspaceEdit?> RequestRenameAsync(int line, int character, string newName);

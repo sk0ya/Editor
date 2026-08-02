@@ -99,6 +99,12 @@ public sealed class SnippetTabStopManager(
                 processKey("Return", false, false, false);
         }
 
+        Arm(expansion);
+    }
+
+    /// <summary>本文を別経路で一括適用済みの場合に、展開済みsnippetのtab stopだけを有効化する。</summary>
+    public void Arm(SnippetExpansion expansion)
+    {
         // Arm tab stops (skip if there's only $0 — nothing to navigate)
         if (expansion.TabStops.Count > 1)
         {

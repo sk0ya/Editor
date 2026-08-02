@@ -36,6 +36,9 @@ public interface ILspDocument : IDisposable
     /// </summary>
     bool IsWriter { get; }
 
+    /// <summary>現在サーバーへ通知済みの文書版。ホストが版を管理しない場合は null。</summary>
+    int? Version => null;
+
     /// <summary>The most recent <c>publishDiagnostics</c> payload for this URI (shared by every handle on it).</summary>
     IReadOnlyList<LspDiagnostic> CurrentDiagnostics { get; }
 
@@ -43,6 +46,7 @@ public interface ILspDocument : IDisposable
     bool ServerSupportsRangeFormatting { get; }
     bool ServerSupportsSelectionRange { get; }
     bool ServerSupportsWorkspaceDiagnostics { get; }
+    IReadOnlyList<string> CompletionTriggerCharacters => ["."];
 
     /// <summary>Mirror the buffer text to the server (<c>didChange</c>). No-op when <see cref="IsWriter"/> is false.</summary>
     void UpdateText(string text);

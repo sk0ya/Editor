@@ -1,10 +1,37 @@
 using System.Text.Json;
 using Editor.Controls.Lsp;
+using Editor.Core.Lsp;
 
 namespace Editor.Controls.Tests;
 
 public sealed class LspProtocolTests
 {
+    [Fact]
+    public void Completion_trigger_characters_are_read_from_server_capabilities()
+    {
+        using var json = JsonDocument.Parse("""{"completionProvider":{"triggerCharacters":[".",":","."]}}""");
+        Assert.Equal([".", ":"], LspClient.ParseCompletionTriggerCharacters(json.RootElement));
+    }
+
+    [Fact]
+    public void Completion_parser_preserves_ranking_edit_snippet_and_commit_metadata()
+    {
+        using var json = JsonDocument.Parse("""
+        [{"label":"WriteLine","kind":2,"sortText":"001","filterText":"write","preselect":true,
+          "insertTextFormat":2,"deprecated":true,"commitCharacters":[".","("],
+          "textEdit":{"range":{"start":{"line":2,"character":3},"end":{"line":2,"character":5}},
+                      "newText":"WriteLine(${1:value})$0"}}]
+        """);
+        var item = Assert.Single(LspClient.ParseCompletionResult(json.RootElement));
+        Assert.Equal("001", item.SortText);
+        Assert.True(item.Preselect);
+        Assert.True(item.Deprecated);
+        Assert.Equal(InsertTextFormat.Snippet, item.TextFormat);
+        Assert.Equal([".", "("], item.CommitCharacters);
+        Assert.Equal(new LspPosition(2, 3), item.TextEdit!.Range.Start);
+        Assert.Equal("WriteLine(${1:value})$0", item.TextEdit.NewText);
+    }
+
     [Fact]
     public void Initialize_workspace_folder_contains_root_uri_and_directory_name()
     {
@@ -76,6 +103,21 @@ public sealed class LspProtocolTests
 
         using var response = JsonDocument.Parse(JsonSerializer.Serialize(result));
         Assert.False(response.RootElement.GetProperty("applied").GetBoolean());
+    }
+
+    [Fact]
+    public void Workspace_edit_preserves_document_version_for_stale_edit_detection()
+    {
+        using var json = JsonDocument.Parse("""
+            {"documentChanges":[{"textDocument":{"uri":"file:///C:/work/a.cs","version":7},
+              "edits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"newText":"A"}]}]}
+            """);
+
+        var edit = Assert.IsType<Editor.Core.Lsp.LspWorkspaceEdit>(
+            LspClient.ParseWorkspaceEdit(json.RootElement));
+
+        Assert.Equal(7, edit.DocumentVersions!["file:///C:/work/a.cs"]);
+        Assert.Single(edit.Changes["file:///C:/work/a.cs"]);
     }
 
     [Fact]

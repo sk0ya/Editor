@@ -23,6 +23,7 @@ public sealed class LspViewBridge : IEditorLspView
     private string? _currentUri;
     private bool _documentReady;   // mirrored onto the dispatcher thread from the handle
     private bool _viewDisposed;
+    private long _documentGeneration;
 
     // Set after the document opens so that the first publishDiagnostics triggers a fold range retry.
     // (Some servers are not ready to answer foldingRange immediately after didOpen.)
@@ -103,6 +104,7 @@ public sealed class LspViewBridge : IEditorLspView
 
     /// <summary>現在のサーバーが textDocument/rangeFormatting をサポートしているか。</summary>
     public bool ServerSupportsRangeFormatting => _document?.ServerSupportsRangeFormatting == true;
+    public IReadOnlyList<string> CompletionTriggerCharacters => _document?.CompletionTriggerCharacters ?? ["."];
 
     /// <summary>Fired on the dispatcher thread for status bar messages.</summary>
     public event Action<string>? StatusMessage;
@@ -263,6 +265,12 @@ public sealed class LspViewBridge : IEditorLspView
     /// <summary>Call whenever text content changes.</summary>
     public void OnTextChanged(string text)
     {
+        Interlocked.Increment(ref _documentGeneration);
+        if (_codeActionsVisible)
+        {
+            HideCodeActions();
+            StatusMessage?.Invoke("Code Action: 文書が変更されたため候補を破棄しました。再度実行してください。");
+        }
         var doc = _document;
         if (doc == null) return;
         doc.UpdateText(text);
@@ -352,6 +360,7 @@ public sealed class LspViewBridge : IEditorLspView
         _completionCts?.Dispose();
         _completionCts = new CancellationTokenSource();
         var requestCts = _completionCts;
+        var documentGeneration = Volatile.Read(ref _documentGeneration);
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
             requestCts.Token, timeoutCts.Token);
@@ -371,12 +380,20 @@ public sealed class LspViewBridge : IEditorLspView
             Log("[LSP] completion request timed out");
             return "LSP: completion request timed out";
         }
+        catch (Exception ex)
+        {
+            if (!ReferenceEquals(_completionCts, requestCts)) return null;
+            Log($"[LSP] completion request failed: {ex.Message}");
+            return $"LSP: completion failed — {ex.Message}";
+        }
 
         Log($"[LSP] completion got {items.Count} items");
 
-        if (ct.IsCancellationRequested)
+        if (ct.IsCancellationRequested || !ReferenceEquals(doc, _document) ||
+            documentGeneration != Volatile.Read(ref _documentGeneration))
         {
-            Log("[LSP] completion response discarded (superseded)");
+            Log($"[LSP] completion response discarded reason=" +
+                (ct.IsCancellationRequested ? "superseded" : "document-modified"));
             return null;
         }
 
@@ -385,11 +402,12 @@ public sealed class LspViewBridge : IEditorLspView
         {
             // Re-check on the dispatcher thread: a newer request or an explicit
             // HideCompletion may have happened while this apply was queued.
-            if (ct.IsCancellationRequested) return;
+            if (ct.IsCancellationRequested || !ReferenceEquals(doc, _document) ||
+                documentGeneration != Volatile.Read(ref _documentGeneration)) return;
             _rawCompletionItems = items;
-            _completionItems = items;
-            _completionSelection = items.Count > 0 ? 0 : -1;
-            _completionScrollOffset = 0;
+            _completionItems = CompletionRanker.Rank(items, "");
+            _completionSelection = FindInitialSelection(_completionItems);
+            _completionScrollOffset = InitialScrollOffset(_completionSelection);
             _completionVisible = items.Count > 0;
             applied = true;
             StateChanged?.Invoke();
@@ -449,11 +467,7 @@ public sealed class LspViewBridge : IEditorLspView
     {
         if (_rawCompletionItems.Count == 0) return;
 
-        IReadOnlyList<LspCompletionItem> filtered = string.IsNullOrEmpty(prefix)
-            ? _rawCompletionItems
-            : (IReadOnlyList<LspCompletionItem>)_rawCompletionItems
-                .Where(i => (i.FilterText ?? i.Label).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+        IReadOnlyList<LspCompletionItem> filtered = CompletionRanker.Rank(_rawCompletionItems, prefix);
 
         if (filtered.Count == 0)
         {
@@ -463,10 +477,20 @@ public sealed class LspViewBridge : IEditorLspView
 
         _completionItems = filtered;
         _completionVisible = true;
-        _completionSelection = 0;
-        _completionScrollOffset = 0;
+        _completionSelection = FindInitialSelection(filtered);
+        _completionScrollOffset = InitialScrollOffset(_completionSelection);
         StateChanged?.Invoke();
     }
+
+    internal static int FindInitialSelection(IReadOnlyList<LspCompletionItem> items)
+    {
+        if (items.Count == 0) return -1;
+        var preselected = items.ToList().FindIndex(i => i.Preselect);
+        return preselected >= 0 ? preselected : 0;
+    }
+
+    internal static int InitialScrollOffset(int selection) =>
+        selection < MaxVisibleCompletion ? 0 : selection - MaxVisibleCompletion + 1;
 
     public void HideCompletion()
     {
@@ -483,6 +507,9 @@ public sealed class LspViewBridge : IEditorLspView
         _completionScrollOffset = 0;
         StateChanged?.Invoke();
     }
+
+    public void RecordCompletionAccepted(LspCompletionItem item) =>
+        Log($"[LSP] completion accepted label={item.Label} kind={item.Kind} textEdit={item.TextEdit is not null} snippet={item.TextFormat == InsertTextFormat.Snippet}");
 
     /// <summary>Request signature help at the given position.</summary>
     public async Task RequestSignatureHelpAsync(int line, int character)
@@ -549,7 +576,14 @@ public sealed class LspViewBridge : IEditorLspView
     {
         var doc = _document;
         if (!_documentReady || doc?.IsConnected != true) return [];
-        return await doc.RequestCodeActionsAsync(line, character);
+        var generation = Volatile.Read(ref _documentGeneration);
+        var actions = await doc.RequestCodeActionsAsync(line, character);
+        if (!ReferenceEquals(doc, _document) || generation != Volatile.Read(ref _documentGeneration))
+        {
+            StatusMessage?.Invoke("Code Action: 文書が変更されたため古い応答を破棄しました。再度実行してください。");
+            return [];
+        }
+        return actions;
     }
 
     /// <summary>Show code actions popup with the given items.</summary>
@@ -815,9 +849,12 @@ public sealed class LspViewBridge : IEditorLspView
     // ── Debug log ──────────────────────────────────────────────────────────
 
     private static readonly string _logPath = Path.Combine(Path.GetTempPath(), "editor-lsp-debug.log");
+    private static readonly bool _diagnosticLogEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("SK0YA_EDITOR_IDE_DIAG"), "1", StringComparison.Ordinal);
 
     private static void Log(string msg)
     {
+        if (!_diagnosticLogEnabled) return;
         try { File.AppendAllText(_logPath, $"[{DateTime.Now:HH:mm:ss.fff}] {msg}\n"); }
         catch { }
     }

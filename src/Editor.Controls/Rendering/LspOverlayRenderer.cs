@@ -142,8 +142,11 @@ internal static class LspOverlayRenderer
         for (int i = 0; i < count; i++)
         {
             var item = completionItems[scrollOffset + i];
-            var label = item.Detail != null ? $"{item.Label}  {item.Detail}" : item.Label;
+            var kind = CompletionKindLabel(item.Kind);
+            var label = item.Detail != null ? $"[{kind}] {item.Label}  {item.Detail}" : $"[{kind}] {item.Label}";
             var ft = metrics.FormatText(label, theme.Foreground);
+            if (item.Deprecated)
+                ft.SetTextDecorations(TextDecorations.Strikethrough);
             texts[i] = ft;
             maxW = Math.Max(maxW, ft.Width);
         }
@@ -248,6 +251,23 @@ internal static class LspOverlayRenderer
         CompletionItemKind.Keyword => theme.TokenKeyword,
         CompletionItemKind.Snippet => theme.TokenString,
         _ => theme.TokenIdentifier
+    };
+
+    private static string CompletionKindLabel(CompletionItemKind kind) => kind switch
+    {
+        CompletionItemKind.Method => "M",
+        CompletionItemKind.Function => "F",
+        CompletionItemKind.Constructor => "C",
+        CompletionItemKind.Property => "P",
+        CompletionItemKind.Field => "Fld",
+        CompletionItemKind.Variable => "V",
+        CompletionItemKind.Class => "Cls",
+        CompletionItemKind.Interface => "I",
+        CompletionItemKind.Module => "Mod",
+        CompletionItemKind.Keyword => "K",
+        CompletionItemKind.Snippet => "Snip",
+        CompletionItemKind.File => "File",
+        _ => "T",
     };
 
     public static void DrawCodeActionPopup(

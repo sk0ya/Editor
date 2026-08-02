@@ -42,6 +42,15 @@ public class OpenFileRequestedEventArgs(string filePath, int line = 0, int colum
     public int Line { get; } = line;
     public int Column { get; } = column;
 }
+public sealed class WorkspaceEditRequestedEventArgs(
+    IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> changes,
+    IReadOnlyDictionary<string, int?>? documentVersions) : EventArgs
+{
+    public IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> Changes { get; } = changes;
+    public IReadOnlyDictionary<string, int?>? DocumentVersions { get; } = documentVersions;
+    public bool Handled { get; set; }
+    public string? Error { get; set; }
+}
 public class NewTabRequestedEventArgs(string? filePath) : EventArgs
 {
     public string? FilePath { get; } = filePath;
@@ -444,6 +453,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     public event EventHandler<SaveRequestedEventArgs>? SaveRequested;
     public event EventHandler<QuitRequestedEventArgs>? QuitRequested;
     public event EventHandler<OpenFileRequestedEventArgs>? OpenFileRequested;
+    /// <summary>複数文書のLSP編集のうち、現在バッファ以外をホストへ適用依頼する。</summary>
+    public event EventHandler<WorkspaceEditRequestedEventArgs>? WorkspaceEditRequested;
     public event EventHandler<NewTabRequestedEventArgs>? NewTabRequested;
     public event EventHandler<SplitRequestedEventArgs>? SplitRequested;
     public event EventHandler? NextTabRequested;
@@ -2492,6 +2503,21 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         ProcessVimEvents(events);
     }
 
+    /// <summary>診断などのrangeを選択し、開始位置をキャレットとして画面中央へ表示する。</summary>
+    public void SelectRange(int startLine, int startColumn, int endLine, int endColumn)
+    {
+        var buf = _engine.CurrentBuffer.Text;
+        if (buf.LineCount == 0) return;
+        startLine = Math.Clamp(startLine, 0, buf.LineCount - 1);
+        endLine = Math.Clamp(endLine, startLine, buf.LineCount - 1);
+        startColumn = Math.Clamp(startColumn, 0, buf.GetLineLength(startLine));
+        endColumn = Math.Clamp(endColumn, 0, buf.GetLineLength(endLine));
+        var start = new CursorPosition(startLine, startColumn);
+        var end = new CursorPosition(endLine, endColumn);
+        ProcessVimEvents(_engine.SetPlainSelection(end, start));
+        AlignViewport(ViewportAlign.Center);
+    }
+
     /// <summary>Visibly selects the whole of <paramref name="line"/> — a plain, highlighted
     /// selection that stays in Normal mode — and scrolls it into view. Used to mark a chosen row,
     /// e.g. the blame commit inside the Git history list, so it reads as "selected" rather than
@@ -3545,6 +3571,31 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (_findBarVisible && (FindSearchBox.IsKeyboardFocusWithin || FindReplaceBox.IsKeyboardFocusWithin))
             return;
 
+        // Escape closes the innermost transient editor UI before it changes Vim mode.
+        // PreviewKeyDown runs before the completion navigator in OnKeyDown, so this
+        // ordering must live here or Escape would leave the popup open while exiting Insert.
+        if (actualKey == Key.Escape && e.Key != Key.ImeProcessed)
+        {
+            if (_lspView.CompletionVisible)
+            {
+                _lspView.HideCompletion();
+                e.Handled = true;
+                return;
+            }
+            if (_lspView.CurrentSignatureHelp is not null)
+            {
+                _lspView.HideSignatureHelp();
+                e.Handled = true;
+                return;
+            }
+            if (_pathCompletionManager.Visible)
+            {
+                _pathCompletionManager.Hide();
+                e.Handled = true;
+                return;
+            }
+        }
+
         // LSP: code-action popup navigation. Not Normal-mode-only — the context-menu item and
         // `:CodeAction` raise the popup in Insert mode and with Vim disabled, and nothing else
         // hides it, so its keys must work there or it would sit painted over the buffer with no
@@ -4141,6 +4192,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.ResetCursorBlink();
         ClearSelectionRangeState();
 
+        // LSP commit character: first accept the selected item, then feed the typed
+        // character through the normal input path exactly once.
+        if (_engine.Mode == VimMode.Insert && !ctrl && !alt && key.Length == 1 &&
+            _lspView.GetSelectedCompletion() is { } selected && IsCommitCharacter(selected, key))
+        {
+            InsertLspCompletion(selected);
+            ProcessKeyCore(key, ctrl: false, shift, alt: false);
+            return;
+        }
+
         // Clipboard image → Markdown link: when pasting (p/P in Normal, Ctrl+V in Insert)
         // into a Markdown file while the clipboard holds an image, save the image per
         // ImagePasteOptions and insert a link instead of the (empty) clipboard text.
@@ -4204,7 +4265,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 while (wordStart > 0 && (char.IsLetterOrDigit(bufLine[wordStart - 1]) || bufLine[wordStart - 1] == '_'))
                     wordStart--;
 
-                if (ch == '.')
+                if (IsCompletionTrigger(ch))
                 {
                     // Dot = new member-access context: fresh completion
                     _lspView.HideCompletion();
@@ -4220,7 +4281,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             else
             {
                 // Popup not visible — schedule auto-trigger
-                if (ch == '.')
+                if (IsCompletionTrigger(ch))
                 {
                     _completionDebounce.Stop();
                     var cur = _engine.Cursor;
@@ -4284,6 +4345,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         ArmMappingTimeout();
     }
 
+    private bool IsCompletionTrigger(char ch) =>
+        _lspView.CompletionTriggerCharacters.Any(x => x.Length == 1 && x[0] == ch);
+
+    internal static bool IsCommitCharacter(LspCompletionItem item, string key) =>
+        key.Length == 1 && item.CommitCharacters?.Contains(key, StringComparer.Ordinal) == true;
+
     // After a key is processed, a multi-key mapping (e.g. `jj`) may be half-typed
     // and its prefix held back — either in the engine (`_pendingMappedInput`, the
     // IME-OFF path) or in `_imeInsertBuffer` (the IME-ON path). Arm a 'timeoutlen'
@@ -4329,6 +4396,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private async Task TriggerCompletionAsync(int line, int col)
     {
+        ActiveStatusBar.UpdateStatus("LSP: completion loading…");
         var msg = await _lspView.RequestCompletionAsync(line, col);
         if (msg == null)
             return; // superseded — a newer request owns the popup state now
@@ -4435,7 +4503,20 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         var item = _lspView.GetSelectedCompletion();
         if (item == null) return;
 
+        InsertLspCompletion(item);
+    }
+
+    private void InsertLspCompletion(LspCompletionItem item)
+    {
+
         _lspView.HideCompletion();
+        _lspView.RecordCompletionAccepted(item);
+
+        if (item.TextEdit is { } textEdit)
+        {
+            ApplyCompletionTextEdit(item, textEdit);
+            return;
+        }
 
         // Delete partial word before cursor and insert completion
         var cursor = _engine.Cursor;
@@ -4468,6 +4549,36 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         foreach (var ch in insertText)
             ProcessKey(ch.ToString(), false, false, false);
+    }
+
+    private void ApplyCompletionTextEdit(LspCompletionItem item, LspTextEdit textEdit)
+    {
+        var replacement = textEdit.NewText;
+        SnippetExpansion? expansion = null;
+        if (item.TextFormat == InsertTextFormat.Snippet && replacement.Contains('$'))
+        {
+            expansion = SnippetManager.ExpandLsp(replacement,
+                textEdit.Range.Start.Line, textEdit.Range.Start.Character,
+                _engine.Options.TabStop, _engine.Options.ExpandTab);
+            replacement = string.Join('\n', expansion.Lines);
+        }
+
+        var original = _engine.CurrentBuffer.Text.GetText();
+        var updated = ApplyTextEdits(original, [new LspTextEdit(textEdit.Range, replacement)]);
+        ProcessVimEvents(_engine.ApplyExternalText(updated));
+        _lspView.OnTextChanged(updated);
+
+        if (expansion is not null)
+        {
+            _snippetTabStopManager.Arm(expansion);
+            return;
+        }
+
+        var insertedLines = replacement.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var end = insertedLines.Length == 1
+            ? new CursorPosition(textEdit.Range.Start.Line, textEdit.Range.Start.Character + insertedLines[0].Length)
+            : new CursorPosition(textEdit.Range.Start.Line + insertedLines.Length - 1, insertedLines[^1].Length);
+        ProcessVimEvents(_engine.SetCursorPosition(end));
     }
 
     // ─── Filesystem path completion (Insert mode, LSP-independent) ─────────────
@@ -4784,7 +4895,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             return;
         }
 
-        int otherFileCount = ApplyWorkspaceEditToCurrentBuffer(edit);
+        var apply = ApplyWorkspaceEditToCurrentBuffer(edit);
+        if (apply.Error is not null)
+        {
+            ActiveStatusBar.UpdateStatus($"Rename failed: {apply.Error}");
+            return;
+        }
+        int otherFileCount = apply.OtherFileCount;
         string msg = otherFileCount > 0
             ? $"Renamed to '{newName}' ({otherFileCount} other file(s) may need saving)"
             : $"Renamed to '{newName}'";
@@ -5094,32 +5211,93 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             return;
         }
 
-        int otherFileCount = ApplyWorkspaceEditToCurrentBuffer(action.Edit);
+        var apply = ApplyWorkspaceEditToCurrentBuffer(action.Edit);
+        if (apply.Error is not null)
+        {
+            ActiveStatusBar.UpdateStatus($"Code action '{action.Title}' failed: {apply.Error}");
+            return;
+        }
+        int otherFileCount = apply.OtherFileCount;
         string msg = otherFileCount > 0
             ? $"Code action '{action.Title}' applied ({otherFileCount} other file(s) may need saving)"
             : $"Code action '{action.Title}' applied";
         ActiveStatusBar.UpdateStatus(msg);
     }
 
-    /// <summary>Apply a workspace edit to the current buffer; returns count of other modified files.</summary>
-    private int ApplyWorkspaceEditToCurrentBuffer(LspWorkspaceEdit edit)
+    /// <summary>現在バッファへworkspace editを適用する。他ファイルはホスト側の文書操作対象として数える。</summary>
+    private (int OtherFileCount, string? Error) ApplyWorkspaceEditToCurrentBuffer(LspWorkspaceEdit edit)
     {
         var currentPath = _engine.CurrentBuffer.FilePath ?? "";
         int otherFileCount = 0;
+        var external = new Dictionary<string, IReadOnlyList<LspTextEdit>>();
+        string? currentUpdate = null;
         foreach (var (fileUri, fileEdits) in edit.Changes)
         {
             string localPath = "";
             try { localPath = new Uri(fileUri).LocalPath; } catch { }
             if (string.Equals(localPath, currentPath, StringComparison.OrdinalIgnoreCase))
             {
-                var text = ApplyTextEdits(_engine.CurrentBuffer.Text.GetText(), fileEdits);
-                ProcessVimEvents(_engine.ApplyExternalText(text));
-                _lspView.OnTextChanged(text);
+                if (edit.DocumentVersions?.TryGetValue(fileUri, out var requestedVersion) == true &&
+                    requestedVersion is not null && _lspView.Document?.Version is { } currentVersion &&
+                    requestedVersion.Value != currentVersion)
+                    return (otherFileCount, $"文書版が一致しません（要求 {requestedVersion} / 現在 {currentVersion}）。再度実行してください。");
+
+                try
+                {
+                    // 外部文書を含む全対象の検証が終わるまで、現在バッファも変更しない。
+                    currentUpdate = ApplyTextEdits(_engine.CurrentBuffer.Text.GetText(), fileEdits);
+                }
+                catch (Exception ex)
+                {
+                    return (otherFileCount, $"編集を適用できませんでした: {ex.Message}");
+                }
             }
             else if (fileEdits.Count > 0)
+            {
                 otherFileCount++;
+                external[fileUri] = fileEdits;
+            }
         }
-        return otherFileCount;
+        if (external.Count > 0)
+        {
+            var args = new WorkspaceEditRequestedEventArgs(external, edit.DocumentVersions);
+            WorkspaceEditRequested?.Invoke(this, args);
+            if (!args.Handled)
+                return (otherFileCount, "他ファイルへの編集をホストが処理できません。");
+            if (args.Error is not null)
+                return (otherFileCount, args.Error);
+        }
+        if (currentUpdate is not null)
+        {
+            ProcessVimEvents(_engine.ApplyExternalText(currentUpdate));
+            _lspView.OnTextChanged(currentUpdate);
+        }
+        return (otherFileCount, null);
+    }
+
+    /// <summary>ホストが複数文書workspace editを、開いている対象バッファへUndo可能な1編集として適用する。</summary>
+    public bool TryApplyLspTextEdits(
+        IReadOnlyList<LspTextEdit> edits, int? expectedVersion, out string? error)
+    {
+        error = null;
+        if (expectedVersion is not null && LspDocument?.Version is { } currentVersion &&
+            expectedVersion.Value != currentVersion)
+        {
+            error = $"文書版が一致しません（要求 {expectedVersion} / 現在 {currentVersion}）。";
+            return false;
+        }
+        try
+        {
+            var updated = ApplyTextEdits(_engine.CurrentBuffer.Text.GetText(), edits);
+            ProcessVimEvents(_engine.ApplyExternalText(updated));
+            _lspView.OnTextChanged(updated);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 
     private string GetWordAtCursor()
@@ -5238,7 +5416,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         return win.ShowDialog() == true ? textBox.Text.Trim() : null;
     }
 
-    private static string ApplyTextEdits(string originalText, IReadOnlyList<Editor.Core.Lsp.LspTextEdit> edits)
+    public static string ApplyTextEdits(string originalText, IReadOnlyList<Editor.Core.Lsp.LspTextEdit> edits)
     {
         if (edits.Count == 0) return originalText;
         var lines = originalText.Split('\n').ToList();

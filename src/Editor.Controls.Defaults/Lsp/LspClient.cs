@@ -30,6 +30,7 @@ public sealed class LspClient : ILspClient
     public bool SupportsSelectionRange { get; private set; }
     public bool SupportsDocumentDiagnostics { get; private set; }
     public bool SupportsWorkspaceDiagnostics { get; private set; }
+    public IReadOnlyList<string> CompletionTriggerCharacters { get; private set; } = ["."];
     public SemanticTokensLegend? SemanticTokensLegend { get; private set; }
 
     public LspClient(string executable, IEnumerable<string> args, string? workingDir = null)
@@ -130,6 +131,7 @@ public sealed class LspClient : ILspClient
             SupportsDocumentDiagnostics = LspCapabilityParser.SupportsDocumentDiagnostics(caps);
             _diagnosticIdentifier = LspCapabilityParser.DocumentDiagnosticIdentifier(caps);
             SupportsWorkspaceDiagnostics = LspCapabilityParser.SupportsWorkspaceDiagnostics(caps);
+            CompletionTriggerCharacters = ParseCompletionTriggerCharacters(caps);
             if (caps.TryGetProperty("semanticTokensProvider", out var stp) &&
                 stp.ValueKind == JsonValueKind.Object &&
                 stp.TryGetProperty("legend", out var legend))
@@ -187,6 +189,18 @@ public sealed class LspClient : ILspClient
         foreach (var item in arr.EnumerateArray())
             if (item.GetString() is string s) list.Add(s);
         return [.. list];
+    }
+
+    internal static IReadOnlyList<string> ParseCompletionTriggerCharacters(JsonElement capabilities)
+    {
+        if (!capabilities.TryGetProperty("completionProvider", out var provider) ||
+            provider.ValueKind != JsonValueKind.Object ||
+            !provider.TryGetProperty("triggerCharacters", out var triggers) ||
+            triggers.ValueKind != JsonValueKind.Array)
+            return ["."];
+        var result = triggers.EnumerateArray().Select(x => x.GetString()).OfType<string>()
+            .Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+        return result.Count > 0 ? result : ["."];
     }
 
     public Task OpenDocumentAsync(string uri, string languageId, string text)
@@ -987,7 +1001,15 @@ public sealed class LspClient : ILspClient
                     ? (DiagnosticSeverity)s.GetInt32()
                     : DiagnosticSeverity.Error;
             var source = el.TryGetProperty("source", out var src) ? src.GetString() : null;
-            diagnostic = new LspDiagnostic(range, message, severity, source);
+            string? code = null;
+            if (el.TryGetProperty("code", out var codeElement))
+                code = codeElement.ValueKind switch
+                {
+                    JsonValueKind.String => codeElement.GetString(),
+                    JsonValueKind.Number => codeElement.GetRawText(),
+                    _ => null,
+                };
+            diagnostic = new LspDiagnostic(range, message, severity, source, code);
             return true;
         }
         catch
@@ -996,9 +1018,10 @@ public sealed class LspClient : ILspClient
         }
     }
 
-    private static LspWorkspaceEdit? ParseWorkspaceEdit(JsonElement el)
+    internal static LspWorkspaceEdit? ParseWorkspaceEdit(JsonElement el)
     {
         var changes = new Dictionary<string, IReadOnlyList<LspTextEdit>>();
+        var versions = new Dictionary<string, int?>();
 
         // "changes": { "file:///...": [ {range, newText}, ... ] }
         if (el.TryGetProperty("changes", out var changesEl) &&
@@ -1023,6 +1046,10 @@ public sealed class LspClient : ILspClient
                 if (!dc.TryGetProperty("textDocument", out var td) ||
                     !td.TryGetProperty("uri", out var uriEl)) continue;
                 var fileUri = uriEl.GetString() ?? "";
+                int? version = td.TryGetProperty("version", out var versionEl) &&
+                               versionEl.ValueKind == JsonValueKind.Number
+                    ? versionEl.GetInt32()
+                    : null;
                 var edits = new List<LspTextEdit>();
                 if (dc.TryGetProperty("edits", out var editsEl) &&
                     editsEl.ValueKind == JsonValueKind.Array)
@@ -1030,10 +1057,11 @@ public sealed class LspClient : ILspClient
                         if (e.TryGetProperty("range", out var r) && e.TryGetProperty("newText", out var t))
                             edits.Add(new LspTextEdit(ParseRange(r), t.GetString() ?? ""));
                 changes[fileUri] = edits;
+                versions[fileUri] = version;
             }
         }
 
-        return changes.Count == 0 ? null : new LspWorkspaceEdit(changes);
+        return changes.Count == 0 ? null : new LspWorkspaceEdit(changes, versions);
     }
 
     private static LspRange ParseRange(JsonElement el)
@@ -1045,7 +1073,7 @@ public sealed class LspClient : ILspClient
             new LspPosition(e.GetProperty("line").GetInt32(), e.GetProperty("character").GetInt32()));
     }
 
-    private static IReadOnlyList<LspCompletionItem> ParseCompletionResult(JsonElement result)
+    internal static IReadOnlyList<LspCompletionItem> ParseCompletionResult(JsonElement result)
     {
         JsonElement items;
         if (result.ValueKind == JsonValueKind.Object && result.TryGetProperty("items", out var listItems))
@@ -1063,6 +1091,9 @@ public sealed class LspClient : ILspClient
             var detail = item.TryGetProperty("detail", out var d) ? d.GetString() : null;
             var insertText = item.TryGetProperty("insertText", out var ins) ? ins.GetString() : null;
             var filterText = item.TryGetProperty("filterText", out var ft) ? ft.GetString() : null;
+            var sortText = item.TryGetProperty("sortText", out var st) ? st.GetString() : null;
+            var preselect = item.TryGetProperty("preselect", out var ps) && ps.ValueKind == JsonValueKind.True;
+            var deprecated = item.TryGetProperty("deprecated", out var dep) && dep.ValueKind == JsonValueKind.True;
             var textFormat = item.TryGetProperty("insertTextFormat", out var itf) && itf.GetInt32() == 2
                 ? Editor.Core.Lsp.InsertTextFormat.Snippet
                 : Editor.Core.Lsp.InsertTextFormat.PlainText;
@@ -1074,7 +1105,15 @@ public sealed class LspClient : ILspClient
                 else if (doc.ValueKind == JsonValueKind.Object && doc.TryGetProperty("value", out var docVal))
                     documentation = docVal.GetString();
             }
-            list.Add(new LspCompletionItem(label, kind, detail, insertText ?? label, filterText, documentation, textFormat));
+            LspTextEdit? textEdit = null;
+            if (item.TryGetProperty("textEdit", out var te) && te.ValueKind == JsonValueKind.Object &&
+                te.TryGetProperty("range", out var range) && te.TryGetProperty("newText", out var newText))
+                textEdit = new LspTextEdit(ParseRange(range), newText.GetString() ?? "");
+            IReadOnlyList<string>? commitCharacters = null;
+            if (item.TryGetProperty("commitCharacters", out var cc) && cc.ValueKind == JsonValueKind.Array)
+                commitCharacters = cc.EnumerateArray().Select(x => x.GetString()).OfType<string>().ToList();
+            list.Add(new LspCompletionItem(label, kind, detail, insertText ?? label, filterText, documentation,
+                textFormat, sortText, preselect, textEdit, commitCharacters, deprecated));
             if (list.Count >= 500) break;
         }
         return list;

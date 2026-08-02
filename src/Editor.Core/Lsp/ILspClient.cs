@@ -24,6 +24,8 @@ public interface ILspClient : IDisposable
     bool SupportsDocumentDiagnostics => false;
     /// <summary>サーバーが workspace/diagnostic をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsWorkspaceDiagnostics { get; }
+    /// <summary>initializeのcompletionProvider.triggerCharacters。未申告サーバー向け既定は'.'。</summary>
+    IReadOnlyList<string> CompletionTriggerCharacters => ["."];
     /// <summary>セマンティックトークンの凡例（トークン種別・修飾子）。InitializeAsync 後に確定する。</summary>
     SemanticTokensLegend? SemanticTokensLegend { get; }
     event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;

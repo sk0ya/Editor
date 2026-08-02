@@ -11,7 +11,8 @@ public record LspDiagnostic(
     LspRange Range,
     string Message,
     DiagnosticSeverity Severity,
-    string? Source = null);
+    string? Source = null,
+    string? Code = null);
 
 /// <summary>textDocument/diagnostic の応答1件。
 /// <paramref name="Unchanged"/> が true のときサーバーは「前回と同じ」とだけ答えているので、
@@ -249,7 +250,12 @@ public record LspCompletionItem(
     string? InsertText = null,
     string? FilterText = null,
     string? Documentation = null,
-    InsertTextFormat TextFormat = InsertTextFormat.PlainText);
+    InsertTextFormat TextFormat = InsertTextFormat.PlainText,
+    string? SortText = null,
+    bool Preselect = false,
+    LspTextEdit? TextEdit = null,
+    IReadOnlyList<string>? CommitCharacters = null,
+    bool Deprecated = false);
 
 public record LspHover(string Value);
 
@@ -265,7 +271,9 @@ public record LspTextEdit(LspRange Range, string NewText);
 public record LspLocation(string Uri, LspRange Range);
 
 // Workspace edit (for rename — maps file URI → list of edits)
-public record LspWorkspaceEdit(IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> Changes);
+public record LspWorkspaceEdit(
+    IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> Changes,
+    IReadOnlyDictionary<string, int?>? DocumentVersions = null);
 
 // Folding ranges
 public record LspFoldingRange(int StartLine, int EndLine, string? Kind = null);

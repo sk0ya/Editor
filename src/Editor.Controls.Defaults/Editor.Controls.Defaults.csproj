@@ -16,7 +16,7 @@
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
     <PackageId>sk0ya.Editor.Controls</PackageId>
-    <Version>1.0.70</Version>
+    <Version>1.0.73</Version>
     <Authors>shigekazukoya</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>
@@ -28,8 +28,10 @@
 
   <Target Name="IncludeReferencedProjectDlls">
     <ItemGroup>
-      <BuildOutputInPackage Include="$(OutputPath)Editor.Core.dll" />
-      <BuildOutputInPackage Include="$(OutputPath)Editor.Controls.dll" />
+      <!-- Defaults の出力に残った古い CopyLocal を誤同梱しないよう、各参照プロジェクトの
+           今回の Configuration 出力を正本にする。 -->
+      <BuildOutputInPackage Include="..\Editor.Core\bin\$(Configuration)\net9.0\Editor.Core.dll" />
+      <BuildOutputInPackage Include="..\Editor.Controls\bin\$(Configuration)\net9.0-windows\Editor.Controls.dll" />
     </ItemGroup>
   </Target>
 

@@ -104,8 +104,11 @@ internal sealed class LspProcess : IDisposable
     }
 
     private static readonly string _logPath = Path.Combine(Path.GetTempPath(), "editor-lsp-debug.log");
+    private static readonly bool _diagnosticLogEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("SK0YA_EDITOR_IDE_DIAG"), "1", StringComparison.Ordinal);
     private static void Log(string msg)
     {
+        if (!_diagnosticLogEnabled) return;
         try { File.AppendAllText(_logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [proc] {msg}\n"); } catch { }
     }
 
