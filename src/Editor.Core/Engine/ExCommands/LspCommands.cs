@@ -5,8 +5,8 @@ using Editor.Core.Models;
 namespace Editor.Core.Engine.ExCommands;
 
 /// <summary>
-/// Handles LSP-triggered ex commands (:Format, :Rename, :Symbols, :CallHierarchy, :TypeHierarchy)
-/// and the :Lsp*/:Fmt* server/formatter configuration commands.
+/// Handles LSP-triggered ex commands (:Format, :Rename, :CodeAction, :Symbols, :CallHierarchy,
+/// :TypeHierarchy) and the :Lsp*/:Fmt* server/formatter configuration commands.
 ///
 /// <para>The <c>:Lsp*</c> commands are only an input frontend: they edit whatever extension→server
 /// table the host injected as <paramref name="lspServerAdmin"/> — the same one the host's settings UI
@@ -38,6 +38,18 @@ public class LspCommands(ILspServerAdmin? lspServerAdmin, FormatterRegistry form
             var newName = cmd.Length > 7 ? cmd[7..].Trim() : null;
             if (string.IsNullOrEmpty(newName)) newName = null;
             result = new ExResult(true, null, VimEvent.LspRenameRequested(newName));
+            return true;
+        }
+
+        // :CodeAction — offer the quick fixes / refactorings available at the cursor (same as `ga`).
+        // Exposed as an ex command so a host can reach it without synthesizing keystrokes
+        // (e.g. from its own context menu), which `ga` cannot do in Insert mode or with Vim off.
+        // The popup itself is navigable in those states too (↑/↓/Enter/Escape — j/k only where a
+        // bare letter isn't text input); see the guard in VimEditorControl.OnPreviewKeyDown.
+        if (cmd.Equals("CodeAction", StringComparison.OrdinalIgnoreCase) ||
+            cmd.Equals("CodeActions", StringComparison.OrdinalIgnoreCase))
+        {
+            result = new ExResult(true, null, VimEvent.CodeActionRequested());
             return true;
         }
 

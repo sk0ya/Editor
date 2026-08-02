@@ -24,14 +24,20 @@ internal sealed class PopupKeyNavigator(
     /// Returns true (and invokes the matching delegate) if it was one of the
     /// popup's move/apply/hide keys; false if the caller should fall through.
     /// </summary>
-    public bool TryHandle(Key key, bool ctrl)
+    /// <param name="allowLetterNav">
+    /// False where a bare letter is text input rather than a motion (Insert/Replace mode, or
+    /// Vim disabled): the popup then navigates with ↑/↓/Enter/Escape only and <c>j</c>/<c>k</c>
+    /// stay literal. Ignored by popups constructed without <c>acceptJK</c>.
+    /// </param>
+    public bool TryHandle(Key key, bool ctrl, bool allowLetterNav = true)
     {
-        if (key == Key.Down || (acceptJK && key == Key.J) || (acceptCtrlNav && ctrl && key == Key.N))
+        bool jk = acceptJK && allowLetterNav;
+        if (key == Key.Down || (jk && key == Key.J) || (acceptCtrlNav && ctrl && key == Key.N))
         {
             move(1);
             return true;
         }
-        if (key == Key.Up || (acceptJK && key == Key.K) || (acceptCtrlNav && ctrl && key == Key.P))
+        if (key == Key.Up || (jk && key == Key.K) || (acceptCtrlNav && ctrl && key == Key.P))
         {
             move(-1);
             return true;

@@ -76,6 +76,31 @@ public class LspExCommandTests
     private static ExCommandProcessor CreateWithoutAdmin() =>
         new(new BufferManager(), new VimOptions(), new MarkManager());
 
+    [Theory]
+    [InlineData("CodeAction")]
+    [InlineData("codeaction")]
+    [InlineData("CodeActions")]
+    public void CodeAction_RequestsTheSameEventAsGa(string command)
+    {
+        var (processor, _) = Create();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal(VimEventType.CodeActionRequested, result.Event?.Type);
+    }
+
+    [Fact]
+    public void CodeAction_BothSpellingsComplete()
+    {
+        var (processor, _) = Create();
+
+        var completions = processor.GetCompletions("Code");
+
+        Assert.Contains("CodeAction", completions);
+        Assert.Contains("CodeActions", completions);
+    }
+
     [Fact]
     public void LspList_ShowsTheInjectedTable()
     {

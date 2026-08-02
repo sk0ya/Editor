@@ -127,6 +127,7 @@ dotnet add package sk0ya.Editor.Controls.Defaults --version 1.0.1
 | `Tab`/`Enter` | Insert+補完 | 選択候補を挿入 |
 | `:Format` | コマンド | LSP でドキュメントをフォーマット |
 | `:Rename [name]` | コマンド | LSP リネーム（名前省略時はダイアログ） |
+| `:CodeAction` | コマンド | コードアクション（`ga` と同じ。右クリックの Code Actions もこれ） |
 | `:diagnostics` / `:diag` | コマンド | LSP `workspace/diagnostic` でワークスペース診断を取得し、References パネルに表示 |
 | `:lopen` / `:llist` | コマンド | 現在バッファの診断、または検索結果を Location list として表示 |
 | `:lnext` / `:lprev` / `:ll [N]` | コマンド | 現在バッファの Location list 内を移動 |

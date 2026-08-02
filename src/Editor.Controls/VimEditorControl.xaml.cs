@@ -2867,6 +2867,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // our store regardless of where WPF thinks keyboard focus is (shared window HWND).
         AssertImeStoreFocus();
         ClearSelectionRangeState();
+        // Click-away dismisses the code-action popup: it is anchored to the cursor it was raised
+        // at, so once the caret moves elsewhere it is stale paint.
+        _lspView.HideCodeActions();
 
         // Vim disabled: drop any plain selection and move the caret like a text box.
         if (!_engine.VimEnabled)
@@ -2937,6 +2940,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         Focus();
         ClearSelectionRangeState();
+        _lspView.HideCodeActions();
         // In Normal/Insert mode: move cursor to the click position
         if (_engine.Mode is not (VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock))
         {
@@ -3034,6 +3038,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 () => _ = HandleFindReferencesAsync()));
             menu.Items.Add(MakeItem("Rename Symbol", "LSP",
                 () => _ = HandleRenameAsync()));
+            // Quick fixes were reachable only through `ga`, so a diagnostic's fix was invisible
+            // unless you already knew the key. The popup itself is unchanged.
+            menu.Items.Add(MakeItem("Code Actions", "ga",
+                () => _ = HandleCodeActionAsync()));
             menu.Items.Add(new Separator { Style = sep });
             menu.Items.Add(MakeItem("Hover Info", "K",
                 () => _ = ShowLspHoverAsync()));
@@ -3514,6 +3522,24 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (_findBarVisible && (FindSearchBox.IsKeyboardFocusWithin || FindReplaceBox.IsKeyboardFocusWithin))
             return;
 
+        // LSP: code-action popup navigation. Not Normal-mode-only — the context-menu item and
+        // `:CodeAction` raise the popup in Insert mode and with Vim disabled, and nothing else
+        // hides it, so its keys must work there or it would sit painted over the buffer with no
+        // way out (and the keys typed at it would land in the text). Handled here rather than in
+        // OnKeyDown because the Insert-mode branches below consume Return/Escape themselves.
+        // Where a bare letter is text input, only ↑/↓/Enter/Escape navigate — j/k stay literal.
+        // Same IME guard as the other popups: never consume keys the IME is still composing with.
+        if (_lspView.CodeActionsVisible && e.Key != Key.ImeProcessed)
+        {
+            bool textEntry = !_engine.VimEnabled || mode is VimMode.Insert or VimMode.Replace;
+            if (_codeActionNavigator.TryHandle(actualKey, ctrlDown, allowLetterNav: !textEntry))
+            {
+                _keyDownHandledByVim = true;
+                e.Handled = true;
+                return;
+            }
+        }
+
         // Ctrl+Space → completion. Handled here (not only OnKeyDown) so it also works
         // while the IME is active, where the key arrives as Key.ImeProcessed and
         // OnKeyDown never fires. Marking the preview event handled suppresses the
@@ -3895,17 +3921,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             }
         }
 
-        // LSP: code actions popup navigation (Normal mode). Same IME guard as above —
-        // never consume keys the IME is still composing with.
-        if (_lspView.CodeActionsVisible && mode == VimMode.Normal
-            && e.Key != Key.ImeProcessed)
-        {
-            if (_codeActionNavigator.TryHandle(key, ctrl))
-            {
-                e.Handled = true;
-                return;
-            }
-        }
+        // (The code-actions popup is navigated in OnPreviewKeyDown — it has to run ahead of the
+        // Insert-mode Return/Escape handling there, which never reaches OnKeyDown.)
 
         if (!ctrl && alt && shift && mode is VimMode.Normal or VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock &&
             (key == Key.Right || key == Key.Left))
