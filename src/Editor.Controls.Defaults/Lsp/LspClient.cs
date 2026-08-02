@@ -10,6 +10,9 @@ public sealed class LspClient : ILspClient
     private readonly LspProcess _process;
     private readonly object _documentGate = new();
     private readonly Dictionary<string, string> _documentTexts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _diagnosticGate = new();
+    private readonly Dictionary<string, string> _diagnosticResultIds = new(StringComparer.OrdinalIgnoreCase);
+    private string? _diagnosticIdentifier;
     private int _textDocumentSyncKind = 1;
 
     public event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
@@ -25,6 +28,7 @@ public sealed class LspClient : ILspClient
     public bool SupportsInlayHint { get; private set; }
     public bool SupportsSemanticTokens { get; private set; }
     public bool SupportsSelectionRange { get; private set; }
+    public bool SupportsDocumentDiagnostics { get; private set; }
     public bool SupportsWorkspaceDiagnostics { get; private set; }
     public SemanticTokensLegend? SemanticTokensLegend { get; private set; }
 
@@ -123,6 +127,8 @@ public sealed class LspClient : ILspClient
                 SupportsInlayHint = ihp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("selectionRangeProvider", out var srp))
                 SupportsSelectionRange = srp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            SupportsDocumentDiagnostics = LspCapabilityParser.SupportsDocumentDiagnostics(caps);
+            _diagnosticIdentifier = LspCapabilityParser.DocumentDiagnosticIdentifier(caps);
             SupportsWorkspaceDiagnostics = LspCapabilityParser.SupportsWorkspaceDiagnostics(caps);
             if (caps.TryGetProperty("semanticTokensProvider", out var stp) &&
                 stp.ValueKind == JsonValueKind.Object &&
@@ -212,6 +218,7 @@ public sealed class LspClient : ILspClient
     public Task CloseDocumentAsync(string uri)
     {
         lock (_documentGate) _documentTexts.Remove(uri);
+        lock (_diagnosticGate) _diagnosticResultIds.Remove(uri);
         _process.SendNotification("textDocument/didClose", new { textDocument = new { uri } });
         return Task.CompletedTask;
     }
@@ -473,6 +480,48 @@ public sealed class LspClient : ILspClient
             return LspWorkspaceDiagnosticParser.Parse(result.Value);
         }
         catch { return null; }
+    }
+
+    public async Task<LspDocumentDiagnosticReport?> GetDocumentDiagnosticsAsync(
+        string uri, CancellationToken ct = default)
+    {
+        if (!SupportsDocumentDiagnostics) return null;
+
+        try
+        {
+            string? previousResultId;
+            lock (_diagnosticGate) _diagnosticResultIds.TryGetValue(uri, out previousResultId);
+
+            // identifier / previousResultId は任意。null を送ると嫌がるサーバーがあるので、
+            // 値があるときだけ載せる（identifier はサーバーが宣言したときのみ返す義務がある）。
+            var @params = new Dictionary<string, object>
+            {
+                ["textDocument"] = new { uri }
+            };
+            if (_diagnosticIdentifier is not null) @params["identifier"] = _diagnosticIdentifier;
+            if (previousResultId is not null) @params["previousResultId"] = previousResultId;
+
+            var result = await _process.SendRequestAsync("textDocument/diagnostic", @params, ct);
+
+            // エラー応答も result == null として返ってくる (LspProcess.HandleMessage)。
+            // textDocument/diagnostic では ServerCancelled(-32802) / ContentModified(-32801) が
+            // 日常的に返るので、「診断ゼロ件」と取り違えて既存の波線を消さないよう null を返す。
+            if (result is null || result.Value.ValueKind == JsonValueKind.Null) return null;
+
+            var report = LspDocumentDiagnosticParser.Parse(result.Value);
+            if (report is not null) RememberDiagnosticResultId(uri, report.ResultId);
+            return report;
+        }
+        catch { return null; }
+    }
+
+    private void RememberDiagnosticResultId(string uri, string? resultId)
+    {
+        lock (_diagnosticGate)
+        {
+            if (resultId is null) _diagnosticResultIds.Remove(uri);
+            else _diagnosticResultIds[uri] = resultId;
+        }
     }
 
     public async Task<IReadOnlyList<DocumentSymbol>> GetDocumentSymbolsAsync(

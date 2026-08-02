@@ -13,6 +13,14 @@ public record LspDiagnostic(
     DiagnosticSeverity Severity,
     string? Source = null);
 
+/// <summary>textDocument/diagnostic の応答1件。
+/// <paramref name="Unchanged"/> が true のときサーバーは「前回と同じ」とだけ答えているので、
+/// <paramref name="Diagnostics"/>（空）で上書きせず既存の診断を維持すること。</summary>
+public record LspDocumentDiagnosticReport(
+    IReadOnlyList<LspDiagnostic> Diagnostics,
+    string? ResultId,
+    bool Unchanged);
+
 public record LspWorkspaceDiagnosticDocument(
     string Uri,
     int? Version,
@@ -67,6 +75,31 @@ public static class LspWorkspaceDiagnosticAggregator
 
 public static class LspCapabilityParser
 {
+    public static bool SupportsDocumentDiagnostics(JsonElement capabilities)
+    {
+        if (capabilities.ValueKind != JsonValueKind.Object ||
+            !capabilities.TryGetProperty("diagnosticProvider", out var diagnosticProvider))
+            return false;
+
+        return diagnosticProvider.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+    }
+
+    /// <summary>サーバーが宣言した <c>diagnosticProvider.identifier</c>。
+    /// 宣言されている場合、クライアントは textDocument/diagnostic でこれを送り返す必要がある
+    /// （識別子ごとに診断を分割するサーバーがあるため）。</summary>
+    public static string? DocumentDiagnosticIdentifier(JsonElement capabilities)
+    {
+        if (capabilities.ValueKind != JsonValueKind.Object ||
+            !capabilities.TryGetProperty("diagnosticProvider", out var diagnosticProvider) ||
+            diagnosticProvider.ValueKind != JsonValueKind.Object ||
+            !diagnosticProvider.TryGetProperty("identifier", out var identifier) ||
+            identifier.ValueKind != JsonValueKind.String)
+            return null;
+
+        var value = identifier.GetString();
+        return string.IsNullOrEmpty(value) ? null : value;
+    }
+
     public static bool SupportsWorkspaceDiagnostics(JsonElement capabilities)
     {
         if (capabilities.ValueKind != JsonValueKind.Object ||
@@ -80,6 +113,36 @@ public static class LspCapabilityParser
                 workspaceDiagnostics.ValueKind == JsonValueKind.True,
             _ => false
         };
+    }
+}
+
+public static class LspDocumentDiagnosticParser
+{
+    /// <summary>textDocument/diagnostic の result を解析する。
+    /// 診断レポートとして読めない形（object でない / items が無い full レポート）なら null。
+    /// 「診断ゼロ件」は空リストを持つレポートであって null ではない。</summary>
+    public static LspDocumentDiagnosticReport? Parse(JsonElement result)
+    {
+        if (result.ValueKind != JsonValueKind.Object) return null;
+
+        var resultId = result.TryGetProperty("resultId", out var resultIdEl) &&
+                       resultIdEl.ValueKind == JsonValueKind.String
+            ? resultIdEl.GetString()
+            : null;
+
+        if (result.TryGetProperty("kind", out var kindEl) &&
+            kindEl.ValueKind == JsonValueKind.String &&
+            string.Equals(kindEl.GetString(), "unchanged", StringComparison.OrdinalIgnoreCase))
+            return new LspDocumentDiagnosticReport([], resultId, Unchanged: true);
+
+        if (!result.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var diagnostics = new List<LspDiagnostic>();
+        foreach (var item in itemsEl.EnumerateArray())
+            if (LspWorkspaceDiagnosticParser.TryParseDiagnostic(item, out var diagnostic))
+                diagnostics.Add(diagnostic);
+        return new LspDocumentDiagnosticReport(diagnostics, resultId, Unchanged: false);
     }
 }
 
@@ -130,7 +193,7 @@ public static class LspWorkspaceDiagnosticParser
         return LspWorkspaceDiagnosticAggregator.CreateResult(documents);
     }
 
-    private static bool TryParseDiagnostic(JsonElement el, out LspDiagnostic diagnostic)
+    internal static bool TryParseDiagnostic(JsonElement el, out LspDiagnostic diagnostic)
     {
         diagnostic = new LspDiagnostic(
             new LspRange(new LspPosition(0, 0), new LspPosition(0, 0)),

@@ -19,6 +19,9 @@ public interface ILspClient : IDisposable
     bool SupportsSemanticTokens { get; }
     /// <summary>サーバーが textDocument/selectionRange をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsSelectionRange { get; }
+    /// <summary>サーバーが textDocument/diagnostic をサポートしているか。InitializeAsync 後に確定する。
+    /// 既存の実装を壊さないよう既定は false。</summary>
+    bool SupportsDocumentDiagnostics => false;
     /// <summary>サーバーが workspace/diagnostic をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsWorkspaceDiagnostics { get; }
     /// <summary>セマンティックトークンの凡例（トークン種別・修飾子）。InitializeAsync 後に確定する。</summary>
@@ -51,6 +54,14 @@ public interface ILspClient : IDisposable
     Task<IReadOnlyList<LspCodeAction>> GetCodeActionsAsync(string uri, LspRange range, CancellationToken ct = default);
     Task<IReadOnlyList<InlayHint>> GetInlayHintsAsync(string uri, LspRange range, CancellationToken ct = default);
     Task<SemanticToken[]?> GetSemanticTokensAsync(string uri, CancellationToken ct = default);
+    /// <summary>プル型診断 (textDocument/diagnostic) を1ファイル分取得する。
+    /// null は「取得できなかった」＝未サポート・エラー応答・例外のいずれか。この場合は既存の診断を
+    /// そのまま残すこと（消してはならない）。取得できた場合は
+    /// <see cref="LspDocumentDiagnosticReport.Unchanged"/> が true なら前回の診断を維持、
+    /// false なら <see cref="LspDocumentDiagnosticReport.Diagnostics"/>（空もあり得る）で置き換える。
+    /// 既定実装は null＝未対応。</summary>
+    Task<LspDocumentDiagnosticReport?> GetDocumentDiagnosticsAsync(string uri, CancellationToken ct = default)
+        => Task.FromResult<LspDocumentDiagnosticReport?>(null);
     Task<LspWorkspaceDiagnosticResult?> GetWorkspaceDiagnosticsAsync(CancellationToken ct = default);
 
     // Call hierarchy

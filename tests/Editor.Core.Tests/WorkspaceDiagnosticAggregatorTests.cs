@@ -109,6 +109,95 @@ public class WorkspaceDiagnosticAggregatorTests
         Assert.Equal(expected, supported);
     }
 
+    [Theory]
+    [InlineData("""{"diagnosticProvider":true}""", true)]
+    [InlineData("""{"diagnosticProvider":false}""", false)]
+    [InlineData("""{"diagnosticProvider":{"workspaceDiagnostics":false}}""", true)]
+    [InlineData("""{}""", false)]
+    public void SupportsDocumentDiagnostics_HandlesBoolAndObjectCapabilities(string json, bool expected)
+    {
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal(expected, LspCapabilityParser.SupportsDocumentDiagnostics(document.RootElement));
+    }
+
+    [Fact]
+    public void ParseDocumentDiagnosticResult_ReadsFullReport()
+    {
+        using var document = JsonDocument.Parse("""
+            {
+              "kind": "full",
+              "items": [{
+                "range": {
+                  "start": { "line": 2, "character": 1 },
+                  "end": { "line": 2, "character": 4 }
+                },
+                "severity": 1,
+                "source": "compiler",
+                "message": "broken"
+              }]
+            }
+            """);
+
+        var report = LspDocumentDiagnosticParser.Parse(document.RootElement);
+
+        Assert.NotNull(report);
+        Assert.False(report.Unchanged);
+        var diagnostic = Assert.Single(report.Diagnostics);
+        Assert.Equal("broken", diagnostic.Message);
+        Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
+    }
+
+    [Fact]
+    public void ParseDocumentDiagnosticResult_ReadsResultId()
+    {
+        using var document = JsonDocument.Parse("""{"kind":"full","resultId":"7","items":[]}""");
+
+        var report = LspDocumentDiagnosticParser.Parse(document.RootElement);
+
+        Assert.NotNull(report);
+        Assert.False(report.Unchanged);
+        Assert.Empty(report.Diagnostics);
+        Assert.Equal("7", report.ResultId);
+    }
+
+    [Fact]
+    public void ParseDocumentDiagnosticResult_FlagsUnchangedReport()
+    {
+        using var document = JsonDocument.Parse("""{"kind":"unchanged","resultId":"2"}""");
+
+        var report = LspDocumentDiagnosticParser.Parse(document.RootElement);
+
+        Assert.NotNull(report);
+        Assert.True(report.Unchanged);
+        Assert.Empty(report.Diagnostics);
+        Assert.Equal("2", report.ResultId);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("""{"kind":"full"}""")]
+    public void ParseDocumentDiagnosticResult_ReturnsNullForUnreadableResult(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Null(LspDocumentDiagnosticParser.Parse(document.RootElement));
+    }
+
+    [Theory]
+    [InlineData("""{"diagnosticProvider":{"identifier":"roslyn"}}""", "roslyn")]
+    [InlineData("""{"diagnosticProvider":{"identifier":""}}""", null)]
+    [InlineData("""{"diagnosticProvider":{}}""", null)]
+    [InlineData("""{"diagnosticProvider":true}""", null)]
+    [InlineData("""{}""", null)]
+    public void DocumentDiagnosticIdentifier_ReadsProviderIdentifier(string json, string? expected)
+    {
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal(expected, LspCapabilityParser.DocumentDiagnosticIdentifier(document.RootElement));
+    }
+
     [Fact]
     public void ParseWorkspaceDiagnosticResult_ReadsFullReportsAndSkipsUnchangedReports()
     {
