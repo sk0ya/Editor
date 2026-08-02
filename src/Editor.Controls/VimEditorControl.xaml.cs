@@ -1005,9 +1005,26 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
     }
 
+    /// <summary>
+    /// Hands keyboard focus down to <see cref="Canvas"/> whenever it lands on this control.
+    /// </summary>
+    /// <remarks>
+    /// The canvas owns the TextPattern automation peer, so it — not this UserControl — has to
+    /// be the focused element for accessibility clients to see a text provider. Hosts focus
+    /// the editor through the public <see cref="UIElement.Focus"/> (tab switches, pane
+    /// navigation, returning from a side panel), so redirecting only at the call sites inside
+    /// this class would leave every one of those paths focusing the wrong element.
+    /// </remarks>
+    protected override void OnGotKeyboardFocus(KeyboardFocusChangedEventArgs e)
+    {
+        base.OnGotKeyboardFocus(e);
+        if (ReferenceEquals(e.NewFocus, this))
+            Canvas.Focus();
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        Focus();
+        Canvas.Focus();
         UpdateAll();
         TryAttachTsfUiElementSink();
 
@@ -2200,14 +2217,20 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (IsOwnRecentSave(fullPath))
             return;
 
-        if (!_engine.CurrentBuffer.Text.IsModified)
+        // A buffer that was edited and then fully undone is clean again but still has a
+        // history worth keeping, and ReloadCurrentFile clears it. Reload unprompted only
+        // when there is genuinely nothing to lose.
+        var buffer = _engine.CurrentBuffer;
+        if (!buffer.Text.IsModified && !buffer.Undo.CanUndo && !buffer.Undo.CanRedo)
         {
             ReloadCurrentFile();  // sets status to "\"<path>\" reloaded"
         }
         else
         {
             var result = MessageBox.Show(
-                "File changed on disk. Reload? (loses unsaved changes)",
+                buffer.Text.IsModified
+                    ? "File changed on disk. Reload? (loses unsaved changes)"
+                    : "File changed on disk. Reload? (loses undo history)",
                 "File Changed",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question);
@@ -2862,7 +2885,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void OnCanvasMouseClicked(int line, int col)
     {
-        Focus();
+        Canvas.Focus();
         // Clicking into this editor makes it the active IME target. Re-point TSF focus to
         // our store regardless of where WPF thinks keyboard focus is (shared window HWND).
         AssertImeStoreFocus();

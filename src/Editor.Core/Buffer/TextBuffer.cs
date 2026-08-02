@@ -6,7 +6,11 @@ namespace Editor.Core.Buffer;
 public class TextBuffer : INormalBufferView
 {
     private List<string> _lines;
-    private bool _modified;
+    // Set by every mutation, cleared at a save point. Only says "an edit happened since
+    // then" — whether the contents actually differ is decided lazily by IsModified.
+    private bool _touched;
+    private long _modifiedComputedAt = -1;
+    private bool _modifiedCache;
     // Snapshot of the line contents as of the last load/save. Used to compute the
     // "changed since last save" gutter (see Editor.Core.Editing.SaveDiff), which is
     // independent of git (it tracks the on-disk baseline, not HEAD).
@@ -25,7 +29,31 @@ public class TextBuffer : INormalBufferView
     }
 
     public int LineCount => _lines.Count;
-    public bool IsModified => _modified;
+
+    /// <summary>
+    /// Whether the contents differ from the last load/save point. Undo/redo can return the
+    /// buffer byte-for-byte to that point, so this is a relation to the save point, not a
+    /// sticky record that an edit happened at some time in the past.
+    /// </summary>
+    /// <remarks>
+    /// The comparison is O(lines), so it is done here — once per <see cref="Version"/>, only
+    /// when someone asks — rather than on every mutation: a bulk edit runs one mutation per
+    /// line, which would make the whole operation quadratic.
+    /// </remarks>
+    public bool IsModified
+    {
+        get
+        {
+            if (!_touched) return false;
+            if (_modifiedComputedAt != Version)
+            {
+                _modifiedCache = !_lines.SequenceEqual(_savedSnapshot);
+                _modifiedComputedAt = Version;
+            }
+            return _modifiedCache;
+        }
+    }
+
     public long Version { get; private set; }
 
     /// <summary>
@@ -48,14 +76,15 @@ public class TextBuffer : INormalBufferView
     public void SetText(string text)
     {
         _lines = SplitLines(text);
-        _modified = false;
+        _touched = false;
         _savedSnapshot = [.. _lines];
         Version++;
     }
 
     /// <summary>
-    /// Replaces the document as an edit, preserving the saved baseline so the result remains
-    /// modified and can participate in an outer undo transaction.
+    /// Replaces the document as an edit rather than as a load: the saved baseline is left
+    /// alone, so the result participates in an outer undo transaction and stays dirty unless
+    /// the replacement happens to equal the save point.
     /// </summary>
     public void ReplaceAll(string text)
     {
@@ -282,7 +311,7 @@ public class TextBuffer : INormalBufferView
 
     public void MarkSaved()
     {
-        _modified = false;
+        _touched = false;
         _savedSnapshot = [.. _lines];
     }
 
@@ -294,9 +323,12 @@ public class TextBuffer : INormalBufferView
         return _lines.Count != originalCount;
     }
 
+    // Kept O(1): a bulk edit calls this once per line (and block insert once per typed
+    // character per line). Whether the buffer really differs from the save point is
+    // settled in IsModified, at most once per Version.
     private void MarkModified()
     {
-        _modified = true;
+        _touched = true;
         Version++;
     }
 

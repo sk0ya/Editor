@@ -208,13 +208,35 @@ public partial class EditorCanvas : FrameworkElement
     public EditorCanvas()
     {
         ClipToBounds = true;
-        Focusable = false;
+        // The canvas owns the TextPattern automation peer, so it must also be the
+        // keyboard-focus element. Keeping focus on the parent made accessibility
+        // clients report an unrelated previously-focused control while the editor
+        // visibly had the caret.
+        Focusable = true;
+        GotKeyboardFocus += (_, _) => EditorCanvasAutomationPeer.NotifyFocusChanged(this);
         _gutterHitTester = new GutterHitTester(HitTestGutterLine);
         StartCursorBlink();
         RebuildVisualLayout();
     }
 
-    protected override AutomationPeer OnCreateAutomationPeer() => new EditorCanvasAutomationPeer(this);
+    protected override AutomationPeer OnCreateAutomationPeer()
+    {
+        var peer = new EditorCanvasAutomationPeer(this);
+        // UI Automation commonly creates the peer lazily, after the user has
+        // already focused the editor. Replay the focus event once the peer is
+        // registered; otherwise GetFocusedElement can remain stuck on the
+        // previously focused native/input-proxy control indefinitely.
+        if (IsKeyboardFocused)
+            Dispatcher.BeginInvoke(() =>
+            {
+                // By the time this runs the canvas may be disconnected (tab closed in the
+                // same input cycle), which makes RaiseAutomationEvent throw. Re-resolve the
+                // current peer instead of holding this one, and swallow the race — this
+                // assembly ships to hosts that have no dispatcher backstop of their own.
+                try { EditorCanvasAutomationPeer.NotifyFocusChanged(this); } catch { }
+            });
+        return peer;
+    }
 
     // ─────────────── Public scroll info ───────────────
 
@@ -965,6 +987,14 @@ public partial class EditorCanvas : FrameworkElement
             e.Handled = true;
             return;
         }
+
+        // A click in the text area takes keyboard focus, and takes it here rather than from
+        // the parent's MouseClicked callback: in a host that also embeds a native terminal
+        // input proxy, focusing later can leave WPF focus on that proxy even though our caret
+        // moved. Deliberately *after* the scrollbar/minimap/gutter branches above — those
+        // never moved focus before this element became focusable, and stealing it there
+        // would break e.g. typing in the Find bar while dragging the overlay scrollbar.
+        System.Windows.Input.Keyboard.Focus(this);
 
         var (line, col) = HitTest(point);
 

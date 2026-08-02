@@ -16,6 +16,8 @@ internal sealed class EditorCanvasAutomationPeer(EditorCanvas owner)
     protected override string GetClassNameCore() => nameof(EditorCanvas);
     protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Document;
     protected override string GetNameCore() => string.IsNullOrWhiteSpace(base.GetNameCore()) ? "Text editor" : base.GetNameCore();
+    protected override bool IsKeyboardFocusableCore() => Canvas.Focusable && Canvas.IsEnabled;
+    protected override bool HasKeyboardFocusCore() => Canvas.IsKeyboardFocused;
     protected override bool IsContentElementCore() => true;
     protected override bool IsControlElementCore() => true;
 
@@ -55,6 +57,12 @@ internal sealed class EditorCanvasAutomationPeer(EditorCanvas owner)
     {
         if (FromElement(canvas) is EditorCanvasAutomationPeer peer && ListenerExists(AutomationEvents.TextPatternOnTextSelectionChanged))
             peer.RaiseAutomationEvent(AutomationEvents.TextPatternOnTextSelectionChanged);
+    }
+
+    internal static void NotifyFocusChanged(EditorCanvas canvas)
+    {
+        if (FromElement(canvas) is EditorCanvasAutomationPeer peer)
+            peer.RaiseAutomationEvent(AutomationEvents.AutomationFocusChanged);
     }
 }
 

@@ -42,6 +42,12 @@ public class EditorCanvasAutomationTests
     }
 
     [Fact]
+    public void Canvas_IsKeyboardFocusableBecauseItOwnsTheTextProvider()
+    {
+        RunSta(() => Assert.True(new EditorCanvas().Focusable));
+    }
+
+    [Fact]
     public void RangeProvider_ObservesSingleSelectionAndMovementContracts()
     {
         RunSta(() =>

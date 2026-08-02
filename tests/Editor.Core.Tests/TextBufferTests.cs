@@ -155,4 +155,69 @@ public class TextBufferTests
         Assert.True(buf.Version > loadedVersion);
         Assert.Equal("xyz", buf.GetLine(0));
     }
+
+    [Fact]
+    public void RestoreSnapshot_RecomputesDirtyAgainstLastSavePoint()
+    {
+        var buf = new TextBuffer("abc");
+        var saved = buf.Snapshot();
+
+        buf.InsertChar(0, 3, '!');
+        Assert.True(buf.IsModified);
+
+        buf.RestoreSnapshot(saved);
+
+        Assert.False(buf.IsModified);
+        Assert.Equal("abc", buf.GetText());
+    }
+
+    [Fact]
+    public void RestoreSnapshot_RemainsDirtyWhenSnapshotDiffersFromSavePoint()
+    {
+        var buf = new TextBuffer("abc");
+
+        buf.RestoreSnapshot(["xyz"]);
+
+        Assert.True(buf.IsModified);
+    }
+
+    // IsModified caches its O(lines) comparison per Version — make sure the cache is
+    // invalidated by every kind of subsequent transition.
+    [Fact]
+    public void IsModified_TracksTheSavePointAcrossRepeatedTransitions()
+    {
+        var buf = new TextBuffer("abc");
+        var saved = buf.Snapshot();
+
+        Assert.False(buf.IsModified);
+
+        buf.InsertChar(0, 3, '!');
+        Assert.True(buf.IsModified);
+        Assert.True(buf.IsModified);   // second read served from the cache
+
+        buf.RestoreSnapshot(saved);
+        Assert.False(buf.IsModified);
+
+        buf.InsertChar(0, 3, '?');
+        Assert.True(buf.IsModified);
+
+        buf.MarkSaved();
+        Assert.False(buf.IsModified);
+
+        // The old save point is gone: restoring it is now an edit, not a return to clean.
+        buf.RestoreSnapshot(saved);
+        Assert.True(buf.IsModified);
+    }
+
+    [Fact]
+    public void ReplaceAll_IsCleanWhenTheReplacementEqualsTheSavePoint()
+    {
+        var buf = new TextBuffer("abc");
+        buf.InsertChar(0, 3, '!');
+
+        buf.ReplaceAll("abc");
+
+        Assert.False(buf.IsModified);
+        Assert.Equal("abc", buf.GetText());
+    }
 }
