@@ -32,6 +32,30 @@ internal sealed class LspProcess : IDisposable
     /// </summary>
     public LspWorkspaceFolder[]? WorkspaceFolders { get; set; }
 
+    /// <summary>
+    /// 応答が返らない要求を諦めるまでの既定時間。
+    ///
+    /// 60 秒という値の根拠: 「速い正常系」ではなく「一番遅い正常系」に合わせる。実測で秒単位まで伸びるのは
+    /// 大規模リポジトリでの <c>initialize</c>（Roslyn / rust-analyzer がプロジェクトを走査する）と
+    /// <c>workspace/symbol</c> の初回、そして <c>workspace/diagnostic</c> で、いずれも 10 秒台までは
+    /// 珍しくない。ここを 5〜10 秒にすると「本当は動いていた」応答を捨ててしまい、補完もシンボル検索も
+    /// 間欠的に空を返す（=タイムアウトが新しいバグになる）。逆に上限が無いと、プロセスは生きているのに
+    /// 応答だけ返さないサーバーで <c>InitializeAsync</c> が永久に固まり、ホスト側は
+    /// 「言語サーバーへの接続待ちです」から一生進まない。60 秒は「正常系が引っかかることはまず無いが、
+    /// 人間が固まったと判断するより前には必ず諦める」ための保守的な妥協点。
+    /// </summary>
+    internal static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// <see cref="SendRequestAsync"/> のタイムアウト。既定は <see cref="DefaultRequestTimeout"/>。
+    /// テストが実時間を待たずに検証するための内部シームで、製品コードからは変更しない。
+    /// </summary>
+    internal TimeSpan RequestTimeout { get; set; } = DefaultRequestTimeout;
+
+    /// <summary>応答待ちの要求数。タイムアウト時に確実に取り除けているか（リークしていないか）を
+    /// テストから確認するための内部シーム。</summary>
+    internal int PendingRequestCount { get { lock (_pending) return _pending.Count; } }
+
     public LspProcess(string executable, IEnumerable<string> args, string? workingDir = null)
     {
         var psi = new ProcessStartInfo
@@ -59,7 +83,13 @@ internal sealed class LspProcess : IDisposable
         thread.Start();
     }
 
-    public Task<JsonElement?> SendRequestAsync(string method, object? @params, CancellationToken ct = default)
+    /// <summary>
+    /// 要求を送り、応答を待つ。応答が <see cref="RequestTimeout"/> 以内に返らなければ
+    /// <see cref="TimeoutException"/> で完了させる（=永久待ちにしない）。呼び出し側の
+    /// <paramref name="ct"/> はタイムアウトと合成され、従来どおりキャンセルとして観測できる。
+    /// </summary>
+    public async Task<JsonElement?> SendRequestAsync(
+        string method, object? @params, CancellationToken ct = default)
     {
         int id = Interlocked.Increment(ref _nextId);
         var tcs = new TaskCompletionSource<JsonElement?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -72,15 +102,45 @@ internal sealed class LspProcess : IDisposable
         }
         catch (Exception ex)
         {
-            lock (_pending) _pending.Remove(id);
-            tcs.SetException(ex);
-            return tcs.Task;
+            RemovePending(id);
+            // Dispose が先に TrySetCanceled 済みのことがある。SetException だと
+            // InvalidOperationException になって本来の送信失敗が失われる。
+            tcs.TrySetException(ex);
+            return await tcs.Task.ConfigureAwait(false);
         }
 
-        if (ct.CanBeCanceled)
-            ct.Register(() => { lock (_pending) _pending.Remove(id); tcs.TrySetCanceled(ct); });
+        // キャンセルとタイムアウトを 1 本のトークンに合成する。応答が届けば下の await が返り、
+        // using による破棄でタイマーも登録も解放されるので、待ち受けが残り続けることはない。
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(RequestTimeout);
+        using var registration = cts.Token.Register(() =>
+        {
+            // 先に _pending から外す。外せなかった＝ちょうど応答が入った、なので何もしない。
+            if (!RemovePending(id)) return;
 
-        return tcs.Task;
+            if (ct.IsCancellationRequested)
+            {
+                tcs.TrySetCanceled(ct);
+                return;
+            }
+
+            // 「生きているのに黙っているサーバー」は放置すると最悪の見え方（初期化中のまま固まる）に
+            // なるので痕跡を残す。ただしこの Log は SK0YA_EDITOR_IDE_DIAG=1 のときだけ書かれる
+            // ——機能要求（補完・シンボル検索）は呼び出し側が空へ丸めるので、既定では
+            // 「60秒待って空だった」ことは表に出ない。initialize だけは例外が伝播し、
+            // ホスト側が「起動失敗」として表示できる（そこが一番効く経路なので現状はこれで足りる）。
+            Log($"request timed out after {RequestTimeout.TotalSeconds:0.#}s: id={id} method={method}");
+            tcs.TrySetException(new TimeoutException(
+                $"LSP request '{method}' timed out after {RequestTimeout.TotalSeconds:0.#}s."));
+        });
+
+        return await tcs.Task.ConfigureAwait(false);
+    }
+
+    /// <summary>応答待ちの一覧から取り除く。取り除けたら true（＝この呼び出しが要求の決着をつける権利を持つ）。</summary>
+    private bool RemovePending(int id)
+    {
+        lock (_pending) return _pending.Remove(id);
     }
 
     public void SendNotification(string method, object? @params)

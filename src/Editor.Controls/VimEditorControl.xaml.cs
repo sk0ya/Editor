@@ -5311,107 +5311,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         return line[start..end];
     }
 
+    /// <summary>
+    /// Rename Symbol の入力ダイアログを出す。中身の組み立てはテーマ追随と見切れ防止を単体で
+    /// 検証できるよう <see cref="RenameSymbolDialog"/> に切り出してある。
+    /// </summary>
     private string? ShowRenameDialog(string currentName)
-    {
-        var bg = new System.Windows.Media.SolidColorBrush(
-            System.Windows.Media.Color.FromRgb(0x28, 0x2A, 0x36));
-        var fg = new System.Windows.Media.SolidColorBrush(
-            System.Windows.Media.Color.FromRgb(0xF8, 0xF8, 0xF2));
-        var inputBg = new System.Windows.Media.SolidColorBrush(
-            System.Windows.Media.Color.FromRgb(0x1E, 0x1F, 0x29));
-        var accent = new System.Windows.Media.SolidColorBrush(
-            System.Windows.Media.Color.FromRgb(0x44, 0x47, 0x5A));
-
-        var textBox = new TextBox
-        {
-            Text = currentName,
-            Background = inputBg,
-            Foreground = fg,
-            CaretBrush = fg,
-            BorderBrush = accent,
-            BorderThickness = new Thickness(1),
-            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-            FontSize = 13,
-            Padding = new Thickness(6, 4, 6, 4),
-            Margin = new Thickness(0, 6, 0, 10),
-            SelectionBrush = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromArgb(0x80, 0xBD, 0x93, 0xF9))
-        };
-
-        var okBtn = new Button
-        {
-            Content = "Rename",
-            Width = 80,
-            Height = 26,
-            Margin = new Thickness(0, 0, 8, 0),
-            Background = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x50, 0xFA, 0x7B)),
-            Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x28, 0x2A, 0x36)),
-            BorderThickness = new Thickness(0),
-            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-            FontSize = 12,
-            IsDefault = true
-        };
-        var cancelBtn = new Button
-        {
-            Content = "Cancel",
-            Width = 70,
-            Height = 26,
-            Background = accent,
-            Foreground = fg,
-            BorderThickness = new Thickness(0),
-            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-            FontSize = 12,
-            IsCancel = true
-        };
-
-        var btnRow = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-        btnRow.Children.Add(okBtn);
-        btnRow.Children.Add(cancelBtn);
-
-        var panel = new StackPanel { Margin = new Thickness(14) };
-        panel.Children.Add(new TextBlock
-        {
-            Text = "New name:",
-            Foreground = fg,
-            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-            FontSize = 12
-        });
-        panel.Children.Add(textBox);
-        panel.Children.Add(btnRow);
-
-        var win = new Window
-        {
-            Title = "Rename Symbol",
-            Content = panel,
-            Background = bg,
-            Width = 300,
-            Height = 140,
-            WindowStartupLocation = WindowStartupLocation.CenterScreen,
-            ResizeMode = ResizeMode.NoResize,
-            ShowInTaskbar = false,
-            Owner = Window.GetWindow(this)
-        };
-
-        okBtn.Click += (_, _) => win.DialogResult = true;
-        textBox.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Return) win.DialogResult = true;
-        };
-
-        win.Loaded += (_, _) =>
-        {
-            textBox.Focus();
-            textBox.SelectAll();
-        };
-
-        return win.ShowDialog() == true ? textBox.Text.Trim() : null;
-    }
+        => RenameSymbolDialog.Show(_theme, currentName, Window.GetWindow(this));
 
     public static string ApplyTextEdits(string originalText, IReadOnlyList<Editor.Core.Lsp.LspTextEdit> edits)
     {

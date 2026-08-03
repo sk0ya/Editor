@@ -22,6 +22,17 @@ public sealed class LspClient : ILspClient
     public event Action? Exited;
 
     public bool IsRunning => _process.IsRunning;
+
+    /// <summary>
+    /// 要求ごとの応答待ちタイムアウト（<see cref="LspProcess.RequestTimeout"/> への委譲）。
+    /// テストが実時間を待たずに検証するための内部シームで、製品コードからは変更しない。
+    /// </summary>
+    internal TimeSpan RequestTimeout
+    {
+        get => _process.RequestTimeout;
+        set => _process.RequestTimeout = value;
+    }
+
     public bool SupportsFoldingRange { get; private set; }
     public bool SupportsWorkspaceSymbol { get; private set; }
     public bool SupportsRangeFormatting { get; private set; }
