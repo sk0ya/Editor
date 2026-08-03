@@ -2360,15 +2360,11 @@ public partial class MainWindow : Window
 
     private static string SymbolUriToPath(string uri)
     {
-        try { return Path.GetFileName(new Uri(uri).LocalPath); }
-        catch { return uri; }
+        var path = LspUri.TryToLocalPath(uri);
+        return path is null ? uri : Path.GetFileName(path);
     }
 
-    private static string? TryUriToLocalPath(string uri)
-    {
-        try { return new Uri(uri).LocalPath; }
-        catch { return null; }
-    }
+    private static string? TryUriToLocalPath(string uri) => LspUri.TryToLocalPath(uri);
 
     private static string GetSymbolIcon(SymbolKind kind) => kind switch
     {

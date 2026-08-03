@@ -337,7 +337,7 @@ public sealed class LspClient : ILspClient
                     line = start.TryGetProperty("line", out var l) ? l.GetInt32() : 0;
                     col  = start.TryGetProperty("character", out var c) ? c.GetInt32() : 0;
                 }
-                return (targetUri, line, col);
+                return (LspUri.Normalize(targetUri), line, col);
             }
 
             // Location: uri + range
@@ -350,7 +350,7 @@ public sealed class LspClient : ILspClient
                     line = start.TryGetProperty("line", out var l) ? l.GetInt32() : 0;
                     col  = start.TryGetProperty("character", out var c) ? c.GetInt32() : 0;
                 }
-                return (locUri, line, col);
+                return (LspUri.Normalize(locUri), line, col);
             }
 
             return null;
@@ -463,7 +463,7 @@ public sealed class LspClient : ILspClient
 
                 if (!item.TryGetProperty("location", out var locEl)) continue;
                 if (!locEl.TryGetProperty("uri", out var uriEl)) continue;
-                var uri = uriEl.GetString() ?? "";
+                var uri = LspUri.Normalize(uriEl.GetString() ?? "");
                 var range = locEl.TryGetProperty("range", out var rangeEl)
                     ? ParseRange(rangeEl)
                     : new LspRange(new LspPosition(0, 0), new LspPosition(0, 0));
@@ -633,7 +633,7 @@ public sealed class LspClient : ILspClient
             {
                 if (!item.TryGetProperty("uri", out var uriEl) ||
                     !item.TryGetProperty("range", out var rangeEl)) continue;
-                list.Add(new LspLocation(uriEl.GetString() ?? "", ParseRange(rangeEl)));
+                list.Add(new LspLocation(LspUri.Normalize(uriEl.GetString() ?? ""), ParseRange(rangeEl)));
             }
             return list;
         }
@@ -912,7 +912,7 @@ public sealed class LspClient : ILspClient
         if (!el.TryGetProperty("name", out var nameEl)) return null;
         var name = nameEl.GetString() ?? "";
         var kind = el.TryGetProperty("kind", out var kindEl) ? kindEl.GetInt32() : 0;
-        var itemUri = el.TryGetProperty("uri", out var uriEl) ? uriEl.GetString() ?? "" : "";
+        var itemUri = el.TryGetProperty("uri", out var uriEl) ? LspUri.Normalize(uriEl.GetString() ?? "") : "";
         var range = el.TryGetProperty("range", out var rangeEl)
             ? ParseRange(rangeEl)
             : new LspRange(new LspPosition(0, 0), new LspPosition(0, 0));
@@ -970,7 +970,9 @@ public sealed class LspClient : ILspClient
         if (method != "textDocument/publishDiagnostics") return;
         try
         {
-            var uri = @params.GetProperty("uri").GetString() ?? "";
+            // サーバーが返す URI はドライブのコロンが %3A 符号化されていることがある（tsserver 等）。
+            // ここで正規化しておかないと、ホスト側の「どの文書の診断か」照合が全て外れる。
+            var uri = LspUri.Normalize(@params.GetProperty("uri").GetString() ?? "");
             var diags = new List<LspDiagnostic>();
             foreach (var d in @params.GetProperty("diagnostics").EnumerateArray())
             {
@@ -1020,8 +1022,9 @@ public sealed class LspClient : ILspClient
 
     internal static LspWorkspaceEdit? ParseWorkspaceEdit(JsonElement el)
     {
-        var changes = new Dictionary<string, IReadOnlyList<LspTextEdit>>();
-        var versions = new Dictionary<string, int?>();
+        // キーはサーバーが返した URI そのままではなく正規化した形にする（%3A 問題、§LspUri）。
+        var changes = new Dictionary<string, IReadOnlyList<LspTextEdit>>(LspUri.Comparer);
+        var versions = new Dictionary<string, int?>(LspUri.Comparer);
 
         // "changes": { "file:///...": [ {range, newText}, ... ] }
         if (el.TryGetProperty("changes", out var changesEl) &&
@@ -1034,7 +1037,7 @@ public sealed class LspClient : ILspClient
                     foreach (var e in prop.Value.EnumerateArray())
                         if (e.TryGetProperty("range", out var r) && e.TryGetProperty("newText", out var t))
                             edits.Add(new LspTextEdit(ParseRange(r), t.GetString() ?? ""));
-                changes[prop.Name] = edits;
+                changes[LspUri.Normalize(prop.Name)] = edits;
             }
         }
         // "documentChanges": [ { textDocument: {uri}, edits: [...] } ]
@@ -1045,7 +1048,7 @@ public sealed class LspClient : ILspClient
             {
                 if (!dc.TryGetProperty("textDocument", out var td) ||
                     !td.TryGetProperty("uri", out var uriEl)) continue;
-                var fileUri = uriEl.GetString() ?? "";
+                var fileUri = LspUri.Normalize(uriEl.GetString() ?? "");
                 int? version = td.TryGetProperty("version", out var versionEl) &&
                                versionEl.ValueKind == JsonValueKind.Number
                     ? versionEl.GetInt32()

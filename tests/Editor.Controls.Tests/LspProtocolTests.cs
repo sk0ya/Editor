@@ -120,6 +120,52 @@ public sealed class LspProtocolTests
         Assert.Single(edit.Changes["file:///C:/work/a.cs"]);
     }
 
+    // tsserver 系は "file:///c%3A/…" を返す。素の文字列のままキーにすると、
+    // 編集対象がどのファイルなのかホスト側で解決できなくなる（rename が動かない原因）。
+    [Fact]
+    public void Workspace_edit_changes_keys_are_normalized_to_a_usable_file_uri()
+    {
+        using var json = JsonDocument.Parse("""
+            {"changes":{"file:///c%3A/work/a.ts":
+              [{"range":{"start":{"line":0,"character":16},"end":{"line":0,"character":25}},"newText":"greetPerson"}]}}
+            """);
+
+        var edit = Assert.IsType<LspWorkspaceEdit>(LspClient.ParseWorkspaceEdit(json.RootElement));
+
+        var key = Assert.Single(edit.Changes.Keys);
+        Assert.Equal(@"c:\work\a.ts", LspUri.TryToLocalPath(key));
+        Assert.True(LspUri.MatchesPath(key, @"C:\work\a.ts"));
+    }
+
+    [Fact]
+    public void Workspace_edit_document_changes_keys_are_normalized_too()
+    {
+        using var json = JsonDocument.Parse("""
+            {"documentChanges":[{"textDocument":{"uri":"file:///c%3A/work/a.ts","version":3},
+              "edits":[{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},"newText":"X"}]}]}
+            """);
+
+        var edit = Assert.IsType<LspWorkspaceEdit>(LspClient.ParseWorkspaceEdit(json.RootElement));
+
+        var key = Assert.Single(edit.Changes.Keys);
+        Assert.True(LspUri.MatchesPath(key, @"C:\work\a.ts"));
+        // ホストは同じキーで版を引く。両辞書のキーが揃っていないと版検証が黙って抜ける。
+        Assert.Equal(3, edit.DocumentVersions![key]);
+    }
+
+    [Fact]
+    public void Workspace_edit_keys_survive_a_drive_letter_case_difference()
+    {
+        using var json = JsonDocument.Parse("""
+            {"changes":{"file:///c:/work/a.ts":
+              [{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"newText":"X"}]}}
+            """);
+
+        var edit = Assert.IsType<LspWorkspaceEdit>(LspClient.ParseWorkspaceEdit(json.RootElement));
+
+        Assert.True(edit.Changes.ContainsKey("file:///C:/work/a.ts"));
+    }
+
     [Fact]
     public void Other_server_requests_keep_the_default_null_response()
     {

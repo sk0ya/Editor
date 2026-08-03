@@ -163,7 +163,7 @@ public static class LspWorkspaceDiagnosticParser
                 !item.TryGetProperty("uri", out var uriEl))
                 continue;
 
-            var uri = uriEl.GetString() ?? "";
+            var uri = LspUri.Normalize(uriEl.GetString() ?? "");
             if (string.IsNullOrWhiteSpace(uri))
                 continue;
 

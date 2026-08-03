@@ -241,6 +241,31 @@ public class WorkspaceDiagnosticAggregatorTests
         Assert.Equal("warning text", diagnostic.Message);
     }
 
+    // 診断の URI はホスト側で「どのタブの診断か」を引くキーになる。tsserver 系の
+    // "file:///c%3A/…" のままだと引けないので、パーサの時点で正規化する。
+    [Fact]
+    public void ParseWorkspaceDiagnosticResult_NormalizesPercentEncodedDriveUris()
+    {
+        using var document = JsonDocument.Parse("""
+            {
+              "items": [{
+                "kind": "full",
+                "uri": "file:///c%3A/work/a.ts",
+                "items": [{
+                  "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+                  "severity": 1,
+                  "message": "broken"
+                }]
+              }]
+            }
+            """);
+
+        var result = LspWorkspaceDiagnosticParser.Parse(document.RootElement);
+
+        var parsedDocument = Assert.Single(result.Documents);
+        Assert.True(LspUri.MatchesPath(parsedDocument.Uri, @"C:\work\a.ts"));
+    }
+
     private static LspDiagnostic Diagnostic(int line, int character, DiagnosticSeverity severity, string message) =>
         new(
             new LspRange(

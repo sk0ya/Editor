@@ -4926,8 +4926,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         var items = refs.Select(r =>
         {
-            try { return new FindReferenceItem(new Uri(r.Uri).LocalPath, r.Range.Start.Line, r.Range.Start.Character); }
-            catch { return new FindReferenceItem(r.Uri, r.Range.Start.Line, r.Range.Start.Character); }
+            return new FindReferenceItem(UriToLocalPath(r.Uri), r.Range.Start.Line, r.Range.Start.Character);
         }).ToList();
 
         FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(items, symbol));
@@ -5233,9 +5232,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         string? currentUpdate = null;
         foreach (var (fileUri, fileEdits) in edit.Changes)
         {
-            string localPath = "";
-            try { localPath = new Uri(fileUri).LocalPath; } catch { }
-            if (string.Equals(localPath, currentPath, StringComparison.OrdinalIgnoreCase))
+            if (LspUri.MatchesPath(fileUri, currentPath))
             {
                 if (edit.DocumentVersions?.TryGetValue(fileUri, out var requestedVersion) == true &&
                     requestedVersion is not null && _lspView.Document?.Version is { } currentVersion &&
@@ -6191,15 +6188,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         return char.IsControl(ch) ? null : ch;
     }
 
-    private static string UriToLocalPath(string uri)
-    {
-        try
-        {
-            var parsed = new Uri(uri);
-            return parsed.IsFile ? parsed.LocalPath : uri;
-        }
-        catch { return uri; }
-    }
+    private static string UriToLocalPath(string uri) => LspUri.ToLocalPathOrOriginal(uri);
 
     private static bool ShouldPreferTextInput(VimMode mode, Key key)
     {

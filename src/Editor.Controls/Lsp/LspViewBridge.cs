@@ -433,13 +433,8 @@ public sealed class LspViewBridge : IEditorLspView
         if (!_documentReady || doc?.IsConnected != true) return null;
         var result = await doc.RequestDefinitionAsync(line, character);
         if (result == null) return null;
-        try
-        {
-            var parsed = new Uri(result.Value.Uri);
-            if (!parsed.IsFile) return null;
-            return (parsed.LocalPath, result.Value.Line, result.Value.Column);
-        }
-        catch { return null; }
+        var localPath = LspUri.TryToLocalPath(result.Value.Uri);
+        return localPath is null ? null : (localPath, result.Value.Line, result.Value.Column);
     }
 
     public void MoveCompletionSelection(int delta)
