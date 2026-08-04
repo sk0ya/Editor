@@ -351,6 +351,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private string? _saveStartedFilePath;
     private VimStatusBar? _sharedStatusBar;
     private VimStatusBar ActiveStatusBar => _sharedStatusBar ?? StatusBar;
+    /// <summary>The status message currently displayed by this editor. Exposed for tests.</summary>
+    internal string CurrentStatusText => ActiveStatusBar.CurrentStatus;
     private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
     // Fires after 'timeoutlen' when a multi-key mapping (e.g. `jj`) is half-typed
     // so the dangling prefix is flushed as literal text instead of hanging forever.
@@ -4400,17 +4402,36 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             _lspView.OnTextChanged(_engine.CurrentBuffer.Text.GetText());
     }
 
+    /// <summary>
+    /// Status shown while a completion request is in flight. It says "still waiting", so
+    /// every path out of the wait must replace it — leaving it behind pins the status bar
+    /// on "loading…" for the rest of the session.
+    /// </summary>
+    internal const string CompletionLoadingStatus = "LSP: completion loading…";
+
+    /// <summary>
+    /// Completion request generation. Only the newest request clears the loading status, so a
+    /// late response cannot wipe the status a newer request has already put in its place.
+    /// </summary>
+    private int _completionStatusGeneration;
+
     private async Task TriggerCompletionAsync(int line, int col)
     {
-        ActiveStatusBar.UpdateStatus("LSP: completion loading…");
+        int generation = ++_completionStatusGeneration;
+        ActiveStatusBar.UpdateStatus(CompletionLoadingStatus);
         var msg = await _lspView.RequestCompletionAsync(line, col);
+
+        // The wait is over — items arrived, none did, or the request was dropped — so the
+        // "loading…" text goes away in every case: replaced by the failure message when there
+        // is one, cleared otherwise (the popup itself is the success feedback). A superseded
+        // request stays silent; the newer one owns the status bar now.
+        if (generation == _completionStatusGeneration)
+            ActiveStatusBar.UpdateStatus(msg is { Length: > 0 } ? msg : "");
+
         if (msg == null)
             return; // superseded — a newer request owns the popup state now
         if (msg.Length > 0)
-        {
-            ActiveStatusBar.UpdateStatus(msg);
             return;
-        }
 
         // Apply filter for any prefix already typed at (or since) the trigger position.
         // Use the current cursor position, not the trigger position, since the user

@@ -1,6 +1,7 @@
-using System.Windows;
 using System.Windows.Input;
 using Editor.Core.Lsp;
+
+using static Editor.Controls.Tests.LspCompletionTestHarness;
 
 namespace Editor.Controls.Tests;
 
@@ -74,51 +75,4 @@ public sealed class PlainModeCompletionTests
         });
     }
 
-    private static void WithEditor(bool vimEnabled, Action<VimEditorControl, FakeEditorLspView> action)
-    {
-        WpfTestHost.Run(() =>
-        {
-            var lsp = new FakeEditorLspView();
-            var editor = new VimEditorControl(new VimEditorControlOptions { LspViewFactory = () => lsp });
-            Window? window = null;
-            try
-            {
-                window = WpfTestHost.Load(editor);
-                editor.VimEnabled = vimEnabled;
-                if (vimEnabled) TypeKeys(editor, "i"); // Insert へ入る（plain は常時 Insert 相当）
-                editor.Focus();
-                action(editor, lsp);
-            }
-            finally
-            {
-                if (window != null) { window.Close(); window.Content = null; }
-                editor.Dispose();
-            }
-        });
-    }
-
-    private static void TypeKeys(VimEditorControl editor, string text) => TypeText(editor, text);
-
-    private static void TypeText(VimEditorControl editor, string text)
-    {
-        foreach (var ch in text)
-        {
-            var composition = new TextComposition(InputManager.Current, editor, ch.ToString());
-            editor.RaiseEvent(new TextCompositionEventArgs(Keyboard.PrimaryDevice, composition)
-            {
-                RoutedEvent = TextCompositionManager.TextInputEvent,
-                Source = editor
-            });
-        }
-    }
-
-    private static void RaiseKeyDown(VimEditorControl editor, Key key)
-    {
-        editor.RaiseEvent(new KeyEventArgs(
-            Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor)!, Environment.TickCount, key)
-        {
-            RoutedEvent = Keyboard.KeyDownEvent,
-            Source = editor
-        });
-    }
 }

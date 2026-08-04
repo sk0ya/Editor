@@ -98,6 +98,9 @@ public partial class VimStatusBar : UserControl
         StatusText.Text = message;
     }
 
+    /// <summary>The status message currently displayed. Exposed for tests.</summary>
+    internal string CurrentStatus => StatusText.Text;
+
     public void UpdateCommandLine(string text)
     {
         if (string.IsNullOrEmpty(text))

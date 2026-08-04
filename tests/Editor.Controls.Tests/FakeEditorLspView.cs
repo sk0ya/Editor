@@ -10,6 +10,22 @@ namespace Editor.Controls.Tests;
 internal sealed class FakeEditorLspView : IEditorLspView
 {
     public List<(int Line, int Character)> CompletionRequests { get; } = [];
+
+    /// <summary>補完要求の戻り値。""=成功（ポップアップ表示）／非空=メッセージ／null=破棄。</summary>
+    public string? CompletionResult { get; set; } = "";
+
+    /// <summary>true の間は要求を保留し、<see cref="ResolveCompletion"/> で明示的に応答させる。</summary>
+    public bool DeferCompletionRequests { get; set; }
+
+    private readonly List<TaskCompletionSource<string?>> _pendingCompletions = [];
+
+    /// <summary>保留中の補完要求の数。</summary>
+    public int PendingCompletionCount => _pendingCompletions.Count;
+
+    /// <summary>保留中の index 番目（要求順）の補完要求に応答を返す。</summary>
+    public void ResolveCompletion(int index, string? result) =>
+        _pendingCompletions[index].TrySetResult(result);
+
     public List<int> SelectionMoves { get; } = [];
     public int HideCompletionCalls { get; private set; }
     public LspCompletionItem? SelectedItem { get; set; }
@@ -46,7 +62,12 @@ internal sealed class FakeEditorLspView : IEditorLspView
     public Task<string?> RequestCompletionAsync(int line, int character)
     {
         CompletionRequests.Add((line, character));
-        return Task.FromResult<string?>("");
+        if (!DeferCompletionRequests)
+            return Task.FromResult(CompletionResult);
+
+        var pending = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingCompletions.Add(pending);
+        return pending.Task;
     }
 
     public Task<string?> RequestHoverAsync(int line, int character) => Task.FromResult<string?>(null);
