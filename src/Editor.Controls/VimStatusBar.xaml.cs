@@ -10,6 +10,19 @@ public partial class VimStatusBar : UserControl
 {
     public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
 
+    /// <summary>
+    /// このバーを今どの編集ビューが代表しているか（共有バーとして複数の
+    /// <see cref="VimEditorControl"/> にぶら下がっているときだけ意味を持つ）。
+    /// <para>
+    /// 分割・タブで複数のビューが1本のバーを共有すると、どのビューも自分の都合で書き込むため、
+    /// 裏になったビューの再描画が<b>現在のファイル名・行数を上書きする</b>。持ち主を1つに決めて
+    /// おき、持ち主でないビューの書き込みは自分の専用バーへ逃がすことでこれを防ぐ
+    /// （<c>VimEditorControl.ActiveStatusBar</c>）。
+    /// </para>
+    /// <para><c>null</c>＝まだ誰も名乗っていない。この間はどのビューも書ける（従来どおりの挙動）。</para>
+    /// </summary>
+    internal object? Owner { get; set; }
+
     public VimStatusBar()
     {
         InitializeComponent();

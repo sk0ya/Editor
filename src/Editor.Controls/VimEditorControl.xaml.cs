@@ -350,7 +350,31 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private string? _gitBranchFilePath;
     private string? _saveStartedFilePath;
     private VimStatusBar? _sharedStatusBar;
-    private VimStatusBar ActiveStatusBar => _sharedStatusBar ?? StatusBar;
+
+    /// <summary>
+    /// Where this editor writes status. When a shared bar is in use but this editor is
+    /// <b>not its owner</b>, writes are routed to this editor's own (hidden) bar instead.
+    /// <para>
+    /// Guarding here — at the single write target — rather than at each of the ~70 call sites is
+    /// what makes the rule hold: any state a background editor pushes (mode, file, cursor, git
+    /// branch, transient messages) lands on its own bar and cannot clobber the shared one. Without
+    /// this, switching tabs left the previous file's name and line count on the shared bar because
+    /// the now-background editor kept repainting into it.
+    /// </para>
+    /// </summary>
+    private VimStatusBar ActiveStatusBar
+        => _sharedStatusBar is { } shared && OwnsSharedStatusBar ? shared : StatusBar;
+
+    /// <summary>
+    /// True when this editor may write to the shared bar: either it has no shared bar (its own bar
+    /// is always its own), or nobody has claimed the shared bar yet, or this editor is the claimant.
+    /// Ownership is claimed by <see cref="SyncStatusBar"/> — the host calls it (and focus raises it)
+    /// to say "this editor is the current one now".
+    /// </summary>
+    private bool OwnsSharedStatusBar
+        => _sharedStatusBar is not { } shared
+           || shared.Owner is null
+           || ReferenceEquals(shared.Owner, this);
     /// <summary>The status message currently displayed by this editor. Exposed for tests.</summary>
     internal string CurrentStatusText => ActiveStatusBar.CurrentStatus;
     private readonly System.Windows.Threading.DispatcherTimer _completionDebounce;
@@ -1121,6 +1145,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         if (_disposed) return;
         _disposed = true;
+        // A closed tab must not keep holding the shared status bar: the owner reference would point
+        // at a dead editor and every remaining editor would be locked out of writing to the bar.
+        ReleaseSharedStatusBar();
         DetachImeWindowHook();
         _completionDebounce.Stop();
         _imeOverlayClearTimer?.Stop();
@@ -2091,7 +2118,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (!string.Equals(_saveStartedFilePath, currentPath, StringComparison.OrdinalIgnoreCase))
             _ = RefreshGitDiffAsync();
         else
-            SyncStatusBar();
+            PushStatusBarState();
         _saveStartedFilePath = null;
     }
 
@@ -2150,7 +2177,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _engine.Syntax.SetLanguage(syntax ?? "");
 
         UpdateAll();
-        SyncStatusBar();
+        PushStatusBarState();
         return id;
     }
 
@@ -2165,7 +2192,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             return;
         _engine.CurrentBuffer.Text.MarkSaved();
         RefreshSaveDiff();
-        SyncStatusBar();
+        PushStatusBarState();
     }
 
     private void SetupFileWatcher(string filePath)
@@ -2291,7 +2318,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         {
             _gitBranchName = null;
             _gitBranchFilePath = null;
-            UpdateGitBranchStatusBarIfActive(null);
+            ActiveStatusBar.UpdateGitBranch(null);
             return;
         }
 
@@ -2303,7 +2330,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         _gitBranchName = gitInfo.Branch;
         _gitBranchFilePath = filePath;
-        UpdateGitBranchStatusBarIfActive(_gitBranchName);
+        ActiveStatusBar.UpdateGitBranch(_gitBranchName);
         var diff = gitInfo.Diff;
         Canvas.SetGitDiff(diff);
 
@@ -2839,16 +2866,36 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     /// </summary>
     public void SetSharedStatusBar(VimStatusBar? bar)
     {
+        // Leaving a bar we owned must release it, or the bar stays pinned to an editor that no
+        // longer uses it and every other editor is locked out of writing to it.
+        ReleaseSharedStatusBar();
         _sharedStatusBar = bar;
         StatusBar.Visibility = (bar != null || _minimalChrome) ? Visibility.Collapsed : Visibility.Visible;
         if (bar != null) { bar.Theme = _theme; bar.SetEditorFontSize(_editorFontSize); }
     }
 
     /// <summary>
-    /// Pushes the current mode / file / cursor state to the active status bar.
-    /// Call this when this editor gains focus so the shared bar reflects its state.
+    /// Makes this editor the current one for the shared status bar and pushes its mode / file /
+    /// cursor state there. Call this when this editor becomes active — on focus (wired below) or
+    /// when the host activates its tab without moving focus (e.g. a tab list in a side panel).
+    /// <para>
+    /// Claiming is deliberately tied to <b>this public entry point only</b>. Internal repaints go
+    /// through <see cref="PushStatusBarState"/>, which never claims — otherwise a background editor
+    /// saving a file or re-rendering would silently steal the bar.
+    /// </para>
     /// </summary>
     public void SyncStatusBar()
+    {
+        if (_sharedStatusBar is { } shared)
+            shared.Owner = this;
+        PushStatusBarState();
+    }
+
+    /// <summary>
+    /// Pushes current state to whichever bar this editor is allowed to write to. Does not change
+    /// ownership: for a background editor this lands on its own hidden bar and is simply not seen.
+    /// </summary>
+    private void PushStatusBarState()
     {
         var buf = _engine.CurrentBuffer;
         bool branchMatchesCurrentFile = string.Equals(_gitBranchFilePath, buf.FilePath, StringComparison.OrdinalIgnoreCase);
@@ -2856,14 +2903,18 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             _ = RefreshGitDiffAsync();
         ActiveStatusBar.UpdateMode(_engine.Mode, _engine.VimEnabled, _engine.Options.ShowMode);
         ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified, buf.FileFormat);
-        UpdateGitBranchStatusBarIfActive(branchMatchesCurrentFile ? _gitBranchName : null);
+        // Ownership already decides whether this reaches the shared bar, so no separate
+        // keyboard-focus test is needed here (focus was a weaker stand-in for "is this the
+        // current editor" — it failed when the host activated a tab from a side panel).
+        ActiveStatusBar.UpdateGitBranch(branchMatchesCurrentFile ? _gitBranchName : null);
         ActiveStatusBar.UpdateCursor(_engine.Cursor, buf.Text.LineCount, _engine.Options.Ruler);
     }
 
-    private void UpdateGitBranchStatusBarIfActive(string? branchName)
+    /// <summary>Gives up the shared bar if this editor holds it, so another editor can claim it.</summary>
+    private void ReleaseSharedStatusBar()
     {
-        if (_sharedStatusBar == null || IsKeyboardFocusWithin)
-            ActiveStatusBar.UpdateGitBranch(branchName);
+        if (_sharedStatusBar is { } shared && ReferenceEquals(shared.Owner, this))
+            shared.Owner = null;
     }
 
     private void SyncViewportState()
@@ -5895,7 +5946,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Canvas.EndBatch();
         }
 
-        SyncStatusBar();
+        PushStatusBarState();
 
         if (_engine.Options.Breadcrumb)
             RefreshBreadcrumbBar();
