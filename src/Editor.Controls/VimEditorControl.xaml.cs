@@ -685,9 +685,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         _gitProvider = options.GitServiceFactory?.Invoke() ?? NullEditorGitService.Instance;
         _lspWorkspace = options.LspWorkspace;
-        _lspView = _lspWorkspace is null
-            ? new NullLspView()
-            : new LspViewBridge(Dispatcher, _lspWorkspace);
+        _lspView = options.LspViewFactory?.Invoke()
+            ?? (_lspWorkspace is null
+                ? new NullLspView()
+                : new LspViewBridge(Dispatcher, _lspWorkspace));
         _pathCompletionManager = new PathCompletionManager(_engine, Canvas, _lspView, ProcessKey);
         _pathCompletionNavigator = new PopupKeyNavigator(
             move: d => _pathCompletionManager.MoveSelection(d),
@@ -700,8 +701,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             {
                 _lspView.HideCompletion();
                 _lspView.HideSignatureHelp();
-                // Also exit insert mode
-                ProcessKey("Escape", false, false, false);
+                // Also exit insert mode. Vim 無効時は抜ける先のモードが無く、Escape は
+                // 「選択を捨てる」だけの操作になるので送らない（ポップアップを閉じた
+                // 副作用で本文の選択が消えるのを避ける）。
+                if (_engine.VimEnabled)
+                    ProcessKey("Escape", false, false, false);
             });
         _codeActionNavigator = new PopupKeyNavigator(
             move: d => _lspView.MoveCodeActionsSelection(d),
@@ -3620,8 +3624,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // bubbling KeyDown, so the OnKeyDown branch won't double-trigger.
         if (actualKey == Key.Space
             && (e.KeyboardDevice.Modifiers & ModifierKeys.Control) != 0
-            && (mode == VimMode.Insert || mode == VimMode.Replace)
-            && _engine.VimEnabled)
+            && (mode == VimMode.Insert || mode == VimMode.Replace))
         {
             TriggerCtrlSpaceCompletion();
             _keyDownHandledByVim = true;
@@ -3956,18 +3959,18 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // In normal/visual/command mode, handle all key presses as vim keys
         var mode = _engine.Mode;
 
-        // Ctrl+Space triggers completion in Insert mode. Skipped when Vim is
-        // disabled — plain mode parks the engine in Insert as a resting state but
-        // must not expose completion sub-modes. Note: with IME ON this is handled
+        // Ctrl+Space triggers completion in Insert mode. Plain mode（Vim 無効）は
+        // Insert を常駐状態にするので同じ条件で通す。Note: with IME ON this is handled
         // in OnPreviewKeyDown instead (OnKeyDown doesn't fire for ImeProcessed).
-        if (ctrl && key == Key.Space && mode == VimMode.Insert && _engine.VimEnabled)
+        if (ctrl && key == Key.Space && mode == VimMode.Insert)
         {
             TriggerCtrlSpaceCompletion();
             e.Handled = true;
             return;
         }
 
-        // LSP: completion popup navigation (never active while Vim is disabled).
+        // LSP: completion popup navigation. Vim 無効時も同じキー（↑↓/Enter/Tab/Escape）で
+        // 動く（_completionNavigator は acceptJK: false なので、j/k は本文入力のまま）。
         // Skip while the IME is mid-composition (e.Key == Key.ImeProcessed): the
         // Enter/Tab/↑/↓ belong to the IME (confirm conversion, move candidate) and
         // must not be hijacked as completion actions — doing so steals the commit
@@ -3985,7 +3988,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             }
         }
 
-        if (_lspView.CompletionVisible && mode == VimMode.Insert && _engine.VimEnabled
+        if (_lspView.CompletionVisible && mode == VimMode.Insert
             && e.Key != Key.ImeProcessed && !HasActiveImeComposition())
         {
             if (_completionNavigator.TryHandle(key, ctrl))
@@ -4227,9 +4230,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             _lspView.OnTextChanged(_engine.CurrentBuffer.Text.GetText());
 
         // LSP: update completion popup after each Insert-mode keypress. Plain mode
-        // (Vim disabled) sits in Insert as a resting state but must not drive LSP
-        // completion / signature help, so gate on VimEnabled.
-        if (_engine.Mode == VimMode.Insert && _engine.VimEnabled && !ctrl && !alt && key.Length == 1)
+        // (Vim 無効) はエンジンが Insert を常駐状態にするので、この条件だけで
+        // 「文字が本文へ入る状態」を両モード共通に表せる。補完は Vim 固有機能では
+        // ないため VimEnabled では絞らない（絞ると plain モードで補完要求自体が
+        // 出ず、補完の無いエディタになる）。Vim 固有の補完サブモード（Ctrl+X 系）は
+        // 別途 VimEngine 側で plain モードから除外されている。
+        if (_engine.Mode == VimMode.Insert && !ctrl && !alt && key.Length == 1)
         {
             char ch = key[0];
 

@@ -140,4 +140,56 @@ public class LinkDetectorTests
         var single = Assert.Single(links);
         Assert.Equal(LinkKind.Url, single.Kind);
     }
+
+    [Fact]
+    public void FindLinks_MarkdownDestinationWithParens_IsOneSpan()
+    {
+        const string line = "[aa](aa(bb)_cc.md)";
+
+        var link = Assert.Single(LinkDetector.FindLinks(line));
+
+        Assert.Equal(LinkKind.FilePath, link.Kind);
+        Assert.Equal("aa(bb)_cc.md", link.Text);
+        Assert.Equal("aa(bb)_cc.md", line[link.Start..link.End]);
+    }
+
+    [Fact]
+    public void FindLinks_MarkdownDestination_ExcludesTheTitle()
+    {
+        var link = Assert.Single(LinkDetector.FindLinks("[aa](docs/a(1).md \"タイトル\")"));
+
+        Assert.Equal("docs/a(1).md", link.Text);
+    }
+
+    [Fact]
+    public void FindLinks_MarkdownUrlWithParens_IsNotTruncated()
+    {
+        var link = Assert.Single(LinkDetector.FindLinks("[wiki](https://ja.wikipedia.org/wiki/X_(Y))"));
+
+        Assert.Equal(LinkKind.Url, link.Kind);
+        Assert.Equal("https://ja.wikipedia.org/wiki/X_(Y)", link.Text);
+    }
+
+    [Fact]
+    public void FindLinks_AngledMarkdownDestination_KeepsSpaces()
+    {
+        var link = Assert.Single(LinkDetector.FindLinks("[aa](<my notes (2).md>)"));
+
+        Assert.Equal("my notes (2).md", link.Text);
+    }
+
+    [Fact]
+    public void FindLinks_PlainMarkdownDestination_StillDetectedOnce()
+    {
+        var link = Assert.Single(LinkDetector.FindLinks("[aa](docs/readme.md)"));
+
+        Assert.Equal(LinkKind.FilePath, link.Kind);
+        Assert.Equal("docs/readme.md", link.Text);
+    }
+
+    [Fact]
+    public void FindLinks_IndexerFollowedByCall_IsNotAPath()
+    {
+        Assert.Empty(LinkDetector.FindLinks("var x = map[key](arg);"));
+    }
 }

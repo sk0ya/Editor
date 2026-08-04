@@ -56,7 +56,9 @@ public sealed class ImagePasteHandler
             var dir = Path.GetDirectoryName(target.AbsolutePath);
             if (!string.IsNullOrEmpty(dir)) System.IO.Directory.CreateDirectory(dir);
             File.WriteAllBytes(target.AbsolutePath, png);
-            return $"![{target.AltText}]({target.LinkPath})";
+            // The saved file name can carry parentheses/spaces (image (1).png), which would make a
+            // bare `(...)` destination unreadable — encode it the way the parser expects.
+            return $"![{target.AltText}]({Editor.Core.Text.MarkdownLinkParser.EncodeDestination(target.LinkPath)})";
         }
         catch (Exception ex)
         {

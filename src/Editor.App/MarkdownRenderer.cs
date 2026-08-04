@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Editor.Core.Text;
 
 namespace Editor.App;
 
@@ -174,6 +175,25 @@ internal static class MarkdownRenderer
         }
     }
 
+    /// <summary>Rewrites already-parsed inline links/images into HTML, leaving the rest of the text alone.</summary>
+    private static string ReplaceLinks(string text, IReadOnlyList<MarkdownInlineLink> links)
+    {
+        if (links.Count == 0) return text;
+
+        var sb = new StringBuilder(text.Length);
+        var pos = 0;
+        foreach (var link in links)
+        {
+            sb.Append(text, pos, link.Start - pos);
+            sb.Append(link.IsImage
+                ? $"<img src=\"{link.Destination}\" alt=\"{Encode(link.Text)}\">"
+                : $"<a href=\"{link.Destination}\">{link.Text}</a>");
+            pos = link.Start + link.Length;
+        }
+        sb.Append(text, pos, text.Length - pos);
+        return sb.ToString();
+    }
+
     private static string Inline(string text)
     {
         // Extract and protect code spans
@@ -184,13 +204,11 @@ internal static class MarkdownRenderer
             return $"\x01{codes.Count - 1}\x01";
         });
 
-        // Images before links
-        text = ImageRe.Replace(text, m =>
-            $"<img src=\"{m.Groups[2].Value}\" alt=\"{Encode(m.Groups[1].Value)}\">");
-
-        // Links
-        text = LinkRe.Replace(text, m =>
-            $"<a href=\"{m.Groups[2].Value}\">{m.Groups[1].Value}</a>");
+        // Images before links (badge form `[![alt](badge.svg)](url)` nests an image inside a link,
+        // so images are collected through the link text as well). Destinations run to the balanced
+        // closing paren — `[aa](aa(bb)_cc.md)` is one link — so both come from MarkdownLinkParser.
+        text = ReplaceLinks(text, MarkdownLinkParser.FindImages(text));
+        text = ReplaceLinks(text, MarkdownLinkParser.FindAll(text));
 
         // Bold (**text** and __text__)
         text = BoldStarRe.Replace(text, "<strong>$1</strong>");
@@ -227,8 +245,6 @@ internal static class MarkdownRenderer
     private static readonly Regex OlRe        = new(@"^\d+\.\s+(.+)$",           RegexOptions.Compiled);
     private static readonly Regex TableSepRe  = new(@"^\|?[\s\-:\|]+\|?$",       RegexOptions.Compiled);
     private static readonly Regex CodeSpanRe  = new(@"`([^`]+)`",                RegexOptions.Compiled);
-    private static readonly Regex ImageRe     = new(@"!\[([^\]]*)\]\(([^\)]+)\)", RegexOptions.Compiled);
-    private static readonly Regex LinkRe      = new(@"\[([^\]]+)\]\(([^\)]+)\)", RegexOptions.Compiled);
     private static readonly Regex BoldStarRe  = new(@"\*\*(.+?)\*\*",            RegexOptions.Compiled);
     private static readonly Regex BoldUnderRe = new(@"__(.+?)__",                RegexOptions.Compiled);
     private static readonly Regex ItalicStarRe  = new(@"\*([^\s\*].*?[^\s\*]?)\*(?!\*)", RegexOptions.Compiled);

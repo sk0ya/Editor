@@ -40,4 +40,11 @@ public sealed class VimEditorControlOptions
     /// mutable via <see cref="VimEditorControl.ImagePasteOptions"/>.
     /// </summary>
     public ImagePasteOptions? ImagePasteOptions { get; init; }
+
+    /// <summary>
+    /// テスト用の差し替え口。指定すると <see cref="LspWorkspace"/> から作る既定のビューの代わりに
+    /// この <see cref="Lsp.IEditorLspView"/> を使う。製品コードのホストは指定しない
+    /// （ポップアップ状態の所有はエディタ側にあり、ホストが再実装する場所ではない）。
+    /// </summary>
+    internal Func<Lsp.IEditorLspView>? LspViewFactory { get; init; }
 }

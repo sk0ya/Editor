@@ -40,11 +40,30 @@ public static class LinkDetector
 
         var results = new List<DetectedLink>();
 
-        // URLs first so path scanning can skip spans already claimed by a URL.
+        // Markdown inline links first: the destination of `[aa](aa(bb)_cc.md)` is one span even
+        // though it contains parentheses, which both the URL regex and the bare-token scan below
+        // would cut at. Claiming it here also keeps those two from re-detecting a fragment of it.
+        foreach (var link in MarkdownLinkParser.FindAll(line))
+        {
+            if (link.DestinationLength == 0) continue;
+
+            int start = link.DestinationStart;
+            int end = start + link.DestinationLength;
+            var dest = link.Destination;
+
+            if (LooksLikeUrl(dest))
+                results.Add(new DetectedLink(start, end, dest, LinkKind.Url));
+            else if (LooksLikePath(dest))
+                results.Add(new DetectedLink(start, end, dest, LinkKind.FilePath));
+        }
+
+        // URLs next so path scanning can skip spans already claimed by a URL.
         foreach (Match m in UrlRegex.Matches(line))
         {
             int start = m.Index;
             int end = m.Index + m.Length;
+
+            if (Overlaps(results, start, end)) continue;
 
             // Trailing punctuation is usually sentence/markup, not part of the URL.
             while (end > start && IsTrailingPunctuation(line[end - 1]))
@@ -78,7 +97,7 @@ public static class LinkDetector
             while (end > start && IsTrailingPunctuation(line[end - 1]))
                 end--;
 
-            if (end > start && !OverlapsUrl(results, start, end))
+            if (end > start && !Overlaps(results, start, end))
             {
                 string token = line[start..end];
                 if (LooksLikePath(token))
@@ -148,14 +167,24 @@ public static class LinkDetector
         !char.IsWhiteSpace(c) && c is not ('"' or '\'' or '<' or '>' or '(' or ')' or
             '[' or ']' or '{' or '}' or ',' or ';');
 
-    private static bool OverlapsUrl(List<DetectedLink> links, int start, int end)
+    /// <summary>True when a span already claimed by an earlier pass covers any of [start, end).</summary>
+    private static bool Overlaps(List<DetectedLink> links, int start, int end)
     {
         foreach (var l in links)
         {
-            if (l.Kind == LinkKind.Url && start < l.End && end > l.Start)
+            if (start < l.End && end > l.Start)
                 return true;
         }
         return false;
+    }
+
+    private static bool LooksLikeUrl(string token)
+    {
+        int scheme = token.IndexOf("://", StringComparison.Ordinal);
+        if (scheme <= 0 || scheme + 3 >= token.Length) return false;
+        return token.AsSpan(0, scheme).Equals("http", StringComparison.OrdinalIgnoreCase)
+            || token.AsSpan(0, scheme).Equals("https", StringComparison.OrdinalIgnoreCase)
+            || token.AsSpan(0, scheme).Equals("ftp", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsTrailingPunctuation(char c) =>

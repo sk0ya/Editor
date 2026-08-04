@@ -99,38 +99,16 @@ public class MarkdownSyntax : ISyntaxLanguage
                 }
             }
 
-            // Image: ![alt](url)
-            if (i + 1 < len && line[i] == '!' && line[i + 1] == '[')
+            // Image ![alt](url) and link [text](url). The destination runs to the *balanced*
+            // closing paren, not the first one — `[aa](aa(bb)_cc.md)` is a single link — so the
+            // span comes from MarkdownLinkParser rather than IndexOf(')').
+            if (line[i] == '[' && Text.MarkdownLinkParser.TryParseAt(line, i, out var mdLink))
             {
-                int cb = line.IndexOf(']', i + 2);
-                if (cb > 0 && cb + 1 < len && line[cb + 1] == '(')
-                {
-                    int cp = line.IndexOf(')', cb + 2);
-                    if (cp > 0)
-                    {
-                        tokens.Add(new SyntaxToken(i, cb + 1 - i, TokenKind.Identifier));
-                        tokens.Add(new SyntaxToken(cb + 1, cp + 1 - cb - 1, TokenKind.Comment));
-                        i = cp + 1;
-                        continue;
-                    }
-                }
-            }
-
-            // Link: [text](url)
-            if (line[i] == '[')
-            {
-                int cb = line.IndexOf(']', i + 1);
-                if (cb > 0 && cb + 1 < len && line[cb + 1] == '(')
-                {
-                    int cp = line.IndexOf(')', cb + 2);
-                    if (cp > 0)
-                    {
-                        tokens.Add(new SyntaxToken(i, cb + 1 - i, TokenKind.Identifier));
-                        tokens.Add(new SyntaxToken(cb + 1, cp + 1 - cb - 1, TokenKind.Comment));
-                        i = cp + 1;
-                        continue;
-                    }
-                }
+                int textEnd = i + 1 + mdLink.Text.Length + 1;   // just past ']'
+                tokens.Add(new SyntaxToken(mdLink.Start, textEnd - mdLink.Start, TokenKind.Identifier));
+                tokens.Add(new SyntaxToken(textEnd, mdLink.Start + mdLink.Length - textEnd, TokenKind.Comment));
+                i = mdLink.Start + mdLink.Length;
+                continue;
             }
 
             // Bold: **text** or __text__
