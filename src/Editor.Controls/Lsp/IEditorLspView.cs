@@ -65,6 +65,22 @@ public interface IEditorLspView : IDisposable
     Task<LspWorkspaceEdit?> RequestRenameAsync(int line, int character, string newName);
     Task<IReadOnlyList<LspLocation>> RequestReferencesAsync(int line, int character);
     Task<IReadOnlyList<LspCodeAction>> RequestCodeActionsAsync(int line, int character);
+
+    /// <summary>範囲指定の code action 要求。選択があるときはこちらを使う——
+    /// 「メソッドの抽出」のような範囲対象のリファクタリングは1点では候補が出ない。
+    /// 既定実装は開始位置だけの要求へ落ちる。</summary>
+    Task<IReadOnlyList<LspCodeAction>> RequestCodeActionsAsync(
+        LspRange range, IReadOnlyList<string>? only)
+        => RequestCodeActionsAsync(range.Start.Line, range.Start.Character);
+
+    /// <summary>未解決 code action の <c>codeAction/resolve</c>。解決できなければ null。</summary>
+    Task<LspCodeAction?> ResolveCodeActionAsync(LspCodeAction action)
+        => Task.FromResult<LspCodeAction?>(null);
+
+    /// <summary>コマンド型 code action の実行。編集はサーバー起点の applyEdit で返る。</summary>
+    Task<bool> ExecuteCodeActionCommandAsync(LspCodeActionCommand command)
+        => Task.FromResult(false);
+
     void ShowCodeActions(IReadOnlyList<LspCodeAction> actions);
     void HideCodeActions();
     void MoveCodeActionsSelection(int delta);

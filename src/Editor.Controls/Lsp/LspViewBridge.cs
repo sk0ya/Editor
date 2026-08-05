@@ -581,6 +581,38 @@ public sealed class LspViewBridge : IEditorLspView
         return actions;
     }
 
+    /// <summary>Request code actions covering a range (Extract Method 等は1点では出ない).</summary>
+    public async Task<IReadOnlyList<LspCodeAction>> RequestCodeActionsAsync(
+        LspRange range, IReadOnlyList<string>? only)
+    {
+        var doc = _document;
+        if (!_documentReady || doc?.IsConnected != true) return [];
+        var generation = Volatile.Read(ref _documentGeneration);
+        var actions = await doc.RequestCodeActionsAsync(range, only);
+        if (!ReferenceEquals(doc, _document) || generation != Volatile.Read(ref _documentGeneration))
+        {
+            StatusMessage?.Invoke("Code Action: 文書が変更されたため古い応答を破棄しました。再度実行してください。");
+            return [];
+        }
+        return actions;
+    }
+
+    public Task<LspCodeAction?> ResolveCodeActionAsync(LspCodeAction action)
+    {
+        var doc = _document;
+        return _documentReady && doc?.IsConnected == true
+            ? doc.ResolveCodeActionAsync(action)
+            : Task.FromResult<LspCodeAction?>(null);
+    }
+
+    public Task<bool> ExecuteCodeActionCommandAsync(LspCodeActionCommand command)
+    {
+        var doc = _document;
+        return _documentReady && doc?.IsConnected == true
+            ? doc.ExecuteCommandAsync(command)
+            : Task.FromResult(false);
+    }
+
     /// <summary>Show code actions popup with the given items.</summary>
     public void ShowCodeActions(IReadOnlyList<LspCodeAction> actions)
     {

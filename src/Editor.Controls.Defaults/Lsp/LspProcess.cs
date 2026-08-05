@@ -33,6 +33,16 @@ internal sealed class LspProcess : IDisposable
     public LspWorkspaceFolder[]? WorkspaceFolders { get; set; }
 
     /// <summary>
+    /// サーバー起点の要求をホスト側で処理するためのフック。処理した場合は応答に載せる result を、
+    /// 関知しない場合は null を返す（null なら <see cref="CreateServerRequestResult"/> の最小応答へ落ちる）。
+    ///
+    /// <para><b>読み取りスレッドで同期的に呼ばれる。</b>サーバーは応答を待って止まっているので、
+    /// ここで長時間ブロックしてはならない。UI スレッドへのマーシャリングが必要なら、
+    /// UI 側がこの要求の原因となった LSP 呼び出しを <c>await</c>（＝ブロックしない）していることが前提。</para>
+    /// </summary>
+    internal Func<string, JsonElement, object?>? ServerRequestHandler { get; set; }
+
+    /// <summary>
     /// 応答が返らない要求を諦めるまでの既定時間。
     ///
     /// 60 秒という値の根拠: 「速い正常系」ではなく「一番遅い正常系」に合わせる。実測で秒単位まで伸びるのは
@@ -292,9 +302,13 @@ internal sealed class LspProcess : IDisposable
                 // JSON-RPC 2.0 の id は number でも string でもよいので、受け取った値をそのまま返す。
                 if (hasId && (idProp.ValueKind == JsonValueKind.Number || idProp.ValueKind == JsonValueKind.String))
                 {
-                    Log($"responding to server request id={idProp} method={methodProp.GetString()}");
-                    SendResponse(idProp, CreateServerRequestResult(
-                        methodProp.GetString() ?? "", @params, WorkspaceFolders));
+                    var method = methodProp.GetString() ?? "";
+                    Log($"responding to server request id={idProp} method={method}");
+                    // ホストが処理できる要求（workspace/applyEdit 等）は先に渡す。
+                    // ハンドラが null を返したら「関知しない」なので既定の最小応答へ落とす。
+                    var handled = ServerRequestHandler?.Invoke(method, @params);
+                    SendResponse(idProp, handled ??
+                        CreateServerRequestResult(method, @params, WorkspaceFolders));
                 }
 
                 NotificationReceived?.Invoke(methodProp.GetString() ?? "", @params);

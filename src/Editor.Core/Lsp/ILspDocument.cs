@@ -48,6 +48,11 @@ public interface ILspDocument : IDisposable
     bool ServerSupportsWorkspaceDiagnostics { get; }
     IReadOnlyList<string> CompletionTriggerCharacters => ["."];
 
+    /// <summary>サーバーが申告した code action kind。空は未申告。</summary>
+    IReadOnlyList<string> ServerCodeActionKinds => [];
+    /// <summary>サーバーが <c>codeAction/resolve</c> に対応しているか。</summary>
+    bool ServerSupportsCodeActionResolve => false;
+
     /// <summary>Mirror the buffer text to the server (<c>didChange</c>). No-op when <see cref="IsWriter"/> is false.</summary>
     void UpdateText(string text);
 
@@ -58,6 +63,22 @@ public interface ILspDocument : IDisposable
     Task<LspWorkspaceEdit?> RequestRenameAsync(int line, int character, string newName);
     Task<IReadOnlyList<LspLocation>> RequestReferencesAsync(int line, int character);
     Task<IReadOnlyList<LspCodeAction>> RequestCodeActionsAsync(int line, int character);
+
+    /// <summary>範囲を指定して code action を取得する。「メソッドの抽出」のように
+    /// <b>選択範囲そのものが対象</b>のリファクタリングは、キャレット1点では候補が出ない。
+    /// <paramref name="only"/> は <c>context.only</c>（<see cref="LspCodeActionKinds"/>）。
+    /// 既定実装は範囲を捨てて位置版へ落ちる（未対応ホスト向けの劣化動作）。</summary>
+    Task<IReadOnlyList<LspCodeAction>> RequestCodeActionsAsync(
+        LspRange range, IReadOnlyList<string>? only, CancellationToken ct = default)
+        => RequestCodeActionsAsync(range.Start.Line, range.Start.Character);
+
+    /// <summary>未解決の code action を確定させる。解決できなければ null（呼び出し側は元のまま使う）。</summary>
+    Task<LspCodeAction?> ResolveCodeActionAsync(LspCodeAction action, CancellationToken ct = default)
+        => Task.FromResult<LspCodeAction?>(null);
+
+    /// <summary>コマンド型 code action を実行する。編集はサーバー起点の <c>workspace/applyEdit</c> で返る。</summary>
+    Task<bool> ExecuteCommandAsync(LspCodeActionCommand command, CancellationToken ct = default)
+        => Task.FromResult(false);
     Task<IReadOnlyList<LspTextEdit>> RequestFormattingAsync(int tabSize, bool insertSpaces);
     Task<IReadOnlyList<LspTextEdit>> RequestRangeFormattingAsync(LspRange range, int tabSize, bool insertSpaces);
     Task<IReadOnlyList<DocumentSymbol>> RequestDocumentSymbolsAsync();

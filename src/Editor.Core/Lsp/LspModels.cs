@@ -270,16 +270,80 @@ public record LspTextEdit(LspRange Range, string NewText);
 // Location (for find references)
 public record LspLocation(string Uri, LspRange Range);
 
+/// <summary>workspace edit に含まれるファイル操作の種類（<c>documentChanges</c> の
+/// <c>CreateFile</c>／<c>RenameFile</c>／<c>DeleteFile</c>）。</summary>
+public enum LspFileOperationKind { Create, Rename, Delete }
+
+/// <summary>workspace edit のファイル操作1件。「クラスに抽出」「型をファイルへ移動」等の
+/// リファクタリングは、本文の編集だけでなく**ファイルの新規作成**を伴うので、これを落とすと
+/// 「適用したのに何も起きない」になる。<paramref name="NewUri"/> は Rename のときだけ意味を持つ。</summary>
+public record LspFileOperation(
+    LspFileOperationKind Kind,
+    string Uri,
+    string? NewUri = null,
+    bool Overwrite = false,
+    bool IgnoreIfExists = false,
+    bool Recursive = false,
+    bool IgnoreIfNotExists = false);
+
 // Workspace edit (for rename — maps file URI → list of edits)
 public record LspWorkspaceEdit(
     IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> Changes,
-    IReadOnlyDictionary<string, int?>? DocumentVersions = null);
+    IReadOnlyDictionary<string, int?>? DocumentVersions = null,
+    IReadOnlyList<LspFileOperation>? FileOperations = null);
 
 // Folding ranges
 public record LspFoldingRange(int StartLine, int EndLine, string? Kind = null);
 
 // Code actions
-public record LspCodeAction(string Title, string? Kind, LspWorkspaceEdit? Edit);
+/// <summary>code action が持つ <c>command</c>。サーバー側で実行し、結果は
+/// サーバー起点の <c>workspace/applyEdit</c> で返ってくる（tsserver 系の抽出リファクタリングがこの形）。
+/// 引数は JSON のまま保持する——<see cref="System.Text.Json.JsonElement"/> は
+/// 元の <c>JsonDocument</c> が破棄されると読めなくなるため、Core へは持ち込まない。</summary>
+public record LspCodeActionCommand(
+    string Command,
+    string? Title = null,
+    IReadOnlyList<string>? ArgumentsJson = null);
+
+/// <summary>code action 1件。
+/// <para><paramref name="Edit"/> が null でも「編集が無い」とは限らない。LSP は遅延解決を許しており、
+/// Roslyn は一覧では title と data だけを返して <c>codeAction/resolve</c> で初めて edit を作る。
+/// したがって適用時は必ず解決（<see cref="ILspClient.ResolveCodeActionAsync"/>）を挟むこと。</para>
+/// <paramref name="RawJson"/> はサーバーが返した元の JSON をそのまま保持したもので、解決要求に
+/// そのまま送り返すために必要（<c>data</c> の中身はサーバー固有で、こちらで解釈してはいけない）。</summary>
+public record LspCodeAction(
+    string Title,
+    string? Kind,
+    LspWorkspaceEdit? Edit,
+    LspCodeActionCommand? Command = null,
+    string? RawJson = null,
+    bool IsPreferred = false,
+    string? DisabledReason = null)
+{
+    /// <summary>解決すれば編集が得られる可能性があるか。edit も command も無く data だけを持つ
+    /// 未解決アクションが該当する。</summary>
+    public bool NeedsResolve => Edit is null && Command is null && RawJson is not null;
+}
+
+/// <summary>LSP 標準の code action kind。<c>only</c> フィルタと分類の両方で使う。
+/// kind は「<c>refactor.extract.function</c> は <c>refactor.extract</c> の下位」という
+/// **ドット区切りの階層**なので、比較は前方一致（<see cref="Matches"/>）で行う。</summary>
+public static class LspCodeActionKinds
+{
+    public const string QuickFix = "quickfix";
+    public const string Refactor = "refactor";
+    public const string RefactorExtract = "refactor.extract";
+    public const string RefactorInline = "refactor.inline";
+    public const string RefactorRewrite = "refactor.rewrite";
+    public const string RefactorMove = "refactor.move";
+    public const string Source = "source";
+
+    /// <summary><paramref name="kind"/> が <paramref name="prefix"/> と等しいか、その下位階層か。</summary>
+    public static bool Matches(string? kind, string prefix) =>
+        kind is not null &&
+        (string.Equals(kind, prefix, StringComparison.Ordinal) ||
+         kind.StartsWith(prefix + ".", StringComparison.Ordinal));
+}
 
 // Inlay hints
 public enum InlayHintKind { Type = 1, Parameter = 2 }

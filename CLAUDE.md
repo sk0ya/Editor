@@ -106,6 +106,19 @@ only a host can define.
 JSON-RPC read loop). Marshalling to a dispatcher is the subscriber's job — `LspViewBridge` is what does
 it for the control, and every member/event of `IEditorLspView` is dispatcher-thread only.
 
+**Code actions / refactorings.** A code action is *not* just `{title, kind, edit}` — `edit` is usually absent:
+Roslyn returns `data` only and builds the edit in `codeAction/resolve`, tsserver returns a `command` whose edit
+comes back as a **server-initiated `workspace/applyEdit`**. So `LspCodeAction` carries `Command` + `RawJson`
+(the untouched server JSON — `data` is server-private and must be echoed back verbatim), and applying one means
+resolve-then-edit or execute-then-await-applyEdit. `ILspClient.ApplyEditRequested` is that inbound path; it fires
+on the read thread and **the server is blocked until the handler returns** (`LspProcess.ServerRequestHandler`).
+`GetCodeActionsAsync` takes a **range** and `only` — a bare position never surfaces Extract Method.
+`LspWorkspaceEdit.FileOperations` carries `documentChanges`' create/rename/delete; dropping them makes
+"extract to a new file" silently do nothing. Kinds are a dotted hierarchy — compare with
+`LspCodeActionKinds.Matches`, not `==`. The client capabilities that make all of this arrive at all
+(`codeActionLiteralSupport`, `resolveSupport`, `dataSupport`, `workspace.applyEdit`) are declared in
+`LspClient.InitializeAsync`. Host-side design: Loomo `docs/設計/32-リファクタリング.md` (§32).
+
 **Key bindings:**
 - `K` (Normal mode) — hover info shown in status bar
 - `Ctrl+Space` (Insert mode) — trigger completion popup

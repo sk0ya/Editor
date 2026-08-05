@@ -44,10 +44,16 @@ public class OpenFileRequestedEventArgs(string filePath, int line = 0, int colum
 }
 public sealed class WorkspaceEditRequestedEventArgs(
     IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> changes,
-    IReadOnlyDictionary<string, int?>? documentVersions) : EventArgs
+    IReadOnlyDictionary<string, int?>? documentVersions,
+    IReadOnlyList<LspFileOperation>? fileOperations = null) : EventArgs
 {
     public IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> Changes { get; } = changes;
     public IReadOnlyDictionary<string, int?>? DocumentVersions { get; } = documentVersions;
+
+    /// <summary>ファイルの作成・改名・削除。「クラスに抽出」「型をファイルへ移動」は
+    /// 本文の編集とセットでこれを伴う。ホストは<b>作成を編集より先に</b>行うこと
+    /// （新規ファイルへの編集がディスク上の実体を前提にしているため）。</summary>
+    public IReadOnlyList<LspFileOperation> FileOperations { get; } = fileOperations ?? [];
     public bool Handled { get; set; }
     public string? Error { get; set; }
 }
@@ -404,6 +410,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     // ─── Clipboard image → Markdown link paste ───
     private readonly ImagePasteHandler _imagePasteHandler;
 
+    /// <summary>ホストが自前の「名前の変更」をメニューへ足すので、ネイティブの
+    /// "Rename Symbol" は出さない（<see cref="VimEditorControlOptions.HostProvidesRenameMenuItem"/>）。</summary>
+    private readonly bool _hostProvidesRenameMenuItem;
+
     /// <summary>
     /// Rules for pasting a clipboard image into a Markdown file (destination directory +
     /// file-name templates, see <see cref="Editor.Core.Editing.ImagePasteOptions"/>). Mutate
@@ -629,6 +639,18 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             start.Line, start.Column, end.Line, end.Column, kind, _engine.GetSelectionText());
     }
 
+    /// <summary>現在の選択を LSP の range として返す。選択が無ければ null。
+    /// 変換規約（含む／含まない、行選択の行頭）は <see cref="EditorSelectionRange"/> が持つ。
+    /// ホストのリファクタリングメニューも同じ範囲を使う（§32）。</summary>
+    public LspRange? SelectionAsLspRange()
+    {
+        if (_engine.Selection is not { } selection) return null;
+        var lines = _engine.CurrentBuffer.Text;
+        return EditorSelectionRange.FromSelection(
+            selection,
+            line => line >= 0 && line < lines.LineCount ? lines.GetLine(line).Length : 0);
+    }
+
     public VimEngine Engine => _engine;
     /// <summary>LSP-only diagnostics. Prefer <see cref="EffectiveDiagnostics"/> for host integration.</summary>
     [Obsolete("This property exposes Editor.Core LSP types and excludes host diagnostics. Use EffectiveDiagnostics.")]
@@ -705,6 +727,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _engine.VerticalColumnResolver = Canvas.ResolveVerticalColumn;
         _engine.SetClipboardProvider(options.ClipboardProviderFactory?.Invoke() ?? new WpfClipboardProvider());
         _imagePasteHandler = new ImagePasteHandler { Options = options.ImagePasteOptions ?? new Editor.Core.Editing.ImagePasteOptions() };
+        _hostProvidesRenameMenuItem = options.HostProvidesRenameMenuItem;
         Canvas.WrapLines = _engine.Options.Wrap;
         _multiCursorManager = new MultiCursorManager(_engine, Canvas, msg => ActiveStatusBar.UpdateStatus(msg), UpdateAll);
         _snippetTabStopManager = new SnippetTabStopManager(_engine, ProcessKey, ClearSelectionRangeState, ProcessVimEvents, UpdateAll);
@@ -739,7 +762,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             {
                 var acts = _lspView.CurrentCodeActions;
                 int sel = _lspView.CodeActionsSelection;
-                if (sel >= 0 && sel < acts.Count) ApplyCodeAction(acts[sel]);
+                if (sel >= 0 && sel < acts.Count) _ = ApplyCodeActionAsync(acts[sel]);
             },
             hide: () => _lspView.HideCodeActions(),
             acceptCtrlNav: false, acceptJK: true, acceptTab: false);
@@ -3047,6 +3070,18 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Focus();
         ClearSelectionRangeState();
         _lspView.HideCodeActions();
+
+        // 選択の内側での右クリックは、選択もキャレットもそのままにする（VS / VS Code / Rider と同じ）。
+        // ここを通さないと「選択してから右クリック → メソッドの抽出」が成立しない：
+        // Vim 無効時のプレーン選択では下の Escape が ClearPlainSelection を呼んで選択が消え、
+        // ホストのリファクタリングメニューは範囲ではなくキャレット1点で問い合わせることになり、
+        // 範囲を対象とするリファクタリングが1つも出なくなる。
+        if (_engine.Selection is { IsEmpty: false } selection && selection.Contains(line, col))
+        {
+            ShowContextMenu();
+            return;
+        }
+
         // In Normal/Insert mode: move cursor to the click position
         if (_engine.Mode is not (VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock))
         {
@@ -3059,6 +3094,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             var moveEvents = _engine.SetCursorPosition(new CursorPosition(line, col));
             ProcessVimEvents(moveEvents);
         }
+        ShowContextMenu();
+    }
+
+    private void ShowContextMenu()
+    {
         var menu = BuildContextMenu();
         // blame ガター右クリックでホストが何も足さなかった場合など、空メニューは出さない。
         Canvas.ContextMenu = menu.Items.Count > 0 ? menu : null;
@@ -3142,8 +3182,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 () => _ = HandleGoToDefinitionAsync()));
             menu.Items.Add(MakeItem("Find References", "LSP",
                 () => _ = HandleFindReferencesAsync()));
-            menu.Items.Add(MakeItem("Rename Symbol", "LSP",
-                () => _ = HandleRenameAsync()));
+            // ホストがリファクタリング一式を自前のメニューへまとめる場合は、ここには出さない
+            // （同じ「名前の変更」が2つ並ぶのを防ぐ。ex コマンド経路は残る）。
+            if (!_hostProvidesRenameMenuItem)
+                menu.Items.Add(MakeItem("Rename Symbol", "LSP",
+                    () => _ = HandleRenameAsync()));
             // Quick fixes were reachable only through `ga`, so a diagnostic's fix was invisible
             // unless you already knew the key. The popup itself is unchanged.
             menu.Items.Add(MakeItem("Code Actions", "ga",
@@ -5267,8 +5310,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (!_lspView.IsConnected) { ActiveStatusBar.UpdateStatus("Code actions: LSP not connected"); return; }
         ActiveStatusBar.UpdateStatus("Code actions: searching…");
 
+        // 選択があれば範囲で問う。1点の要求では「メソッドの抽出」等が候補に出ない。
         var cursor = _engine.Cursor;
-        var actions = await _lspView.RequestCodeActionsAsync(cursor.Line, cursor.Column);
+        var actions = SelectionAsLspRange() is { } range
+            ? await _lspView.RequestCodeActionsAsync(range, only: null)
+            : await _lspView.RequestCodeActionsAsync(cursor.Line, cursor.Column);
         if (actions.Count == 0)
         {
             ActiveStatusBar.UpdateStatus("Code actions: none available");
@@ -5279,9 +5325,29 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         ActiveStatusBar.UpdateStatus($"Code actions: {actions.Count} available — j/k to select, Enter to apply, Esc to dismiss");
     }
 
-    private void ApplyCodeAction(LspCodeAction action)
+    private async Task ApplyCodeActionAsync(LspCodeAction action)
     {
         _lspView.HideCodeActions();
+        if (action.DisabledReason is { Length: > 0 } disabled)
+        {
+            ActiveStatusBar.UpdateStatus($"Code action '{action.Title}': {disabled}");
+            return;
+        }
+
+        // Roslyn 等は一覧では edit を作らない（data だけ返す）。適用時に解決してから見る。
+        if (action.Edit is null && action.NeedsResolve)
+            action = await _lspView.ResolveCodeActionAsync(action) ?? action;
+
+        // 編集が無くコマンドだけのアクションはサーバー側で実行し、編集は applyEdit で返ってくる。
+        if ((action.Edit is null || action.Edit.Changes.Count == 0) && action.Command is { } command)
+        {
+            bool ok = await _lspView.ExecuteCodeActionCommandAsync(command);
+            ActiveStatusBar.UpdateStatus(ok
+                ? $"Code action '{action.Title}' applied"
+                : $"Code action '{action.Title}' failed: サーバーがコマンドを実行できませんでした。");
+            return;
+        }
+
         if (action.Edit == null || action.Edit.Changes.Count == 0)
         {
             ActiveStatusBar.UpdateStatus($"Code action '{action.Title}': no edits to apply");
@@ -5333,9 +5399,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 external[fileUri] = fileEdits;
             }
         }
-        if (external.Count > 0)
+        var fileOperations = edit.FileOperations ?? [];
+        if (external.Count > 0 || fileOperations.Count > 0)
         {
-            var args = new WorkspaceEditRequestedEventArgs(external, edit.DocumentVersions);
+            var args = new WorkspaceEditRequestedEventArgs(external, edit.DocumentVersions, fileOperations);
             WorkspaceEditRequested?.Invoke(this, args);
             if (!args.Handled)
                 return (otherFileCount, "他ファイルへの編集をホストが処理できません。");

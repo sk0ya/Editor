@@ -228,4 +228,129 @@ public sealed class LspProtocolTests
         using var json = JsonDocument.Parse(jsonText);
         Assert.Equal(expected, LspClient.ParseTextDocumentSyncKind(json.RootElement));
     }
+
+    [Fact]
+    public void Code_action_provider_capability_yields_kinds_and_resolve_support()
+    {
+        using var json = JsonDocument.Parse("""
+        {"codeActionProvider":{"codeActionKinds":["quickfix","refactor.extract"],"resolveProvider":true}}
+        """);
+        var (kinds, resolve) = LspClient.ParseCodeActionProvider(json.RootElement);
+
+        Assert.Equal(["quickfix", "refactor.extract"], kinds);
+        Assert.True(resolve);
+    }
+
+    [Fact]
+    public void Code_action_provider_reported_as_bare_true_declares_no_kinds()
+    {
+        using var json = JsonDocument.Parse("""{"codeActionProvider":true}""");
+        var (kinds, resolve) = LspClient.ParseCodeActionProvider(json.RootElement);
+
+        Assert.Empty(kinds);
+        Assert.False(resolve);
+    }
+
+    /// <summary>Roslyn 系は一覧では title/kind/data だけを返し、edit は codeAction/resolve で作る。
+    /// data を落とすと解決要求が組み立てられず「適用しても何も起きない」になる。</summary>
+    [Fact]
+    public void Unresolved_code_action_keeps_its_raw_json_and_is_marked_for_resolve()
+    {
+        using var json = JsonDocument.Parse("""
+        {"title":"メソッドの抽出","kind":"refactor.extract","data":{"handle":17}}
+        """);
+        var action = LspClient.ParseCodeAction(json.RootElement)!;
+
+        Assert.Equal("メソッドの抽出", action.Title);
+        Assert.Equal("refactor.extract", action.Kind);
+        Assert.Null(action.Edit);
+        Assert.True(action.NeedsResolve);
+        Assert.Contains("\"handle\":17", action.RawJson!.Replace(" ", ""));
+    }
+
+    [Fact]
+    public void Code_action_literal_reads_the_nested_command_object()
+    {
+        using var json = JsonDocument.Parse("""
+        {"title":"関数へ抽出","kind":"refactor.extract",
+         "command":{"title":"適用","command":"_typescript.applyRefactoring","arguments":[{"file":"a.ts"},3]}}
+        """);
+        var action = LspClient.ParseCodeAction(json.RootElement)!;
+
+        Assert.Equal("_typescript.applyRefactoring", action.Command!.Command);
+        Assert.Equal(["""{"file":"a.ts"}""", "3"], action.Command.ArgumentsJson!.Select(a => a.Replace(" ", "")));
+    }
+
+    /// <summary>旧仕様の Command（command が文字列で title と同階層）を CodeAction リテラルと取り違えない。</summary>
+    [Fact]
+    public void Legacy_command_shaped_action_is_read_from_the_item_itself()
+    {
+        using var json = JsonDocument.Parse("""
+        {"title":"インポートの整理","command":"editor.organizeImports","arguments":["file:///a.ts"]}
+        """);
+        var action = LspClient.ParseCodeAction(json.RootElement)!;
+
+        Assert.Equal("editor.organizeImports", action.Command!.Command);
+        Assert.Equal(["\"file:///a.ts\""], action.Command.ArgumentsJson!);
+    }
+
+    [Fact]
+    public void Disabled_code_action_carries_its_reason()
+    {
+        using var json = JsonDocument.Parse("""
+        {"title":"インライン化","kind":"refactor.inline","disabled":{"reason":"選択が式ではありません"}}
+        """);
+        var action = LspClient.ParseCodeAction(json.RootElement)!;
+
+        Assert.Equal("選択が式ではありません", action.DisabledReason);
+    }
+
+    /// <summary>「クラスに抽出」はファイル作成と本文編集がひと組で来る。作成を落とすと
+    /// 新しいファイルへの編集だけが宙に浮く（＝適用しても何も起きない）。</summary>
+    [Fact]
+    public void Workspace_edit_keeps_create_operations_alongside_text_edits()
+    {
+        using var json = JsonDocument.Parse("""
+        {"documentChanges":[
+          {"kind":"create","uri":"file:///c%3A/p/New.cs","options":{"ignoreIfExists":true}},
+          {"textDocument":{"uri":"file:///c%3A/p/New.cs","version":null},
+           "edits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},
+                     "newText":"class New {}"}]}]}
+        """);
+        var edit = LspClient.ParseWorkspaceEdit(json.RootElement)!;
+
+        var operation = Assert.Single(edit.FileOperations!);
+        Assert.Equal(LspFileOperationKind.Create, operation.Kind);
+        Assert.True(operation.IgnoreIfExists);
+        // URI は %3A のまま扱わない（LspUri 正規化。§30.14）。
+        Assert.Equal("file:///c:/p/New.cs", operation.Uri);
+        Assert.Single(edit.Changes);
+    }
+
+    [Fact]
+    public void Workspace_edit_reads_rename_and_delete_operations()
+    {
+        using var json = JsonDocument.Parse("""
+        {"documentChanges":[
+          {"kind":"rename","oldUri":"file:///c%3A/p/A.cs","newUri":"file:///c%3A/p/B.cs"},
+          {"kind":"delete","uri":"file:///c%3A/p/C.cs","options":{"recursive":true}}]}
+        """);
+        var edit = LspClient.ParseWorkspaceEdit(json.RootElement)!;
+
+        Assert.Equal(2, edit.FileOperations!.Count);
+        Assert.Equal("file:///c:/p/B.cs", edit.FileOperations[0].NewUri);
+        Assert.Equal(LspFileOperationKind.Delete, edit.FileOperations[1].Kind);
+        Assert.True(edit.FileOperations[1].Recursive);
+        Assert.Empty(edit.Changes);
+    }
+
+    [Theory]
+    [InlineData("refactor.extract.function", "refactor", true)]
+    [InlineData("refactor.extract.function", "refactor.extract", true)]
+    [InlineData("refactor.extract", "refactor.extract", true)]
+    [InlineData("refactoring", "refactor", false)]
+    [InlineData("quickfix", "refactor", false)]
+    [InlineData(null, "refactor", false)]
+    public void Code_action_kinds_match_by_dotted_hierarchy(string? kind, string prefix, bool expected)
+        => Assert.Equal(expected, LspCodeActionKinds.Matches(kind, prefix));
 }

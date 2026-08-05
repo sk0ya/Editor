@@ -6,6 +6,21 @@ public class DiagnosticsChangedEventArgs(string uri, IReadOnlyList<LspDiagnostic
     public IReadOnlyList<LspDiagnostic> Diagnostics { get; } = diagnostics;
 }
 
+/// <summary>サーバー起点の <c>workspace/applyEdit</c>。ホストが実際に文書へ適用し、
+/// <see cref="Applied"/> をその結果に設定して返す（サーバーはこの真偽で後続の動作を変える）。
+///
+/// <para><b>LSP の読み取りスレッドで発火し、ハンドラが戻るまでサーバーは待つ。</b>
+/// 抽出リファクタリングを <c>workspace/executeCommand</c> で実行するサーバー（tsserver 系）は
+/// この経路でしか編集を返さないので、未処理＝リファクタリングが無言で失敗する。</para></summary>
+public sealed class LspApplyEditEventArgs(LspWorkspaceEdit edit, string? label) : EventArgs
+{
+    public LspWorkspaceEdit Edit { get; } = edit;
+    /// <summary>サーバーが付けた操作名（Undo の見出しに使える）。</summary>
+    public string? Label { get; } = label;
+    public bool Applied { get; set; }
+    public string? FailureReason { get; set; }
+}
+
 public interface ILspClient : IDisposable
 {
     bool IsRunning { get; }
@@ -28,7 +43,22 @@ public interface ILspClient : IDisposable
     IReadOnlyList<string> CompletionTriggerCharacters => ["."];
     /// <summary>セマンティックトークンの凡例（トークン種別・修飾子）。InitializeAsync 後に確定する。</summary>
     SemanticTokensLegend? SemanticTokensLegend { get; }
+    /// <summary>サーバーが申告した code action kind の一覧。空は「申告なし」で、
+    /// この場合 <c>only</c> を絞っても意味がある保証はない（全件取得して自前で分類する）。
+    /// InitializeAsync 後に確定する。</summary>
+    IReadOnlyList<string> CodeActionKinds => [];
+    /// <summary>サーバーが <c>codeAction/resolve</c> をサポートしているか。InitializeAsync 後に確定する。
+    /// Roslyn はリファクタリングの edit を必ず解決時に作るため、これが false のサーバーとは
+    /// 挙動が根本的に違う。</summary>
+    bool SupportsCodeActionResolve => false;
+    /// <summary>サーバーが <c>workspace/executeCommand</c> で受け付けるコマンド名。
+    /// 空は未申告＝コマンド型 code action は実行できないものとして扱う。</summary>
+    IReadOnlyList<string> ExecuteCommandNames => [];
+
     event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
+
+    /// <summary>サーバー起点の <c>workspace/applyEdit</c>。<see cref="LspApplyEditEventArgs"/> 参照。</summary>
+    event EventHandler<LspApplyEditEventArgs>? ApplyEditRequested;
 
     /// <summary>プロセス/接続が <see cref="IDisposable.Dispose"/> 以外の理由で死んだとき1回だけ発火する。
     /// ホスト側のプールがこれを見て作り直す。</summary>
@@ -54,6 +84,27 @@ public interface ILspClient : IDisposable
     Task<IReadOnlyList<LspSymbolInformation>> GetWorkspaceSymbolsAsync(string query, CancellationToken ct = default);
     Task<IReadOnlyList<DocumentSymbol>> GetDocumentSymbolsAsync(string uri, CancellationToken ct = default);
     Task<IReadOnlyList<LspCodeAction>> GetCodeActionsAsync(string uri, LspRange range, CancellationToken ct = default);
+
+    /// <summary>範囲と kind を指定して code action を取得する。
+    /// <paramref name="only"/> は <c>context.only</c>（例: <c>["refactor"]</c>）で、
+    /// リファクタリング一覧に quick fix を混ぜないために使う。null なら絞り込まない。
+    /// <paramref name="diagnostics"/> は <c>context.diagnostics</c>——quick fix を要求するときは
+    /// 対象の診断を渡さないと候補を出さないサーバーがある。
+    /// 既定実装は位置版へ委譲する（未対応クライアント向けの劣化動作）。</summary>
+    Task<IReadOnlyList<LspCodeAction>> GetCodeActionsAsync(
+        string uri, LspRange range, IReadOnlyList<string>? only,
+        IReadOnlyList<LspDiagnostic>? diagnostics, CancellationToken ct = default)
+        => GetCodeActionsAsync(uri, range, ct);
+
+    /// <summary><c>codeAction/resolve</c> で edit を確定させる。解決できなければ null。
+    /// <see cref="LspCodeAction.RawJson"/> を持たないアクションは解決できない。</summary>
+    Task<LspCodeAction?> ResolveCodeActionAsync(LspCodeAction action, CancellationToken ct = default)
+        => Task.FromResult<LspCodeAction?>(null);
+
+    /// <summary><c>workspace/executeCommand</c> でコマンド型 code action を実行する。
+    /// 編集はこの応答ではなく、サーバー起点の <see cref="ApplyEditRequested"/> で返ってくる。</summary>
+    Task<bool> ExecuteCommandAsync(LspCodeActionCommand command, CancellationToken ct = default)
+        => Task.FromResult(false);
     Task<IReadOnlyList<InlayHint>> GetInlayHintsAsync(string uri, LspRange range, CancellationToken ct = default);
     Task<SemanticToken[]?> GetSemanticTokensAsync(string uri, CancellationToken ct = default);
     /// <summary>プル型診断 (textDocument/diagnostic) を1ファイル分取得する。

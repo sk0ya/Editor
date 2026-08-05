@@ -43,12 +43,49 @@ public sealed class LspClient : ILspClient
     public bool SupportsWorkspaceDiagnostics { get; private set; }
     public IReadOnlyList<string> CompletionTriggerCharacters { get; private set; } = ["."];
     public SemanticTokensLegend? SemanticTokensLegend { get; private set; }
+    public IReadOnlyList<string> CodeActionKinds { get; private set; } = [];
+    public bool SupportsCodeActionResolve { get; private set; }
+    public IReadOnlyList<string> ExecuteCommandNames { get; private set; } = [];
+
+    public event EventHandler<LspApplyEditEventArgs>? ApplyEditRequested;
 
     public LspClient(string executable, IEnumerable<string> args, string? workingDir = null)
     {
         _process = new LspProcess(executable, args, workingDir);
         _process.NotificationReceived += OnNotification;
         _process.Exited += () => Exited?.Invoke();
+        _process.ServerRequestHandler = OnServerRequest;
+    }
+
+    /// <summary>サーバー起点の要求のうち、ホストが実際に処理できるものを引き受ける。
+    /// 関知しないものは null を返して <see cref="LspProcess.CreateServerRequestResult"/> の最小応答へ渡す。</summary>
+    private object? OnServerRequest(string method, JsonElement @params)
+    {
+        if (!string.Equals(method, "workspace/applyEdit", StringComparison.Ordinal)) return null;
+        if (ApplyEditRequested is not { } handler) return null;
+
+        try
+        {
+            if (@params.ValueKind != JsonValueKind.Object ||
+                !@params.TryGetProperty("edit", out var editEl) ||
+                ParseWorkspaceEdit(editEl) is not { } edit)
+                return new { applied = false, failureReason = "編集内容を解釈できませんでした。" };
+
+            var label = @params.TryGetProperty("label", out var labelEl) ? labelEl.GetString() : null;
+            var args = new LspApplyEditEventArgs(edit, label);
+            handler(this, args);
+            return new
+            {
+                applied = args.Applied,
+                failureReason = args.Applied
+                    ? null
+                    : args.FailureReason ?? "ホストが編集を適用しませんでした。"
+            };
+        }
+        catch (Exception ex)
+        {
+            return new { applied = false, failureReason = ex.Message };
+        }
     }
 
     public async Task InitializeAsync(string rootUri)
@@ -84,6 +121,30 @@ public sealed class LspClient : ILspClient
                     rangeFormatting = new { },
                     rename = new { },
                     references = new { },
+                    // codeActionLiteralSupport を宣言しないサーバーは旧仕様の Command[] しか返さない
+                    // （kind が無いのでリファクタリングと quick fix を区別できない）。
+                    // resolveSupport / dataSupport は Roslyn 系が必須——一覧では data だけを返し、
+                    // edit は codeAction/resolve で初めて作るため、宣言しないと候補が空か edit なしになる。
+                    codeAction = new
+                    {
+                        dynamicRegistration = false,
+                        isPreferredSupport = true,
+                        disabledSupport = true,
+                        dataSupport = true,
+                        resolveSupport = new { properties = new[] { "edit" } },
+                        codeActionLiteralSupport = new
+                        {
+                            codeActionKind = new
+                            {
+                                valueSet = new[]
+                                {
+                                    "", "quickfix", "refactor", "refactor.extract", "refactor.inline",
+                                    "refactor.rewrite", "refactor.move", "source", "source.organizeImports",
+                                    "source.fixAll"
+                                }
+                            }
+                        }
+                    },
                     foldingRange = new { },
                     selectionRange = new { },
                     diagnostic = new { dynamicRegistration = false, relatedDocumentSupport = false },
@@ -114,6 +175,17 @@ public sealed class LspClient : ILspClient
                 {
                     symbol = new { },
                     diagnostics = new { refreshSupport = false },
+                    // コマンド型リファクタリング（tsserver 系の「関数へ抽出」等）は
+                    // executeCommand → サーバー起点の applyEdit で編集が返る。applyEdit を
+                    // 宣言しないと、そもそもコマンドを出さないサーバーがある。
+                    applyEdit = true,
+                    executeCommand = new { dynamicRegistration = false },
+                    workspaceEdit = new
+                    {
+                        documentChanges = true,
+                        resourceOperations = new[] { "create", "rename", "delete" },
+                        failureHandling = "abort"
+                    },
                     // これを宣言しないと InitializeParams.workspaceFolders は無視される
                     // (Roslyn / rust-analyzer はフォルダを取り込む前にこの capability を見る)。
                     workspaceFolders = true
@@ -143,6 +215,8 @@ public sealed class LspClient : ILspClient
             _diagnosticIdentifier = LspCapabilityParser.DocumentDiagnosticIdentifier(caps);
             SupportsWorkspaceDiagnostics = LspCapabilityParser.SupportsWorkspaceDiagnostics(caps);
             CompletionTriggerCharacters = ParseCompletionTriggerCharacters(caps);
+            (CodeActionKinds, SupportsCodeActionResolve) = ParseCodeActionProvider(caps);
+            ExecuteCommandNames = ParseExecuteCommandNames(caps);
             if (caps.TryGetProperty("semanticTokensProvider", out var stp) &&
                 stp.ValueKind == JsonValueKind.Object &&
                 stp.TryGetProperty("legend", out var legend))
@@ -200,6 +274,30 @@ public sealed class LspClient : ILspClient
         foreach (var item in arr.EnumerateArray())
             if (item.GetString() is string s) list.Add(s);
         return [.. list];
+    }
+
+    /// <summary><c>codeActionProvider</c> から対応 kind と resolve 対応を読む。
+    /// <c>true</c>（真偽値）で返すサーバーは kind を申告しないので空一覧＝「絞り込まず全件取る」。</summary>
+    internal static (IReadOnlyList<string> Kinds, bool SupportsResolve) ParseCodeActionProvider(
+        JsonElement capabilities)
+    {
+        if (!capabilities.TryGetProperty("codeActionProvider", out var provider))
+            return ([], false);
+        if (provider.ValueKind != JsonValueKind.Object)
+            return ([], false);
+
+        var kinds = ParseStringArray(provider, "codeActionKinds");
+        bool resolve = provider.TryGetProperty("resolveProvider", out var rp) &&
+                       rp.ValueKind == JsonValueKind.True;
+        return (kinds, resolve);
+    }
+
+    internal static IReadOnlyList<string> ParseExecuteCommandNames(JsonElement capabilities)
+    {
+        if (!capabilities.TryGetProperty("executeCommandProvider", out var provider) ||
+            provider.ValueKind != JsonValueKind.Object)
+            return [];
+        return ParseStringArray(provider, "commands");
     }
 
     internal static IReadOnlyList<string> ParseCompletionTriggerCharacters(JsonElement capabilities)
@@ -651,11 +749,20 @@ public sealed class LspClient : ILspClient
         catch { return []; }
     }
 
-    public async Task<IReadOnlyList<LspCodeAction>> GetCodeActionsAsync(
+    public Task<IReadOnlyList<LspCodeAction>> GetCodeActionsAsync(
         string uri, LspRange range, CancellationToken ct = default)
+        => GetCodeActionsAsync(uri, range, only: null, diagnostics: null, ct);
+
+    public async Task<IReadOnlyList<LspCodeAction>> GetCodeActionsAsync(
+        string uri, LspRange range, IReadOnlyList<string>? only,
+        IReadOnlyList<LspDiagnostic>? diagnostics, CancellationToken ct = default)
     {
         try
         {
+            object context = only is { Count: > 0 }
+                ? new { diagnostics = SerializeDiagnostics(diagnostics), only = only.ToArray() }
+                : new { diagnostics = SerializeDiagnostics(diagnostics) };
+
             var result = await _process.SendRequestAsync("textDocument/codeAction", new
             {
                 textDocument = new { uri },
@@ -664,25 +771,120 @@ public sealed class LspClient : ILspClient
                     start = new { line = range.Start.Line, character = range.Start.Character },
                     end   = new { line = range.End.Line,   character = range.End.Character }
                 },
-                context = new { diagnostics = Array.Empty<object>() }
+                context
             }, ct);
 
             if (result is null || result.Value.ValueKind != JsonValueKind.Array) return [];
 
             var list = new List<LspCodeAction>();
             foreach (var item in result.Value.EnumerateArray())
-            {
-                if (!item.TryGetProperty("title", out var titleEl)) continue;
-                var title = titleEl.GetString() ?? "";
-                var kind = item.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null;
-                LspWorkspaceEdit? edit = null;
-                if (item.TryGetProperty("edit", out var editEl))
-                    edit = ParseWorkspaceEdit(editEl);
-                list.Add(new LspCodeAction(title, kind, edit));
-            }
+                if (ParseCodeAction(item) is { } action)
+                    list.Add(action);
             return list;
         }
         catch { return []; }
+    }
+
+    /// <summary>code action 1件を解釈する。旧仕様の <c>Command</c>（title + command が直下にある形）と
+    /// <c>CodeAction</c> リテラルの両方を受ける。</summary>
+    internal static LspCodeAction? ParseCodeAction(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object ||
+            !item.TryGetProperty("title", out var titleEl)) return null;
+
+        var title = titleEl.GetString() ?? "";
+        var kind = item.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null;
+
+        LspWorkspaceEdit? edit = null;
+        if (item.TryGetProperty("edit", out var editEl))
+            edit = ParseWorkspaceEdit(editEl);
+
+        // CodeAction リテラルは command がオブジェクト、旧仕様の Command は command が文字列で
+        // title/arguments と同じ階層に並ぶ。前者は入れ子を、後者は item 自身を読む。
+        LspCodeActionCommand? command = item.TryGetProperty("command", out var cmdEl)
+            ? cmdEl.ValueKind == JsonValueKind.Object ? ParseCommand(cmdEl) : ParseCommand(item)
+            : null;
+
+        bool preferred = item.TryGetProperty("isPreferred", out var pref) &&
+                         pref.ValueKind == JsonValueKind.True;
+        string? disabled = item.TryGetProperty("disabled", out var dis) &&
+                           dis.ValueKind == JsonValueKind.Object &&
+                           dis.TryGetProperty("reason", out var reason)
+            ? reason.GetString()
+            : null;
+
+        return new LspCodeAction(title, kind, edit, command, item.GetRawText(), preferred, disabled);
+    }
+
+    private static LspCodeActionCommand? ParseCommand(JsonElement el)
+    {
+        if (el.ValueKind != JsonValueKind.Object ||
+            !el.TryGetProperty("command", out var cmdEl) ||
+            cmdEl.ValueKind != JsonValueKind.String ||
+            cmdEl.GetString() is not { Length: > 0 } name) return null;
+
+        string? title = el.TryGetProperty("title", out var t) ? t.GetString() : null;
+        List<string>? args = null;
+        if (el.TryGetProperty("arguments", out var argsEl) && argsEl.ValueKind == JsonValueKind.Array)
+        {
+            args = [];
+            foreach (var a in argsEl.EnumerateArray()) args.Add(a.GetRawText());
+        }
+        return new LspCodeActionCommand(name, title, args);
+    }
+
+    private static object[] SerializeDiagnostics(IReadOnlyList<LspDiagnostic>? diagnostics)
+    {
+        if (diagnostics is not { Count: > 0 }) return [];
+        return [.. diagnostics.Select(d => (object)new
+        {
+            range = new
+            {
+                start = new { line = d.Range.Start.Line, character = d.Range.Start.Character },
+                end   = new { line = d.Range.End.Line,   character = d.Range.End.Character }
+            },
+            severity = (int)d.Severity,
+            message = d.Message,
+            source = d.Source,
+            code = d.Code
+        })];
+    }
+
+    /// <summary>未解決の code action を <c>codeAction/resolve</c> で確定させる。
+    /// サーバーが返した元 JSON をそのまま送り返す必要がある（<c>data</c> はサーバー固有）。</summary>
+    public async Task<LspCodeAction?> ResolveCodeActionAsync(
+        LspCodeAction action, CancellationToken ct = default)
+    {
+        if (action.RawJson is not { Length: > 0 } raw) return null;
+        try
+        {
+            using var payload = JsonDocument.Parse(raw);
+            var result = await _process.SendRequestAsync("codeAction/resolve", payload.RootElement, ct);
+            if (result is null || result.Value.ValueKind != JsonValueKind.Object) return null;
+            return ParseCodeAction(result.Value);
+        }
+        catch { return null; }
+    }
+
+    public async Task<bool> ExecuteCommandAsync(
+        LspCodeActionCommand command, CancellationToken ct = default)
+    {
+        // 引数はサーバーが返した JSON をそのまま戻す。再構成すると数値型や null が落ちる。
+        var documents = new List<JsonDocument>();
+        try
+        {
+            foreach (var json in command.ArgumentsJson ?? [])
+                documents.Add(JsonDocument.Parse(json));
+
+            await _process.SendRequestAsync("workspace/executeCommand", new
+            {
+                command = command.Command,
+                arguments = documents.Select(d => d.RootElement).ToArray()
+            }, ct);
+            return true;
+        }
+        catch { return false; }
+        finally { foreach (var d in documents) d.Dispose(); }
     }
 
     public async Task<IReadOnlyList<InlayHint>> GetInlayHintsAsync(
@@ -1051,12 +1253,27 @@ public sealed class LspClient : ILspClient
                 changes[LspUri.Normalize(prop.Name)] = edits;
             }
         }
-        // "documentChanges": [ { textDocument: {uri}, edits: [...] } ]
-        else if (el.TryGetProperty("documentChanges", out var dcEl) &&
-                 dcEl.ValueKind == JsonValueKind.Array)
+        // "documentChanges": [ { textDocument: {uri}, edits: [...] } | {kind: "create"|"rename"|"delete"} ]
+        // ファイル操作は「クラスに抽出」「型をファイルへ移動」で本文の編集と一緒に来るので、
+        // ここで落とすと新しいファイルが生まれず、そこへの編集だけが宙に浮く。
+        // （LSP 上 changes と documentChanges は排他。両方あるサーバーは documentChanges を正とする
+        //  仕様なので、changes を読めたときはこちらへ来ない。）
+        var fileOperations = new List<LspFileOperation>();
+        if (changes.Count == 0 &&
+            el.TryGetProperty("documentChanges", out var dcEl) &&
+            dcEl.ValueKind == JsonValueKind.Array)
         {
             foreach (var dc in dcEl.EnumerateArray())
             {
+                if (dc.ValueKind != JsonValueKind.Object) continue;
+
+                if (dc.TryGetProperty("kind", out var kindEl) && kindEl.ValueKind == JsonValueKind.String)
+                {
+                    if (ParseFileOperation(dc, kindEl.GetString()) is { } operation)
+                        fileOperations.Add(operation);
+                    continue;
+                }
+
                 if (!dc.TryGetProperty("textDocument", out var td) ||
                     !td.TryGetProperty("uri", out var uriEl)) continue;
                 var fileUri = LspUri.Normalize(uriEl.GetString() ?? "");
@@ -1070,12 +1287,45 @@ public sealed class LspClient : ILspClient
                     foreach (var e in editsEl.EnumerateArray())
                         if (e.TryGetProperty("range", out var r) && e.TryGetProperty("newText", out var t))
                             edits.Add(new LspTextEdit(ParseRange(r), t.GetString() ?? ""));
-                changes[fileUri] = edits;
+                // 同一 URI が複数回現れる（作成→追記）ことがあるので上書きせず連結する。
+                changes[fileUri] = changes.TryGetValue(fileUri, out var existing)
+                    ? [.. existing, .. edits]
+                    : edits;
                 versions[fileUri] = version;
             }
         }
 
-        return changes.Count == 0 ? null : new LspWorkspaceEdit(changes, versions);
+        return changes.Count == 0 && fileOperations.Count == 0
+            ? null
+            : new LspWorkspaceEdit(changes, versions, fileOperations);
+    }
+
+    private static LspFileOperation? ParseFileOperation(JsonElement el, string? kind)
+    {
+        bool Option(string name) =>
+            el.TryGetProperty("options", out var options) &&
+            options.ValueKind == JsonValueKind.Object &&
+            options.TryGetProperty(name, out var value) &&
+            value.ValueKind == JsonValueKind.True;
+
+        string? Uri(string name) =>
+            el.TryGetProperty(name, out var value) && value.GetString() is { Length: > 0 } text
+                ? LspUri.Normalize(text)
+                : null;
+
+        return kind switch
+        {
+            "create" when Uri("uri") is { } uri =>
+                new LspFileOperation(LspFileOperationKind.Create, uri,
+                    Overwrite: Option("overwrite"), IgnoreIfExists: Option("ignoreIfExists")),
+            "rename" when Uri("oldUri") is { } oldUri && Uri("newUri") is { } newUri =>
+                new LspFileOperation(LspFileOperationKind.Rename, oldUri, newUri,
+                    Overwrite: Option("overwrite"), IgnoreIfExists: Option("ignoreIfExists")),
+            "delete" when Uri("uri") is { } uri =>
+                new LspFileOperation(LspFileOperationKind.Delete, uri,
+                    Recursive: Option("recursive"), IgnoreIfNotExists: Option("ignoreIfNotExists")),
+            _ => null,
+        };
     }
 
     private static LspRange ParseRange(JsonElement el)

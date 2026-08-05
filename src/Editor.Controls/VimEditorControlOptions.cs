@@ -28,6 +28,14 @@ public sealed class VimEditorControlOptions
     /// are unavailable rather than editing a table nobody reads.
     /// </summary>
     public ILspServerAdmin? LspServerAdmin { get; init; }
+    /// <summary>
+    /// ホストが右クリックメニューへ自前の「名前の変更」を足すときに true にする。
+    /// コントロールはネイティブの "Rename Symbol" 項目を出さなくなるので、同じ操作が2つ並ばない
+    /// （ホストがリファクタリング一式を自分のメニューへまとめる場合に使う。Loomo 設計書 §32）。
+    /// <c>:Rename</c>・<c>gR</c> などのコマンド経路はこのフラグに関係なく残る。
+    /// </summary>
+    public bool HostProvidesRenameMenuItem { get; init; }
+
     public SyntaxLanguageRegistry? SyntaxLanguages { get; init; }
     public EditorCommandRegistry? Commands { get; init; }
     public IServiceProvider? CommandServices { get; init; }
