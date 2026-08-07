@@ -2925,7 +2925,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (!branchMatchesCurrentFile)
             _ = RefreshGitDiffAsync();
         ActiveStatusBar.UpdateMode(_engine.Mode, _engine.VimEnabled, _engine.Options.ShowMode);
-        ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified, buf.FileFormat);
+        ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified, buf.FileFormat, buf.FileEncoding);
         // Ownership already decides whether this reaches the shared bar, so no separate
         // keyboard-focus test is needed here (focus was a weaker stand-in for "is this the
         // current editor" — it failed when the host activated a tab from a side panel).
