@@ -1113,6 +1113,28 @@ internal sealed class VimEngineRuntime
     }
 
     /// <summary>
+    /// Points the current buffer at a new path without touching its content, undo history or
+    /// caret — for a host that renamed/moved the open file behind the editor's back.
+    /// When the extension changes the syntax language is re-detected (and FileType autocmds
+    /// re-run), so highlighting follows the new name instead of staying on the old one.
+    /// </summary>
+    public void RebaseFilePath(string newPath)
+    {
+        if (string.IsNullOrEmpty(newPath)) return;
+        var oldPath = CurrentBuffer.FilePath;
+        CurrentBuffer.FilePath = newPath;
+        _registerManager.SetCurrentFileName(newPath);   // "%" register
+
+        bool extensionChanged = !string.Equals(
+            Path.GetExtension(oldPath ?? ""), Path.GetExtension(newPath), StringComparison.OrdinalIgnoreCase);
+        if (!extensionChanged) return;
+
+        _syntaxEngine.DetectLanguage(newPath);
+        _syntaxEngine.Invalidate();
+        _autocmdRunner.RunAutocmds("FileType", AutocmdRunner.GetFileTypeNames(newPath));
+    }
+
+    /// <summary>
     /// Replace the whole buffer, keeping the caret on the same line/column as best it can,
     /// clamping to the new buffer's bounds. Callers that want the caret at the top of a fresh
     /// document (e.g. opening a new file) should set the cursor explicitly afterward.

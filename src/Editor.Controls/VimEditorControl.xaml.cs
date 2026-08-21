@@ -2049,6 +2049,29 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         SetupFileWatcher(path);
     }
 
+    /// <summary>
+    /// Follows the open file to a new path after the host renamed or moved it on disk.
+    /// The buffer content, undo history, caret and unsaved edits are all kept — only the
+    /// identity moves: syntax highlighting is re-detected when the extension changes, the
+    /// LSP document is re-opened under the new URI, and the file watcher and git diff
+    /// re-target the new path. Nothing is read from disk, so a dirty buffer stays dirty.
+    /// </summary>
+    public void RebaseFilePath(string newPath)
+    {
+        if (string.IsNullOrEmpty(newPath)) return;
+        var oldPath = _engine.CurrentBuffer.FilePath;
+        if (string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase)) return;
+
+        _engine.RebaseFilePath(newPath);
+        UpdateAll();
+        // 旧URIの didClose と新URIの didOpen は OnFileOpened が面倒を見る。拡張子が変われば
+        // 担当サーバーごと変わるので、URIだけ差し替えるのでは足りない。
+        _lspView.OnFileOpened(newPath, _engine.CurrentBuffer.Text.GetText());
+        SetupFileWatcher(newPath);
+        _ = RefreshGitDiffAsync();
+        PushStatusBarState();
+    }
+
     private void ReloadCurrentFile()
     {
         var filePath = _engine.CurrentBuffer.FilePath;
