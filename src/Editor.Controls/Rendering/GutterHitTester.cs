@@ -4,13 +4,15 @@ using System.Windows;
 namespace Editor.Controls.Rendering;
 
 // EditorCanvas の OnMouseMove/OnMouseLeftButtonDown が個別に計算していた
-// 「blame | ブレークポイント | 行番号 | フォールド」列の境界チェックを1箇所にまとめたもの。
+// 「blame | ブレークポイント | テスト | 行番号 | フォールド」列の境界チェックを1箇所にまとめたもの。
 // バッファ行への変換（fold-aware な Y→行番号変換）は EditorCanvas 側の HitTestGutterLine に残し、
 // コンストラクタでデリゲートとして受け取る。
 internal sealed class GutterHitTester
 {
-    // 各列の左端からの幅。GetGutterMetrics() の戻り値 + _blameColWidth をそのまま渡す。
-    public readonly record struct Boundaries(double BlameColWidth, double BpColWidth, double LineNumWidth, double GutterWidth);
+    // 各列の幅。フィールドの並びは実際の列の並び（左→右）と同じ。GetGutterMetrics() の戻り値 +
+    // _blameColWidth をそのまま渡す。無効な列は幅 0 で来るので、その列のヒットテストは必ず false になる。
+    public readonly record struct Boundaries(
+        double BlameColWidth, double BpColWidth, double TestColWidth, double LineNumWidth, double GutterWidth);
 
     private readonly Func<Point, int> _lineResolver;
 
@@ -41,9 +43,21 @@ internal sealed class GutterHitTester
         return false;
     }
 
+    public bool TryHitTestGutter(Point point, Boundaries b, out int line)
+    {
+        double left = b.BlameColWidth + b.BpColWidth;
+        if (b.TestColWidth > 0 && point.X >= left && point.X < left + b.TestColWidth)
+        {
+            line = _lineResolver(point);
+            return true;
+        }
+        line = -1;
+        return false;
+    }
+
     public bool TryHitFoldGutter(Point point, Boundaries b, out int line)
     {
-        if (point.X >= b.BlameColWidth + b.BpColWidth + b.LineNumWidth && point.X < b.GutterWidth)
+        if (point.X >= b.BlameColWidth + b.BpColWidth + b.TestColWidth + b.LineNumWidth && point.X < b.GutterWidth)
         {
             line = _lineResolver(point);
             return true;
@@ -54,7 +68,7 @@ internal sealed class GutterHitTester
 
     public bool TryHitLineNumberGutter(Point point, Boundaries b, out int line)
     {
-        if (point.X < b.BlameColWidth + b.BpColWidth + b.LineNumWidth)
+        if (point.X < b.BlameColWidth + b.BpColWidth + b.TestColWidth + b.LineNumWidth)
         {
             line = _lineResolver(point);
             return true;

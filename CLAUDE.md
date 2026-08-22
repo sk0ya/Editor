@@ -159,6 +159,28 @@ Resolution order in `HandleFormatDocumentAsync`: (1) a configured CLI formatter 
 
 **Managing formatters (ex commands):** `:Fmt` / `:FmtList`, `:FmtSet <ext> <executable> [args...]` (use `{file}` for the path, e.g. `:FmtSet .md prettier --stdin-filepath {file}`), `:FmtRemove <ext>`.
 
+## Gutter columns (host-driven)
+
+The gutter is laid out left→right as **blame | breakpoint | test | line number | fold | text**. The two
+host-driven columns (breakpoint, test) are **off by default and 0 px wide** until the host enables them, so a
+standalone editor's layout is untouched. Widths come from `EditorCanvas.GetGutterMetrics()` and hit-testing from
+`Rendering/GutterHitTester.cs` — the `Boundaries` record's fields are in column order, so adding a column means
+touching exactly those two places (plus one `Draw*` call in `OnRender`).
+
+- **Breakpoints** (`Rendering/EditorCanvas.Breakpoints.cs`, `VimEditorControl.Debug.cs`) — `SetBreakpointsEnabled`,
+  `SetBreakpoints`, `SetExecutionLine`, `BreakpointToggled`, plus the DataTip hover bridge.
+- **Test glyphs** (`Rendering/EditorCanvas.TestGlyphs.cs`, `VimEditorControl.TestGlyphs.cs`) — the gutter side of
+  "run this test ▶ / here's its result". **Discovery, execution and pass/fail judgement are entirely the host's
+  job**; the editor only draws a glyph on a line and reports clicks. `SetTestGlyphsEnabled(bool)`,
+  `SetTestGlyphs(IReadOnlyList<EditorTestGlyph>)` (**full replace**; an empty list clears), and
+  `event Action<int>? TestGlyphClicked` (0-based **buffer** line, raised only for lines that carry a glyph;
+  a click anywhere in the column is swallowed rather than moving the caret). `EditorTestGlyph(int Line0,
+  TestGlyphKind Kind, string? Tooltip = null)` with `TestGlyphKind` = `Run`/`Passed`/`Failed`/`Skipped`/`Running`;
+  `Tooltip` is shown on hover. Colors come from `EditorTheme` (`GitAdded`/`DiagnosticError`/`DiagnosticHint`/
+  `DiagnosticWarning`/`LineNumberFg`) — no new hardcoded palette.
+
+Both columns skip wrapped continuation rows, so a glyph is drawn once per buffer line.
+
 ## Adding Syntax Highlighting for a New Language
 
 Implement `ISyntaxLanguage` (in `Editor.Core.Syntax`) and register the instance in the array inside `SyntaxEngine`. The interface requires `Name`, `Extensions`, and `Tokenize(string[] lines) → LineTokens[]`. Available `TokenKind` values: `Text`, `Keyword`, `Type`, `String`, `Comment`, `Number`, `Operator`, `Preprocessor`, `Identifier`, `Attribute`.

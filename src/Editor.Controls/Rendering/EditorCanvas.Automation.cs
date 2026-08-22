@@ -141,7 +141,7 @@ public partial class EditorCanvas
         {
             int sc = line == a.Line ? a.Column : 0, ec = line == b.Line ? b.Column : _lines[line].Length;
             int visual = Array.FindIndex(_visualLines, v => v.BufferLine == line); if (visual < 0) continue;
-            var (_, _, _, gutter) = GetGutterMetrics(); Point local = new(gutter + sc * _charWidth - _scrollOffsetX, visual * _lineHeight - _scrollOffsetY);
+            var (_, _, _, _, gutter) = GetGutterMetrics(); Point local = new(gutter + sc * _charWidth - _scrollOffsetX, visual * _lineHeight - _scrollOffsetY);
             Point screen = PresentationSource.FromVisual(this) is null ? local : PointToScreen(local);
             result.Add(screen.X); result.Add(screen.Y); result.Add(Math.Max(_charWidth, (ec - sc) * _charWidth)); result.Add(_lineHeight);
         }

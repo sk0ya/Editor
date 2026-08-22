@@ -809,6 +809,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.BlameClicked += (line, blame) =>
             BlameCommitClicked?.Invoke(this, new Git.BlameCommitClickedEventArgs(line, blame));
         Canvas.BreakpointToggled += OnCanvasBreakpointToggled;
+        Canvas.TestGlyphClicked += OnCanvasTestGlyphClicked;
         Canvas.DataTipHoverChanged += OnCanvasDataTipHoverChanged;
         Canvas.DataTipHoverEnded += OnCanvasDataTipHoverEnded;
         Canvas.LinkClicked += OnCanvasLinkClicked;

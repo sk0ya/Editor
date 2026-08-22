@@ -753,7 +753,7 @@ public partial class EditorCanvas : FrameworkElement
         if (_batchingLayout) { _layoutDirtyDuringBatch = true; return; }
 
         MeasureChar();
-        var (_, _, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, _, gutterWidth) = GetGutterMetrics();
         double minimapReserve = _showMinimap ? MinimapWidth : 0;
         double availableTextWidth = Math.Max(1, RenderSize.Width - gutterWidth - minimapReserve);
 
@@ -835,17 +835,27 @@ public partial class EditorCanvas : FrameworkElement
         return Math.Max(1, length);
     }
 
-    private (int bpColWidth, int lineNumWidth, double foldColWidth, int gutterWidth) GetGutterMetrics()
+    private (int bpColWidth, int testColWidth, int lineNumWidth, double foldColWidth, int gutterWidth) GetGutterMetrics()
     {
         // ブレークポイント列はガター最左に確保する。デバッグ無効時(_breakpointsEnabled=false)は幅0で
         // 従来のガター（行番号＋フォールド列）と完全に一致する＝既存利用に影響しない。
         int bpColWidth = _breakpointsEnabled ? (int)Math.Max(14.0, _charWidth + 2) : 0;
+        // テスト実行列も同じ流儀。ホストが SetTestGlyphsEnabled(true) を呼ぶまでは幅 0 ＝列そのものが無い。
+        int testColWidth = _testGlyphsEnabled ? (int)Math.Max(14.0, _charWidth + 2) : 0;
         int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
         double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
         // blame 左カラム（:Gblame 有効時のみ幅 > 0）はガターの最左＝ブレークポイント列よりさらに左に確保する。
-        // 各列の並びは blame | ブレークポイント | 行番号 | フォールド | 本文（x 位置は _blameColWidth 起点）。
-        int gutterWidth = (int)(_blameColWidth + bpColWidth + lineNumWidth + foldColWidth);
-        return (bpColWidth, lineNumWidth, foldColWidth, gutterWidth);
+        // 各列の並びは blame | ブレークポイント | テスト | 行番号 | フォールド | 本文（x 位置は _blameColWidth 起点）。
+        int gutterWidth = (int)(_blameColWidth + bpColWidth + testColWidth + lineNumWidth + foldColWidth);
+        return (bpColWidth, testColWidth, lineNumWidth, foldColWidth, gutterWidth);
+    }
+
+    // 現在のガター幅から作ったヒットテスト境界。列の並びと同じ順で詰めるので、
+    // 新しい列を足すときはここと GetGutterMetrics の2箇所だけを見ればよい。
+    private GutterHitTester.Boundaries CurrentGutterBoundaries()
+    {
+        var (bpColWidth, testColWidth, lineNumWidth, _, gutterWidth) = GetGutterMetrics();
+        return new GutterHitTester.Boundaries(_blameColWidth, bpColWidth, testColWidth, lineNumWidth, gutterWidth);
     }
 
     private void ClampScrollOffsets(bool raiseScrollChanged)
@@ -947,8 +957,8 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
-        var (bpColWidth, lineNumWidth, _, gutterWidth) = GetGutterMetrics();
-        var boundaries = new GutterHitTester.Boundaries(_blameColWidth, bpColWidth, lineNumWidth, gutterWidth);
+        var boundaries = CurrentGutterBoundaries();
+        double gutterWidth = boundaries.GutterWidth;
 
         // blame カラム右端のリサイズハンドル — ドラッグで幅の変更を開始する（CaptureMouse は取得済み）。
         if (IsOnBlameColEdge(point))
@@ -972,6 +982,13 @@ public partial class EditorCanvas : FrameworkElement
         if (_gutterHitTester.TryHitBreakpointGutter(point, boundaries, out int bpClickLine))
         {
             if (bpClickLine >= 0) BreakpointToggled?.Invoke(bpClickLine);
+            e.Handled = true;
+            return;
+        }
+
+        // テスト列のクリック — グリフのある行ならホストにその行のテスト実行を依頼する。
+        if (TryClickTestGlyphColumn(point))
+        {
             e.Handled = true;
             return;
         }
@@ -1083,14 +1100,14 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         // Update fold/breakpoint/blame hover state
-        var (bpColW, lineNumWidth2, _, gutterWidth2) = GetGutterMetrics();
-        var boundaries2 = new GutterHitTester.Boundaries(_blameColWidth, bpColW, lineNumWidth2, gutterWidth2);
+        var boundaries2 = CurrentGutterBoundaries();
 
         // blame カラム右端のリサイズハンドル上 — 左右カーソルを出し、他のホバー状態は解除する。
         if (IsOnBlameColEdge(point))
         {
             if (_hoveredBlameLine >= 0) { _hoveredBlameLine = -1; CloseBlameToolTip(); InvalidateVisual(); }
             SetHoveredBreakpointLine(-1);
+            SetHoveredTestGlyphLine(-1);
             ClearDataTipHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
             Cursor = System.Windows.Input.Cursors.SizeWE;
@@ -1108,11 +1125,25 @@ public partial class EditorCanvas : FrameworkElement
             InvalidateVisual();
         }
 
+        // テスト列のホバー（グリフのある行だけ。ツールチップの開閉も含めてここで一括更新する）。
+        bool inTestGutter = _gutterHitTester.TryHitTestGutter(point, boundaries2, out int testHoverLine);
+        SetHoveredTestGlyphLine(inTestGutter ? testHoverLine : -1);
+
         if (_gutterHitTester.TryHitBreakpointGutter(point, boundaries2, out int bpHoverLine))
         {
             // Hovering in breakpoint column — show a faint placeholder dot and a hand cursor.
             Cursor = bpHoverLine >= 0 ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
             SetHoveredBreakpointLine(bpHoverLine);
+            ClearDataTipHover();
+            if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+        }
+        else if (inTestGutter)
+        {
+            // テスト列上 — グリフのある行だけ手カーソル（押せる行だけを示す）。
+            Cursor = _hoveredTestGlyphLine >= 0
+                ? System.Windows.Input.Cursors.Hand
+                : System.Windows.Input.Cursors.Arrow;
+            SetHoveredBreakpointLine(-1);
             ClearDataTipHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
         }
@@ -1188,6 +1219,7 @@ public partial class EditorCanvas : FrameworkElement
         base.OnMouseLeave(e);
         if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
         if (_hoveredBlameLine >= 0) { _hoveredBlameLine = -1; InvalidateVisual(); }
+        SetHoveredTestGlyphLine(-1);
         CloseBlameToolTip();
         ClearDataTipHover();
         Cursor = System.Windows.Input.Cursors.IBeam;
@@ -1200,8 +1232,7 @@ public partial class EditorCanvas : FrameworkElement
 
         // 右クリックが blame ガター上なら、その行のコミット情報を控える（メニュー構築でホストへ渡す）。
         _rightClickBlame = null;
-        var (bpColWidth, lineNumWidth, _, gutterWidth) = GetGutterMetrics();
-        var boundaries = new GutterHitTester.Boundaries(_blameColWidth, bpColWidth, lineNumWidth, gutterWidth);
+        var boundaries = CurrentGutterBoundaries();
         if (_gutterHitTester.TryHitBlameGutter(point, boundaries, out int blameLine)
             && blameLine >= 0 && _blameLines.TryGetValue(blameLine, out var blame))
             _rightClickBlame = blame;
@@ -1270,7 +1301,7 @@ public partial class EditorCanvas : FrameworkElement
     {
         if (_lineHeight <= 0 || _charWidth <= 0) return (0, 0);
 
-        var (_, _, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, _, gutterWidth) = GetGutterMetrics();
 
         int visualLine = GetVisualLineIndexFromY(point.Y);
         var segment = GetVisualSegment(visualLine);
@@ -1321,7 +1352,7 @@ public partial class EditorCanvas : FrameworkElement
         }
         if (_charWidth > 0)
         {
-            var (_, _, _, gutterWidth) = GetGutterMetrics();
+            var (_, _, _, _, gutterWidth) = GetGutterMetrics();
             double minimapReserve = _showMinimap ? MinimapWidth : 0;
             double textAreaWidth = Math.Max(1, finalSize.Width - gutterWidth - minimapReserve);
             _visibleColumns = (int)(textAreaWidth / _charWidth) + 2;
@@ -1346,7 +1377,7 @@ public partial class EditorCanvas : FrameworkElement
         double contentBottom = needHorizBar ? Math.Max(0, size.Height - OverlayRenderer.ScrollbarSize) : size.Height;
         dc.PushClip(new RectangleGeometry(new Rect(0, 0, size.Width, contentBottom)));
 
-        var (bpColWidth, lineNumWidth, foldColWidth, gutterWidth) = GetGutterMetrics();
+        var (bpColWidth, testColWidth, lineNumWidth, foldColWidth, gutterWidth) = GetGutterMetrics();
         double textLeft = gutterWidth;
         var metrics = BuildGlyphMetrics();
 
@@ -1426,7 +1457,7 @@ public partial class EditorCanvas : FrameworkElement
                 if (drawNumberAndFold)
                 {
                     GutterRenderer.DrawLineNumberAndFold(dc, Theme, metrics, l, y,
-                        _blameColWidth, bpColWidth, lineNumWidth, foldColWidth,
+                        _blameColWidth, bpColWidth, testColWidth, lineNumWidth, foldColWidth,
                         _cursor.Line, _relativeNumber, _lineNumberWidth,
                         _closedFoldStarts, _openFoldStarts, _hoveredFoldLine, _gitDiff);
                 }
@@ -1442,6 +1473,11 @@ public partial class EditorCanvas : FrameworkElement
             // (right of the blame margin when blame is active).
             if (_breakpointsEnabled && drawNumberAndFold && bpColWidth > 0)
                 DrawBreakpointGlyph(dc, l, y, _blameColWidth, bpColWidth);
+
+            // テスト実行グリフ（ブレークポイント列の右）。折り返しの継続行には描かない＝
+            // ブレークポイント列と同じ「バッファ行の先頭ビジュアル行だけ」の扱い。
+            if (_testGlyphsEnabled && drawNumberAndFold && testColWidth > 0)
+                DrawTestGlyph(dc, l, y, _blameColWidth + bpColWidth, testColWidth);
 
             // Git blame margin (far-left column of the gutter)
             if (_blameColWidth > 0)
@@ -2464,7 +2500,7 @@ public partial class EditorCanvas : FrameworkElement
     public Point GetCursorPixelPosition()
     {
         MeasureChar();
-        var (_, _, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, _, gutterWidth) = GetGutterMetrics();
         string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : string.Empty;
         int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);
         int cursorVisualLine = GetCursorVisualLine();
@@ -2775,7 +2811,7 @@ public partial class EditorCanvas : FrameworkElement
         }
         else
         {
-            var (_, _, _, gutterWidth) = GetGutterMetrics();
+            var (_, _, _, _, gutterWidth) = GetGutterMetrics();
             double viewportWidth = Math.Max(0, UsableViewportWidth - gutterWidth);
             string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : string.Empty;
             int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);
