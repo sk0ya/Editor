@@ -46,6 +46,8 @@ public partial class EditorCanvas
             _executionLine = -1;
             _hoveredBreakpointLine = -1;
         }
+        // 列の分だけ本文の左端が動く（折り返し幅・可視桁数に影響）ので、再描画に加えて再レイアウトも要求する。
+        InvalidateArrange();
         InvalidateVisual();
     }
 
