@@ -73,6 +73,15 @@ public partial class EditorCanvas
         InvalidateVisual();
     }
 
+    /// <summary>ブレークポイント列のクリック処理本体。テスト列の <c>TryClickTestGlyphColumn</c> と同じく、
+    /// マウスイベントから切り離して座標だけで叩けるようにしてある。列の外なら false。</summary>
+    internal bool TryClickBreakpointColumn(Point point)
+    {
+        if (!_gutterHitTester.TryHitBreakpointGutter(point, CurrentGutterBoundaries(), out int line)) return false;
+        if (line >= 0) BreakpointToggled?.Invoke(line);
+        return true;
+    }
+
     private void SetHoveredBreakpointLine(int line)
     {
         if (_hoveredBreakpointLine == line) return;

@@ -43,7 +43,7 @@ internal sealed class GutterHitTester
         return false;
     }
 
-    public bool TryHitTestGutter(Point point, Boundaries b, out int line)
+    public bool TryHitTestGlyphGutter(Point point, Boundaries b, out int line)
     {
         double left = b.BlameColWidth + b.BpColWidth;
         if (b.TestColWidth > 0 && point.X >= left && point.X < left + b.TestColWidth)
@@ -68,7 +68,10 @@ internal sealed class GutterHitTester
 
     public bool TryHitLineNumberGutter(Point point, Boundaries b, out int line)
     {
-        if (point.X < b.BlameColWidth + b.BpColWidth + b.TestColWidth + b.LineNumWidth)
+        // 行番号列そのものの範囲だけを見る。左端を左隣の列の右端に合わせておかないと、
+        // 列を1つ足すたびにこの範囲が黙って広がる（左の列とヒットが二重になる）。
+        double left = b.BlameColWidth + b.BpColWidth + b.TestColWidth;
+        if (point.X >= left && point.X < left + b.LineNumWidth)
         {
             line = _lineResolver(point);
             return true;

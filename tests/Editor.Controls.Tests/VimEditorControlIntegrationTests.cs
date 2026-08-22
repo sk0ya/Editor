@@ -92,5 +92,46 @@ public sealed class VimEditorControlIntegrationTests
         });
     }
 
-}
 
+    /// <summary>テストグリフのクリックはコントロールの公開イベントへそのまま転送され、
+    /// あわせてエディタへフォーカスが戻る（ホストのボタン操作でキャレットを失わないため）。</summary>
+    [Fact]
+    public void TestGlyphClick_IsForwardedByTheControl_AndRestoresFocus()
+    {
+        WpfTestHost.Run(() => WpfTestHost.WithLoadedControl<VimEditorControl>((editor, _) =>
+        {
+            editor.SetText(string.Join(Environment.NewLine, "one", "two", "three"));
+            editor.SetTestGlyphsEnabled(true);
+            editor.SetTestGlyphs([new Editor.Controls.Rendering.EditorTestGlyph(1, Editor.Controls.Rendering.TestGlyphKind.Run, "実行する")]);
+
+            var forwarded = new List<int>();
+            editor.TestGlyphClicked += forwarded.Add;
+
+            // Canvas 側のイベントが（列のクリック経由で）コントロールの公開イベントへ抜けてくる。
+            var canvas = editor.Canvas;
+            var lineHeight = (double)typeof(Editor.Controls.Rendering.EditorCanvas)
+                .GetField("_lineHeight", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(canvas)!;
+            var metrics = (System.Runtime.CompilerServices.ITuple)typeof(Editor.Controls.Rendering.EditorCanvas)
+                .GetMethod("GetGutterMetrics", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .Invoke(canvas, null)!;
+            double x = (int)metrics[0]! + (int)metrics[1]! / 2.0;
+
+            Assert.True(canvas.TryClickTestGlyphColumn(new Point(x, lineHeight * 1.5)));
+            Assert.Equal(new[] { 1 }, forwarded);
+            Assert.True(editor.IsKeyboardFocusWithin || canvas.IsFocused || editor.IsFocused);
+
+            // ファイルを切り替えたら前のファイルのグリフは残さない。
+            string path = Path.Combine(Path.GetTempPath(), $"editor-testglyph-{Guid.NewGuid():N}.txt");
+            File.WriteAllLines(path, new[] { "alpha", "beta", "gamma" });
+            try
+            {
+                editor.LoadFile(path);
+                forwarded.Clear();
+                Assert.True(canvas.TryClickTestGlyphColumn(new Point(x, lineHeight * 1.5)));
+                Assert.Empty(forwarded);
+            }
+            finally { File.Delete(path); }
+        }));
+    }
+}

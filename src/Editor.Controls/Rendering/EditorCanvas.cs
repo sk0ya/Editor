@@ -979,9 +979,8 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         // Breakpoint column click — toggle a breakpoint on that line.
-        if (_gutterHitTester.TryHitBreakpointGutter(point, boundaries, out int bpClickLine))
+        if (TryClickBreakpointColumn(point))
         {
-            if (bpClickLine >= 0) BreakpointToggled?.Invoke(bpClickLine);
             e.Handled = true;
             return;
         }
@@ -1042,6 +1041,9 @@ public partial class EditorCanvas : FrameworkElement
     {
         base.OnMouseMove(e);
         var point = e.GetPosition(this);
+        // ドラッグ・スクロールバー操作などで下の分岐を抜けても、位置だけは常に控えておく
+        // （テストグリフが後から届いたときのホバー再評価に使う）。
+        TrackMousePoint(point);
 
         if ((_draggingVScrollbar || _draggingHScrollbar) &&
             e.LeftButton == System.Windows.Input.MouseButtonState.Pressed)
@@ -1126,8 +1128,8 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         // テスト列のホバー（グリフのある行だけ。ツールチップの開閉も含めてここで一括更新する）。
-        bool inTestGutter = _gutterHitTester.TryHitTestGutter(point, boundaries2, out int testHoverLine);
-        SetHoveredTestGlyphLine(inTestGutter ? testHoverLine : -1);
+        bool inTestGlyphGutter = _gutterHitTester.TryHitTestGlyphGutter(point, boundaries2, out int testHoverLine);
+        SetHoveredTestGlyphLine(inTestGlyphGutter ? testHoverLine : -1);
 
         if (_gutterHitTester.TryHitBreakpointGutter(point, boundaries2, out int bpHoverLine))
         {
@@ -1137,7 +1139,7 @@ public partial class EditorCanvas : FrameworkElement
             ClearDataTipHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
         }
-        else if (inTestGutter)
+        else if (inTestGlyphGutter)
         {
             // テスト列上 — グリフのある行だけ手カーソル（押せる行だけを示す）。
             Cursor = _hoveredTestGlyphLine >= 0
@@ -1219,6 +1221,7 @@ public partial class EditorCanvas : FrameworkElement
         base.OnMouseLeave(e);
         if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
         if (_hoveredBlameLine >= 0) { _hoveredBlameLine = -1; InvalidateVisual(); }
+        TrackMousePoint(null);
         SetHoveredTestGlyphLine(-1);
         CloseBlameToolTip();
         ClearDataTipHover();

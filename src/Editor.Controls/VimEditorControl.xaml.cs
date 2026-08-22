@@ -2043,6 +2043,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         _multiCursorManager.Exit();
         ClearSelectionRangeState();
+        // テストグリフは行番号でしか結び付いていないので、別のファイルを載せた時点で無意味になる。
+        // ホストが新しい一覧を送るまでの間、前のファイルの ▶ や結果が残らないようここで捨てる。
+        Canvas.SetTestGlyphs([]);
         _engine.LoadFile(path);
         UpdateAll();
         _lspView.OnFileOpened(path, _engine.CurrentBuffer.Text.GetText());

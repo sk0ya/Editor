@@ -164,8 +164,10 @@ Resolution order in `HandleFormatDocumentAsync`: (1) a configured CLI formatter 
 The gutter is laid out left→right as **blame | breakpoint | test | line number | fold | text**. The two
 host-driven columns (breakpoint, test) are **off by default and 0 px wide** until the host enables them, so a
 standalone editor's layout is untouched. Widths come from `EditorCanvas.GetGutterMetrics()` and hit-testing from
-`Rendering/GutterHitTester.cs` — the `Boundaries` record's fields are in column order, so adding a column means
-touching exactly those two places (plus one `Draw*` call in `OnRender`).
+`Rendering/GutterHitTester.cs`, whose `Boundaries` record lists the columns in left→right order. Adding a column
+means touching **four** places: `GetGutterMetrics`, `Boundaries` + the neighbouring `TryHit*` ranges, the `Draw*`
+call in `OnRender`, and `GutterRenderer.DrawLineNumberAndFold` (its signature plus the two x calculations inside
+it, which offset the line number text and the fold chevron).
 
 - **Breakpoints** (`Rendering/EditorCanvas.Breakpoints.cs`, `VimEditorControl.Debug.cs`) — `SetBreakpointsEnabled`,
   `SetBreakpoints`, `SetExecutionLine`, `BreakpointToggled`, plus the DataTip hover bridge.
@@ -176,10 +178,23 @@ touching exactly those two places (plus one `Draw*` call in `OnRender`).
   `event Action<int>? TestGlyphClicked` (0-based **buffer** line, raised only for lines that carry a glyph;
   a click anywhere in the column is swallowed rather than moving the caret). `EditorTestGlyph(int Line0,
   TestGlyphKind Kind, string? Tooltip = null)` with `TestGlyphKind` = `Run`/`Passed`/`Failed`/`Skipped`/`Running`;
-  `Tooltip` is shown on hover. Colors come from `EditorTheme` (`GitAdded`/`DiagnosticError`/`DiagnosticHint`/
-  `DiagnosticWarning`/`LineNumberFg`) — no new hardcoded palette.
+  `Tooltip` is shown on hover and re-read on every `SetTestGlyphs`, so a `Running`→`Failed` swap under a
+  motionless cursor updates the open tooltip instead of leaving the stale text. Glyph colors come from
+  `EditorTheme` (`GitAdded`/`DiagnosticError`/`DiagnosticHint`/`DiagnosticWarning`/`LineNumberFg`); only the hover
+  ring is a fixed translucent brush, because the gutter background and the current-line background are nearly the
+  same in some themes.
 
 Both columns skip wrapped continuation rows, so a glyph is drawn once per buffer line.
+
+**Host contract for test glyphs**, none of which the editor does for you:
+
+- Glyphs are keyed by line number only, so they **do not follow inserted/deleted lines**. After any edit that
+  shifts lines (and after a `TextChanged` burst settles) the host must re-send the whole list.
+- `LoadFile` clears the glyphs, so switching documents in one control never shows the previous file's results;
+  the host re-sends for the newly opened file.
+- The column is **mouse-only** — there is deliberately no key binding, ex command or automation peer for it, and
+  a screen reader sees nothing. That is a host responsibility: a host that offers "run the test at the caret"
+  must expose it as its own command, and should treat the ▶ as a convenience on top, not the only route.
 
 ## Adding Syntax Highlighting for a New Language
 
