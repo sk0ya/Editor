@@ -76,8 +76,13 @@ This is unfixable after pushing, because a NuGet version can never be re-uploade
    Get-ChildItem "$sp\lib\net9.0-windows7.0" | ForEach-Object {
      "{0} {1}" -f $_.Name, [Diagnostics.FileVersionInfo]::GetVersionInfo($_.FullName).ProductVersion }
    ```
-   Check: nuspec version = `<VER>`; `repository commit=` **equals `git rev-parse HEAD`**; all three DLLs
-   present with `ProductVersion` = `<VER>+<HEAD>`; dependency group empty.
+   Check: nuspec version = `<VER>`; all DLLs present with `ProductVersion` = `<VER>+<HEAD>`, where
+   `<HEAD>` **equals `git rev-parse HEAD`**; dependency groups empty; `frameworkReference` on
+   `net9.0-windows7.0`; `README.md` at the package root.
+   The lib layout is `lib/net9.0/Editor.Core.dll` plus all three DLLs under `lib/net9.0-windows7.0/`.
+   Note: since the package is built from the checked-in `sk0ya.Editor.Controls.nuspec` (`<NuspecFile>`),
+   SourceLink's `<repository commit="…">` element is **not** emitted — the DLLs' `ProductVersion` suffix
+   is what pins the commit, so verify that instead.
    If the commit doesn't match, **stop** — commit the stray changes, re-pack, and re-verify.
 7. **Push** to nuget.org using the `NUGET_API_KEY` env var:
    ```
