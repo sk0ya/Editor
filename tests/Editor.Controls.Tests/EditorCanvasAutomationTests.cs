@@ -42,6 +42,18 @@ public class EditorCanvasAutomationTests
     }
 
     [Fact]
+    public void AutomationPeer_AdvertisesTextPatternToClients()
+    {
+        RunSta(() =>
+        {
+            var canvas = new TestCanvas();
+            var peer = canvas.CreatePeer();
+
+            Assert.Same(peer, peer.GetPattern(PatternInterface.Text));
+        });
+    }
+
+    [Fact]
     public void Canvas_IsKeyboardFocusableBecauseItOwnsTheTextProvider()
     {
         RunSta(() => Assert.True(new EditorCanvas().Focusable));

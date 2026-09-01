@@ -43,8 +43,18 @@ This is unfixable after pushing, because a NuGet version can never be re-uploade
    Proceed only when there is real content: uncommitted work in the tree, or commits on `main` since
    the last bump commit. (If the user explicitly says they want a bump-only republish anyway — e.g. to
    recover from a bad upload — that's their call: say it's empty once, then do it.)
-2. **Find current version**: grep `<Version>` in the three `.csproj` files. They should all match.
-3. **Bump**: increment patch version (e.g. 1.0.29 → 1.0.30) in **all three** `.csproj` files via Edit (kept in sync so assembly versions match), even though only Defaults is packed. Use a higher bump only if the user specifies (minor/major).
+2. **Find the last *published* version — that, not the `.csproj`, is what you bump from:**
+   ```
+   curl -s https://api.nuget.org/v3-flatcontainer/sk0ya.editor.controls/index.json | tail -c 400
+   ```
+   Also grep `<Version>` in the three `.csproj` files; they should all match each other.
+   **The next version is `<last published> + 1` patch, always.** The `.csproj` version is not
+   authoritative: an aborted or interrupted release leaves the tree bumped to a number that was never
+   pushed, so it can sit one or more patches *ahead* of nuget.org. When they disagree, nuget.org wins —
+   set the `.csproj` files back down to `<last published> + 1` (going *down* is correct here; nothing
+   unpublished is being overwritten). Never skip a number because a stale bump is sitting in the tree,
+   and never publish the stale number as-is without checking it is really the next one.
+3. **Bump**: set the version from step 2 in **all three** `.csproj` files via Edit (kept in sync so assembly versions match), even though only Defaults is packed. Use a higher bump only if the user specifies (minor/major).
 4. **Commit everything** (`git status --short` must come back empty afterwards) — the bump plus any other
    pending work that will end up in this release:
    ```

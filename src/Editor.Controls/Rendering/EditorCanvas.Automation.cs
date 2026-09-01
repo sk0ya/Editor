@@ -20,6 +20,8 @@ internal sealed class EditorCanvasAutomationPeer(EditorCanvas owner)
     protected override bool HasKeyboardFocusCore() => Canvas.IsKeyboardFocused;
     protected override bool IsContentElementCore() => true;
     protected override bool IsControlElementCore() => true;
+    public override object? GetPattern(PatternInterface patternInterface)
+        => patternInterface == PatternInterface.Text ? this : base.GetPattern(patternInterface);
 
     public ITextRangeProvider DocumentRange => Range(0, Canvas.AutomationText.Length);
     public SupportedTextSelection SupportedTextSelection => SupportedTextSelection.Single;
@@ -113,7 +115,7 @@ internal sealed class EditorTextRangeProvider(EditorCanvasAutomationPeer peer, i
     }
     public void RemoveFromSelection() { var (s, e) = Canvas.AutomationSelectionOffsets; if (s == Start && e == End) Canvas.SetSelection(null); }
     public void ScrollIntoView(bool alignToTop) { Canvas.AutomationScrollToOffset(Start); }
-    public void Select() { var (s, e) = (Canvas.AutomationPosition(Start), Canvas.AutomationPosition(End)); Canvas.SetSelection(s == e ? null : new Selection(s, e, SelectionType.Character)); Canvas.SetCursor(e); }
+    public void Select() { var (s, e) = (Canvas.AutomationPosition(Start), Canvas.AutomationPosition(End)); Canvas.SetAutomationSelection(s, e); }
     public void AddToSelection() => throw new InvalidOperationException("The editor supports a single selection.");
     private int Endpoint(TextPatternRangeEndpoint e) => e == TextPatternRangeEndpoint.Start ? Start : End;
     private void SetEndpoint(TextPatternRangeEndpoint e, int value) { value = Math.Clamp(value, 0, Length); if (e == TextPatternRangeEndpoint.Start) { Start = value; if (Start > End) End = Start; } else { End = value; if (End < Start) Start = End; } }

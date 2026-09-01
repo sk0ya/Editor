@@ -86,6 +86,9 @@ public class VimEngine
     public void SetText(string text) => _runtime.SetText(text);
     public IReadOnlyList<VimEvent> ApplyExternalText(string text) =>
         _runtime.ApplyExternalText(text);
+    /// <summary>Host transaction rollback用。Undo履歴へ新しいcheckpointを追加しない。</summary>
+    public IReadOnlyList<VimEvent> RestoreExternalText(string text) =>
+        _runtime.RestoreExternalText(text);
     public IReadOnlyList<VimEvent> SetCursorPosition(CursorPosition position) =>
         _runtime.SetCursorPosition(position);
     public IReadOnlyList<VimEvent> SetSelection(Selection selection) =>
@@ -96,6 +99,7 @@ public class VimEngine
         bool shift = false,
         bool alt = false) =>
         _runtime.ProcessKey(key, ctrl, shift, alt);
+    public IReadOnlyList<VimEvent> CompleteStatement() => _runtime.CompleteStatement();
     public IReadOnlyList<VimEvent> ExecuteExCommand(string commandLine) =>
         _runtime.ExecuteExCommand(commandLine);
     public IReadOnlyList<VimEvent> SetVimEnabled(bool enabled) =>

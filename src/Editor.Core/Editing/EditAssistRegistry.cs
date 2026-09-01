@@ -48,6 +48,18 @@ public sealed class EditAssistRegistry
         return EditResult.NotHandled;
     }
 
+    /// <summary>Tries explicit statement completion on each applicable assist.</summary>
+    public EditResult OnCompleteStatement(EditContext ctx)
+    {
+        foreach (var assist in _assists)
+        {
+            if (!assist.AppliesTo(ctx.FilePath)) continue;
+            var result = assist.OnCompleteStatement(ctx);
+            if (result.Handled) return result;
+        }
+        return EditResult.NotHandled;
+    }
+
     /// <summary>Tries <see cref="IEditAssist.OnTab"/> on each applicable assist in order.</summary>
     public EditResult OnTab(EditContext ctx, bool shift)
     {

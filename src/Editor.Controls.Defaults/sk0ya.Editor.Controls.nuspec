@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
+  <metadata>
+    <id>$id$</id>
+    <version>$version$</version>
+    <authors>$author$</authors>
+    <license type="expression">MIT</license>
+    <readme>README.md</readme>
+    <projectUrl>https://github.com/sk0ya/Editor</projectUrl>
+    <description>WPF Vim-like editor control with built-in Git and LSP integrations. Bundles the core engine, the WPF control, and the default Git/LSP integrations in a single package.</description>
+    <tags>editor wpf vim text-editor lsp git</tags>
+    <dependencies>
+      <group targetFramework="net9.0" />
+      <group targetFramework="net9.0-windows7.0" />
+    </dependencies>
+    <frameworkReferences>
+      <group targetFramework="net9.0-windows7.0">
+        <frameworkReference name="Microsoft.WindowsDesktop.App.WPF" />
+      </group>
+    </frameworkReferences>
+  </metadata>
+  <files>
+    <file src="..\Editor.Core\bin\$configuration$\net9.0\Editor.Core.dll" target="lib\net9.0" />
+    <file src="bin\$configuration$\net9.0-windows\Editor.Controls.Defaults.dll" target="lib\net9.0-windows7.0" />
+    <file src="..\Editor.Controls\bin\$configuration$\net9.0-windows\Editor.Controls.dll" target="lib\net9.0-windows7.0" />
+    <file src="..\Editor.Core\bin\$configuration$\net9.0\Editor.Core.dll" target="lib\net9.0-windows7.0" />
+    <file src="..\..\README.md" target="" />
+  </files>
+</package>

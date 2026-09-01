@@ -232,7 +232,7 @@ public sealed class CommandGrammar
             "~", "x", "X", "p", "P", "u", "\x12", ".", "J",
             "a", "A", "i", "I", "o", "O", "s", "S", "C", "D", "Y", "U",
             "R", "v", "V", "\x16",
-            "gt", "gT", "gd", "gr", "ga", "gf", "gx", "gv", "gi", "gJ",
+            "gt", "gT", "gd", "gI", "gY", "gD", "gr", "ga", "gA", "gf", "gx", "gv", "gi", "gJ",
             "gp", "gP", "g;", "g,", "gch", "gct",
             "zz", "zt", "zb", "za", "zc", "zo", "zM", "zR", "zf", "z=",
             "zj", "zk", "zd", "zD", "zE", "zn", "zN", "ZZ", "ZQ"

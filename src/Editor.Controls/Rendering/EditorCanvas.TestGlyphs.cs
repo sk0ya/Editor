@@ -106,7 +106,8 @@ public partial class EditorCanvas
 
     private void SetHoveredTestGlyphLine(int line)
     {
-        int normalized = _testGlyphsEnabled && line >= 0 && _testGlyphs.ContainsKey(line) ? line : -1;
+        int normalized = (_testGlyphsEnabled || _coverageMarkersEnabled) && line >= 0
+            && (_testGlyphs.ContainsKey(line) || HasCoverageMarker(line)) ? line : -1;
         if (_hoveredTestGlyphLine == normalized) return;
         _hoveredTestGlyphLine = normalized;
         UpdateTestGlyphToolTip(normalized);
@@ -119,6 +120,19 @@ public partial class EditorCanvas
         if (hoveredLine < 0 || !_testGlyphs.TryGetValue(hoveredLine, out var glyph)
             || string.IsNullOrEmpty(glyph.Tooltip))
         {
+            if (hoveredLine >= 0 && _coverageMarkers.TryGetValue(hoveredLine, out var coverage)
+                && !string.IsNullOrEmpty(coverage.Tooltip))
+            {
+                _testGlyphToolTip ??= new System.Windows.Controls.ToolTip
+                {
+                    PlacementTarget = this,
+                    Placement = System.Windows.Controls.Primitives.PlacementMode.Mouse,
+                };
+                _testGlyphToolTip.IsOpen = false;
+                _testGlyphToolTip.Content = coverage.Tooltip;
+                _testGlyphToolTip.IsOpen = true;
+                return;
+            }
             CloseTestGlyphToolTip();
             return;
         }
@@ -142,7 +156,11 @@ public partial class EditorCanvas
     /// <paramref name="x"/> は列の左端。</summary>
     private void DrawTestGlyph(DrawingContext dc, int line, double y, double x, int colWidth)
     {
-        if (!_testGlyphs.TryGetValue(line, out var glyph)) return;
+        if (!_testGlyphs.TryGetValue(line, out var glyph))
+        {
+            DrawCoverageMarker(dc, line, y, x, colWidth);
+            return;
+        }
 
         double cx = x + colWidth / 2.0;
         double cy = y + _lineHeight / 2.0;

@@ -64,13 +64,28 @@ public sealed class LspViewBridge : IEditorLspView
     // Inlay hints
     private IReadOnlyList<InlayHint> _inlayHints = [];
     private bool _inlayHintsEnabled = false;
+    private CancellationTokenSource? _inlayHintsCts;
+    private System.Windows.Threading.DispatcherTimer? _inlayHintDebounce;
+    private const int InlayHintDebounceMs = 250;
 
     // Document highlights
     private IReadOnlyList<DocumentHighlight>? _documentHighlights;
     private CancellationTokenSource? _highlightCts;
 
+    // Document links
+    private IReadOnlyList<LspDocumentLink> _documentLinks = [];
+    private System.Threading.Timer? _documentLinkDebounce;
+    private const int DocumentLinkDebounceMs = 500;
+
+    // Code lenses
+    private IReadOnlyList<LspCodeLens> _codeLenses = [];
+    private System.Threading.Timer? _codeLensDebounce;
+    private const int CodeLensDebounceMs = 700;
+
     // Semantic tokens
     private bool _semanticTokensEnabled = false;
+    private string? _semanticTokenResultId;
+    private readonly SemaphoreSlim _semanticTokenRequestGate = new(1, 1);
     private System.Threading.Timer? _semanticTokenDebounce;
     private const int SemanticTokenDebounceMs = 500;
 
@@ -88,7 +103,35 @@ public sealed class LspViewBridge : IEditorLspView
     public int CompletionScrollOffset => _completionScrollOffset;
     public bool CompletionVisible => _completionVisible;
     public LspSignatureHelp? CurrentSignatureHelp => _signatureHelp;
+    /// <summary>Fallback for host-provided, language-specific completion.</summary>
+    public Func<int, int, CancellationToken, Task<IReadOnlyList<LspCompletionItem>>>? HostCompletionProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific semantic tokens.</summary>
+    public Func<CancellationToken, Task<IReadOnlyList<SemanticToken>>>? HostSemanticTokensProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific signature help.</summary>
+    public Func<int, int, CancellationToken, Task<LspSignatureHelp?>>? HostSignatureHelpProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific semantic rename.</summary>
+    public Func<int, int, string, CancellationToken, Task<LspWorkspaceEdit?>>? HostRenameProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific rename range validation.</summary>
+    public Func<int, int, CancellationToken, Task<LspRange?>>? HostPrepareRenameProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific document highlights.</summary>
+    public Func<int, int, CancellationToken, Task<IReadOnlyList<DocumentHighlight>>>? HostDocumentHighlightProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific definition lookup.</summary>
+    public Func<int, int, CancellationToken, Task<(string Uri, int Line, int Column)?>>? HostDefinitionProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific reference lookup.</summary>
+    public Func<int, int, CancellationToken, Task<IReadOnlyList<LspLocation>>>? HostReferencesProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific implementation lookup.</summary>
+    public Func<int, int, CancellationToken, Task<IReadOnlyList<LspLocation>>>? HostImplementationProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific type-definition lookup.</summary>
+    public Func<int, int, CancellationToken, Task<IReadOnlyList<LspLocation>>>? HostTypeDefinitionProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific declaration lookup.</summary>
+    public Func<int, int, CancellationToken, Task<IReadOnlyList<LspLocation>>>? HostDeclarationProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific hover information.</summary>
+    public Func<int, int, CancellationToken, Task<string?>>? HostHoverProvider { get; set; }
+    /// <summary>Fallback for host-provided, language-specific inlay hints.</summary>
+    public Func<int, int, CancellationToken, Task<IReadOnlyList<InlayHint>>>? HostInlayHintProvider { get; set; }
     public IReadOnlyList<LspCodeAction> CurrentCodeActions => _codeActions;
+    public IReadOnlyList<LspDocumentLink> CurrentDocumentLinks => _documentLinks;
+    public IReadOnlyList<LspCodeLens> CurrentCodeLenses => _codeLenses;
     public int CodeActionsSelection => _codeActionsSelection;
     public int CodeActionsScrollOffset => _codeActionsScrollOffset;
     public bool CodeActionsVisible => _codeActionsVisible;
@@ -104,10 +147,28 @@ public sealed class LspViewBridge : IEditorLspView
 
     /// <summary>現在のサーバーが textDocument/rangeFormatting をサポートしているか。</summary>
     public bool ServerSupportsRangeFormatting => _document?.ServerSupportsRangeFormatting == true;
+    public bool ServerSupportsCompletionResolve => _document?.ServerSupportsCompletionResolve == true;
+    public bool ServerSupportsImplementation => _document?.ServerSupportsImplementation == true;
+    public bool ServerSupportsTypeDefinition => _document?.ServerSupportsTypeDefinition == true;
+    public bool ServerSupportsDeclaration => _document?.ServerSupportsDeclaration == true;
+    public bool ServerSupportsPrepareRename => _document?.ServerSupportsPrepareRename == true;
+    public bool HasHostRenameProvider => HostRenameProvider is not null;
+    public bool HasHostPrepareRenameProvider => HostPrepareRenameProvider is not null;
+    public bool HasHostDefinitionProvider => HostDefinitionProvider is not null;
+    public bool HasHostReferencesProvider => HostReferencesProvider is not null;
+    public bool HasHostImplementationProvider => HostImplementationProvider is not null;
+    public bool HasHostTypeDefinitionProvider => HostTypeDefinitionProvider is not null;
+    public bool HasHostDeclarationProvider => HostDeclarationProvider is not null;
+    public bool HasHostHoverProvider => HostHoverProvider is not null;
+    public bool HasHostDocumentHighlightProvider => HostDocumentHighlightProvider is not null;
+    public bool HasHostCompletionProvider => HostCompletionProvider is not null;
+    public bool ServerSupportsDocumentHighlight => _document?.ServerSupportsDocumentHighlight == true;
+    public IReadOnlyList<string> ServerCodeActionKinds => _document?.ServerCodeActionKinds ?? [];
     public IReadOnlyList<string> CompletionTriggerCharacters => _document?.CompletionTriggerCharacters ?? ["."];
 
     /// <summary>Fired on the dispatcher thread for status bar messages.</summary>
     public event Action<string>? StatusMessage;
+    public event Action<IReadOnlyList<LspDiagnostic>>? DiagnosticsChanged;
 
     /// <summary>Fired on the dispatcher thread whenever LSP state changes.</summary>
     public event Action? StateChanged;
@@ -127,6 +188,12 @@ public sealed class LspViewBridge : IEditorLspView
     /// <summary>Fired on the dispatcher thread when document highlights change.</summary>
     public event Action<IReadOnlyList<DocumentHighlight>?>? DocumentHighlightsChanged;
 
+    /// <summary>Fired on the dispatcher thread when document links are refreshed.</summary>
+    public event Action<IReadOnlyList<LspDocumentLink>>? DocumentLinksChanged;
+
+    /// <summary>Fired on the dispatcher thread when code lenses are refreshed.</summary>
+    public event Action<IReadOnlyList<LspCodeLens>>? CodeLensesChanged;
+
     public string? CurrentUri => _currentUri;
 
     public LspViewBridge(Dispatcher dispatcher, ILspWorkspace workspace)
@@ -145,9 +212,19 @@ public sealed class LspViewBridge : IEditorLspView
         _highlightCts?.Dispose();
         _highlightCts = null;
         _documentHighlights = null;
+        _documentLinks = [];
+        DocumentLinksChanged?.Invoke(_documentLinks);
+        _codeLenses = [];
+        CodeLensesChanged?.Invoke(_codeLenses);
         _diagnostics = [];
         _inlayHints = [];
+        _inlayHintsCts?.Cancel();
+        _inlayHintsCts?.Dispose();
+        _inlayHintsCts = null;
+        _inlayHintDebounce?.Stop();
+        InlayHintsChanged?.Invoke(_inlayHints);
         _documentSymbols = [];
+        _semanticTokenResultId = null;
         if (_semanticTokensEnabled) SemanticTokensChanged?.Invoke([]);
         _lastBreadcrumb = "";
         _documentReady = false;
@@ -157,6 +234,10 @@ public sealed class LspViewBridge : IEditorLspView
         _symbolDebounce = null;
         _semanticTokenDebounce?.Dispose();
         _semanticTokenDebounce = null;
+        _documentLinkDebounce?.Dispose();
+        _documentLinkDebounce = null;
+        _codeLensDebounce?.Dispose();
+        _codeLensDebounce = null;
 
         DetachDocument();
 
@@ -173,11 +254,15 @@ public sealed class LspViewBridge : IEditorLspView
             _currentUri = null;
             StateChanged?.Invoke();
             FoldingRangesChanged?.Invoke([]);   // LSP サーバーなし → シンタックスフォールドへフォールバック
+            if (_semanticTokensEnabled)
+                RequestSemanticTokens();
             return;
         }
 
         _document = document;
         _currentUri = document.Uri;
+        if (_semanticTokensEnabled)
+            RequestSemanticTokens();
         document.DiagnosticsChanged += OnDocumentDiagnostics;
         document.StateChanged += OnDocumentStateChanged;
         document.StatusMessage += OnDocumentStatusMessage;
@@ -228,9 +313,11 @@ public sealed class LspViewBridge : IEditorLspView
         _pendingSymbolUri = uri;
         _ = RefreshDocumentSymbolsUntilReadyAsync(doc);
         if (_inlayHintsEnabled)
-            _ = RequestInlayHintsInternalAsync(doc, 0, int.MaxValue);
+            RequestInlayHints(0, int.MaxValue);
         if (_semanticTokensEnabled)
             _ = RequestSemanticTokensInternalAsync(doc);
+        _ = RequestDocumentLinksInternalAsync(doc);
+        _ = RequestCodeLensesInternalAsync(doc);
     }
 
     private void OnDocumentDiagnostics(IReadOnlyList<LspDiagnostic> diagnostics)
@@ -258,6 +345,7 @@ public sealed class LspViewBridge : IEditorLspView
             if (!ReferenceEquals(_document, doc)) return;
             _diagnostics = diagnostics;
             Log($"[LSP] diagnostics: {diagnostics.Count} items");
+            DiagnosticsChanged?.Invoke(_diagnostics);
             StateChanged?.Invoke();
         });
     }
@@ -272,13 +360,80 @@ public sealed class LspViewBridge : IEditorLspView
             StatusMessage?.Invoke("Code Action: 文書が変更されたため候補を破棄しました。再度実行してください。");
         }
         var doc = _document;
-        if (doc == null) return;
+        if (_inlayHintsEnabled) ScheduleInlayHintRefresh();
+        if (doc == null)
+        {
+            if (_semanticTokensEnabled)
+                ScheduleSemanticTokenRefresh();
+            return;
+        }
         doc.UpdateText(text);
         if (!_documentReady) return;
         ClearDocumentHighlights();
         ScheduleSymbolRefresh();
         if (_semanticTokensEnabled)
             ScheduleSemanticTokenRefresh();
+        ScheduleDocumentLinkRefresh();
+        // CodeLensの行位置は編集で直ちに古くなる。再取得のデバウンス中に旧行へ
+        // クリック可能なラベルを残すと、別の宣言を実行してしまう可能性があるため先に消す。
+        if (_codeLenses.Count > 0)
+        {
+            _codeLenses = [];
+            CodeLensesChanged?.Invoke(_codeLenses);
+        }
+        ScheduleCodeLensRefresh();
+    }
+
+    private void ScheduleDocumentLinkRefresh()
+    {
+        _documentLinkDebounce?.Dispose();
+        _documentLinkDebounce = new System.Threading.Timer(_ =>
+        {
+            var doc = _document;
+            if (doc?.IsConnected == true && _documentReady)
+                _ = RequestDocumentLinksInternalAsync(doc);
+        }, null, DocumentLinkDebounceMs, Timeout.Infinite);
+    }
+
+    private async Task RequestDocumentLinksInternalAsync(ILspDocument doc)
+    {
+        try
+        {
+            var links = await doc.RequestDocumentLinksAsync();
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (!ReferenceEquals(_document, doc)) return;
+                _documentLinks = links;
+                DocumentLinksChanged?.Invoke(_documentLinks);
+            });
+        }
+        catch { }
+    }
+
+    private void ScheduleCodeLensRefresh()
+    {
+        _codeLensDebounce?.Dispose();
+        _codeLensDebounce = new System.Threading.Timer(_ =>
+        {
+            var doc = _document;
+            if (doc?.IsConnected == true && _documentReady)
+                _ = RequestCodeLensesInternalAsync(doc);
+        }, null, CodeLensDebounceMs, Timeout.Infinite);
+    }
+
+    private async Task RequestCodeLensesInternalAsync(ILspDocument doc)
+    {
+        try
+        {
+            var lenses = await doc.RequestCodeLensesAsync();
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (!ReferenceEquals(_document, doc)) return;
+                _codeLenses = lenses;
+                CodeLensesChanged?.Invoke(_codeLenses);
+            });
+        }
+        catch { }
     }
 
     private void ScheduleSemanticTokenRefresh()
@@ -287,8 +442,11 @@ public sealed class LspViewBridge : IEditorLspView
         _semanticTokenDebounce = new System.Threading.Timer(_ =>
         {
             var doc = _document;
-            if (doc?.IsConnected == true && _documentReady && _semanticTokensEnabled)
+            if (!_semanticTokensEnabled) return;
+            if (doc?.IsConnected == true && _documentReady)
                 _ = RequestSemanticTokensInternalAsync(doc);
+            else if (HostSemanticTokensProvider is { } provider)
+                _ = RequestHostSemanticTokensAsync(provider, doc);
         }, null, SemanticTokenDebounceMs, Timeout.Infinite);
     }
 
@@ -347,10 +505,10 @@ public sealed class LspViewBridge : IEditorLspView
     public async Task<string?> RequestCompletionAsync(int line, int character)
     {
         var doc = _document;
-        if (doc?.IsConnected != true)
+        if (doc?.IsConnected != true && HostCompletionProvider is null)
             return "LSP: no language server for this file type";
 
-        if (!_documentReady)
+        if (doc?.IsConnected == true && !_documentReady && HostCompletionProvider is null)
             return "LSP: indexing… try again in a moment";
 
         Log($"[LSP] completion request line={line} col={character}");
@@ -369,7 +527,11 @@ public sealed class LspViewBridge : IEditorLspView
         IReadOnlyList<LspCompletionItem> items;
         try
         {
-            items = await doc.RequestCompletionAsync(line, character, ct);
+            items = doc?.IsConnected == true && _documentReady
+                ? await doc.RequestCompletionAsync(line, character, ct)
+                : [];
+            if (items.Count == 0 && HostCompletionProvider is { } provider)
+                items = await provider(line, character, ct);
         }
         catch (OperationCanceledException)
         {
@@ -421,20 +583,111 @@ public sealed class LspViewBridge : IEditorLspView
     public async Task<string?> RequestHoverAsync(int line, int character)
     {
         var doc = _document;
-        if (!_documentReady || doc?.IsConnected != true) return null;
-        var hover = await doc.RequestHoverAsync(line, character);
-        return hover?.Value;
+        if (_documentReady && doc?.IsConnected == true)
+        {
+            var hover = await doc.RequestHoverAsync(line, character);
+            if (!string.IsNullOrWhiteSpace(hover?.Value)) return hover.Value;
+        }
+        if (HostHoverProvider is { } provider)
+            return await provider(line, character, CancellationToken.None);
+        return null;
     }
 
     /// <summary>Request go-to-definition. Returns (localFilePath, line, column) or null.</summary>
     public async Task<(string FilePath, int Line, int Column)?> RequestDefinitionAsync(int line, int character)
     {
+        if (await RequestDefinitionLocationAsync(line, character) is not { } location)
+            return null;
+        var localPath = LspUri.TryToLocalPath(location.Uri);
+        return localPath is null ? null : (localPath, location.Line, location.Column);
+    }
+
+    /// <summary>Request the definition while preserving an external URI for host peek surfaces.</summary>
+    public async Task<(string Uri, int Line, int Column)?> RequestDefinitionLocationAsync(int line, int character)
+    {
         var doc = _document;
-        if (!_documentReady || doc?.IsConnected != true) return null;
-        var result = await doc.RequestDefinitionAsync(line, character);
-        if (result == null) return null;
-        var localPath = LspUri.TryToLocalPath(result.Value.Uri);
-        return localPath is null ? null : (localPath, result.Value.Line, result.Value.Column);
+        if (_documentReady && doc?.IsConnected == true)
+        {
+            var result = await doc.RequestDefinitionAsync(line, character);
+            if (result is not null) return result;
+        }
+        if (HostDefinitionProvider is { } provider)
+            return await provider(line, character, CancellationToken.None);
+        return null;
+    }
+
+    public async Task<LspCompletionItem?> ResolveCompletionAsync(
+        LspCompletionItem item, CancellationToken ct = default)
+    {
+        var doc = _document;
+        if (!_documentReady || doc?.IsConnected != true || !doc.ServerSupportsCompletionResolve)
+            return null;
+        return await doc.ResolveCompletionAsync(item, ct);
+    }
+
+    public async Task<IReadOnlyList<LspLocation>> RequestImplementationAsync(
+        int line, int character, CancellationToken ct = default)
+    {
+        var doc = _document;
+        if (_documentReady && doc?.IsConnected == true && doc.ServerSupportsImplementation)
+        {
+            var result = await doc.RequestImplementationAsync(line, character, ct);
+            if (result.Count > 0) return result;
+        }
+        if (HostImplementationProvider is { } provider)
+            return await provider(line, character, ct);
+        return [];
+    }
+
+    public async Task<IReadOnlyList<LspLocation>> RequestTypeDefinitionAsync(
+        int line, int character, CancellationToken ct = default)
+    {
+        var doc = _document;
+        if (_documentReady && doc?.IsConnected == true && doc.ServerSupportsTypeDefinition)
+        {
+            var result = await doc.RequestTypeDefinitionAsync(line, character, ct);
+            if (result.Count > 0) return result;
+        }
+        if (HostTypeDefinitionProvider is { } provider)
+            return await provider(line, character, ct);
+        return [];
+    }
+
+    public async Task<IReadOnlyList<LspLocation>> RequestDeclarationAsync(
+        int line, int character, CancellationToken ct = default)
+    {
+        var doc = _document;
+        if (_documentReady && doc?.IsConnected == true && doc.ServerSupportsDeclaration)
+        {
+            var result = await doc.RequestDeclarationAsync(line, character, ct);
+            if (result.Count > 0) return result;
+        }
+        if (HostDeclarationProvider is { } provider)
+            return await provider(line, character, ct);
+        return [];
+    }
+
+    public async Task<LspRange?> PrepareRenameAsync(
+        int line, int character, CancellationToken ct = default)
+    {
+        var doc = _document;
+        if (_documentReady && doc?.IsConnected == true && doc.ServerSupportsPrepareRename)
+        {
+            var range = await doc.PrepareRenameAsync(line, character, ct);
+            if (range is not null) return range;
+        }
+        return HostPrepareRenameProvider is { } provider
+            ? await provider(line, character, ct)
+            : null;
+    }
+
+    public Task<bool> ExecuteCompletionCommandAsync(
+        LspCompletionCommand command, CancellationToken ct = default)
+    {
+        var doc = _document;
+        if (!_documentReady || doc?.IsConnected != true) return Task.FromResult(false);
+        return doc.ExecuteCommandAsync(new LspCodeActionCommand(
+            command.Command, command.Title, command.ArgumentsJson), ct);
     }
 
     public void MoveCompletionSelection(int delta)
@@ -509,23 +762,44 @@ public sealed class LspViewBridge : IEditorLspView
     /// <summary>Request signature help at the given position.</summary>
     public async Task RequestSignatureHelpAsync(int line, int character)
     {
-        var doc = _document;
-        if (doc?.IsConnected != true || !_documentReady) return;
-
         // Cancel any in-flight request so it is both discarded and stops working.
         _signatureHelpCts?.Cancel();
         _signatureHelpCts?.Dispose();
         _signatureHelpCts = new CancellationTokenSource();
         var ct = _signatureHelpCts.Token;
-
-        LspSignatureHelp? help;
-        try
+        var doc = _document;
+        LspSignatureHelp? help = null;
+        if (doc?.IsConnected == true && _documentReady)
         {
-            help = await doc.RequestSignatureHelpAsync(line, character, ct);
+            try
+            {
+                help = await doc.RequestSignatureHelpAsync(line, character, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch
+            {
+                // A language-specific host provider can still answer when the LSP
+                // server does not implement signatureHelp or failed the request.
+            }
         }
-        catch (OperationCanceledException)
+
+        if (help?.Signatures.Count is not > 0 && HostSignatureHelpProvider is { } provider)
         {
-            return;
+            try
+            {
+                help = await provider(line, character, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch
+            {
+                help = null;
+            }
         }
 
         await _dispatcher.InvokeAsync(() =>
@@ -554,16 +828,28 @@ public sealed class LspViewBridge : IEditorLspView
     public async Task<LspWorkspaceEdit?> RequestRenameAsync(int line, int character, string newName)
     {
         var doc = _document;
-        if (!_documentReady || doc?.IsConnected != true) return null;
-        return await doc.RequestRenameAsync(line, character, newName);
+        if (_documentReady && doc?.IsConnected == true)
+        {
+            var edit = await doc.RequestRenameAsync(line, character, newName);
+            if (edit is { Changes.Count: > 0 }) return edit;
+        }
+        if (HostRenameProvider is { } provider)
+            return await provider(line, character, newName, CancellationToken.None);
+        return null;
     }
 
     /// <summary>Request all references at the given position.</summary>
     public async Task<IReadOnlyList<LspLocation>> RequestReferencesAsync(int line, int character)
     {
         var doc = _document;
-        if (!_documentReady || doc?.IsConnected != true) return [];
-        return await doc.RequestReferencesAsync(line, character);
+        if (_documentReady && doc?.IsConnected == true)
+        {
+            var result = await doc.RequestReferencesAsync(line, character);
+            if (result.Count > 0) return result;
+        }
+        if (HostReferencesProvider is { } provider)
+            return await provider(line, character, CancellationToken.None);
+        return [];
     }
 
     /// <summary>Request code actions at the given cursor line.</summary>
@@ -606,6 +892,22 @@ public sealed class LspViewBridge : IEditorLspView
     }
 
     public Task<bool> ExecuteCodeActionCommandAsync(LspCodeActionCommand command)
+    {
+        var doc = _document;
+        return _documentReady && doc?.IsConnected == true
+            ? doc.ExecuteCommandAsync(command)
+            : Task.FromResult(false);
+    }
+
+    public Task<LspCodeLens?> ResolveCodeLensAsync(LspCodeLens lens)
+    {
+        var doc = _document;
+        return _documentReady && doc?.IsConnected == true
+            ? doc.ResolveCodeLensAsync(lens)
+            : Task.FromResult<LspCodeLens?>(null);
+    }
+
+    public Task<bool> ExecuteCodeLensCommandAsync(LspCodeActionCommand command)
     {
         var doc = _document;
         return _documentReady && doc?.IsConnected == true
@@ -729,13 +1031,21 @@ public sealed class LspViewBridge : IEditorLspView
         {
             await Task.Delay(150, ct);
             var doc = _document;
-            if (!_documentReady || doc?.IsConnected != true || doc.Uri != uri) return;
+            IReadOnlyList<DocumentHighlight>? highlights = null;
+            if (_documentReady && doc?.IsConnected == true && doc.Uri == uri &&
+                doc.ServerSupportsDocumentHighlight)
+                highlights = await doc.RequestDocumentHighlightAsync(line, character, ct);
 
-            var highlights = await doc.RequestDocumentHighlightAsync(line, character, ct);
+            if (highlights is not { } && HostDocumentHighlightProvider is { } provider)
+                highlights = await provider(line, character, ct);
+            if (highlights is not { }) return;
+
             await _dispatcher.InvokeAsync(() =>
             {
-                if (!ReferenceEquals(_document, doc)) return;
-                _documentHighlights = highlights ?? [];
+                if (ct.IsCancellationRequested ||
+                    _currentUri != uri ||
+                    (doc is not null && !ReferenceEquals(_document, doc))) return;
+                _documentHighlights = highlights;
                 DocumentHighlightsChanged?.Invoke(_documentHighlights);
             });
         }
@@ -815,30 +1125,66 @@ public sealed class LspViewBridge : IEditorLspView
     /// <summary>Request inlay hints for the given line range (0-based, inclusive).</summary>
     public void RequestInlayHints(int startLine, int endLine)
     {
-        var doc = _document;
-        if (!_inlayHintsEnabled || !_documentReady || doc?.IsConnected != true) return;
-        _ = RequestInlayHintsInternalAsync(doc, startLine, endLine);
+        if (!_inlayHintsEnabled) return;
+        _inlayHintsCts?.Cancel();
+        _inlayHintsCts?.Dispose();
+        _inlayHintsCts = new CancellationTokenSource();
+        _ = RequestInlayHintsInternalAsync(
+            _document, startLine, endLine, _inlayHintsCts.Token);
     }
 
     private void ClearInlayHints()
     {
+        _inlayHintsCts?.Cancel();
+        _inlayHintsCts?.Dispose();
+        _inlayHintsCts = null;
+        _inlayHintDebounce?.Stop();
         _inlayHints = [];
         InlayHintsChanged?.Invoke(_inlayHints);
     }
 
-    private async Task RequestInlayHintsInternalAsync(ILspDocument doc, int startLine, int endLine)
+    private void ScheduleInlayHintRefresh()
     {
+        _inlayHintDebounce ??= new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromMilliseconds(InlayHintDebounceMs),
+            System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) =>
+            {
+                _inlayHintDebounce!.Stop();
+                RequestInlayHints(0, int.MaxValue);
+            },
+            _dispatcher);
+        _inlayHintDebounce.Stop();
+        _inlayHintDebounce.Start();
+    }
+
+    private async Task RequestInlayHintsInternalAsync(
+        ILspDocument? doc, int startLine, int endLine, CancellationToken ct)
+    {
+        IReadOnlyList<InlayHint> hints = [];
         try
         {
-            var hints = await doc.RequestInlayHintsAsync(startLine, endLine);
-            await _dispatcher.InvokeAsync(() =>
-            {
-                if (!ReferenceEquals(_document, doc)) return;
-                _inlayHints = hints;
-                InlayHintsChanged?.Invoke(_inlayHints);
-            });
+            if (doc?.IsConnected == true && _documentReady)
+                hints = await doc.RequestInlayHintsAsync(startLine, endLine);
+            if (hints.Count == 0 && HostInlayHintProvider is { } provider)
+                hints = await provider(startLine, endLine, ct);
         }
-        catch { }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            hints = [];
+        }
+
+        await _dispatcher.InvokeAsync(() =>
+        {
+            if (ct.IsCancellationRequested) return;
+            if (doc is not null && !ReferenceEquals(_document, doc)) return;
+            _inlayHints = hints;
+            InlayHintsChanged?.Invoke(_inlayHints);
+        });
     }
 
     /// <summary>Enable or disable semantic token highlighting. When enabled, immediately fetches tokens for the current file.</summary>
@@ -848,29 +1194,74 @@ public sealed class LspViewBridge : IEditorLspView
         if (enabled)
             RequestSemanticTokens();
         else
+        {
+            _semanticTokenResultId = null;
             SemanticTokensChanged?.Invoke([]);
+        }
     }
 
     /// <summary>Request semantic tokens for the current document.</summary>
     public void RequestSemanticTokens()
     {
         var doc = _document;
-        if (!_semanticTokensEnabled || !_documentReady || doc?.IsConnected != true) return;
-        _ = RequestSemanticTokensInternalAsync(doc);
+        if (!_semanticTokensEnabled) return;
+        if (_documentReady && doc?.IsConnected == true)
+        {
+            _ = RequestSemanticTokensInternalAsync(doc);
+            return;
+        }
+        if (HostSemanticTokensProvider is { } hostProvider)
+            _ = RequestHostSemanticTokensAsync(hostProvider, doc);
+    }
+
+    private async Task RequestHostSemanticTokensAsync(
+        Func<CancellationToken, Task<IReadOnlyList<SemanticToken>>> provider,
+        ILspDocument? expectedDocument)
+    {
+        try
+        {
+            var tokens = await provider(CancellationToken.None);
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (ReferenceEquals(_document, expectedDocument))
+                    SemanticTokensChanged?.Invoke(tokens.ToArray());
+            });
+        }
+        catch { }
     }
 
     private async Task RequestSemanticTokensInternalAsync(ILspDocument doc)
     {
         try
         {
-            var tokens = await doc.RequestSemanticTokensAsync();
-            await _dispatcher.InvokeAsync(() =>
+            await _semanticTokenRequestGate.WaitAsync();
+            try
             {
-                if (!ReferenceEquals(_document, doc)) return;
-                SemanticTokensChanged?.Invoke(tokens ?? []);
-            });
+                var result = await doc.RequestSemanticTokensResultAsync(_semanticTokenResultId);
+                if ((result is null || result.Tokens.Length == 0) &&
+                    HostSemanticTokensProvider is { } hostProvider)
+                {
+                    var hostTokens = await hostProvider(CancellationToken.None);
+                    result = new SemanticTokensResult(null, hostTokens.ToArray());
+                }
+                await _dispatcher.InvokeAsync(() =>
+                {
+                    if (!ReferenceEquals(_document, doc)) return;
+                    if (result is null) return;
+                    _semanticTokenResultId = result.ResultId;
+                    SemanticTokensChanged?.Invoke(result.Tokens);
+                });
+            }
+            finally
+            {
+                _semanticTokenRequestGate.Release();
+            }
         }
-        catch { }
+        catch
+        {
+            if (HostSemanticTokensProvider is { } hostProvider)
+                await RequestHostSemanticTokensAsync(hostProvider, doc);
+        }
     }
 
     // ── Debug log ──────────────────────────────────────────────────────────
@@ -894,10 +1285,17 @@ public sealed class LspViewBridge : IEditorLspView
         _highlightCts?.Dispose();
         _completionCts?.Cancel();
         _completionCts?.Dispose();
+        _inlayHintsCts?.Cancel();
+        _inlayHintsCts?.Dispose();
         _signatureHelpCts?.Cancel();
         _signatureHelpCts?.Dispose();
+        _inlayHintDebounce?.Stop();
+        _inlayHintDebounce = null;
         _symbolDebounce?.Dispose();
         _semanticTokenDebounce?.Dispose();
+        _documentLinkDebounce?.Dispose();
+        _codeLensDebounce?.Dispose();
+        _semanticTokenRequestGate.Dispose();
         DetachDocument();
     }
 }

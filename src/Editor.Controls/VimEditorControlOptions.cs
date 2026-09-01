@@ -28,6 +28,15 @@ public sealed class VimEditorControlOptions
     /// are unavailable rather than editing a table nobody reads.
     /// </summary>
     public ILspServerAdmin? LspServerAdmin { get; init; }
+
+    /// <summary>Optional host-side semantic completion provider used when LSP has no usable result.</summary>
+    public Func<string, string, int, int, CancellationToken,
+        Task<IReadOnlyList<LspCompletionItem>>>? HostCompletionProvider { get; init; }
+
+    /// <summary>Optional host-side semantic-token provider used when LSP has no usable result.</summary>
+    public Func<string, string, CancellationToken,
+        Task<IReadOnlyList<SemanticToken>>>? HostSemanticTokensProvider { get; init; }
+
     /// <summary>
     /// ホストが右クリックメニューへ自前の「名前の変更」を足すときに true にする。
     /// コントロールはネイティブの "Rename Symbol" 項目を出さなくなるので、同じ操作が2つ並ばない
@@ -35,6 +44,58 @@ public sealed class VimEditorControlOptions
     /// <c>:Rename</c>・<c>gR</c> などのコマンド経路はこのフラグに関係なく残る。
     /// </summary>
     public bool HostProvidesRenameMenuItem { get; init; }
+
+    /// <summary>
+    /// Optional host-side semantic rename provider. It is tried when the current LSP server is
+    /// unavailable or returns an empty workspace edit, so language-specific hosts can keep the
+    /// generic rename dialog and workspace-edit application path.
+    /// </summary>
+    public Func<string, string, int, int, string, CancellationToken, Task<LspWorkspaceEdit?>>? HostRenameProvider { get; init; }
+
+    /// <summary>Optional host-side rename-range provider used when LSP prepareRename is unavailable.</summary>
+    public Func<string, string, int, int, CancellationToken, Task<LspRange?>>? HostPrepareRenameProvider { get; init; }
+
+    /// <summary>Optional host-side semantic definition provider used when LSP has no result.</summary>
+    public Func<string, string, int, int, CancellationToken,
+        Task<(string Uri, int Line, int Column)?>>? HostDefinitionProvider { get; init; }
+
+    /// <summary>Optional host-side semantic references provider used when LSP has no result.</summary>
+    public Func<string, string, int, int, CancellationToken,
+        Task<IReadOnlyList<LspLocation>>>? HostReferencesProvider { get; init; }
+
+    /// <summary>Optional host-side semantic implementation provider used when LSP has no result.</summary>
+    public Func<string, string, int, int, CancellationToken,
+        Task<IReadOnlyList<LspLocation>>>? HostImplementationProvider { get; init; }
+
+    /// <summary>Optional host-side semantic type-definition provider used when LSP has no result.</summary>
+    public Func<string, string, int, int, CancellationToken,
+        Task<IReadOnlyList<LspLocation>>>? HostTypeDefinitionProvider { get; init; }
+
+    /// <summary>Optional host-side semantic declaration provider used when LSP has no result.</summary>
+    public Func<string, string, int, int, CancellationToken,
+        Task<IReadOnlyList<LspLocation>>>? HostDeclarationProvider { get; init; }
+
+    /// <summary>Optional host-side semantic hover provider used when LSP has no result.</summary>
+    public Func<string, string, int, int, CancellationToken, Task<string?>>? HostHoverProvider { get; init; }
+
+    /// <summary>Optional host-side document-highlight provider used when LSP has no result.</summary>
+    public Func<string, string, int, int, CancellationToken,
+        Task<IReadOnlyList<DocumentHighlight>>>? HostDocumentHighlightProvider { get; init; }
+
+    /// <summary>
+    /// Optional host-side signature-help provider. It is used when the current LSP
+    /// server is unavailable or returns no signatures, so a host can supply
+    /// language-specific semantic help without teaching the generic editor about
+    /// that language.
+    /// </summary>
+    public Func<string, string, int, int, CancellationToken, Task<LspSignatureHelp?>>? HostSignatureHelpProvider { get; init; }
+
+    /// <summary>
+    /// Optional host-side inlay-hint provider. It is used when the current LSP
+    /// server is unavailable or returns no hints, allowing language-specific
+    /// semantic hints to be supplied by the host.
+    /// </summary>
+    public Func<string, string, int, int, CancellationToken, Task<IReadOnlyList<InlayHint>>>? HostInlayHintProvider { get; init; }
 
     public SyntaxLanguageRegistry? SyntaxLanguages { get; init; }
     public EditorCommandRegistry? Commands { get; init; }

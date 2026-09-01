@@ -5,7 +5,7 @@ using Editor.Core.Models;
 namespace Editor.Core.Engine.ExCommands;
 
 /// <summary>
-/// Handles LSP-triggered ex commands (:Format, :Rename, :CodeAction, :Symbols, :CallHierarchy,
+/// Handles LSP-triggered ex commands (:Format, :Rename, :QuickFix, :CodeAction, :Symbols, :CallHierarchy,
 /// :TypeHierarchy) and the :Lsp*/:Fmt* server/formatter configuration commands.
 ///
 /// <para>The <c>:Lsp*</c> commands are only an input frontend: they edit whatever extension→server
@@ -41,15 +41,28 @@ public class LspCommands(ILspServerAdmin? lspServerAdmin, FormatterRegistry form
             return true;
         }
 
-        // :CodeAction — offer the quick fixes / refactorings available at the cursor (same as `ga`).
+        // :QuickFix / :CodeAction — offer actions in the same popup, but keep
+        // diagnostic-only Quick Fix distinct so hosts can use their fallback provider.
         // Exposed as an ex command so a host can reach it without synthesizing keystrokes
         // (e.g. from its own context menu), which `ga` cannot do in Insert mode or with Vim off.
         // The popup itself is navigable in those states too (↑/↓/Enter/Escape — j/k only where a
         // bare letter isn't text input); see the guard in VimEditorControl.OnPreviewKeyDown.
+        if (cmd.Equals("QuickFix", StringComparison.OrdinalIgnoreCase))
+        {
+            result = new ExResult(true, null, VimEvent.QuickFixRequested());
+            return true;
+        }
         if (cmd.Equals("CodeAction", StringComparison.OrdinalIgnoreCase) ||
             cmd.Equals("CodeActions", StringComparison.OrdinalIgnoreCase))
         {
             result = new ExResult(true, null, VimEvent.CodeActionRequested());
+            return true;
+        }
+
+        // :FixAll — request source.fixAll for the entire current document.
+        if (cmd.Equals("FixAll", StringComparison.OrdinalIgnoreCase))
+        {
+            result = new ExResult(true, null, VimEvent.FixAllRequested());
             return true;
         }
 

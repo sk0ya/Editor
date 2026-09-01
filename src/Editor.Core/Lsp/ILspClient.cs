@@ -32,6 +32,8 @@ public interface ILspClient : IDisposable
     bool SupportsRangeFormatting { get; }
     /// <summary>サーバーが textDocument/semanticTokens/full をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsSemanticTokens { get; }
+    /// <summary>サーバーが textDocument/semanticTokens/full/delta をサポートしているか。InitializeAsync 後に確定する。</summary>
+    bool SupportsSemanticTokensDelta => false;
     /// <summary>サーバーが textDocument/selectionRange をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsSelectionRange { get; }
     /// <summary>サーバーが textDocument/diagnostic をサポートしているか。InitializeAsync 後に確定する。
@@ -41,6 +43,15 @@ public interface ILspClient : IDisposable
     bool SupportsWorkspaceDiagnostics { get; }
     /// <summary>initializeのcompletionProvider.triggerCharacters。未申告サーバー向け既定は'.'。</summary>
     IReadOnlyList<string> CompletionTriggerCharacters => ["."];
+    bool SupportsCompletionResolve => false;
+    bool SupportsImplementation => false;
+    bool SupportsTypeDefinition => false;
+    bool SupportsDeclaration => false;
+    bool SupportsPrepareRename => false;
+    bool SupportsDocumentHighlight => false;
+    bool SupportsDocumentLink => false;
+    bool SupportsCodeLens => false;
+    bool SupportsCodeLensResolve => false;
     /// <summary>セマンティックトークンの凡例（トークン種別・修飾子）。InitializeAsync 後に確定する。</summary>
     SemanticTokensLegend? SemanticTokensLegend { get; }
     /// <summary>サーバーが申告した code action kind の一覧。空は「申告なし」で、
@@ -73,8 +84,18 @@ public interface ILspClient : IDisposable
     Task ChangeDocumentAsync(string uri, int version, string text);
     Task CloseDocumentAsync(string uri);
     Task<IReadOnlyList<LspCompletionItem>> GetCompletionAsync(string uri, LspPosition position, CancellationToken ct = default);
+    Task<LspCompletionItem?> ResolveCompletionAsync(LspCompletionItem item, CancellationToken ct = default)
+        => Task.FromResult<LspCompletionItem?>(null);
     Task<LspHover?> GetHoverAsync(string uri, LspPosition position, CancellationToken ct = default);
     Task<(string Uri, int Line, int Column)?> GetDefinitionAsync(string uri, LspPosition position, CancellationToken ct = default);
+    Task<IReadOnlyList<LspLocation>> GetImplementationAsync(string uri, LspPosition position, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspLocation>>([]);
+    Task<IReadOnlyList<LspLocation>> GetTypeDefinitionAsync(string uri, LspPosition position, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspLocation>>([]);
+    Task<IReadOnlyList<LspLocation>> GetDeclarationAsync(string uri, LspPosition position, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspLocation>>([]);
+    Task<LspRange?> PrepareRenameAsync(string uri, LspPosition position, CancellationToken ct = default)
+        => Task.FromResult<LspRange?>(null);
     Task<LspSignatureHelp?> GetSignatureHelpAsync(string uri, LspPosition position, CancellationToken ct = default);
     Task<IReadOnlyList<LspTextEdit>> GetFormattingEditsAsync(string uri, int tabSize, bool insertSpaces, CancellationToken ct = default);
     Task<IReadOnlyList<LspTextEdit>> GetRangeFormattingEditsAsync(string uri, LspRange range, int tabSize, bool insertSpaces, CancellationToken ct = default);
@@ -107,6 +128,14 @@ public interface ILspClient : IDisposable
         => Task.FromResult(false);
     Task<IReadOnlyList<InlayHint>> GetInlayHintsAsync(string uri, LspRange range, CancellationToken ct = default);
     Task<SemanticToken[]?> GetSemanticTokensAsync(string uri, CancellationToken ct = default);
+    /// <summary>Semantic tokens with the optional result id used for incremental refreshes.
+    /// The default implementation preserves compatibility with hosts that only provide full tokens.</summary>
+    async Task<SemanticTokensResult?> GetSemanticTokensResultAsync(
+        string uri, string? previousResultId, CancellationToken ct = default)
+    {
+        var tokens = await GetSemanticTokensAsync(uri, ct);
+        return tokens is null ? null : new SemanticTokensResult(null, tokens);
+    }
     /// <summary>プル型診断 (textDocument/diagnostic) を1ファイル分取得する。
     /// null は「取得できなかった」＝未サポート・エラー応答・例外のいずれか。この場合は既存の診断を
     /// そのまま残すこと（消してはならない）。取得できた場合は
@@ -129,6 +158,12 @@ public interface ILspClient : IDisposable
 
     // Document highlight
     Task<IReadOnlyList<DocumentHighlight>?> RequestDocumentHighlightAsync(string uri, int line, int character, CancellationToken ct = default);
+    Task<IReadOnlyList<LspDocumentLink>> GetDocumentLinksAsync(string uri, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspDocumentLink>>([]);
+    Task<IReadOnlyList<LspCodeLens>> GetCodeLensesAsync(string uri, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspCodeLens>>([]);
+    Task<LspCodeLens?> ResolveCodeLensAsync(LspCodeLens lens, CancellationToken ct = default)
+        => Task.FromResult<LspCodeLens?>(null);
 
     // Selection range
     Task<IReadOnlyList<LspSelectionRange>?> RequestSelectionRangesAsync(string uri, IReadOnlyList<LspPosition> positions, CancellationToken ct = default);

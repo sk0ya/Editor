@@ -16,12 +16,14 @@
     <UseWPF>true</UseWPF>
     <IsPackable>true</IsPackable>
     <PackageId>sk0ya.Editor.Controls</PackageId>
-    <Version>1.0.79</Version>
+    <Version>1.0.80</Version>
     <Authors>shigekazukoya</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/sk0ya/Editor</RepositoryUrl>
     <Description>WPF Vim-like editor control with built-in Git and LSP integrations. Bundles the core engine, the WPF control, and the default Git/LSP integrations in a single package.</Description>
     <PackageTags>editor;wpf;vim;text-editor;lsp;git</PackageTags>
+    <NuspecFile>sk0ya.Editor.Controls.nuspec</NuspecFile>
+    <NuspecProperties>id=$(PackageId);version=$(Version);author=$(Authors);configuration=$(Configuration)</NuspecProperties>
     <!-- Bundle the referenced project DLLs (Core, Controls) into this single package -->
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeReferencedProjectDlls</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>

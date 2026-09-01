@@ -90,6 +90,19 @@ public class LspExCommandTests
         Assert.Equal(VimEventType.CodeActionRequested, result.Event?.Type);
     }
 
+    [Theory]
+    [InlineData("QuickFix")]
+    [InlineData("quickfix")]
+    public void QuickFix_RequestsTheQuickFixEvent(string command)
+    {
+        var (processor, _) = Create();
+
+        var result = processor.Execute(command, CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal(VimEventType.QuickFixRequested, result.Event?.Type);
+    }
+
     [Fact]
     public void CodeAction_BothSpellingsComplete()
     {
@@ -99,6 +112,28 @@ public class LspExCommandTests
 
         Assert.Contains("CodeAction", completions);
         Assert.Contains("CodeActions", completions);
+    }
+
+    [Fact]
+    public void FixAll_normal_command_emits_a_distinct_event()
+    {
+        var events = new List<VimEvent>();
+
+        var handled = new Editor.Core.Engine.Commands.LspTriggerCommands().TryHandle("gA", events);
+
+        Assert.True(handled);
+        Assert.Equal(VimEventType.FixAllRequested, Assert.Single(events).Type);
+    }
+
+    [Fact]
+    public void FixAll_ex_command_emits_the_same_event()
+    {
+        var (processor, _) = Create();
+
+        var result = processor.Execute("FixAll", CursorPosition.Zero);
+
+        Assert.True(result.Success);
+        Assert.Equal(VimEventType.FixAllRequested, result.Event?.Type);
     }
 
     [Fact]

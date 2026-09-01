@@ -69,6 +69,18 @@ public partial class EditorCanvas : FrameworkElement
     private VisualLineSegment[] _visualLines = [new VisualLineSegment(0, 0, false)];
     private bool _wrapLines;
 
+    // UI Automation's TextPattern selection is initiated by an external client. The
+    // containing VimEditorControl subscribes so that LSP commands see the same selection
+    // as the accessibility surface, rather than only the canvas paint state.
+    internal event Action<CursorPosition, CursorPosition>? AutomationSelectionRequested;
+
+    internal void SetAutomationSelection(CursorPosition start, CursorPosition end)
+    {
+        SetSelection(start == end ? null : new Selection(start, end, SelectionType.Character));
+        SetCursor(end);
+        AutomationSelectionRequested?.Invoke(start, end);
+    }
+
     // Layout batching: while batching, RebuildVisualLayout() is deferred so a burst of
     // Canvas.SetXxx() calls (e.g. one keystroke's UpdateAll) rebuilds the layout once
     // instead of 3+ times. See BeginBatch/EndBatch.
@@ -161,11 +173,16 @@ public partial class EditorCanvas : FrameworkElement
     private IReadOnlyList<InlayHint> _inlayHints = [];
     private Dictionary<int, List<InlayHint>> _inlayHintsByLine = [];
 
-    // Semantic tokens — line-keyed lookup: line → list of (startChar, length, brush)
-    private Dictionary<int, List<(int StartChar, int Length, Brush Brush)>> _semanticTokensByLine = [];
+    // Semantic tokens — line-keyed lookup: line → list of (startChar, length, brush, tokenType, modifiers)
+    private Dictionary<int, List<(int StartChar, int Length, Brush Brush, string TokenType, string[] Modifiers)>> _semanticTokensByLine = [];
 
     // Document highlights
     private IReadOnlyList<DocumentHighlight>? _documentHighlights;
+    private IReadOnlyList<LspDocumentLink> _documentLinks = [];
+    private IReadOnlyList<LspCodeLens> _codeLenses = [];
+    private IReadOnlyDictionary<int, IReadOnlyList<LspCodeLens>> _codeLensesByLine =
+        new Dictionary<int, IReadOnlyList<LspCodeLens>>();
+    private readonly List<(Rect Bounds, LspCodeLens Lens)> _codeLensHitRects = [];
 
     // LSP
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
@@ -194,6 +211,8 @@ public partial class EditorCanvas : FrameworkElement
     public EditorBlameLine? RightClickBlame => _rightClickBlame;
     public event Action<string>? LinkClicked;          // (url) Ctrl+clicked on a detected URL
     public event Action<string>? FileLinkClicked;      // (absolutePath) Ctrl+clicked on a detected file path
+    public event Action<string>? DocumentLinkClicked;  // (LSP target) Ctrl+clicked on a document link
+    public event Action<LspCodeLens>? CodeLensClicked; // (LSP code lens) Ctrl+clicked on its label
 
     // Brushes/pens for spell underlines — created once (theme-independent). Popup chrome brushes
     // shared with LspOverlayRenderer live in PopupChrome.
@@ -461,6 +480,23 @@ public partial class EditorCanvas : FrameworkElement
         InvalidateVisual();
     }
 
+    public void SetDocumentLinks(IReadOnlyList<LspDocumentLink>? links)
+    {
+        _documentLinks = links ?? [];
+        InvalidateVisual();
+    }
+
+    public void SetCodeLenses(IReadOnlyList<LspCodeLens>? lenses)
+    {
+        _codeLenses = lenses ?? [];
+        _codeLensesByLine = _codeLenses
+            .Where(lens => lens.Range.Start.Line >= 0 && !string.IsNullOrWhiteSpace(lens.Title))
+            .GroupBy(lens => lens.Range.Start.Line)
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<LspCodeLens>)group.ToArray());
+        _codeLensHitRects.Clear();
+        InvalidateVisual();
+    }
+
     public void SetSemanticTokens(SemanticToken[] tokens)
     {
         _semanticTokensByLine = [];
@@ -472,7 +508,7 @@ public partial class EditorCanvas : FrameworkElement
             var brush = SemanticTokenTypeToBrush(tok.TokenType) ?? Theme.Foreground;
             if (!_semanticTokensByLine.TryGetValue(tok.Line, out var list))
                 _semanticTokensByLine[tok.Line] = list = [];
-            list.Add((tok.StartChar, tok.Length, brush));
+            list.Add((tok.StartChar, tok.Length, brush, tok.TokenType, tok.Modifiers ?? []));
         }
         // Pre-sort each line's tokens by start column so the render loop needs no LINQ allocation per frame.
         foreach (var list in _semanticTokensByLine.Values)
@@ -841,7 +877,7 @@ public partial class EditorCanvas : FrameworkElement
         // 従来のガター（行番号＋フォールド列）と完全に一致する＝既存利用に影響しない。
         int bpColWidth = _breakpointsEnabled ? (int)Math.Max(14.0, _charWidth + 2) : 0;
         // テスト実行列も同じ流儀。ホストが SetTestGlyphsEnabled(true) を呼ぶまでは幅 0 ＝列そのものが無い。
-        int testColWidth = _testGlyphsEnabled ? (int)Math.Max(14.0, _charWidth + 2) : 0;
+        int testColWidth = (_testGlyphsEnabled || _coverageMarkersEnabled) ? (int)Math.Max(14.0, _charWidth + 2) : 0;
         int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
         double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
         // blame 左カラム（:Gblame 有効時のみ幅 > 0）はガターの最左＝ブレークポイント列よりさらに左に確保する。
@@ -1017,6 +1053,21 @@ public partial class EditorCanvas : FrameworkElement
         // Ctrl+Click on a detected URL or file path opens it instead of moving the cursor
         if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0)
         {
+            if (TryGetCodeLensAt(point, out var codeLens))
+            {
+                CodeLensClicked?.Invoke(codeLens);
+                e.Handled = true;
+                return;
+            }
+
+            var documentLink = GetDocumentLinkAt(line, col);
+            if (documentLink is not null)
+            {
+                DocumentLinkClicked?.Invoke(documentLink.Target);
+                e.Handled = true;
+                return;
+            }
+
             var link = GetLinkAt(line, col);
             if (link != null)
             {
@@ -1192,7 +1243,7 @@ public partial class EditorCanvas : FrameworkElement
             if (ctrlDown)
             {
                 var (hLine, hCol) = HitTest(point);
-                onLink = GetLinkAt(hLine, hCol) != null;
+                onLink = TryGetCodeLensAt(point, out _) || GetDocumentLinkAt(hLine, hCol) is not null || GetLinkAt(hLine, hCol) != null;
             }
             Cursor = onLink ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.IBeam;
         }
@@ -1369,6 +1420,7 @@ public partial class EditorCanvas : FrameworkElement
     {
         var size = RenderSize;
         MeasureChar();
+        _codeLensHitRects.Clear();
 
         // Background
         dc.DrawRectangle(Theme.Background, null, new Rect(size));
@@ -1479,7 +1531,7 @@ public partial class EditorCanvas : FrameworkElement
 
             // テスト実行グリフ（ブレークポイント列の右）。折り返しの継続行には描かない＝
             // ブレークポイント列と同じ「バッファ行の先頭ビジュアル行だけ」の扱い。
-            if (_testGlyphsEnabled && drawNumberAndFold && testColWidth > 0)
+            if ((_testGlyphsEnabled || _coverageMarkersEnabled) && drawNumberAndFold && testColWidth > 0)
                 DrawTestGlyph(dc, l, y, _blameColWidth + bpColWidth, testColWidth);
 
             // Git blame margin (far-left column of the gutter)
@@ -1508,6 +1560,15 @@ public partial class EditorCanvas : FrameworkElement
 
                 // Text with syntax coloring
                 DrawLineText(dc, l, lineText, y, textLeft);
+
+                // LSP code lenses are compact clickable annotations on declaration lines.
+                if (_codeLensesByLine.TryGetValue(l, out var lineLenses))
+                    LspOverlayRenderer.DrawCodeLensLine(dc, Theme, metrics, lineLenses,
+                        y, textLeft, lineText, _scrollOffsetX, size.Width, _codeLensHitRects);
+
+                // LSP document links (capability-driven; Ctrl+Click opens the target)
+                LspOverlayRenderer.DrawDocumentLinks(dc, Theme, metrics, _documentLinks,
+                    l, y, textLeft, lineText, _scrollOffsetX);
 
                 // Inline color preview swatches
                 if (_showColorPreview)
@@ -1875,6 +1936,30 @@ public partial class EditorCanvas : FrameworkElement
         return null;
     }
 
+    private LspDocumentLink? GetDocumentLinkAt(int line, int col)
+    {
+        foreach (var link in _documentLinks)
+        {
+            if (line < link.Range.Start.Line || line > link.Range.End.Line) continue;
+            if (line == link.Range.Start.Line && col < link.Range.Start.Character) continue;
+            if (line == link.Range.End.Line && col >= link.Range.End.Character) continue;
+            return link;
+        }
+        return null;
+    }
+
+    private bool TryGetCodeLensAt(Point point, out LspCodeLens lens)
+    {
+        foreach (var hit in _codeLensHitRects)
+        {
+            if (!hit.Bounds.Contains(point)) continue;
+            lens = hit.Lens;
+            return true;
+        }
+        lens = null!;
+        return false;
+    }
+
     private void DrawLinkUnderline(DrawingContext dc, int line, double y, double textLeft, string lineText, int segStart, int segEnd)
     {
         var links = GetLinks(line, lineText);
@@ -2077,9 +2162,12 @@ public partial class EditorCanvas : FrameworkElement
     /// Builds the colored segments for a line by layering LSP semantic tokens on top of the
     /// regex-based syntax tokens. Regex tokens form the base layer (so keywords/strings/comments
     /// keep their color even when the server only emits semantic tokens for identifiers/types);
-    /// semantic tokens override wherever they exist. Returns null if the line has no coloring.
+    /// semantic tokens override wherever they exist, except that a semantic identifier/type
+    /// must not erase a lexical string/comment/preprocessor range. Returns null if the line has
+    /// no coloring.
     /// </summary>
-    private List<(int StartCol, int Length, Brush? Brush)>? BuildColorSegments(int lineIndex, int lineLength)
+    private List<(int StartCol, int Length, Brush? Brush, bool Italic, bool Deprecated)>? BuildColorSegments(
+        int lineIndex, int lineLength)
     {
         _semanticTokensByLine.TryGetValue(lineIndex, out var semTokens);
         _tokensByLine.TryGetValue(lineIndex, out var regexTokens);
@@ -2089,14 +2177,20 @@ public partial class EditorCanvas : FrameworkElement
         if (!hasSem && !hasRegex) return null;
 
         if (hasSem && !hasRegex)
-            return semTokens!.Select(t => (t.StartChar, t.Length, (Brush?)t.Brush)).ToList();
+            return semTokens!.Select(t => (
+                t.StartChar, t.Length, (Brush?)t.Brush,
+                SemanticModifierIsItalic(t.Modifiers),
+                SemanticModifierIsDeprecated(t.Modifiers))).ToList();
 
         if (!hasSem && hasRegex)
-            return regexTokens!.Select(t => (t.StartColumn, t.Length, (Brush?)Theme.GetTokenBrush(t.Kind))).ToList();
+            return regexTokens!.Select(t => (
+                t.StartColumn, t.Length, (Brush?)Theme.GetTokenBrush(t.Kind), false, false)).ToList();
 
         // Both present: merge per-character (regex base, semantic overlay), then coalesce runs.
         if (lineLength <= 0) return null;
         var brushes = new Brush?[lineLength];
+        var italics = new bool[lineLength];
+        var deprecated = new bool[lineLength];
         var has = new bool[lineLength];
         foreach (var t in regexTokens!)
         {
@@ -2104,23 +2198,58 @@ public partial class EditorCanvas : FrameworkElement
             for (int c = t.StartColumn; c < t.StartColumn + t.Length && c < lineLength; c++)
             { if (c >= 0) { brushes[c] = b; has[c] = true; } }
         }
-        foreach (var (sc, ln, br) in semTokens!)
+        foreach (var (sc, ln, br, tokenType, modifiers) in semTokens!)
         {
             for (int c = sc; c < sc + ln && c < lineLength; c++)
-            { if (c >= 0) { brushes[c] = br; has[c] = true; } }
+            {
+                if (c >= 0 && SemanticMayOverlay(regexTokens!, c, tokenType))
+                {
+                    brushes[c] = br;
+                    italics[c] = SemanticModifierIsItalic(modifiers);
+                    deprecated[c] = SemanticModifierIsDeprecated(modifiers);
+                    has[c] = true;
+                }
+            }
         }
 
-        var segs = new List<(int StartCol, int Length, Brush? Brush)>();
+        var segs = new List<(int StartCol, int Length, Brush? Brush, bool Italic, bool Deprecated)>();
         int i = 0;
         while (i < lineLength)
         {
             if (!has[i]) { i++; continue; }
             int start = i;
             var brush = brushes[i];
-            while (i < lineLength && has[i] && ReferenceEquals(brushes[i], brush)) i++;
-            segs.Add((start, i - start, brush));
+            var italic = italics[i];
+            var isDeprecated = deprecated[i];
+            while (i < lineLength && has[i] && ReferenceEquals(brushes[i], brush)
+                && italics[i] == italic && deprecated[i] == isDeprecated) i++;
+            segs.Add((start, i - start, brush, italic, isDeprecated));
         }
         return segs;
+    }
+
+    private static bool SemanticModifierIsItalic(string[] modifiers)
+        => modifiers.Any(modifier => modifier is "readonly" or "abstract" or "documentation");
+
+    private static bool SemanticModifierIsDeprecated(string[] modifiers)
+        => modifiers.Any(modifier => modifier == "deprecated");
+
+    private static bool SemanticMayOverlay(SyntaxToken[] lexicalTokens, int column, string semanticType)
+    {
+        var lexicalKind = lexicalTokens
+            .Where(token => column >= token.StartColumn && column < token.StartColumn + token.Length)
+            .Select(token => token.Kind)
+            .FirstOrDefault(kind => kind is TokenKind.String or TokenKind.Comment or TokenKind.Preprocessor);
+        if (lexicalKind is not (TokenKind.String or TokenKind.Comment or TokenKind.Preprocessor))
+            return true;
+
+        return lexicalKind switch
+        {
+            TokenKind.String => semanticType is "string" or "regexp",
+            TokenKind.Comment => semanticType == "comment",
+            TokenKind.Preprocessor => semanticType == "macro",
+            _ => true,
+        };
     }
 
     /// <summary>
@@ -2129,7 +2258,7 @@ public partial class EditorCanvas : FrameworkElement
     /// Null brush means "use default foreground".
     /// </summary>
     private void DrawLineTextWithSegments(DrawingContext dc, string lineText, double y, double textLeft,
-        IEnumerable<(int StartCol, int Length, Brush? Brush)> segments)
+        IEnumerable<(int StartCol, int Length, Brush? Brush, bool Italic, bool Deprecated)> segments)
     {
         // Keep shaping identical to the layout used by GetTextBoundaries. Drawing each syntax
         // token as a separate FormattedText run changes kerning/ligatures and can move glyphs
@@ -2137,27 +2266,31 @@ public partial class EditorCanvas : FrameworkElement
         if (_activeLineOverrides == null || _activeLineOverrides.Count == 0)
         {
             var ft = FormatText(lineText, Theme.Foreground);
-            foreach (var (startCol, length, brush) in segments)
+            foreach (var (startCol, length, brush, italic, deprecated) in segments)
             {
                 int start = Math.Clamp(startCol, 0, lineText.Length);
                 int count = Math.Clamp(length, 0, lineText.Length - start);
-                if (count > 0 && brush != null) ft.SetForegroundBrush(brush, start, count);
+                if (count <= 0) continue;
+                if (brush != null) ft.SetForegroundBrush(brush, start, count);
+                ApplySemanticModifierStyle(ft, start, count, italic, deprecated);
             }
             dc.DrawText(ft, new Point(textLeft - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
             return;
         }
 
         int pos = 0;
-        foreach (var (startCol, length, brush) in segments)
+        foreach (var (startCol, length, brush, italic, deprecated) in segments)
         {
             // Gap before segment in default color
             if (startCol > pos)
-                DrawTextRun(dc, lineText, pos, Math.Min(startCol, lineText.Length), textLeft, y, Theme.Foreground);
+                DrawTextRun(dc, lineText, pos, Math.Min(startCol, lineText.Length), textLeft, y,
+                    Theme.Foreground);
 
             // Segment text
             int end = Math.Min(startCol + length, lineText.Length);
             if (startCol < end)
-                DrawTextRun(dc, lineText, startCol, end, textLeft, y, brush ?? Theme.Foreground);
+                DrawTextRun(dc, lineText, startCol, end, textLeft, y, brush ?? Theme.Foreground,
+                    italic, deprecated);
 
             pos = Math.Max(pos, startCol + length);
         }
@@ -2176,13 +2309,15 @@ public partial class EditorCanvas : FrameworkElement
     /// character is drawn alone (at its natural size) and the next run starts at the stretched
     /// GetVisualX position, producing the visible gap.
     /// </summary>
-    private void DrawTextRun(DrawingContext dc, string lineText, int startCol, int endCol, double textLeft, double y, Brush brush)
+    private void DrawTextRun(DrawingContext dc, string lineText, int startCol, int endCol,
+        double textLeft, double y, Brush brush, bool italic = false, bool deprecated = false)
     {
         if (startCol >= endCol) return;
 
         if (_activeLineOverrides == null || _activeLineOverrides.Count == 0)
         {
             var ft = FormatText(lineText[startCol..endCol], brush);
+            ApplySemanticModifierStyle(ft, 0, endCol - startCol, italic, deprecated);
             dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
             return;
         }
@@ -2195,6 +2330,7 @@ public partial class EditorCanvas : FrameworkElement
             if (runEnd > runStart)
             {
                 var ft = FormatText(lineText[runStart..runEnd], brush);
+                ApplySemanticModifierStyle(ft, 0, runEnd - runStart, italic, deprecated);
                 dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, runStart) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
             }
             runStart = runEnd;
@@ -2202,6 +2338,7 @@ public partial class EditorCanvas : FrameworkElement
         if (runStart < endCol)
         {
             var ft = FormatText(lineText[runStart..endCol], brush);
+            ApplySemanticModifierStyle(ft, 0, endCol - runStart, italic, deprecated);
             dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, runStart) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
         }
     }
@@ -2275,20 +2412,20 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
-        IEnumerable<(int StartCol, int Length, Brush? Brush)> segments =
+        IEnumerable<(int StartCol, int Length, Brush? Brush, bool Italic, bool Deprecated)> segments =
             BuildColorSegments(lineIndex, lineText.Length) ?? [];
 
         DrawLineTextWithSegments(dc, merged, y, textLeft,
             ShiftSegmentsForImeComposition(segments, lineText.Length, cursorCol, _imeCompositionText.Length));
     }
 
-    private static IEnumerable<(int StartCol, int Length, Brush? Brush)> ShiftSegmentsForImeComposition(
-        IEnumerable<(int StartCol, int Length, Brush? Brush)> segments,
+    private static IEnumerable<(int StartCol, int Length, Brush? Brush, bool Italic, bool Deprecated)> ShiftSegmentsForImeComposition(
+        IEnumerable<(int StartCol, int Length, Brush? Brush, bool Italic, bool Deprecated)> segments,
         int originalLength,
         int cursorCol,
         int compositionLength)
     {
-        foreach (var (startCol, length, brush) in segments)
+        foreach (var (startCol, length, brush, italic, deprecated) in segments)
         {
             if (length <= 0) continue;
 
@@ -2300,13 +2437,13 @@ public partial class EditorCanvas : FrameworkElement
             {
                 int beforeEnd = Math.Min(end, cursorCol);
                 if (beforeEnd > start)
-                    yield return (start, beforeEnd - start, brush);
+                    yield return (start, beforeEnd - start, brush, italic, deprecated);
             }
 
             if (end > cursorCol)
             {
                 int afterStart = Math.Max(start, cursorCol);
-                yield return (afterStart + compositionLength, end - afterStart, brush);
+                yield return (afterStart + compositionLength, end - afterStart, brush, italic, deprecated);
             }
         }
     }
@@ -2761,6 +2898,14 @@ public partial class EditorCanvas : FrameworkElement
             _fontSize,
             brush,
             GetDpi());
+    }
+
+    private static void ApplySemanticModifierStyle(
+        FormattedText text, int start, int length, bool italic, bool deprecated)
+    {
+        if (length <= 0) return;
+        if (italic) text.SetFontStyle(FontStyles.Italic, start, length);
+        if (deprecated) text.SetTextDecorations(TextDecorations.Strikethrough, start, length);
     }
 
     /// <summary>Formats text in the italic typeface at <paramref name="sizeScale"/> times the normal

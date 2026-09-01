@@ -21,6 +21,9 @@ public enum VimEventType
     SearchResultChanged,
     CommandLineChanged,
     GoToDefinitionRequested,
+    GoToImplementationRequested,
+    GoToTypeDefinitionRequested,
+    GoToDeclarationRequested,
     FormatDocumentRequested,
     QuickfixOpenRequested,
     QuickfixCloseRequested,
@@ -47,6 +50,8 @@ public enum VimEventType
     FindReferencesRequested,
     LspRenameRequested,
     CodeActionRequested,
+    QuickFixRequested,
+    FixAllRequested,
     CommandCompletionChanged,
     OpenUrlRequested,
     MkSessionRequested,
@@ -145,6 +150,15 @@ public record VimEvent(VimEventType Type)
     public static VimEvent GoToDefinitionRequested() =>
         new(VimEventType.GoToDefinitionRequested);
 
+    public static VimEvent GoToImplementationRequested() =>
+        new(VimEventType.GoToImplementationRequested);
+
+    public static VimEvent GoToTypeDefinitionRequested() =>
+        new(VimEventType.GoToTypeDefinitionRequested);
+
+    public static VimEvent GoToDeclarationRequested() =>
+        new(VimEventType.GoToDeclarationRequested);
+
     /// <summary>
     /// Request formatting. With no arguments the whole document is formatted; with a line range
     /// (0-based, inclusive) only those lines are — e.g. `:'&lt;,'&gt;Format` over a visual selection.
@@ -220,6 +234,12 @@ public record VimEvent(VimEventType Type)
 
     public static VimEvent CodeActionRequested() =>
         new(VimEventType.CodeActionRequested);
+
+    public static VimEvent QuickFixRequested() =>
+        new(VimEventType.QuickFixRequested);
+
+    public static VimEvent FixAllRequested() =>
+        new(VimEventType.FixAllRequested);
 
     public static VimEvent CommandCompletionChanged(string[] items, int selectedIndex) =>
         new CommandCompletionChangedEvent(items, selectedIndex);

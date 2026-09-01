@@ -165,6 +165,20 @@ public class EditTransactionIntegrationTests
     }
 
     [Fact]
+    public void RestoreExternalText_DoesNotCreateAnUndoStep()
+    {
+        var engine = new VimEngine();
+        engine.SetText("before");
+        engine.ApplyExternalText("after");
+
+        engine.RestoreExternalText("before");
+        engine.ProcessKey("u");
+
+        // The rollback must not make Ctrl+Z resurrect the failed workspace edit.
+        Assert.Equal("before", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
     public void DeferredSurround_SnapshotsWhenCharacterCompletes()
     {
         var engine = new VimEngine();

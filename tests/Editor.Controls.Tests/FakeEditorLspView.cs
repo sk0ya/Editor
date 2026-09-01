@@ -39,6 +39,8 @@ internal sealed class FakeEditorLspView : IEditorLspView
     public int CompletionScrollOffset => 0;
     public LspSignatureHelp? CurrentSignatureHelp => null;
     public IReadOnlyList<LspCodeAction> CurrentCodeActions => [];
+    public IReadOnlyList<LspDocumentLink> CurrentDocumentLinks => [];
+    public IReadOnlyList<LspCodeLens> CurrentCodeLenses => [];
     public int CodeActionsSelection => 0;
     public int CodeActionsScrollOffset => 0;
     public bool CodeActionsVisible => false;
@@ -49,12 +51,15 @@ internal sealed class FakeEditorLspView : IEditorLspView
     public string? CurrentUri => "file:///fake.cs";
 
     public event Action<string>? StatusMessage { add { } remove { } }
+    public event Action<IReadOnlyList<LspDiagnostic>>? DiagnosticsChanged { add { } remove { } }
     public event Action? StateChanged { add { } remove { } }
     public event Action<string>? BreadcrumbChanged { add { } remove { } }
     public event Action<IReadOnlyList<LspFoldingRange>>? FoldingRangesChanged { add { } remove { } }
     public event Action<IReadOnlyList<InlayHint>>? InlayHintsChanged { add { } remove { } }
     public event Action<SemanticToken[]>? SemanticTokensChanged { add { } remove { } }
     public event Action<IReadOnlyList<DocumentHighlight>?>? DocumentHighlightsChanged { add { } remove { } }
+    public event Action<IReadOnlyList<LspDocumentLink>>? DocumentLinksChanged { add { } remove { } }
+    public event Action<IReadOnlyList<LspCodeLens>>? CodeLensesChanged { add { } remove { } }
 
     public void OnFileOpened(string? filePath, string text) { }
     public void OnTextChanged(string text) { }

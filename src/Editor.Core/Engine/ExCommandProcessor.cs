@@ -1239,7 +1239,7 @@ public class ExCommandProcessor
         "tabc", "tabc!", "tabclose", "tabclose!",
         "split", "sp", "new",
         "vsplit", "vs", "vnew",
-        "Format", "Rename", "CodeAction", "CodeActions", "Symbols", "sym", "outline", "digraphs",
+        "Format", "Rename", "QuickFix", "CodeAction", "CodeActions", "FixAll", "Symbols", "sym", "outline", "digraphs",
         "Lsp", "LspList", "LspAdd", "LspRemove", "LspReset",
         "Fmt", "FmtList", "FmtSet", "FmtRemove",
         "read", "r",

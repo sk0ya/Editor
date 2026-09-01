@@ -19,6 +19,8 @@ public interface ILspDocument : IDisposable
 
     /// <summary>The local path this handle was opened for.</summary>
     string FilePath { get; }
+    /// <summary>現在LSPへ同期されている本文。ホストのワークスペース操作が文書範囲を作るときに使う。</summary>
+    string? Text => null;
 
     /// <summary>The LSP language id negotiated for this document (e.g. "csharp").</summary>
     string LanguageId { get; }
@@ -47,6 +49,15 @@ public interface ILspDocument : IDisposable
     bool ServerSupportsSelectionRange { get; }
     bool ServerSupportsWorkspaceDiagnostics { get; }
     IReadOnlyList<string> CompletionTriggerCharacters => ["."];
+    bool ServerSupportsCompletionResolve => false;
+    bool ServerSupportsImplementation => false;
+    bool ServerSupportsTypeDefinition => false;
+    bool ServerSupportsDeclaration => false;
+    bool ServerSupportsPrepareRename => false;
+    bool ServerSupportsDocumentHighlight => false;
+    bool ServerSupportsDocumentLink => false;
+    bool ServerSupportsCodeLens => false;
+    bool ServerSupportsCodeLensResolve => false;
 
     /// <summary>サーバーが申告した code action kind。空は未申告。</summary>
     IReadOnlyList<string> ServerCodeActionKinds => [];
@@ -57,8 +68,18 @@ public interface ILspDocument : IDisposable
     void UpdateText(string text);
 
     Task<IReadOnlyList<LspCompletionItem>> RequestCompletionAsync(int line, int character, CancellationToken ct = default);
+    Task<LspCompletionItem?> ResolveCompletionAsync(LspCompletionItem item, CancellationToken ct = default)
+        => Task.FromResult<LspCompletionItem?>(null);
     Task<LspHover?> RequestHoverAsync(int line, int character);
     Task<(string Uri, int Line, int Column)?> RequestDefinitionAsync(int line, int character);
+    Task<IReadOnlyList<LspLocation>> RequestImplementationAsync(int line, int character, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspLocation>>([]);
+    Task<IReadOnlyList<LspLocation>> RequestTypeDefinitionAsync(int line, int character, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspLocation>>([]);
+    Task<IReadOnlyList<LspLocation>> RequestDeclarationAsync(int line, int character, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspLocation>>([]);
+    Task<LspRange?> PrepareRenameAsync(int line, int character, CancellationToken ct = default)
+        => Task.FromResult<LspRange?>(null);
     Task<LspSignatureHelp?> RequestSignatureHelpAsync(int line, int character, CancellationToken ct = default);
     Task<LspWorkspaceEdit?> RequestRenameAsync(int line, int character, string newName);
     Task<IReadOnlyList<LspLocation>> RequestReferencesAsync(int line, int character);
@@ -85,7 +106,19 @@ public interface ILspDocument : IDisposable
     Task<IReadOnlyList<LspFoldingRange>> RequestFoldingRangesAsync();
     Task<IReadOnlyList<InlayHint>> RequestInlayHintsAsync(int startLine, int endLine);
     Task<SemanticToken[]?> RequestSemanticTokensAsync();
+    /// <summary>Semantic tokens with a result id for optional LSP delta refreshes.</summary>
+    async Task<SemanticTokensResult?> RequestSemanticTokensResultAsync(string? previousResultId, CancellationToken ct = default)
+    {
+        var tokens = await RequestSemanticTokensAsync();
+        return tokens is null ? null : new SemanticTokensResult(null, tokens);
+    }
     Task<IReadOnlyList<DocumentHighlight>?> RequestDocumentHighlightAsync(int line, int character, CancellationToken ct = default);
+    Task<IReadOnlyList<LspDocumentLink>> RequestDocumentLinksAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspDocumentLink>>([]);
+    Task<IReadOnlyList<LspCodeLens>> RequestCodeLensesAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspCodeLens>>([]);
+    Task<LspCodeLens?> ResolveCodeLensAsync(LspCodeLens lens, CancellationToken ct = default)
+        => Task.FromResult<LspCodeLens?>(null);
     Task<LspSelectionRange?> RequestSelectionRangeAsync(int line, int character);
 
     /// <summary>New diagnostics for this URI. <b>Fires on a background thread.</b></summary>

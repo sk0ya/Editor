@@ -255,7 +255,14 @@ public record LspCompletionItem(
     bool Preselect = false,
     LspTextEdit? TextEdit = null,
     IReadOnlyList<string>? CommitCharacters = null,
-    bool Deprecated = false);
+    bool Deprecated = false,
+    IReadOnlyList<LspTextEdit>? AdditionalTextEdits = null,
+    string? DataJson = null,
+    LspCompletionCommand? Command = null,
+    string? RawJson = null);
+
+/// <summary>補完採用時またはresolve後に実行できるLSP command。引数はJSON文字列で保持する。</summary>
+public record LspCompletionCommand(string Title, string Command, IReadOnlyList<string>? ArgumentsJson = null);
 
 public record LspHover(string Value);
 
@@ -290,7 +297,9 @@ public record LspFileOperation(
 public record LspWorkspaceEdit(
     IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> Changes,
     IReadOnlyDictionary<string, int?>? DocumentVersions = null,
-    IReadOnlyList<LspFileOperation>? FileOperations = null);
+    IReadOnlyList<LspFileOperation>? FileOperations = null,
+    // Optional host-side guard for locally generated edits. Server JSON never supplies this.
+    IReadOnlyDictionary<string, string>? ExpectedTexts = null);
 
 // Folding ranges
 public record LspFoldingRange(int StartLine, int EndLine, string? Kind = null);
@@ -304,6 +313,75 @@ public record LspCodeActionCommand(
     string Command,
     string? Title = null,
     IReadOnlyList<string>? ArgumentsJson = null);
+
+/// <summary>textDocument/codeLens の1件。未解決の場合は codeLens/resolve 用の元JSONを保持する。</summary>
+public record LspCodeLens(
+    LspRange Range,
+    LspCodeActionCommand? Command = null,
+    string? DataJson = null,
+    string? RawJson = null)
+{
+    public bool NeedsResolve => Command is null && RawJson is not null;
+    public string Title => Command?.Title ?? "CodeLens";
+}
+
+public static class LspCodeLensParser
+{
+    public static IReadOnlyList<LspCodeLens> Parse(JsonElement result)
+    {
+        if (result.ValueKind != JsonValueKind.Array) return [];
+
+        var lenses = new List<LspCodeLens>();
+        foreach (var item in result.EnumerateArray())
+        {
+            try
+            {
+                if (!item.TryGetProperty("range", out var range)) continue;
+                LspCodeActionCommand? command = null;
+                if (item.TryGetProperty("command", out var commandEl))
+                    command = ParseCommand(commandEl);
+                string? data = item.TryGetProperty("data", out var dataEl)
+                    ? dataEl.GetRawText()
+                    : null;
+                lenses.Add(new LspCodeLens(ParseRange(range), command, data, item.GetRawText()));
+            }
+            catch
+            {
+                // A malformed lens must not hide valid lenses next to it.
+            }
+            if (lenses.Count >= 500) break;
+        }
+        return lenses;
+    }
+
+    private static LspCodeActionCommand? ParseCommand(JsonElement el)
+    {
+        if (el.ValueKind != JsonValueKind.Object ||
+            !el.TryGetProperty("command", out var commandEl) ||
+            commandEl.ValueKind != JsonValueKind.String ||
+            commandEl.GetString() is not { Length: > 0 } command)
+            return null;
+
+        string? title = el.TryGetProperty("title", out var titleEl) ? titleEl.GetString() : null;
+        List<string>? arguments = null;
+        if (el.TryGetProperty("arguments", out var argumentsEl) && argumentsEl.ValueKind == JsonValueKind.Array)
+        {
+            arguments = [];
+            foreach (var argument in argumentsEl.EnumerateArray())
+                arguments.Add(argument.GetRawText());
+        }
+        return new LspCodeActionCommand(command, title, arguments);
+    }
+
+    private static LspRange ParseRange(JsonElement el)
+    {
+        var start = el.GetProperty("start");
+        var end = el.GetProperty("end");
+        return new LspRange(
+            new LspPosition(start.GetProperty("line").GetInt32(), start.GetProperty("character").GetInt32()),
+            new LspPosition(end.GetProperty("line").GetInt32(), end.GetProperty("character").GetInt32()));
+    }
+}
 
 /// <summary>code action 1件。
 /// <para><paramref name="Edit"/> が null でも「編集が無い」とは限らない。LSP は遅延解決を許しており、
@@ -337,6 +415,7 @@ public static class LspCodeActionKinds
     public const string RefactorRewrite = "refactor.rewrite";
     public const string RefactorMove = "refactor.move";
     public const string Source = "source";
+    public const string SourceFixAll = "source.fixAll";
 
     /// <summary><paramref name="kind"/> が <paramref name="prefix"/> と等しいか、その下位階層か。</summary>
     public static bool Matches(string? kind, string prefix) =>
@@ -380,10 +459,61 @@ public record TypeHierarchyItem(
 // Semantic tokens
 public record SemanticTokensLegend(string[] TokenTypes, string[] TokenModifiers);
 public record SemanticToken(int Line, int StartChar, int Length, string TokenType, string[] Modifiers);
+/// <summary>Decoded semantic tokens together with the server's result id.
+/// The id is used by <c>textDocument/semanticTokens/full/delta</c> on the next refresh.</summary>
+public record SemanticTokensResult(string? ResultId, SemanticToken[] Tokens);
 
 // Document highlight
 public enum DocumentHighlightKind { Text = 1, Read = 2, Write = 3 }
 public record DocumentHighlight(LspRange Range, DocumentHighlightKind Kind);
+
+/// <summary>textDocument/documentLink の1件。Target は file:// または http(s) URI。</summary>
+public record LspDocumentLink(LspRange Range, string Target, string? Tooltip = null);
+
+/// <summary>documentLink 応答を安全に読み取る。壊れた要素は捨て、正常なリンクは残す。</summary>
+public static class LspDocumentLinkParser
+{
+    public static IReadOnlyList<LspDocumentLink> Parse(JsonElement result)
+    {
+        if (result.ValueKind != JsonValueKind.Array) return [];
+
+        var links = new List<LspDocumentLink>();
+        foreach (var item in result.EnumerateArray())
+        {
+            try
+            {
+                if (!item.TryGetProperty("range", out var range) ||
+                    !item.TryGetProperty("target", out var target) ||
+                    target.ValueKind != JsonValueKind.String)
+                    continue;
+
+                var targetText = target.GetString();
+                if (string.IsNullOrWhiteSpace(targetText)) continue;
+
+                string? tooltip = item.TryGetProperty("tooltip", out var tooltipEl) &&
+                    tooltipEl.ValueKind == JsonValueKind.String
+                    ? tooltipEl.GetString()
+                    : null;
+                links.Add(new LspDocumentLink(ParseRange(range), LspUri.Normalize(targetText), tooltip));
+            }
+            catch
+            {
+                // One malformed link must not hide valid links returned beside it.
+            }
+            if (links.Count >= 1000) break;
+        }
+        return links;
+    }
+
+    private static LspRange ParseRange(JsonElement el)
+    {
+        var start = el.GetProperty("start");
+        var end = el.GetProperty("end");
+        return new LspRange(
+            new LspPosition(start.GetProperty("line").GetInt32(), start.GetProperty("character").GetInt32()),
+            new LspPosition(end.GetProperty("line").GetInt32(), end.GetProperty("character").GetInt32()));
+    }
+}
 
 // Selection ranges (returned by textDocument/selectionRange)
 public record LspSelectionRange(LspRange Range, LspSelectionRange? Parent = null);

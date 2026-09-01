@@ -28,6 +28,8 @@ public interface IEditorLspView : IDisposable
     bool CompletionVisible { get; }
     LspSignatureHelp? CurrentSignatureHelp { get; }
     IReadOnlyList<LspCodeAction> CurrentCodeActions { get; }
+    IReadOnlyList<LspDocumentLink> CurrentDocumentLinks { get; }
+    IReadOnlyList<LspCodeLens> CurrentCodeLenses { get; }
     int CodeActionsSelection { get; }
     int CodeActionsScrollOffset { get; }
     bool CodeActionsVisible { get; }
@@ -35,16 +37,26 @@ public interface IEditorLspView : IDisposable
     bool IsDocumentReady { get; }
     bool ServerSupportsFoldingRange { get; }
     bool ServerSupportsRangeFormatting { get; }
+    bool ServerSupportsCompletionResolve => Document?.ServerSupportsCompletionResolve == true;
+    bool ServerSupportsImplementation => Document?.ServerSupportsImplementation == true;
+    bool ServerSupportsTypeDefinition => Document?.ServerSupportsTypeDefinition == true;
+    bool ServerSupportsDeclaration => Document?.ServerSupportsDeclaration == true;
+    bool ServerSupportsPrepareRename => Document?.ServerSupportsPrepareRename == true;
+    bool ServerSupportsDocumentHighlight => Document?.ServerSupportsDocumentHighlight == true;
+    IReadOnlyList<string> ServerCodeActionKinds => Document?.ServerCodeActionKinds ?? [];
     IReadOnlyList<string> CompletionTriggerCharacters => ["."];
     string? CurrentUri { get; }
 
     event Action<string>? StatusMessage;
+    event Action<IReadOnlyList<LspDiagnostic>>? DiagnosticsChanged;
     event Action? StateChanged;
     event Action<string>? BreadcrumbChanged;
     event Action<IReadOnlyList<LspFoldingRange>>? FoldingRangesChanged;
     event Action<IReadOnlyList<InlayHint>>? InlayHintsChanged;
     event Action<SemanticToken[]>? SemanticTokensChanged;
     event Action<IReadOnlyList<DocumentHighlight>?>? DocumentHighlightsChanged;
+    event Action<IReadOnlyList<LspDocumentLink>>? DocumentLinksChanged;
+    event Action<IReadOnlyList<LspCodeLens>>? CodeLensesChanged;
 
     void OnFileOpened(string? filePath, string text);
     void OnTextChanged(string text);
@@ -54,7 +66,32 @@ public interface IEditorLspView : IDisposable
     /// </summary>
     Task<string?> RequestCompletionAsync(int line, int character);
     Task<string?> RequestHoverAsync(int line, int character);
+    /// <summary>Request the raw definition URI, preserving external (non-file) sources for peek displays.</summary>
+    Task<(string Uri, int Line, int Column)?> RequestDefinitionLocationAsync(int line, int character)
+        => RequestDefinitionAsync(line, character);
+    bool HasHostCompletionProvider => false;
+    bool HasHostDefinitionProvider => false;
+    bool HasHostReferencesProvider => false;
+    bool HasHostImplementationProvider => false;
+    bool HasHostTypeDefinitionProvider => false;
+    bool HasHostDeclarationProvider => false;
+    bool HasHostHoverProvider => false;
+    bool HasHostDocumentHighlightProvider => false;
     Task<(string FilePath, int Line, int Column)?> RequestDefinitionAsync(int line, int character);
+    Task<LspCompletionItem?> ResolveCompletionAsync(LspCompletionItem item, CancellationToken ct = default)
+        => Task.FromResult<LspCompletionItem?>(null);
+    Task<IReadOnlyList<LspLocation>> RequestImplementationAsync(int line, int character, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspLocation>>([]);
+    Task<IReadOnlyList<LspLocation>> RequestTypeDefinitionAsync(int line, int character, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspLocation>>([]);
+    Task<IReadOnlyList<LspLocation>> RequestDeclarationAsync(int line, int character, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<LspLocation>>([]);
+    Task<LspRange?> PrepareRenameAsync(int line, int character, CancellationToken ct = default)
+        => Task.FromResult<LspRange?>(null);
+    bool HasHostRenameProvider => false;
+    bool HasHostPrepareRenameProvider => false;
+    Task<bool> ExecuteCompletionCommandAsync(LspCompletionCommand command, CancellationToken ct = default)
+        => Task.FromResult(false);
     void MoveCompletionSelection(int delta);
     LspCompletionItem? GetSelectedCompletion();
     void FilterCompletion(string prefix);
@@ -76,9 +113,13 @@ public interface IEditorLspView : IDisposable
     /// <summary>未解決 code action の <c>codeAction/resolve</c>。解決できなければ null。</summary>
     Task<LspCodeAction?> ResolveCodeActionAsync(LspCodeAction action)
         => Task.FromResult<LspCodeAction?>(null);
+    Task<LspCodeLens?> ResolveCodeLensAsync(LspCodeLens lens)
+        => Task.FromResult<LspCodeLens?>(null);
 
     /// <summary>コマンド型 code action の実行。編集はサーバー起点の applyEdit で返る。</summary>
     Task<bool> ExecuteCodeActionCommandAsync(LspCodeActionCommand command)
+        => Task.FromResult(false);
+    Task<bool> ExecuteCodeLensCommandAsync(LspCodeActionCommand command)
         => Task.FromResult(false);
 
     void ShowCodeActions(IReadOnlyList<LspCodeAction> actions);

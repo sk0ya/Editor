@@ -757,7 +757,7 @@ internal sealed class VimEngineRuntime
 
     private void RegisterNavigationFeatureCommands(BuiltInNormalCommandDispatcher commands)
     {
-        commands.Register(["gd", "gr", "ga", "gch", "gct"],
+        commands.Register(["gd", "gI", "gY", "gD", "gr", "ga", "gA", "gch", "gct"],
             (cmd, events) => _lspTriggerCommands.TryHandle(cmd.Motion!, events));
         commands.Register(["gf", "gx"],
             (cmd, events) => _fileNavCommands.TryHandle(cmd.Motion!, _cursor, events));
@@ -1170,6 +1170,28 @@ internal sealed class VimEngineRuntime
         return events;
     }
 
+    /// <summary>
+    /// Restores host-managed text without adding another undo checkpoint.
+    /// This is reserved for rolling back a completed host transaction after a later
+    /// file operation fails; normal formatter/LSP edits must use <see cref="ApplyExternalText"/>.
+    /// </summary>
+    public IReadOnlyList<VimEvent> RestoreExternalText(string text)
+    {
+        var old = _cursor;
+        CurrentBuffer.Text.ReplaceAll(text);
+        _syntaxEngine.Invalidate();
+
+        var buffer = CurrentBuffer.Text;
+        var line = Math.Clamp(old.Line, 0, buffer.LineCount - 1);
+        var lineLength = buffer.GetLine(line).Length;
+        var maxColumn = _mode is VimMode.Insert or VimMode.Replace
+            ? lineLength
+            : Math.Max(0, lineLength - 1);
+        _cursor = new CursorPosition(line, Math.Clamp(old.Column, 0, maxColumn));
+        SetPreferredColumn(_cursor.Column);
+        return [VimEvent.TextChanged(), VimEvent.CursorMoved(_cursor)];
+    }
+
     // Move cursor to an arbitrary position (used for mouse click).
     public IReadOnlyList<VimEvent> SetCursorPosition(CursorPosition pos)
     {
@@ -1224,6 +1246,36 @@ internal sealed class VimEngineRuntime
     {
         var events = new List<VimEvent>();
         ProcessStroke(new VimKeyStroke(key, ctrl, shift, alt), events, allowMapping: true);
+        return events;
+    }
+
+    /// <summary>
+    /// Invokes the active filetype's explicit statement-completion hook. The host maps this
+    /// to a language-neutral shortcut; a language assist decides whether the edit is safe.
+    /// </summary>
+    public IReadOnlyList<VimEvent> CompleteStatement()
+    {
+        var events = new List<VimEvent>();
+        if (_mode is not (VimMode.Insert or VimMode.Replace)) return events;
+
+        _editTransactions.Execute(
+            events,
+            transaction =>
+            {
+                var result = _editAssists.OnCompleteStatement(new EditContext(
+                    transaction.Buffer,
+                    transaction.Cursor,
+                    _bufferManager.Current.FilePath,
+                    _config.Options.ShiftWidth,
+                    _config.Options.ExpandTab));
+                if (!result.Handled) return null;
+                transaction.Cursor = result.Cursor;
+                return null;
+            },
+            new EditTransactionOptions(
+                CreateUndoSnapshot: true,
+                AllowCursorAtEndOfLine: true,
+                EnforceReadOnly: true));
         return events;
     }
 

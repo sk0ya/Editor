@@ -53,6 +53,13 @@ public interface IEditAssist
     EditResult OnEnter(EditContext ctx);
 
     /// <summary>
+    /// Handle an explicit complete-statement command (for example
+    /// Ctrl+Shift+Enter). Return <see cref="EditResult.NotHandled"/> when the
+    /// current language has no safe statement completion at the caret.
+    /// </summary>
+    EditResult OnCompleteStatement(EditContext ctx);
+
+    /// <summary>
     /// Handle a Tab (<paramref name="shift"/> = Shift+Tab) keypress. Return
     /// <see cref="EditResult.NotHandled"/> to let the engine insert a plain tab.
     /// </summary>
@@ -77,6 +84,7 @@ public abstract class EditAssistBase : IEditAssist
 {
     public abstract bool AppliesTo(string? filePath);
     public virtual EditResult OnEnter(EditContext ctx) => EditResult.NotHandled;
+    public virtual EditResult OnCompleteStatement(EditContext ctx) => EditResult.NotHandled;
     public virtual EditResult OnTab(EditContext ctx, bool shift) => EditResult.NotHandled;
     public virtual string? OpenLinePrefix(EditContext ctx, bool above) => null;
     public virtual EditResult OnChar(EditContext ctx, char typed) => EditResult.NotHandled;

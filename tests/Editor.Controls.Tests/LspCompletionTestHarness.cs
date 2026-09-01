@@ -57,6 +57,16 @@ internal static class LspCompletionTestHarness
         });
     }
 
+    public static void RaisePreviewKeyDown(VimEditorControl editor, Key key)
+    {
+        editor.RaiseEvent(new KeyEventArgs(
+            Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor)!, Environment.TickCount, key)
+        {
+            RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            Source = editor
+        });
+    }
+
     /// <summary>
     /// ディスパッチャに溜まった継続（await の再開など）を処理する。テスト本体は
     /// ディスパッチャスレッド上で動くので、Background 優先度で入れ子フレームを回して

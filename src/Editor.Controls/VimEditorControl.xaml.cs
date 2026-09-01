@@ -45,7 +45,11 @@ public class OpenFileRequestedEventArgs(string filePath, int line = 0, int colum
 public sealed class WorkspaceEditRequestedEventArgs(
     IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> changes,
     IReadOnlyDictionary<string, int?>? documentVersions,
-    IReadOnlyList<LspFileOperation>? fileOperations = null) : EventArgs
+    IReadOnlyList<LspFileOperation>? fileOperations = null,
+    string? currentFilePath = null,
+    string? currentOriginalText = null,
+    string? currentUpdatedText = null,
+    IReadOnlyDictionary<string, string>? expectedTexts = null) : EventArgs
 {
     public IReadOnlyDictionary<string, IReadOnlyList<LspTextEdit>> Changes { get; } = changes;
     public IReadOnlyDictionary<string, int?>? DocumentVersions { get; } = documentVersions;
@@ -54,6 +58,13 @@ public sealed class WorkspaceEditRequestedEventArgs(
     /// 本文の編集とセットでこれを伴う。ホストは<b>作成を編集より先に</b>行うこと
     /// （新規ファイルへの編集がディスク上の実体を前提にしているため）。</summary>
     public IReadOnlyList<LspFileOperation> FileOperations { get; } = fileOperations ?? [];
+    /// <summary>このEditorの現在バッファに対する変更。ホストのpreview表示へ含めるための情報で、
+    /// <see cref="Changes"/>には重複して載せない。ホストが未接続でも現在バッファの適用は継続する。</summary>
+    public string? CurrentFilePath { get; } = currentFilePath;
+    public string? CurrentOriginalText { get; } = currentOriginalText;
+    public string? CurrentUpdatedText { get; } = currentUpdatedText;
+    /// <summary>ホストが適用前に検証する、ローカル生成WorkspaceEditの期待本文。</summary>
+    public IReadOnlyDictionary<string, string>? ExpectedTexts { get; } = expectedTexts;
     public bool Handled { get; set; }
     public string? Error { get; set; }
 }
@@ -498,6 +509,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     public event EventHandler<CloseTabRequestedEventArgs>? CloseTabRequested;
     public event EventHandler<ModeChangedEventArgs>? ModeChanged;
     public event EventHandler? BufferChanged;
+    /// <summary>Raised when the current LSP document diagnostics are replaced.</summary>
+    public event EventHandler? LspDiagnosticsChanged;
+    /// <summary>ホスト固有のCode ActionをLSP候補へ加えるための拡張点。nullまたは空結果なら
+    /// 通常のLSP要求へフォールバックする。C#のStyleCop等、LSPが返さない公式Analyzer修正に使う。</summary>
+    public Func<LspRange, IReadOnlyList<string>?, Task<IReadOnlyList<LspCodeAction>>>? HostCodeActionProvider { get; set; }
     public event EventHandler<FindReferencesResultEventArgs>? FindReferencesResult;
     public event EventHandler<DocumentSymbolsResultEventArgs>? DocumentSymbolsResult;
     public event EventHandler? QuickfixOpenRequested;
@@ -556,7 +572,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             {
                 // Entering plain mode: tear down any open LSP sub-mode UI so a popup
                 // left over from Vim editing can't linger and hijack keys.
-                _lspView.HideCompletion();
+                HideLspCompletion();
                 _lspView.HideSignatureHelp();
                 _completionDebounce.Stop();
             }
@@ -656,6 +672,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     [Obsolete("This property exposes Editor.Core LSP types and excludes host diagnostics. Use EffectiveDiagnostics.")]
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => _lspView.CurrentDiagnostics;
 
+    /// <summary>LSP-only diagnostics for hosts that need to distinguish them from host diagnostics.</summary>
+    public IReadOnlyList<LspDiagnostic> LspDiagnostics => _lspView.CurrentDiagnostics;
+
     /// <summary>
     /// The LSP document handle for the buffer currently loaded, or null when LSP is off or no server
     /// is configured for this file type. Hosts use it for document-scope queries about the visible
@@ -736,8 +755,193 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _lspWorkspace = options.LspWorkspace;
         _lspView = options.LspViewFactory?.Invoke()
             ?? (_lspWorkspace is null
-                ? new NullLspView()
+                ? new NullLspView(Dispatcher)
                 : new LspViewBridge(Dispatcher, _lspWorkspace));
+        if (options.HostCompletionProvider is { } completionHost)
+        {
+            Func<int, int, CancellationToken, Task<IReadOnlyList<LspCompletionItem>>> provider =
+                (line, character, ct) =>
+                {
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return completionHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostCompletionProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostCompletionProvider = provider;
+        }
+        if (options.HostSemanticTokensProvider is { } semanticHost)
+        {
+            Func<CancellationToken, Task<IReadOnlyList<SemanticToken>>> provider = ct =>
+            {
+                // Capture editor state on the control thread before semantic work runs elsewhere.
+                var path = FilePath ?? string.Empty;
+                var source = Text;
+                return semanticHost(path, source, ct);
+            };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostSemanticTokensProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostSemanticTokensProvider = provider;
+        }
+        if (options.HostSignatureHelpProvider is { } host)
+        {
+            Func<int, int, CancellationToken, Task<LspSignatureHelp?>> provider = (line, character, ct) =>
+            {
+                // Capture editor state on the control thread before the host may
+                // move the semantic work to a background thread.
+                var path = FilePath ?? string.Empty;
+                var source = Text;
+                return host(path, source, line, character, ct);
+            };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostSignatureHelpProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostSignatureHelpProvider = provider;
+        }
+        if (options.HostRenameProvider is { } renameHost)
+        {
+            Func<int, int, string, CancellationToken, Task<LspWorkspaceEdit?>> provider =
+                (line, character, newName, ct) =>
+                {
+                    // Capture editor state on the control thread before semantic work runs elsewhere.
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return renameHost(path, source, line, character, newName, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostRenameProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostRenameProvider = provider;
+        }
+        if (options.HostPrepareRenameProvider is { } prepareRenameHost)
+        {
+            Func<int, int, CancellationToken, Task<LspRange?>> provider =
+                (line, character, ct) =>
+                {
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return prepareRenameHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostPrepareRenameProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostPrepareRenameProvider = provider;
+        }
+        if (options.HostDefinitionProvider is { } definitionHost)
+        {
+            Func<int, int, CancellationToken, Task<(string Uri, int Line, int Column)?>> provider =
+                (line, character, ct) =>
+                {
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return definitionHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostDefinitionProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostDefinitionProvider = provider;
+        }
+        if (options.HostReferencesProvider is { } referencesHost)
+        {
+            Func<int, int, CancellationToken, Task<IReadOnlyList<LspLocation>>> provider =
+                (line, character, ct) =>
+                {
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return referencesHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostReferencesProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostReferencesProvider = provider;
+        }
+        if (options.HostImplementationProvider is { } implementationHost)
+        {
+            Func<int, int, CancellationToken, Task<IReadOnlyList<LspLocation>>> provider =
+                (line, character, ct) =>
+                {
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return implementationHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostImplementationProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostImplementationProvider = provider;
+        }
+        if (options.HostTypeDefinitionProvider is { } typeDefinitionHost)
+        {
+            Func<int, int, CancellationToken, Task<IReadOnlyList<LspLocation>>> provider =
+                (line, character, ct) =>
+                {
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return typeDefinitionHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostTypeDefinitionProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostTypeDefinitionProvider = provider;
+        }
+        if (options.HostDeclarationProvider is { } declarationHost)
+        {
+            Func<int, int, CancellationToken, Task<IReadOnlyList<LspLocation>>> provider =
+                (line, character, ct) =>
+                {
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return declarationHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostDeclarationProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostDeclarationProvider = provider;
+        }
+        if (options.HostHoverProvider is { } hoverHost)
+        {
+            Func<int, int, CancellationToken, Task<string?>> provider =
+                (line, character, ct) =>
+                {
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return hoverHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostHoverProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostHoverProvider = provider;
+        }
+        if (options.HostDocumentHighlightProvider is { } highlightHost)
+        {
+            Func<int, int, CancellationToken, Task<IReadOnlyList<DocumentHighlight>>> provider =
+                (line, character, ct) =>
+                {
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return highlightHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostDocumentHighlightProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostDocumentHighlightProvider = provider;
+        }
+        if (options.HostInlayHintProvider is { } inlayHost)
+        {
+            Func<int, int, CancellationToken, Task<IReadOnlyList<InlayHint>>> provider =
+                (startLine, endLine, ct) =>
+                {
+                    // Capture editor state on the control thread before semantic work runs elsewhere.
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return inlayHost(path, source, startLine, endLine, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostInlayHintProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostInlayHintProvider = provider;
+        }
         _pathCompletionManager = new PathCompletionManager(_engine, Canvas, _lspView, ProcessKey);
         _pathCompletionNavigator = new PopupKeyNavigator(
             move: d => _pathCompletionManager.MoveSelection(d),
@@ -745,10 +949,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             hide: () => { _pathCompletionManager.Hide(); _keyDownHandledByVim = true; });
         _completionNavigator = new PopupKeyNavigator(
             move: d => _lspView.MoveCompletionSelection(d),
-            apply: () => { InsertLspCompletion(); _keyDownHandledByVim = true; },
+            apply: () => { _ = InsertLspCompletionAsync(); _keyDownHandledByVim = true; },
             hide: () =>
             {
-                _lspView.HideCompletion();
+                HideLspCompletion();
                 _lspView.HideSignatureHelp();
                 // Also exit insert mode. Vim 無効時は抜ける先のモードが無く、Escape は
                 // 「選択を捨てる」だけの操作になるので送らない（ポップアップを閉じた
@@ -767,12 +971,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             hide: () => _lspView.HideCodeActions(),
             acceptCtrlNav: false, acceptJK: true, acceptTab: false);
         _lspView.StateChanged += OnLspStateChanged;
+        _lspView.DiagnosticsChanged += OnLspDiagnosticsChanged;
         _lspView.StatusMessage += OnLspStatusMessage;
         _lspView.FoldingRangesChanged += OnLspFoldingRangesChanged;
         _lspView.BreadcrumbChanged += OnLspBreadcrumbChanged;
         _lspView.InlayHintsChanged += OnLspInlayHintsChanged;
         _lspView.SemanticTokensChanged += OnLspSemanticTokensChanged;
         _lspView.DocumentHighlightsChanged += OnLspDocumentHighlightsChanged;
+        _lspView.DocumentLinksChanged += OnLspDocumentLinksChanged;
+        _lspView.CodeLensesChanged += OnLspCodeLensesChanged;
 
         _completionDebounce = new System.Windows.Threading.DispatcherTimer
         {
@@ -802,6 +1009,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         // Mouse and scroll wiring
         Canvas.MouseClicked += OnCanvasMouseClicked;
+        Canvas.AutomationSelectionRequested += OnAutomationSelectionRequested;
         Canvas.MouseRightClicked += OnCanvasMouseRightClicked;
         Canvas.MouseDragging += OnCanvasMouseDragging;
         Canvas.MouseDragEnded += OnCanvasMouseDragEnded;
@@ -814,6 +1022,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.DataTipHoverEnded += OnCanvasDataTipHoverEnded;
         Canvas.LinkClicked += OnCanvasLinkClicked;
         Canvas.FileLinkClicked += OnCanvasFileLinkClicked;
+        Canvas.DocumentLinkClicked += OnCanvasDocumentLinkClicked;
+        Canvas.CodeLensClicked += OnCanvasCodeLensClicked;
 
         // Keep VimEngine informed of viewport state for H/M/L motions
         Canvas.ScrollChanged += (_, _) =>
@@ -834,6 +1044,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         ApplyTheme();
     }
 
+    private void OnLspDiagnosticsChanged(IReadOnlyList<LspDiagnostic> diagnostics)
+        => LspDiagnosticsChanged?.Invoke(this, EventArgs.Empty);
+
     private void OnLspStateChanged()
     {
         RefreshCombinedDiagnostics();
@@ -841,6 +1054,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Canvas.SetCompletionItems(_lspView.CompletionItems, _lspView.CompletionSelection, _lspView.CompletionScrollOffset);
         Canvas.SetSignatureHelp(_lspView.CurrentSignatureHelp);
         Canvas.SetCodeActions(_lspView.CurrentCodeActions, _lspView.CodeActionsSelection, _lspView.CodeActionsScrollOffset);
+        Canvas.SetDocumentLinks(_lspView.CurrentDocumentLinks);
+        Canvas.SetCodeLenses(_lspView.CurrentCodeLenses);
         // Document symbols arrive asynchronously after a file opens; refresh the breadcrumb
         // bar so it populates without waiting for the next cursor move.
         if (_engine.Options.Breadcrumb)
@@ -989,6 +1204,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private void OnLspDocumentHighlightsChanged(IReadOnlyList<DocumentHighlight>? highlights)
     {
         Canvas.SetDocumentHighlights(highlights);
+    }
+
+    private void OnLspDocumentLinksChanged(IReadOnlyList<LspDocumentLink> links)
+    {
+        Canvas.SetDocumentLinks(links);
+    }
+
+    private void OnLspCodeLensesChanged(IReadOnlyList<LspCodeLens> lenses)
+    {
+        Canvas.SetCodeLenses(lenses);
     }
 
     private void OnLspFoldingRangesChanged(IReadOnlyList<LspFoldingRange> ranges)
@@ -3016,6 +3241,39 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         OpenFileLink(filePath);
     }
 
+    private void OnCanvasDocumentLinkClicked(string target)
+    {
+        Focus();
+        if (LspUri.TryToLocalPath(target) is { } filePath)
+            OpenFileLink(filePath);
+        else
+            OpenLink(target);
+    }
+
+    private async void OnCanvasCodeLensClicked(LspCodeLens lens)
+    {
+        Focus();
+        var resolved = lens.NeedsResolve
+            ? await _lspView.ResolveCodeLensAsync(lens)
+            : lens;
+        var command = resolved?.Command;
+        if (command is null)
+        {
+            ActiveStatusBar.UpdateStatus("CodeLens: この候補には実行可能なコマンドがありません。");
+            return;
+        }
+
+        bool executed = await _lspView.ExecuteCodeLensCommandAsync(command);
+        ActiveStatusBar.UpdateStatus(executed
+            ? $"CodeLens: {command.Title ?? command.Command}"
+            : "CodeLens: コマンドの実行に失敗しました。");
+    }
+
+    private void OnAutomationSelectionRequested(CursorPosition start, CursorPosition end)
+    {
+        ProcessVimEvents(_engine.SetSelection(new Selection(start, end, SelectionType.Character)));
+    }
+
     private void OnCanvasMouseClicked(int line, int col)
     {
         Canvas.Focus();
@@ -3201,12 +3459,27 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             ToggleWordWrap));
 
         // ── LSP operations (only when a language server is connected) ──
-        if (_lspView.IsConnected)
+        if (_lspView.IsConnected ||
+            _lspView.HasHostDefinitionProvider || _lspView.HasHostReferencesProvider ||
+            _lspView.HasHostImplementationProvider || _lspView.HasHostTypeDefinitionProvider ||
+            _lspView.HasHostDeclarationProvider || _lspView.HasHostHoverProvider)
         {
             menu.Items.Add(new Separator { Style = sep });
 
             menu.Items.Add(MakeItem("Go to Definition", "gd",
                 () => _ = HandleGoToDefinitionAsync()));
+            menu.Items.Add(MakeItem("Go to Implementation", "gI",
+                () => _ = HandleGoToLocationsAsync(
+                    (line, character) => _lspView.RequestImplementationAsync(line, character),
+                    () => _lspView.ServerSupportsImplementation || _lspView.HasHostImplementationProvider, "implementation")));
+            menu.Items.Add(MakeItem("Go to Type Definition", "gY",
+                () => _ = HandleGoToLocationsAsync(
+                    (line, character) => _lspView.RequestTypeDefinitionAsync(line, character),
+                    () => _lspView.ServerSupportsTypeDefinition || _lspView.HasHostTypeDefinitionProvider, "type definition")));
+            menu.Items.Add(MakeItem("Go to Declaration", "gD",
+                () => _ = HandleGoToLocationsAsync(
+                    (line, character) => _lspView.RequestDeclarationAsync(line, character),
+                    () => _lspView.ServerSupportsDeclaration || _lspView.HasHostDeclarationProvider, "declaration")));
             menu.Items.Add(MakeItem("Find References", "LSP",
                 () => _ = HandleFindReferencesAsync()));
             // ホストがリファクタリング一式を自前のメニューへまとめる場合は、ここには出さない
@@ -3218,6 +3491,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             // unless you already knew the key. The popup itself is unchanged.
             menu.Items.Add(MakeItem("Code Actions", "ga",
                 () => _ = HandleCodeActionAsync()));
+            menu.Items.Add(MakeItem("Fix All in File", "gA",
+                () => _ = HandleFixAllAsync()));
             menu.Items.Add(new Separator { Style = sep });
             menu.Items.Add(MakeItem("Hover Info", "K",
                 () => _ = ShowLspHoverAsync()));
@@ -3692,6 +3967,38 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             return;
         }
 
+        // Alt+Enter is the Rider/Visual Studio spelling of the current diagnostic's
+        // Quick Fix menu. Keep it at the view boundary so it works in both Vim and
+        // standard editing modes and uses the same Code Action popup/resolve/apply
+        // transaction as `ga`, Problems, and the context menu.
+        bool altDown = (e.KeyboardDevice.Modifiers & ModifierKeys.Alt) != 0;
+        if (altDown && actualKey == Key.Enter && e.Key != Key.ImeProcessed)
+        {
+            _ = HandleQuickFixAsync();
+            _keyDownHandledByVim = true;
+            e.Handled = true;
+            return;
+        }
+
+        // Ctrl+Shift+Enter is the explicit statement-completion shortcut used by
+        // C# editing. The language-specific hook lives in the host's EditAssist;
+        // when it declines, let the normal key path continue untouched.
+        bool shiftDown = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
+        if (ctrlDown && shiftDown && (actualKey == Key.Enter || actualKey == Key.Return) &&
+            e.Key != Key.ImeProcessed)
+        {
+            var completionEvents = _engine.CompleteStatement();
+            if (completionEvents.Count > 0)
+            {
+                ProcessVimEvents(completionEvents);
+                _lspView.OnTextChanged(_engine.CurrentBuffer.Text.GetText());
+                UpdateAll();
+                _keyDownHandledByVim = true;
+                e.Handled = true;
+                return;
+            }
+        }
+
         // While the Find/Replace bar's own text boxes have focus, let WPF (and their
         // dedicated PreviewKeyDown handlers) process the key instead of routing it
         // through Vim.
@@ -3705,7 +4012,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         {
             if (_lspView.CompletionVisible)
             {
-                _lspView.HideCompletion();
+                HideLspCompletion();
                 e.Handled = true;
                 return;
             }
@@ -3733,7 +4040,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (_lspView.CodeActionsVisible && e.Key != Key.ImeProcessed)
         {
             bool textEntry = !_engine.VimEnabled || mode is VimMode.Insert or VimMode.Replace;
-            if (_codeActionNavigator.TryHandle(actualKey, ctrlDown, allowLetterNav: !textEntry))
+            bool popupHandled = _codeActionNavigator.TryHandle(actualKey, ctrlDown, allowLetterNav: !textEntry);
+            if (popupHandled)
             {
                 _keyDownHandledByVim = true;
                 e.Handled = true;
@@ -4323,8 +4631,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (_engine.Mode == VimMode.Insert && !ctrl && !alt && key.Length == 1 &&
             _lspView.GetSelectedCompletion() is { } selected && IsCommitCharacter(selected, key))
         {
-            InsertLspCompletion(selected);
-            ProcessKeyCore(key, ctrl: false, shift, alt: false);
+            _ = AcceptCompletionAndCommitCharacterAsync(selected, key, shift, alt);
             return;
         }
 
@@ -4380,7 +4687,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             {
                 // A filesystem path popup is active; it owns the completion UI, so
                 // suppress LSP completion / signature help for this keystroke.
-                _lspView.HideCompletion();
+                HideLspCompletion();
                 _completionDebounce.Stop();
                 _lspView.HideSignatureHelp();
             }
@@ -4397,7 +4704,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 if (IsCompletionTrigger(ch))
                 {
                     // Dot = new member-access context: fresh completion
-                    _lspView.HideCompletion();
+                    HideLspCompletion();
                     _completionDebounce.Stop();
                     var cur = _engine.Cursor;
                     _ = TriggerCompletionAsync(cur.Line, cur.Column);
@@ -4443,7 +4750,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             // Hide unconditionally: a completion request may still be in flight
             // with no popup visible yet (e.g. Escape during the debounce round-trip),
             // and its late response must not open the popup outside Insert mode.
-            _lspView.HideCompletion();
+            HideLspCompletion();
             _completionDebounce.Stop();
             _lspView.HideSignatureHelp();
             _pathCompletionManager.Hide();
@@ -4569,6 +4876,19 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
     }
 
+    /// <summary>
+    /// Close completion and invalidate the request that may still be in flight. The LSP
+    /// request is cancellation-aware, but a server is allowed to finish late; the loading
+    /// indicator must nevertheless disappear when the user has already dismissed the UI.
+    /// </summary>
+    private void HideLspCompletion()
+    {
+        ++_completionStatusGeneration;
+        _lspView.HideCompletion();
+        if (ActiveStatusBar.CurrentStatus == CompletionLoadingStatus)
+            ActiveStatusBar.UpdateStatus("");
+    }
+
     private async Task ShowLspHoverAsync()
     {
         var cursor = _engine.Cursor;
@@ -4646,57 +4966,90 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _lspSelectionRangeOrigin = null;
     }
 
-    private void InsertLspCompletion()
+    private async Task InsertLspCompletionAsync()
     {
         var item = _lspView.GetSelectedCompletion();
         if (item == null) return;
 
+        if (_lspView.ServerSupportsCompletionResolve)
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var resolved = await _lspView.ResolveCompletionAsync(item, cts.Token);
+                if (resolved is not null)
+                    item = MergeResolvedCompletion(item, resolved);
+            }
+            catch (OperationCanceledException)
+            {
+                // Resolution is an enhancement; the original completion remains usable.
+            }
+        }
+
         InsertLspCompletion(item);
+    }
+
+    private static LspCompletionItem MergeResolvedCompletion(
+        LspCompletionItem original, LspCompletionItem resolved) => resolved with
+        {
+            InsertText = resolved.InsertText ?? original.InsertText,
+            FilterText = resolved.FilterText ?? original.FilterText,
+            Documentation = resolved.Documentation ?? original.Documentation,
+            TextEdit = resolved.TextEdit ?? original.TextEdit,
+            CommitCharacters = resolved.CommitCharacters ?? original.CommitCharacters,
+            AdditionalTextEdits = resolved.AdditionalTextEdits ?? original.AdditionalTextEdits,
+            DataJson = resolved.DataJson ?? original.DataJson,
+            Command = resolved.Command ?? original.Command,
+            RawJson = resolved.RawJson ?? original.RawJson
+        };
+
+    private async Task AcceptCompletionAndCommitCharacterAsync(
+        LspCompletionItem item, string key, bool shift, bool alt)
+    {
+        if (_lspView.ServerSupportsCompletionResolve)
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var resolved = await _lspView.ResolveCompletionAsync(item, cts.Token);
+                if (resolved is not null)
+                    item = MergeResolvedCompletion(item, resolved);
+            }
+            catch (OperationCanceledException) { }
+        }
+
+        InsertLspCompletion(item);
+        ProcessKeyCore(key, ctrl: false, shift, alt: false);
     }
 
     private void InsertLspCompletion(LspCompletionItem item)
     {
 
-        _lspView.HideCompletion();
+        HideLspCompletion();
         _lspView.RecordCompletionAccepted(item);
 
         if (item.TextEdit is { } textEdit)
         {
             ApplyCompletionTextEdit(item, textEdit);
-            return;
         }
-
-        // Delete partial word before cursor and insert completion
-        var cursor = _engine.Cursor;
-        var line = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
-        int col = cursor.Column;
-
-        // Find start of current word (walk back over word chars)
-        int wordStart = col;
-        while (wordStart > 0 && (char.IsLetterOrDigit(line[wordStart - 1]) || line[wordStart - 1] == '_'))
-            wordStart--;
-
-        // Delete the partial prefix with Backspace keys
-        int deleteCount = col - wordStart;
-        for (int i = 0; i < deleteCount; i++)
-            ProcessKey("Back", false, false, false);
-
-        var insertText = item.InsertText ?? item.Label;
-
-        // LSP Snippet format (insertTextFormat == 2): expand tab stops
-        if (item.TextFormat == InsertTextFormat.Snippet && insertText.Contains('$'))
+        else
         {
-            var insertCursor = _engine.Cursor;
-            var expansion = SnippetManager.ExpandLsp(
-                insertText,
-                insertCursor.Line, insertCursor.Column,
-                _engine.Options.TabStop, _engine.Options.ExpandTab);
-            _snippetTabStopManager.Apply(expansion);
-            return;
+            // A completion item without textEdit replaces the current word. Applying the
+            // primary edit and additionalTextEdits through the same external-edit transaction
+            // keeps an import insertion and the accepted completion in one Undo unit.
+            var cursor = _engine.Cursor;
+            var line = _engine.CurrentBuffer.Text.GetLine(cursor.Line);
+            int col = cursor.Column;
+            int wordStart = col;
+            while (wordStart > 0 && (char.IsLetterOrDigit(line[wordStart - 1]) || line[wordStart - 1] == '_'))
+                wordStart--;
+            ApplyCompletionTextEdit(item, new LspTextEdit(
+                new LspRange(new LspPosition(cursor.Line, wordStart), new LspPosition(cursor.Line, col)),
+                item.InsertText ?? item.Label));
         }
 
-        foreach (var ch in insertText)
-            ProcessKey(ch.ToString(), false, false, false);
+        if (item.Command is { } command)
+            _ = ExecuteCompletionCommandAsync(command);
     }
 
     private void ApplyCompletionTextEdit(LspCompletionItem item, LspTextEdit textEdit)
@@ -4712,7 +5065,22 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         var original = _engine.CurrentBuffer.Text.GetText();
-        var updated = ApplyTextEdits(original, [new LspTextEdit(textEdit.Range, replacement)]);
+        var edits = new List<LspTextEdit>(item.AdditionalTextEdits ?? [])
+        {
+            new(textEdit.Range, replacement)
+        };
+
+        // Put a marker at the end of the primary replacement while applying every edit. This
+        // lets imports inserted above the completion move the caret correctly without guessing
+        // line deltas, and avoids a second edit transaction just to restore the caret.
+        const string marker = "\uE000LoomoCompletionCaret\uE001";
+        var markedEdits = new List<LspTextEdit>(item.AdditionalTextEdits ?? [])
+        {
+            new(textEdit.Range, replacement + marker)
+        };
+        var marked = ApplyTextEdits(original, markedEdits);
+        var markerOffset = marked.IndexOf(marker, StringComparison.Ordinal);
+        var updated = markerOffset >= 0 ? marked.Remove(markerOffset, marker.Length) : ApplyTextEdits(original, edits);
         ProcessVimEvents(_engine.ApplyExternalText(updated));
         _lspView.OnTextChanged(updated);
 
@@ -4722,11 +5090,23 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             return;
         }
 
-        var insertedLines = replacement.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        var end = insertedLines.Length == 1
-            ? new CursorPosition(textEdit.Range.Start.Line, textEdit.Range.Start.Character + insertedLines[0].Length)
-            : new CursorPosition(textEdit.Range.Start.Line + insertedLines.Length - 1, insertedLines[^1].Length);
-        ProcessVimEvents(_engine.SetCursorPosition(end));
+        if (markerOffset >= 0)
+        {
+            int line = 0;
+            int column = 0;
+            for (int i = 0; i < markerOffset; i++)
+            {
+                if (updated[i] == '\n') { line++; column = 0; }
+                else column++;
+            }
+            ProcessVimEvents(_engine.SetCursorPosition(new CursorPosition(line, column)));
+        }
+    }
+
+    private async Task ExecuteCompletionCommandAsync(LspCompletionCommand command)
+    {
+        if (!await _lspView.ExecuteCompletionCommandAsync(command))
+            ActiveStatusBar.UpdateStatus($"LSP: completion command failed — {command.Title}");
     }
 
     // ─── Filesystem path completion (Insert mode, LSP-independent) ─────────────
@@ -4744,7 +5124,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // Ctrl+Space on a normal identifier keeps going to LSP.
         if (_pathCompletionManager.Update(forced: !_lspView.IsConnected))
         {
-            _lspView.HideCompletion();
+            HideLspCompletion();
             return;
         }
         var cursor = _engine.Cursor;
@@ -4776,6 +5156,130 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
         OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(filePath, line, col));
     }
+
+    /// <summary>Host command surfaces can invoke the same definition navigation as the Vim command.</summary>
+    public Task GoToDefinitionAsync() => HandleGoToDefinitionAsync();
+
+    /// <summary>
+    /// Requests the definition and publishes it through the host's reference-result surface so
+    /// the host can show a non-destructive source peek before opening the target.
+    /// </summary>
+    public async Task PeekDefinitionAsync()
+    {
+        var cursor = _engine.Cursor;
+        var result = await _lspView.RequestDefinitionLocationAsync(cursor.Line, cursor.Column);
+        if (result is not { } target)
+        {
+            ActiveStatusBar.UpdateStatus("LSP: definition not found");
+            return;
+        }
+
+        var filePath = LspUri.TryToLocalPath(target.Uri) ?? target.Uri;
+        var (line, col) = (target.Line, target.Column);
+        if (LspUri.TryToLocalPath(target.Uri) is null &&
+            !Uri.TryCreate(target.Uri, UriKind.Absolute, out _))
+        {
+            ActiveStatusBar.UpdateStatus("LSP: definition in non-navigable location");
+            return;
+        }
+        if (LspUri.TryToLocalPath(target.Uri) is not null && !System.IO.File.Exists(filePath))
+        {
+            ActiveStatusBar.UpdateStatus("LSP: definition in non-navigable location");
+            return;
+        }
+
+        string? preview = null;
+        if (string.Equals(filePath, _engine.CurrentBuffer.FilePath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var lines = _engine.CurrentBuffer.Text;
+            if (line >= 0 && line < lines.LineCount)
+                preview = lines.GetLine(line).Trim();
+        }
+
+        FindReferencesResult?.Invoke(this, new FindReferencesResultEventArgs(
+            [new FindReferenceItem(filePath, line, col, preview)],
+            GetWordAtCursor(), "PEEK DEFINITION"));
+    }
+
+    /// <summary>Host command surfaces can invoke implementation navigation without synthesizing a key event.</summary>
+    public Task GoToImplementationAsync()
+        => HandleGoToLocationsAsync(
+            (line, character) => _lspView.RequestImplementationAsync(line, character),
+            () => _lspView.ServerSupportsImplementation || _lspView.HasHostImplementationProvider, "implementation");
+
+    /// <summary>Host command surfaces can invoke type-definition navigation without synthesizing a key event.</summary>
+    public Task GoToTypeDefinitionAsync()
+        => HandleGoToLocationsAsync(
+            (line, character) => _lspView.RequestTypeDefinitionAsync(line, character),
+            () => _lspView.ServerSupportsTypeDefinition || _lspView.HasHostTypeDefinitionProvider, "type definition");
+
+    /// <summary>Host command surfaces can invoke declaration navigation without synthesizing a key event.</summary>
+    public Task GoToDeclarationAsync()
+        => HandleGoToLocationsAsync(
+            (line, character) => _lspView.RequestDeclarationAsync(line, character),
+            () => _lspView.ServerSupportsDeclaration || _lspView.HasHostDeclarationProvider, "declaration");
+
+    private async Task HandleGoToLocationsAsync(
+        Func<int, int, Task<IReadOnlyList<LspLocation>>> request,
+        Func<bool> supported,
+        string operation)
+    {
+        if (!supported())
+        {
+            ActiveStatusBar.UpdateStatus($"LSP: {operation} is not supported by this language server");
+            return;
+        }
+        if (!_lspView.IsDocumentReady &&
+            !_lspView.HasHostImplementationProvider &&
+            !_lspView.HasHostTypeDefinitionProvider &&
+            !_lspView.HasHostDeclarationProvider)
+        {
+            ActiveStatusBar.UpdateStatus($"LSP: {operation} unavailable while the document is loading");
+            return;
+        }
+
+        var cursor = _engine.Cursor;
+        var locations = await request(cursor.Line, cursor.Column);
+        var navigableLocations = LspNavigationLocationResolver.Resolve(
+            locations, UriToLocalPath, File.Exists);
+        if (navigableLocations.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus($"LSP: {operation} not found");
+            return;
+        }
+
+        // implementation/type-definition/declaration commonly have multiple targets. Do not
+        // silently discard all but the first one: use the same host result surface as references,
+        // so split views and the main window can show file/line candidates consistently.
+        if (navigableLocations.Count > 1)
+        {
+            var items = navigableLocations.Select(item => new FindReferenceItem(
+                item.FilePath,
+                item.Line,
+                item.Column)).ToList();
+            ActiveStatusBar.UpdateStatus($"LSP: {operation}: {items.Count} location(s)");
+            FindReferencesResult?.Invoke(this,
+                new FindReferencesResultEventArgs(items, GetWordAtCursor(), $"LSP {operation}"));
+            return;
+        }
+
+        var target = navigableLocations[0];
+        var filePath = target.FilePath;
+        var line = target.Line;
+        var col = target.Column;
+        if (string.Equals(filePath, _engine.CurrentBuffer.FilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            ClearSelectionRangeState();
+            ProcessVimEvents(_engine.SetCursorPosition(new CursorPosition(line, col)));
+            return;
+        }
+
+        OpenFileRequested?.Invoke(this, new OpenFileRequestedEventArgs(filePath, line, col));
+    }
+
+    /// <summary>Host command surfaces can invoke reference navigation without synthesizing a key event.</summary>
+    public Task FindReferencesAsync() => HandleFindReferencesAsync();
 
     /// <summary>
     /// Format the buffer, or — when <paramref name="lines"/> is given (0-based, inclusive) — only those lines.
@@ -5032,6 +5536,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private async Task HandleRenameAsync(string? prefilledName = null)
     {
         var currentWord = GetWordAtCursor();
+        if (_lspView.ServerSupportsPrepareRename || _lspView.HasHostPrepareRenameProvider)
+        {
+            var prepareCursor = _engine.Cursor;
+            var renameRange = await _lspView.PrepareRenameAsync(prepareCursor.Line, prepareCursor.Column);
+            if (renameRange is null && !_lspView.HasHostRenameProvider)
+            {
+                ActiveStatusBar.UpdateStatus("Rename: the symbol at the cursor cannot be renamed");
+                return;
+            }
+        }
         var newName = prefilledName ?? ShowRenameDialog(currentWord);
         if (string.IsNullOrWhiteSpace(newName) || newName == currentWord) return;
 
@@ -5334,22 +5848,126 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private async Task HandleCodeActionAsync()
     {
-        if (!_lspView.IsConnected) { ActiveStatusBar.UpdateStatus("Code actions: LSP not connected"); return; }
-        ActiveStatusBar.UpdateStatus("Code actions: searching…");
-
         // 選択があれば範囲で問う。1点の要求では「メソッドの抽出」等が候補に出ない。
         var cursor = _engine.Cursor;
-        var actions = SelectionAsLspRange() is { } range
-            ? await _lspView.RequestCodeActionsAsync(range, only: null)
-            : await _lspView.RequestCodeActionsAsync(cursor.Line, cursor.Column);
+        var range = SelectionAsLspRange() ??
+            new LspRange(new LspPosition(cursor.Line, cursor.Column),
+                new LspPosition(cursor.Line, cursor.Column));
+        IReadOnlyList<LspCodeAction> actions = [];
+        if (_lspView.IsConnected)
+        {
+            ActiveStatusBar.UpdateStatus("Code actions: searching…");
+            actions = await _lspView.RequestCodeActionsAsync(range, only: null);
+        }
+        if (actions.Count == 0 && HostCodeActionProvider is { } hostProvider)
+        {
+            try { actions = await hostProvider(range, null); }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Host Code Action failed: {ex.Message}"); }
+        }
         if (actions.Count == 0)
         {
-            ActiveStatusBar.UpdateStatus("Code actions: none available");
+            ActiveStatusBar.UpdateStatus(!_lspView.IsConnected
+                ? "Code actions: LSP not connected"
+                : "Code actions: none available");
             return;
         }
 
         _lspView.ShowCodeActions(actions);
         ActiveStatusBar.UpdateStatus($"Code actions: {actions.Count} available — j/k to select, Enter to apply, Esc to dismiss");
+    }
+
+    private async Task HandleQuickFixAsync()
+    {
+        var cursor = _engine.Cursor;
+        var range = SelectionAsLspRange() ??
+            new LspRange(new LspPosition(cursor.Line, cursor.Column),
+                         new LspPosition(cursor.Line, cursor.Column));
+        IReadOnlyList<LspCodeAction> actions = [];
+        if (HostCodeActionProvider is { } hostProvider)
+        {
+            try { actions = await hostProvider(range, [LspCodeActionKinds.QuickFix]); }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Host Quick Fix failed: {ex.Message}"); }
+        }
+        if (actions.Count == 0)
+        {
+            if (!_lspView.IsConnected) { ActiveStatusBar.UpdateStatus("Quick Fix: LSP not connected"); return; }
+            if (!_lspView.IsDocumentReady)
+            {
+                ActiveStatusBar.UpdateStatus("Quick Fix: LSP is still analyzing this document");
+                return;
+            }
+
+            var declaredKinds = _lspView.ServerCodeActionKinds;
+            if (declaredKinds.Count > 0 &&
+                !declaredKinds.Any(kind => LspCodeActionKinds.Matches(kind, LspCodeActionKinds.QuickFix) ||
+                                           LspCodeActionKinds.Matches(LspCodeActionKinds.QuickFix, kind)))
+            {
+                ActiveStatusBar.UpdateStatus("Quick Fix: このLSPサーバーはquickfixに非対応です");
+                return;
+            }
+            ActiveStatusBar.UpdateStatus("Quick Fix: searching…");
+            actions = await _lspView.RequestCodeActionsAsync(range, [LspCodeActionKinds.QuickFix]);
+        }
+        if (actions.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus("Quick Fix: no fixes available");
+            return;
+        }
+
+        _lspView.ShowCodeActions(actions);
+        ActiveStatusBar.UpdateStatus($"Quick Fix: {actions.Count} available — j/k to select, Enter to apply, Esc to dismiss");
+    }
+
+    private async Task HandleFixAllAsync()
+    {
+        var lines = _engine.CurrentBuffer.Text;
+        var lastLine = Math.Max(0, lines.LineCount - 1);
+        var fullDocument = new LspRange(
+            new LspPosition(0, 0),
+            new LspPosition(lastLine, lines.GetLine(lastLine).Length));
+
+        IReadOnlyList<LspCodeAction> actions = [];
+        var lspCanRequest = _lspView.IsConnected && _lspView.IsDocumentReady;
+        var lspSupportsFixAll = true;
+        if (lspCanRequest)
+        {
+            var declaredKinds = _lspView.ServerCodeActionKinds;
+            lspSupportsFixAll = declaredKinds.Count == 0 || declaredKinds.Any(kind =>
+                LspCodeActionKinds.Matches(kind, LspCodeActionKinds.SourceFixAll) ||
+                LspCodeActionKinds.Matches(LspCodeActionKinds.SourceFixAll, kind));
+            if (lspSupportsFixAll)
+            {
+                ActiveStatusBar.UpdateStatus("Fix all (file): searching…");
+                actions = await _lspView.RequestCodeActionsAsync(
+                    fullDocument, [LspCodeActionKinds.SourceFixAll]);
+            }
+        }
+
+        // Language-specific hosts may implement source.fixAll without an LSP server, or may
+        // cover a diagnostic family the server does not return. Keep LSP primary, then use the
+        // same host Code Action contract as Alt+Enter.
+        if (actions.Count == 0 && HostCodeActionProvider is { } hostProvider)
+        {
+            try { actions = await hostProvider(fullDocument, [LspCodeActionKinds.SourceFixAll]); }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Host Fix All failed: {ex.Message}"); }
+        }
+        if (actions.Count == 0)
+        {
+            ActiveStatusBar.UpdateStatus(!_lspView.IsConnected
+                ? "Fix all: LSP not connected"
+                : !lspSupportsFixAll
+                    ? "Fix all: このLSPサーバーはsource.fixAllに非対応です"
+                    : !_lspView.IsDocumentReady
+                        ? "Fix all: LSP is still analyzing this document"
+                        : "Fix all (file): no fixes available");
+            return;
+        }
+
+        _lspView.ShowCodeActions(actions);
+        ActiveStatusBar.UpdateStatus($"Fix all (file): {actions.Count} available — j/k to select, Enter to apply, Esc to dismiss");
     }
 
     private async Task ApplyCodeActionAsync(LspCodeAction action)
@@ -5427,11 +6045,17 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             }
         }
         var fileOperations = edit.FileOperations ?? [];
-        if (external.Count > 0 || fileOperations.Count > 0)
+        bool hostWorkspaceEdit = external.Count > 0 || fileOperations.Count > 0 || currentUpdate is not null;
+        if (hostWorkspaceEdit)
         {
-            var args = new WorkspaceEditRequestedEventArgs(external, edit.DocumentVersions, fileOperations);
+            var args = new WorkspaceEditRequestedEventArgs(
+                external, edit.DocumentVersions, fileOperations,
+                _engine.CurrentBuffer.FilePath,
+                currentUpdate is null ? null : _engine.CurrentBuffer.Text.GetText(),
+                currentUpdate,
+                edit.ExpectedTexts);
             WorkspaceEditRequested?.Invoke(this, args);
-            if (!args.Handled)
+            if (!args.Handled && (external.Count > 0 || fileOperations.Count > 0))
                 return (otherFileCount, "他ファイルへの編集をホストが処理できません。");
             if (args.Error is not null)
                 return (otherFileCount, args.Error);
@@ -5460,6 +6084,26 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             var updated = ApplyTextEdits(_engine.CurrentBuffer.Text.GetText(), edits);
             ProcessVimEvents(_engine.ApplyExternalText(updated));
             _lspView.OnTextChanged(updated);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Restores a buffer while rolling back a host-level workspace transaction.
+    /// Unlike <see cref="TryApplyLspTextEdits"/>, this does not create another local undo step.
+    /// </summary>
+    public bool TryRestoreWorkspaceText(string text, out string? error)
+    {
+        error = null;
+        try
+        {
+            ProcessVimEvents(_engine.RestoreExternalText(text));
+            _lspView.OnTextChanged(text);
             return true;
         }
         catch (Exception ex)
@@ -5747,7 +6391,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                             }
                             // Request document highlights for the symbol under cursor (Normal mode)
                             var uri = _lspView.CurrentUri;
-                            if (uri != null)
+                            if (uri != null && (_lspView.ServerSupportsDocumentHighlight ||
+                                                _lspView.HasHostDocumentHighlightProvider))
                                 _ = _lspView.RequestDocumentHighlightAsync(uri, ce.Position.Line, ce.Position.Column);
                         }
                     }
@@ -5870,6 +6515,21 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 case VimEventType.GoToDefinitionRequested:
                     _ = HandleGoToDefinitionAsync();
                     break;
+                case VimEventType.GoToImplementationRequested:
+                    _ = HandleGoToLocationsAsync(
+                        (line, character) => _lspView.RequestImplementationAsync(line, character),
+                        () => _lspView.ServerSupportsImplementation || _lspView.HasHostImplementationProvider, "implementation");
+                    break;
+                case VimEventType.GoToTypeDefinitionRequested:
+                    _ = HandleGoToLocationsAsync(
+                        (line, character) => _lspView.RequestTypeDefinitionAsync(line, character),
+                        () => _lspView.ServerSupportsTypeDefinition || _lspView.HasHostTypeDefinitionProvider, "type definition");
+                    break;
+                case VimEventType.GoToDeclarationRequested:
+                    _ = HandleGoToLocationsAsync(
+                        (line, character) => _lspView.RequestDeclarationAsync(line, character),
+                        () => _lspView.ServerSupportsDeclaration || _lspView.HasHostDeclarationProvider, "declaration");
+                    break;
                 case VimEventType.FindReferencesRequested:
                     _ = HandleFindReferencesAsync();
                     break;
@@ -5887,6 +6547,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                     break;
                 case VimEventType.CodeActionRequested:
                     _ = HandleCodeActionAsync();
+                    break;
+                case VimEventType.QuickFixRequested:
+                    _ = HandleQuickFixAsync();
+                    break;
+                case VimEventType.FixAllRequested:
+                    _ = HandleFixAllAsync();
                     break;
                 case VimEventType.LspHoverRequested:
                     _ = ShowLspHoverAsync();

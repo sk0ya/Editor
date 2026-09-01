@@ -1,3 +1,4 @@
+using System.Windows.Input;
 using static Editor.Controls.Tests.LspCompletionTestHarness;
 
 namespace Editor.Controls.Tests;
@@ -59,6 +60,29 @@ public sealed class CompletionStatusTests
             lsp.ResolveCompletion(0, null);
             Pump();
 
+            Assert.Equal("", editor.CurrentStatusText);
+        });
+    }
+
+    [Fact]
+    public void Explicit_close_clears_loading_before_a_server_finishes()
+    {
+        WithEditor(vimEnabled: false, (editor, lsp) =>
+        {
+            lsp.DeferCompletionRequests = true;
+
+            TypeText(editor, "a.");
+            Assert.Equal(VimEditorControl.CompletionLoadingStatus, editor.CurrentStatusText);
+            lsp.CompletionVisible = true;
+
+            // The fake deliberately does not complete the request here. Closing the
+            // transient UI must still release the user-visible wait state immediately.
+            RaisePreviewKeyDown(editor, Key.Escape);
+            RaiseKeyDown(editor, Key.Escape);
+            Assert.Equal("", editor.CurrentStatusText);
+
+            lsp.ResolveCompletion(0, null);
+            Pump();
             Assert.Equal("", editor.CurrentStatusText);
         });
     }
