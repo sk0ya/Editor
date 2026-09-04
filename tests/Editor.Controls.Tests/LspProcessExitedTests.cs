@@ -1,4 +1,4 @@
-using Editor.Controls.Lsp;
+﻿using Editor.Controls.Lsp;
 
 namespace Editor.Controls.Tests;
 
@@ -38,6 +38,36 @@ public sealed class LspProcessExitedTests
 
         Assert.False(exitedRaised);
         Assert.False(process.IsRunning);
+    }
+
+    /// <summary>
+    /// 構築直後の <see cref="LspProcess.Dispose"/>。読み取りスレッドが最初の一行を実行する前に
+    /// <c>Process.Dispose()</c> が済んでいると、以前はそのスレッドが <c>_process.StandardOutput</c> に
+    /// 触れて <see cref="ObjectDisposedException"/> を投げ、背景スレッドの未処理例外として
+    /// テストホスト（＝ホストアプリ）ごと落としていた。タイミング勝負なので繰り返して当てる。
+    /// </summary>
+    /// <summary>
+    /// 構築直後の <see cref="LspProcess.Dispose"/>。読み取りスレッドが最初の一行を実行する前に
+    /// <c>Process.Dispose()</c> が済んでいると、以前はそのスレッドが <c>_process.StandardOutput</c> に
+    /// 触れて <see cref="ObjectDisposedException"/> を投げ、背景スレッドの未処理例外として
+    /// テストホスト（＝ホストアプリ）ごと落としていた。
+    /// 実際に競り勝てるかは負荷次第でこのテスト単体では狙って再現できない（読み取りスレッドが
+    /// ほぼ必ず先着する）ので、これは再現テストではなく「構築直後に捨てても落ちない」という
+    /// 契約の記録。保証しているのは ReadLoop 側の捕獲であってこのループではない。
+    /// </summary>
+    [Fact]
+    public async Task Disposing_immediately_after_construction_does_not_crash_the_read_loop()
+    {
+        for (int i = 0; i < 25; i++)
+        {
+            var process = new LspProcess("cmd.exe", ["/c", "pause>nul"]);
+            process.Dispose();
+            Assert.False(process.IsRunning);
+        }
+
+        // 未処理例外はこのスレッドでは観測できない（落ちるとしたらホストごと）ので、
+        // 読み取りスレッドが出揃うまで待ってからテストを終える。
+        await Task.Delay(500);
     }
 
     [Fact]

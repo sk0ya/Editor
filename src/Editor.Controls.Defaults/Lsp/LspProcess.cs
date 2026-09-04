@@ -9,6 +9,11 @@ namespace Editor.Controls.Lsp;
 internal sealed class LspProcess : IDisposable
 {
     private readonly Process _process;
+    /// <summary>子プロセスの stdout。読み取りスレッドの中ではなく構築時に取り出しておく——
+    /// スレッドが動き出す前に <see cref="Dispose"/> が走ると <c>_process.StandardOutput</c> が
+    /// <see cref="ObjectDisposedException"/> を投げ、背景スレッドの未処理例外としてホストごと
+    /// 落ちていた。参照さえ持っていれば、破棄後の読み取りは既存の try/catch で EOF 同様に畳める。</summary>
+    private readonly Stream _stdout;
     private readonly object _writeLock = new();
     private readonly Dictionary<int, TaskCompletionSource<JsonElement?>> _pending = new();
     private int _nextId;
@@ -88,6 +93,7 @@ internal sealed class LspProcess : IDisposable
         // processes left behind by an ungraceful exit never get cleaned up on their own (observed as csharp-ls
         // instances accumulating across days, each competing for MSBuild/CPU and starving new sessions).
         JobObject.Assign(_process);
+        _stdout = _process.StandardOutput.BaseStream;
 
         var thread = new Thread(ReadLoop) { IsBackground = true, Name = "LspStdout" };
         thread.Start();
@@ -182,9 +188,29 @@ internal sealed class LspProcess : IDisposable
         try { File.AppendAllText(_logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [proc] {msg}\n"); } catch { }
     }
 
+    /// <summary>
+    /// 読み取りスレッドの本体。ここは背景スレッドなので、抜けた例外はプロセスごと落とす——
+    /// 実際 <see cref="Dispose"/> 直後に起動が間に合わなかった場合、以前は <c>_process</c> の
+    /// 参照で <see cref="ObjectDisposedException"/> が投げっぱなしになりホストが落ちていた。
+    /// ストリームは構築時に捕まえてある（<see cref="_stdout"/>）ので通常の停止は
+    /// 「破棄済みストリームからの読み取り例外 → break」に落ち、この catch は最後の砦。
+    /// </summary>
     private void ReadLoop()
     {
-        var stream = _process.StandardOutput.BaseStream;
+        try { ReadLoopCore(); }
+        catch (Exception ex) { Log($"ReadLoop aborted: {ex}"); }
+        finally
+        {
+            // 例外で抜けたときも接続は死んでいる。ここを通さないと IsRunning が true のまま残り、
+            // 誰もサーバーが黙ったことに気付けない（Exited を足した理由そのもの）。二重呼び出しは
+            // RaiseExitedAndTearDown 内の _exitRaised で弾かれる。
+            try { RaiseExitedAndTearDown(); } catch (Exception ex) { Log($"teardown failed: {ex}"); }
+        }
+    }
+
+    private void ReadLoopCore()
+    {
+        var stream = _stdout;
         while (!_disposed)
         {
             // IO errors break the loop; parse/dispatch errors must not.
@@ -208,7 +234,7 @@ internal sealed class LspProcess : IDisposable
             catch { }  // bad JSON or dispatch error — skip this message
         }
         Log("ReadLoop exited");
-        RaiseExitedAndTearDown();
+        // 後始末は ReadLoop の finally が引き受ける（例外で抜けた経路と一本化するため）。
     }
 
     /// <summary>Whatever ended the read loop, this connection can never receive another response or
