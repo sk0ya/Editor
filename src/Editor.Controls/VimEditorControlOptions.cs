@@ -46,6 +46,13 @@ public sealed class VimEditorControlOptions
     public bool HostProvidesRenameMenuItem { get; init; }
 
     /// <summary>
+    /// 右クリックメニューのネイティブ項目の見出し。null なら英語の既定
+    /// （<see cref="EditorContextMenuLabels.Default"/>）。ホストは <c>ContextMenuBuilding</c> で
+    /// 自分の言語の項目を足すので、ここを差し替えないと 1 つのメニューに 2 言語が混ざる。
+    /// </summary>
+    public EditorContextMenuLabels? ContextMenuLabels { get; init; }
+
+    /// <summary>
     /// Optional host-side semantic rename provider. It is tried when the current LSP server is
     /// unavailable or returns an empty workspace edit, so language-specific hosts can keep the
     /// generic rename dialog and workspace-edit application path.

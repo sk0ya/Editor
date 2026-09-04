@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
@@ -177,7 +177,8 @@ public class FileLinkClickedEventArgs(string path, bool isDirectory) : EventArgs
 /// </summary>
 public class EditorContextMenuBuildingEventArgs(
     string selectedText, bool hasSelection, System.Windows.Controls.ContextMenu menu,
-    Git.EditorBlameLine? blameLine = null) : EventArgs
+    Git.EditorBlameLine? blameLine = null,
+    System.Windows.Controls.MenuItem? navigateMenu = null) : EventArgs
 {
     /// <summary>The current selection text (empty when nothing is selected).</summary>
     public string SelectedText { get; } = selectedText;
@@ -196,6 +197,15 @@ public class EditorContextMenuBuildingEventArgs(
     /// items so the menu is blame-focused.
     /// </summary>
     public Git.EditorBlameLine? BlameLine { get; } = blameLine;
+
+    /// <summary>
+    /// The editor's own "Go To" submenu (definition / implementation / type definition /
+    /// declaration / references), or <c>null</c> when no language server backs this buffer.
+    /// Hosts that have their own navigation command (a Peek variant, say) should append it
+    /// <b>here</b> rather than to <see cref="Menu"/>, so every "go somewhere" entry stays in one
+    /// place instead of being scattered down the menu.
+    /// </summary>
+    public System.Windows.Controls.MenuItem? NavigateMenu { get; } = navigateMenu;
 }
 
 /// <summary>The kind of a text selection (mirrors the engine's selection type).</summary>
@@ -424,6 +434,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     /// <summary>ホストが自前の「名前の変更」をメニューへ足すので、ネイティブの
     /// "Rename Symbol" は出さない（<see cref="VimEditorControlOptions.HostProvidesRenameMenuItem"/>）。</summary>
     private readonly bool _hostProvidesRenameMenuItem;
+    private readonly EditorContextMenuLabels _menuLabels;
 
     /// <summary>
     /// Rules for pasting a clipboard image into a Markdown file (destination directory +
@@ -747,6 +758,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _engine.SetClipboardProvider(options.ClipboardProviderFactory?.Invoke() ?? new WpfClipboardProvider());
         _imagePasteHandler = new ImagePasteHandler { Options = options.ImagePasteOptions ?? new Editor.Core.Editing.ImagePasteOptions() };
         _hostProvidesRenameMenuItem = options.HostProvidesRenameMenuItem;
+        _menuLabels = options.ContextMenuLabels ?? EditorContextMenuLabels.Default;
         Canvas.WrapLines = _engine.Options.Wrap;
         _multiCursorManager = new MultiCursorManager(_engine, Canvas, msg => ActiveStatusBar.UpdateStatus(msg), UpdateAll);
         _snippetTabStopManager = new SnippetTabStopManager(_engine, ProcessKey, ClearSelectionRangeState, ProcessVimEvents, UpdateAll);
@@ -3392,10 +3404,27 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private ContextMenu BuildContextMenu()
     {
         bool isVisual = _engine.Mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock;
-        var sep = (Style)FindResource("DarkMenuSeparator");
-        var itemStyle = (Style)FindResource("DarkMenuItem");
+        var sep = (Style)FindResource("EditorMenuSeparator");
+        var itemStyle = (Style)FindResource("EditorMenuItem");
 
-        var menu = new ContextMenu { Style = (Style)FindResource("DarkContextMenu") };
+        var menu = new ContextMenu { Style = (Style)FindResource("EditorContextMenu") };
+        // 配色は今の EditorTheme から引く（固定の Dracula ではない——ライトテーマのエディタで
+        // 真っ黒なメニューが出ていた）。リソースをメニュー自身に載せるので、サブメニューの
+        // ポップアップの中まで同じキーで解決できる。
+        menu.Resources["EditorMenuBackground"] = _theme.LineNumberBg;
+        menu.Resources["EditorMenuForeground"] = _theme.Foreground;
+        menu.Resources["EditorMenuBorderBrush"] = _theme.IndentGuideBrush;
+        menu.Resources["EditorMenuHoverBackground"] = _theme.CurrentLineBg;
+        menu.Resources["EditorMenuDimForeground"] = _theme.LineNumberFg;
+        // ホストが ContextMenuBuilding で足す項目とその**子孫**（サブメニューの中身）にも同じ
+        // 見た目を効かせるため、暗黙スタイルとして載せる。以前は追加後に一段だけ Style を
+        // 代入しており、サブメニューの子項目は WPF 既定の白いメニューのままだった。
+        menu.Resources[typeof(MenuItem)] = itemStyle;
+        menu.Resources[typeof(Separator)] = sep;
+        // メニューの中の Separator は暗黙スタイルでは決まらない——WPF は容器を用意するときに
+        // MenuItem.SeparatorStyleKey で引いたスタイルを直接代入するため、そちらを上書きしないと
+        // ホストが足した区切り線だけ既定の白い線で描かれる（実際にそうなっていた）。
+        menu.Resources[MenuItem.SeparatorStyleKey] = sep;
 
         MenuItem MakeItem(string header, string gesture, Action onClick)
         {
@@ -3407,11 +3436,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // 右クリックが blame ガター上のときは、テキスト編集/LSP 項目を出さず blame 専用メニューにする
         // （ホストがコミット固有の操作＝差分表示・履歴表示などを ContextMenuBuilding で足す）。
         var blameLine = Canvas.RightClickBlame;
+        MenuItem? navigateMenu = null;
         if (blameLine is null)
         {
         // ── Vim editing operations ──────────────────────────────
         menu.Items.Add(MakeItem(
-            isVisual ? "Copy Selection" : "Copy Line",
+            isVisual ? _menuLabels.CopySelection : _menuLabels.CopyLine,
             isVisual ? "y" : "yy",
             () =>
             {
@@ -3422,7 +3452,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             }));
 
         menu.Items.Add(MakeItem(
-            isVisual ? "Cut Selection" : "Cut Line",
+            isVisual ? _menuLabels.CutSelection : _menuLabels.CutLine,
             isVisual ? "d" : "dd",
             () =>
             {
@@ -3432,19 +3462,19 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 { ProcessKey("d", false, false, false); ProcessKey("d", false, false, false); }
             }));
 
-        menu.Items.Add(MakeItem("Paste", "p",
+        menu.Items.Add(MakeItem(_menuLabels.Paste, "p",
             () => ProcessKey("p", false, false, false)));
 
         menu.Items.Add(new Separator { Style = sep });
 
-        menu.Items.Add(MakeItem("Undo", "u",
+        menu.Items.Add(MakeItem(_menuLabels.Undo, "u",
             () => ProcessKey("u", false, false, false)));
-        menu.Items.Add(MakeItem("Redo", "Ctrl+R",
+        menu.Items.Add(MakeItem(_menuLabels.Redo, "Ctrl+R",
             () => ProcessKey("r", true, false, false)));
 
         menu.Items.Add(new Separator { Style = sep });
 
-        menu.Items.Add(MakeItem("Select All", "ggVG", () =>
+        menu.Items.Add(MakeItem(_menuLabels.SelectAll, "ggVG", () =>
         {
             ProcessKey("g", false, false, false);
             ProcessKey("g", false, false, false);
@@ -3452,11 +3482,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             ProcessKey("G", false, false, false);
         }));
 
-        menu.Items.Add(new Separator { Style = sep });
-        menu.Items.Add(MakeItem(
-            Canvas.WrapLines ? "Word Wrap: Off" : "Word Wrap: On",
-            "Alt+Z",
-            ToggleWordWrap));
+        // Word wrap used to sit here as a menu row of its own. It is a view preference, not
+        // something you act on at the caret, so it stays on Alt+Z / `:set wrap` and off the menu.
 
         // ── LSP operations (only when a language server is connected) ──
         if (_lspView.IsConnected ||
@@ -3466,43 +3493,47 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         {
             menu.Items.Add(new Separator { Style = sep });
 
-            menu.Items.Add(MakeItem("Go to Definition", "gd",
+            // 「どこかへ行く」操作は 1 つの入口にまとめる。以前は 5 行が横並びで、
+            // メニューの半分近くが移動先の列挙になっていた（ホストが足す項目はこの下に続く）。
+            navigateMenu = new MenuItem { Header = _menuLabels.Navigate, Style = itemStyle };
+            navigateMenu.Items.Add(MakeItem(_menuLabels.GoToDefinition, "gd",
                 () => _ = HandleGoToDefinitionAsync()));
-            menu.Items.Add(MakeItem("Go to Implementation", "gI",
+            navigateMenu.Items.Add(MakeItem(_menuLabels.GoToImplementation, "gI",
                 () => _ = HandleGoToLocationsAsync(
                     (line, character) => _lspView.RequestImplementationAsync(line, character),
                     () => _lspView.ServerSupportsImplementation || _lspView.HasHostImplementationProvider, "implementation")));
-            menu.Items.Add(MakeItem("Go to Type Definition", "gY",
+            navigateMenu.Items.Add(MakeItem(_menuLabels.GoToTypeDefinition, "gY",
                 () => _ = HandleGoToLocationsAsync(
                     (line, character) => _lspView.RequestTypeDefinitionAsync(line, character),
                     () => _lspView.ServerSupportsTypeDefinition || _lspView.HasHostTypeDefinitionProvider, "type definition")));
-            menu.Items.Add(MakeItem("Go to Declaration", "gD",
+            navigateMenu.Items.Add(MakeItem(_menuLabels.GoToDeclaration, "gD",
                 () => _ = HandleGoToLocationsAsync(
                     (line, character) => _lspView.RequestDeclarationAsync(line, character),
                     () => _lspView.ServerSupportsDeclaration || _lspView.HasHostDeclarationProvider, "declaration")));
-            menu.Items.Add(MakeItem("Find References", "LSP",
+            navigateMenu.Items.Add(MakeItem(_menuLabels.FindReferences, "LSP",
                 () => _ = HandleFindReferencesAsync()));
+            menu.Items.Add(navigateMenu);
             // ホストがリファクタリング一式を自前のメニューへまとめる場合は、ここには出さない
             // （同じ「名前の変更」が2つ並ぶのを防ぐ。ex コマンド経路は残る）。
             if (!_hostProvidesRenameMenuItem)
-                menu.Items.Add(MakeItem("Rename Symbol", "LSP",
+                menu.Items.Add(MakeItem(_menuLabels.RenameSymbol, "LSP",
                     () => _ = HandleRenameAsync()));
             // Quick fixes were reachable only through `ga`, so a diagnostic's fix was invisible
             // unless you already knew the key. The popup itself is unchanged.
-            menu.Items.Add(MakeItem("Code Actions", "ga",
+            menu.Items.Add(MakeItem(_menuLabels.CodeActions, "ga",
                 () => _ = HandleCodeActionAsync()));
-            menu.Items.Add(MakeItem("Fix All in File", "gA",
+            menu.Items.Add(MakeItem(_menuLabels.FixAllInFile, "gA",
                 () => _ = HandleFixAllAsync()));
             menu.Items.Add(new Separator { Style = sep });
-            menu.Items.Add(MakeItem("Hover Info", "K",
+            menu.Items.Add(MakeItem(_menuLabels.HoverInfo, "K",
                 () => _ = ShowLspHoverAsync()));
-            menu.Items.Add(MakeItem("Format Document", ":Format",
+            menu.Items.Add(MakeItem(_menuLabels.FormatDocument, ":Format",
                 () => _ = HandleFormatDocumentAsync()));
             // Capture the selected lines now — invoking the menu item clears the selection.
             if (_engine.Selection is { IsEmpty: false } fmtSel)
             {
                 var fmtLines = (fmtSel.NormalizedStart.Line, fmtSel.NormalizedEnd.Line);
-                menu.Items.Add(MakeItem("Format Selection", ":'<,'>Format",
+                menu.Items.Add(MakeItem(_menuLabels.FormatSelection, ":'<,'>Format",
                     () => _ = HandleFormatDocumentAsync(fmtLines)));
             }
         }
@@ -3512,23 +3543,44 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // Let the embedding application append its own entries (e.g. "Ask AI", "Search the web")
         // that act on the current selection, or commit actions when the right-click was on the blame
         // gutter (BlameLine is non-null then). They are added after the editor's own items.
-        if (ContextMenuBuilding is { } handler)
-        {
-            var before = menu.Items.Count;
-            handler(this, new EditorContextMenuBuildingEventArgs(SelectedText, HasSelection, menu, blameLine));
+        // Host items pick up the editor's look from the implicit styles placed on menu.Resources
+        // above — that covers submenu children too, which a post-hoc pass over the top level could
+        // never reach (and which used to render as WPF's default light menu).
+        ContextMenuBuilding?.Invoke(
+            this, new EditorContextMenuBuildingEventArgs(
+                SelectedText, HasSelection, menu, blameLine, navigateMenu));
 
-            // Apply the dark menu styling to any items the host added without their own style,
-            // so host entries match the editor's native menu look.
-            for (int i = before; i < menu.Items.Count; i++)
-            {
-                if (menu.Items[i] is MenuItem { Style: null } mi)
-                    mi.Style = itemStyle;
-                else if (menu.Items[i] is Separator { Style: null } s)
-                    s.Style = sep;
-            }
+        TrimMenuSeparators(menu);
+        return menu;
+    }
+
+    /// <summary>先頭・末尾の区切り線と、区切り線の連続を落とす。ネイティブ項目とホスト項目が
+    /// それぞれ自分の区切り線を足すので、条件次第で「区切り線だけが並ぶ」状態が起きる。</summary>
+    private static void TrimMenuSeparators(ItemsControl menu)
+    {
+        bool PrecededByItem(int index)
+        {
+            for (int i = index - 1; i >= 0; i--)
+                if (menu.Items[i] is not Separator)
+                    return true;
+            return false;
+        }
+        bool FollowedByItem(int index)
+        {
+            for (int i = index + 1; i < menu.Items.Count; i++)
+                if (menu.Items[i] is not Separator)
+                    return true;
+            return false;
         }
 
-        return menu;
+        for (int i = menu.Items.Count - 1; i >= 0; i--)
+        {
+            if (menu.Items[i] is not Separator)
+                continue;
+            // 直前に項目が無い（先頭）／直後に項目が無い（末尾）／直前も区切り線（連続）なら不要。
+            if (!PrecededByItem(i) || !FollowedByItem(i) || menu.Items[i - 1] is Separator)
+                menu.Items.RemoveAt(i);
+        }
     }
 
     private void OnPreviewTextInputStart(object sender, TextCompositionEventArgs e)
