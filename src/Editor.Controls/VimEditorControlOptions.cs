@@ -104,6 +104,18 @@ public sealed class VimEditorControlOptions
     /// </summary>
     public Func<string, string, int, int, CancellationToken, Task<IReadOnlyList<InlayHint>>>? HostInlayHintProvider { get; init; }
 
+    /// <summary>
+    /// マウスを本文の識別子に乗せたまま止めたとき、型と説明のポップアップを出すか（既定は true）。
+    /// 中身は <see cref="HostHoverProvider"/> を含む通常の hover 経路から取るので、LSP もホスト提供も
+    /// 無いエディタでは何も出ない（＝出せるときだけ出る）。実行時は
+    /// <see cref="VimEditorControl.HoverInfoEnabled"/> で切り替えられる。
+    /// </summary>
+    public bool HoverInfoEnabled { get; init; } = true;
+
+    /// <summary>ホバーの説明を出すまでの待ち時間（ms、既定 400）。マウスを掃くように動かしている間は
+    /// 問い合わせない。</summary>
+    public int HoverInfoDelayMs { get; init; } = 400;
+
     public SyntaxLanguageRegistry? SyntaxLanguages { get; init; }
     public EditorCommandRegistry? Commands { get; init; }
     public IServiceProvider? CommandServices { get; init; }

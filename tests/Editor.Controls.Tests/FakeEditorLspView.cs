@@ -75,7 +75,15 @@ internal sealed class FakeEditorLspView : IEditorLspView
         return pending.Task;
     }
 
-    public Task<string?> RequestHoverAsync(int line, int character) => Task.FromResult<string?>(null);
+    /// <summary>hover の応答（Markdown）。null なら「説明なし」。</summary>
+    public string? HoverResult { get; set; }
+    public List<(int Line, int Character)> HoverRequests { get; } = [];
+
+    public Task<string?> RequestHoverAsync(int line, int character)
+    {
+        HoverRequests.Add((line, character));
+        return Task.FromResult(HoverResult);
+    }
 
     public Task<(string FilePath, int Line, int Column)?> RequestDefinitionAsync(int line, int character) =>
         Task.FromResult<(string FilePath, int Line, int Column)?>(null);
@@ -101,8 +109,21 @@ internal sealed class FakeEditorLspView : IEditorLspView
     public Task<IReadOnlyList<LspLocation>> RequestReferencesAsync(int line, int character) =>
         Task.FromResult<IReadOnlyList<LspLocation>>([]);
 
+    /// <summary>codeAction の応答。</summary>
+    public List<LspCodeAction> CodeActions { get; } = [];
+    /// <summary>要求された (範囲, kind) の記録。ホバーが診断の範囲で quickfix だけを聞いているかを見る。</summary>
+    public List<(LspRange Range, IReadOnlyList<string>? Only)> CodeActionRequests { get; } = [];
+
     public Task<IReadOnlyList<LspCodeAction>> RequestCodeActionsAsync(int line, int character) =>
-        Task.FromResult<IReadOnlyList<LspCodeAction>>([]);
+        RequestCodeActionsAsync(
+            new LspRange(new LspPosition(line, character), new LspPosition(line, character)), null);
+
+    public Task<IReadOnlyList<LspCodeAction>> RequestCodeActionsAsync(
+        LspRange range, IReadOnlyList<string>? only)
+    {
+        CodeActionRequests.Add((range, only));
+        return Task.FromResult<IReadOnlyList<LspCodeAction>>(CodeActions.ToArray());
+    }
 
     public void ShowCodeActions(IReadOnlyList<LspCodeAction> actions) { }
     public void HideCodeActions() { }

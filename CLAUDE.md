@@ -119,8 +119,38 @@ on the read thread and **the server is blocked until the handler returns** (`Lsp
 (`codeActionLiteralSupport`, `resolveSupport`, `dataSupport`, `workspace.applyEdit`) are declared in
 `LspClient.InitializeAsync`. Host-side design: Loomo `docs/設計/32-リファクタリング.md` (§32).
 
+**Applying an edit the host owns:** `WorkspaceEditRequestedEventArgs` carries `Handled`, `Error` **and
+`Cancelled`**. A host that asks the user (an edit preview, a confirmation) and is told "no" sets `Cancelled`,
+not `Error` — the editor then leaves the current buffer untouched and reports "cancelled", where an `Error`
+would have been reported as `Code action 'X' failed: …`, i.e. the user's own decision handed back as a
+failure.
+
+**Hover info (mouse):** resting the mouse on an identifier pops up its type and summary — the Rider/VS
+tooltip. `Rendering/EditorCanvas.TextHover.cs` only decides *which word the pointer is on*
+(`TextHoverChanged`; it hit-tests the text itself because `HitTest` rounds a point past end-of-line back
+onto the last column) and `VimEditorControl.HoverInfo.cs` owns the dwell timer, the request and the popup.
+The body is the **same** `IEditorLspView.RequestHoverAsync` path as `K` — server `textDocument/hover`, else
+the host's `HostHoverProvider` — with the diagnostics covering that position (`EditorCanvas.DiagnosticsAt`)
+listed first, and under them a **lightbulb** — pressing it opens that diagnostic's quick fixes inside the same
+popup, and clicking one applies it. The fixes are **fetched on that press, never on hover**: the host's
+`HostCodeActionProvider` has no cancellation parameter, so hovering would leave one uncancellable Roslyn/LSP
+computation per squiggle behind as the mouse sweeps a file (same reason Loomo fills its own Quick Fix submenu
+on `SubmenuOpened`). While the request is out the popup says so, and an empty answer says "no fixes" rather
+than leaving a bulb that does nothing. Fixes come from the **same** `CollectQuickFixesAsync` as Alt+Enter (host
+`HostCodeActionProvider` first, then LSP `only: ["quickfix"]` over the **diagnostic's own range**) and apply
+through the same `ApplyCodeActionAsync`, so there is one path, not two. Servers do **not** honour `only` reliably
+(a C# server returned "extract method" for an unused-variable warning), so `Editor.Core/Lsp/HoverFixSelection.cs`
+keeps quickfix/fixAll kinds plus kind-less actions, puts `IsPreferred` first and caps the list. The bulb stays
+collapsed by default: someone hovering to read a type should not get a stack of rewrites in their face.
+Servers answer in **Markdown**, so `Editor.Core/Text/HoverMarkdown.cs` (pure, tested) splits it
+into code / text / rule blocks and `Rendering/HoverContentBuilder.cs` renders them, running code fences
+through the editor's own `SyntaxEngine` so a signature is coloured like code. Off switch:
+`VimEditorControlOptions.HoverInfoEnabled` / `HoverInfoDelayMs` (runtime: `VimEditorControl.HoverInfoEnabled`).
+Distinct from the debug **DataTip** (`VimEditorControl.Debug.cs`), which evaluates a *value* while stopped.
+
 **Key bindings:**
-- `K` (Normal mode) — hover info shown in status bar
+- `K` (Normal mode) — hover info in the same popup (it used to be one status-bar line, which showed
+  nothing but the ```` ```csharp ```` fence for Markdown servers)
 - `Ctrl+Space` (Insert mode) — trigger completion popup
 - `↓`/`Ctrl+N`, `↑`/`Ctrl+P` — navigate completion list
 - `Tab`/`Enter` — insert selected completion item

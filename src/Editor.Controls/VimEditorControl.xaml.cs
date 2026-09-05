@@ -67,6 +67,11 @@ public sealed class WorkspaceEditRequestedEventArgs(
     public IReadOnlyDictionary<string, string>? ExpectedTexts { get; } = expectedTexts;
     public bool Handled { get; set; }
     public string? Error { get; set; }
+
+    /// <summary>ホストが<b>利用者の意思で</b>適用を取りやめた（編集プレビューで「キャンセル」を押した等）。
+    /// <see cref="Error"/> に文言を入れて伝えると「失敗」として報告されてしまう——取り消しは失敗ではないので、
+    /// こちらを true にする。エディタは現在バッファへも何も書かない。</summary>
+    public bool Cancelled { get; set; }
 }
 public class NewTabRequestedEventArgs(string? filePath) : EventArgs
 {
@@ -759,6 +764,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _imagePasteHandler = new ImagePasteHandler { Options = options.ImagePasteOptions ?? new Editor.Core.Editing.ImagePasteOptions() };
         _hostProvidesRenameMenuItem = options.HostProvidesRenameMenuItem;
         _menuLabels = options.ContextMenuLabels ?? EditorContextMenuLabels.Default;
+        _syntaxLanguages = options.SyntaxLanguages;
+        _hoverInfoEnabled = options.HoverInfoEnabled;
+        _hoverInfoDwellMs = Math.Max(0, options.HoverInfoDelayMs);
         Canvas.WrapLines = _engine.Options.Wrap;
         _multiCursorManager = new MultiCursorManager(_engine, Canvas, msg => ActiveStatusBar.UpdateStatus(msg), UpdateAll);
         _snippetTabStopManager = new SnippetTabStopManager(_engine, ProcessKey, ClearSelectionRangeState, ProcessVimEvents, UpdateAll);
@@ -1032,6 +1040,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.TestGlyphClicked += OnCanvasTestGlyphClicked;
         Canvas.DataTipHoverChanged += OnCanvasDataTipHoverChanged;
         Canvas.DataTipHoverEnded += OnCanvasDataTipHoverEnded;
+        Canvas.TextHoverChanged += OnCanvasTextHoverChanged;
+        Canvas.TextHoverEnded += OnCanvasTextHoverEnded;
+        Canvas.SetTextHoverEnabled(_hoverInfoEnabled);
         Canvas.LinkClicked += OnCanvasLinkClicked;
         Canvas.FileLinkClicked += OnCanvasFileLinkClicked;
         Canvas.DocumentLinkClicked += OnCanvasDocumentLinkClicked;
@@ -1043,6 +1054,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             SyncViewportState();
             UpdateViewportDecorations();
             HideDataTip();
+            HideHoverInfo();
             NotifyImeLayoutChanged();
             ViewportScrolled?.Invoke(this, EventArgs.Empty);
         };
@@ -1327,6 +1339,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         Canvas.Focus();
+        AttachHoverInfoWindowHook();
         UpdateAll();
         TryAttachTsfUiElementSink();
 
@@ -1352,6 +1365,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        DetachHoverInfoWindowHook();
+        HideHoverInfo();
         DetachImeWindowHook();
         TextCompositionManager.RemovePreviewTextInputStartHandler(this, OnPreviewTextInputStart);
         TextCompositionManager.RemovePreviewTextInputUpdateHandler(this, OnPreviewTextInputUpdate);
@@ -3062,6 +3077,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         BreadcrumbBar.BorderBrush = _theme.IndentGuideBrush;
         RefreshBreadcrumbBar();
         ApplyFindReplaceBarTheme();
+        ApplyThemeToHoverPopup();
         Canvas.InvalidateVisual();
     }
 
@@ -3296,6 +3312,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // Click-away dismisses the code-action popup: it is anchored to the cursor it was raised
         // at, so once the caret moves elsewhere it is stale paint.
         _lspView.HideCodeActions();
+        // 説明ポップアップも同じ——クリックは「読む」から「編集する」への切り替えなので引っ込める。
+        HideHoverInfo();
 
         // Vim disabled: drop any plain selection and move the caret like a text box.
         if (!_engine.VimEnabled)
@@ -3976,6 +3994,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         // Any key dismisses an open debug DataTip (it tracks the mouse-hovered value).
         if (_dataTipPopup is { IsOpen: true }) HideDataTip();
+        // 説明ポップアップも同じ（マウス位置に紐づく表示なので、打鍵を始めたら引っ込める）。
+        if (_hoverPopup is { IsOpen: true }) HideHoverInfo();
 
         // Reset the "Vim already handled this key" flag at the start of EVERY key.
         // OnKeyDown also resets it, but OnKeyDown does NOT fire for Key.ImeProcessed
@@ -4941,17 +4961,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             ActiveStatusBar.UpdateStatus("");
     }
 
-    private async Task ShowLspHoverAsync()
-    {
-        var cursor = _engine.Cursor;
-        var text = await _lspView.RequestHoverAsync(cursor.Line, cursor.Column);
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-            // Show first non-empty line of hover in status bar
-            var firstLine = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? text;
-            ActiveStatusBar.UpdateStatus(firstLine.Trim());
-        }
-    }
+    /// <summary>キャレット位置の hover。本文はマウスホバーと同じポップアップに出す
+    /// （<c>VimEditorControl.HoverInfo.cs</c>）——ステータスバーの 1 行では Markdown の
+    /// コードフェンスしか読めなかった。</summary>
+    private Task ShowLspHoverAsync() => ShowHoverInfoAtCaretAsync();
 
     private async Task HandleSelectionRangeAsync(bool expand)
     {
@@ -5610,6 +5623,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         var apply = ApplyWorkspaceEditToCurrentBuffer(edit);
+        if (apply.Cancelled)
+        {
+            ActiveStatusBar.UpdateStatus("Rename cancelled");
+            return;
+        }
         if (apply.Error is not null)
         {
             ActiveStatusBar.UpdateStatus($"Rename failed: {apply.Error}");
@@ -5935,41 +5953,51 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         var range = SelectionAsLspRange() ??
             new LspRange(new LspPosition(cursor.Line, cursor.Column),
                          new LspPosition(cursor.Line, cursor.Column));
-        IReadOnlyList<LspCodeAction> actions = [];
-        if (HostCodeActionProvider is { } hostProvider)
-        {
-            try { actions = await hostProvider(range, [LspCodeActionKinds.QuickFix]); }
-            catch (OperationCanceledException) { return; }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Host Quick Fix failed: {ex.Message}"); }
-        }
-        if (actions.Count == 0)
-        {
-            if (!_lspView.IsConnected) { ActiveStatusBar.UpdateStatus("Quick Fix: LSP not connected"); return; }
-            if (!_lspView.IsDocumentReady)
-            {
-                ActiveStatusBar.UpdateStatus("Quick Fix: LSP is still analyzing this document");
-                return;
-            }
 
-            var declaredKinds = _lspView.ServerCodeActionKinds;
-            if (declaredKinds.Count > 0 &&
-                !declaredKinds.Any(kind => LspCodeActionKinds.Matches(kind, LspCodeActionKinds.QuickFix) ||
-                                           LspCodeActionKinds.Matches(LspCodeActionKinds.QuickFix, kind)))
-            {
-                ActiveStatusBar.UpdateStatus("Quick Fix: このLSPサーバーはquickfixに非対応です");
-                return;
-            }
-            ActiveStatusBar.UpdateStatus("Quick Fix: searching…");
-            actions = await _lspView.RequestCodeActionsAsync(range, [LspCodeActionKinds.QuickFix]);
-        }
+        var (actions, unavailable) = await CollectQuickFixesAsync(range, announce: true);
+        if (actions is null) return;   // ホスト側で取り消された。黙って終わる。
         if (actions.Count == 0)
         {
-            ActiveStatusBar.UpdateStatus("Quick Fix: no fixes available");
+            ActiveStatusBar.UpdateStatus($"Quick Fix: {unavailable ?? "no fixes available"}");
             return;
         }
 
         _lspView.ShowCodeActions(actions);
         ActiveStatusBar.UpdateStatus($"Quick Fix: {actions.Count} available — j/k to select, Enter to apply, Esc to dismiss");
+    }
+
+    /// <summary>
+    /// その範囲の quickfix を集める。Alt+Enter（<see cref="HandleQuickFixAsync"/>）とホバーの説明ポップアップ
+    /// （<c>VimEditorControl.HoverInfo.cs</c>）が<b>同じ順序</b>——ホスト提供が先、無ければ LSP——で
+    /// 同じ修正候補を出すための共有部。
+    /// </summary>
+    /// <param name="announce">ステータスバーに「searching…」を出すか。ホバーからは黙って集めるので false。</param>
+    /// <returns>Actions が null なら取り消し（呼び出し側は何も言わずに終わる）。空リストのときだけ
+    /// Unavailable に「集まらなかった理由」が入る（null なら単に候補なし）。</returns>
+    private async Task<(IReadOnlyList<LspCodeAction>? Actions, string? Unavailable)> CollectQuickFixesAsync(
+        LspRange range, bool announce)
+    {
+        IReadOnlyList<LspCodeAction> actions = [];
+        if (HostCodeActionProvider is { } hostProvider)
+        {
+            try { actions = await hostProvider(range, [LspCodeActionKinds.QuickFix]); }
+            catch (OperationCanceledException) { return (null, null); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Host Quick Fix failed: {ex.Message}"); }
+        }
+        if (actions.Count > 0) return (actions, null);
+
+        if (!_lspView.IsConnected) return ([], "LSP not connected");
+        if (!_lspView.IsDocumentReady) return ([], "LSP is still analyzing this document");
+
+        var declaredKinds = _lspView.ServerCodeActionKinds;
+        if (declaredKinds.Count > 0 &&
+            !declaredKinds.Any(kind => LspCodeActionKinds.Matches(kind, LspCodeActionKinds.QuickFix) ||
+                                       LspCodeActionKinds.Matches(LspCodeActionKinds.QuickFix, kind)))
+            return ([], "このLSPサーバーはquickfixに非対応です");
+
+        if (announce) ActiveStatusBar.UpdateStatus("Quick Fix: searching…");
+        actions = await _lspView.RequestCodeActionsAsync(range, [LspCodeActionKinds.QuickFix]);
+        return (actions, null);
     }
 
     private async Task HandleFixAllAsync()
@@ -6052,6 +6080,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         var apply = ApplyWorkspaceEditToCurrentBuffer(action.Edit);
+        if (apply.Cancelled)
+        {
+            ActiveStatusBar.UpdateStatus($"Code action '{action.Title}' cancelled");
+            return;
+        }
         if (apply.Error is not null)
         {
             ActiveStatusBar.UpdateStatus($"Code action '{action.Title}' failed: {apply.Error}");
@@ -6065,7 +6098,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     }
 
     /// <summary>現在バッファへworkspace editを適用する。他ファイルはホスト側の文書操作対象として数える。</summary>
-    private (int OtherFileCount, string? Error) ApplyWorkspaceEditToCurrentBuffer(LspWorkspaceEdit edit)
+    private (int OtherFileCount, string? Error, bool Cancelled) ApplyWorkspaceEditToCurrentBuffer(
+        LspWorkspaceEdit edit)
     {
         var currentPath = _engine.CurrentBuffer.FilePath ?? "";
         int otherFileCount = 0;
@@ -6078,7 +6112,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 if (edit.DocumentVersions?.TryGetValue(fileUri, out var requestedVersion) == true &&
                     requestedVersion is not null && _lspView.Document?.Version is { } currentVersion &&
                     requestedVersion.Value != currentVersion)
-                    return (otherFileCount, $"文書版が一致しません（要求 {requestedVersion} / 現在 {currentVersion}）。再度実行してください。");
+                    return (otherFileCount, $"文書版が一致しません（要求 {requestedVersion} / 現在 {currentVersion}）。再度実行してください。", false);
 
                 try
                 {
@@ -6087,7 +6121,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 }
                 catch (Exception ex)
                 {
-                    return (otherFileCount, $"編集を適用できませんでした: {ex.Message}");
+                    return (otherFileCount, $"編集を適用できませんでした: {ex.Message}", false);
                 }
             }
             else if (fileEdits.Count > 0)
@@ -6107,17 +6141,21 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 currentUpdate,
                 edit.ExpectedTexts);
             WorkspaceEditRequested?.Invoke(this, args);
-            if (!args.Handled && (external.Count > 0 || fileOperations.Count > 0))
-                return (otherFileCount, "他ファイルへの編集をホストが処理できません。");
+            // 取り消しは失敗ではない。現在バッファにも書かずに、そのまま引き下がる。
+            if (args.Cancelled) return (otherFileCount, null, true);
+            // ホストが理由を言っているなら<b>それ</b>を出す。ホストは失敗時に Handled=false のままにするので、
+            // 下の汎用文言を先に見ると「ワークスペースが開かれていません」等の本当の理由が消える。
             if (args.Error is not null)
-                return (otherFileCount, args.Error);
+                return (otherFileCount, args.Error, false);
+            if (!args.Handled && (external.Count > 0 || fileOperations.Count > 0))
+                return (otherFileCount, "他ファイルへの編集をホストが処理できません。", false);
         }
         if (currentUpdate is not null)
         {
             ProcessVimEvents(_engine.ApplyExternalText(currentUpdate));
             _lspView.OnTextChanged(currentUpdate);
         }
-        return (otherFileCount, null);
+        return (otherFileCount, null, false);
     }
 
     /// <summary>ホストが複数文書workspace editを、開いている対象バッファへUndo可能な1編集として適用する。</summary>

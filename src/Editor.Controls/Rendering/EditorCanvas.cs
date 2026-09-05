@@ -1125,6 +1125,7 @@ public partial class EditorCanvas : FrameworkElement
 
             _isDragging = true;
             ClearDataTipHover();
+            ClearTextHover();
             // Don't fire MouseDragging when dragging in minimap area
             if (!(_showMinimap && point.X >= RenderSize.Width - MinimapWidth))
             {
@@ -1139,6 +1140,7 @@ public partial class EditorCanvas : FrameworkElement
         {
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
             ClearDataTipHover();
+            ClearTextHover();
             Cursor = System.Windows.Input.Cursors.Arrow;
             return;
         }
@@ -1148,6 +1150,7 @@ public partial class EditorCanvas : FrameworkElement
         {
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
             ClearDataTipHover();
+            ClearTextHover();
             Cursor = System.Windows.Input.Cursors.Arrow;
             return;
         }
@@ -1162,6 +1165,7 @@ public partial class EditorCanvas : FrameworkElement
             SetHoveredBreakpointLine(-1);
             SetHoveredTestGlyphLine(-1);
             ClearDataTipHover();
+            ClearTextHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
             Cursor = System.Windows.Input.Cursors.SizeWE;
             return;
@@ -1188,6 +1192,7 @@ public partial class EditorCanvas : FrameworkElement
             Cursor = bpHoverLine >= 0 ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
             SetHoveredBreakpointLine(bpHoverLine);
             ClearDataTipHover();
+            ClearTextHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
         }
         else if (inTestGlyphGutter)
@@ -1198,6 +1203,7 @@ public partial class EditorCanvas : FrameworkElement
                 : System.Windows.Input.Cursors.Arrow;
             SetHoveredBreakpointLine(-1);
             ClearDataTipHover();
+            ClearTextHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
         }
         else if (inBlameGutter)
@@ -1205,6 +1211,7 @@ public partial class EditorCanvas : FrameworkElement
             // Hovering in blame margin — hand cursor over an annotated (clickable) line.
             SetHoveredBreakpointLine(-1);
             ClearDataTipHover();
+            ClearTextHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
             Cursor = blameHover >= 0
                 ? System.Windows.Input.Cursors.Hand
@@ -1215,6 +1222,7 @@ public partial class EditorCanvas : FrameworkElement
             // Hovering in fold column
             SetHoveredBreakpointLine(-1);
             ClearDataTipHover();
+            ClearTextHover();
             bool onFold = foldHoverLine >= 0 && (_closedFoldStarts.Contains(foldHoverLine) || _openFoldStarts.Contains(foldHoverLine));
             Cursor = onFold ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
             int prev = _hoveredFoldLine;
@@ -1226,6 +1234,7 @@ public partial class EditorCanvas : FrameworkElement
             // Hovering in line number area
             SetHoveredBreakpointLine(-1);
             ClearDataTipHover();
+            ClearTextHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
             Cursor = System.Windows.Input.Cursors.Arrow;
         }
@@ -1236,6 +1245,8 @@ public partial class EditorCanvas : FrameworkElement
 
             // Debug DataTip: while stopped, hovering an identifier asks the host to evaluate it.
             UpdateDataTipHover(point);
+            // 本文ホバー（型と説明のツールチップ）。常時動く——DataTip と違い停止中に限らない。
+            UpdateTextHover(point);
 
             // Ctrl+hover over a link shows a hand cursor as a clickability cue
             bool ctrlDown = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0;
@@ -1276,6 +1287,7 @@ public partial class EditorCanvas : FrameworkElement
         SetHoveredTestGlyphLine(-1);
         CloseBlameToolTip();
         ClearDataTipHover();
+        ClearTextHover();
         Cursor = System.Windows.Input.Cursors.IBeam;
     }
 
