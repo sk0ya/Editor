@@ -51,16 +51,32 @@ public partial class VimEditorControl
     private static readonly bool s_inlineDiag =
         string.Equals(Environment.GetEnvironmentVariable("SK0YA_EDITOR_INLINE_DIAG"), "1", StringComparison.Ordinal);
 
+    /// <summary>診断の書き出し専用スレッドへ渡すだけ。<b>ファイル I/O を打鍵の経路に置かない</b>
+    /// ——診断のつもりで入力を重くしては本末転倒で、実際それをやってしまった。</summary>
+    private static readonly System.Collections.Concurrent.BlockingCollection<string>? s_inlineDiagQueue =
+        s_inlineDiag ? StartInlineDiagWriter() : null;
+
+    private static System.Collections.Concurrent.BlockingCollection<string> StartInlineDiagWriter()
+    {
+        var queue = new System.Collections.Concurrent.BlockingCollection<string>(4096);
+        var thread = new Thread(() =>
+        {
+            var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "editor-inline-debug.log");
+            foreach (var line in queue.GetConsumingEnumerable())
+            {
+                try { System.IO.File.AppendAllText(path, line); } catch { }
+            }
+        })
+        { IsBackground = true, Name = "EditorInlineDiag", Priority = ThreadPriority.BelowNormal };
+        thread.Start();
+        return queue;
+    }
+
     private static void InlineLog(string message)
     {
-        if (!s_inlineDiag) return;
-        try
-        {
-            System.IO.File.AppendAllText(
-                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "editor-inline-debug.log"),
-                $"[{DateTime.Now:HH:mm:ss.fff}] {message}" + Environment.NewLine);
-        }
-        catch { }
+        if (s_inlineDiagQueue is null) return;
+        // 詰まっていたら捨てる。診断のために打鍵を待たせない。
+        s_inlineDiagQueue.TryAdd($"[{DateTime.Now:HH:mm:ss.fff}] {message}" + Environment.NewLine);
     }
 
     /// <summary>打鍵・カーソル移動・モード変更のあとに呼ぶ。出せる状況なら作り直し、そうでなければ消す。</summary>
@@ -147,14 +163,27 @@ public partial class VimEditorControl
 
             var buffer = _engine.CurrentBuffer;
             var cursor = _engine.Cursor;
-            var lines = GetCachedLines(buffer);
+            var lines = GetCachedLines(buffer);   // 版ごとの不変スナップショット
             int generation = ++_inlineSuggestionGeneration;
 
-            var builtIn = BufferLinePredictor.Predict(lines, cursor.Line, cursor.Column);
-            InlineLog($"tick: 内蔵={(builtIn is { } b ? "「" + b.Text + "」" : "なし")} " +
-                $"供給元={(_inlineSuggestionProvider is null ? "無し" : "有り")} 行={cursor.Line} 桁={cursor.Column}");
-            if (builtIn is { } immediate)
-                SetInlineSuggestion(immediate, cursor.Line, cursor.Column);
+            // 予測そのものは背景で。バッファ全体を走査しうるものを、打鍵の直後に UI スレッドで
+            // 回す理由は無い（結果を渡すときだけ戻る）。
+            _ = Task.Run(() =>
+            {
+                var builtIn = BufferLinePredictor.Predict(lines, cursor.Line, cursor.Column);
+                InlineLog($"tick: 内蔵={(builtIn is { } b ? "「" + b.Text + "」" : "なし")} " +
+                    $"供給元={(_inlineSuggestionProvider is null ? "無し" : "有り")} 行={cursor.Line} 桁={cursor.Column}");
+                if (builtIn is not { } immediate) return;
+
+                _ = Dispatcher.BeginInvoke(() =>
+                {
+                    if (generation != _inlineSuggestionGeneration) return;
+                    if (!CanShowInlineSuggestion()) return;
+                    var now = _engine.Cursor;
+                    if (now.Line != cursor.Line || now.Column != cursor.Column) return;
+                    SetInlineSuggestion(immediate, cursor.Line, cursor.Column);
+                });
+            });
 
             RequestHostInlineSuggestion(
                 new InlineSuggestionContext(lines, cursor.Line, cursor.Column, buffer.FilePath), generation);
