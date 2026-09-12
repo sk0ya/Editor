@@ -36,11 +36,46 @@ public partial class VimEditorControl
     /// <summary>いま提案が出ているか。Tab をどちらが取るかの判断に使う。</summary>
     private bool InlineSuggestionVisible => _inlineSuggestion is not null;
 
+    /// <summary>いま出ている提案の文面（無ければ null）。テストから状態を見るためのシーム。</summary>
+    internal string? InlineSuggestionText => _inlineSuggestion?.FirstLine;
+
+    /// <summary>提案の出どころ。内蔵の予測か、ホストが差した供給元か。テスト用。</summary>
+    internal InlineSuggestionSource? InlineSuggestionOrigin => _inlineSuggestion?.Source;
+
+    /// <summary>提案の受け入れ。修飾キー付きの入力はテストから再現しにくいので、
+    /// 受け入れそのものの振る舞いはここを直接叩いて確かめる（キーの配線は Tab 側で踏む）。</summary>
+    internal bool AcceptInlineSuggestionForTest(bool wordOnly) => AcceptInlineSuggestion(wordOnly);
+
+    /// <summary>SK0YA_EDITOR_INLINE_DIAG=1 のときだけ %TEMP%\editor-inline-debug.log へ書く。
+    /// 「出ない」の原因は条件の取りこぼしか呼ばれていないかのどちらかで、外からは区別がつかない。</summary>
+    private static readonly bool s_inlineDiag =
+        string.Equals(Environment.GetEnvironmentVariable("SK0YA_EDITOR_INLINE_DIAG"), "1", StringComparison.Ordinal);
+
+    private static void InlineLog(string message)
+    {
+        if (!s_inlineDiag) return;
+        try
+        {
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "editor-inline-debug.log"),
+                $"[{DateTime.Now:HH:mm:ss.fff}] {message}" + Environment.NewLine);
+        }
+        catch { }
+    }
+
     /// <summary>打鍵・カーソル移動・モード変更のあとに呼ぶ。出せる状況なら作り直し、そうでなければ消す。</summary>
     private void UpdateInlineSuggestion()
     {
         if (!CanShowInlineSuggestion())
         {
+            if (s_inlineDiag)
+            {
+                var c = _engine.Cursor;
+                var len = _engine.CurrentBuffer.Text.GetLine(c.Line).Length;
+                InlineLog($"update: 出せない (opt={_engine.Options.InlineSuggest} mode={_engine.Mode} " +
+                    $"col={c.Column}/{len} path={_pathCompletionManager.Visible} " +
+                    $"snippet={_snippetTabStopManager.IsActive} multi={_multiCursorManager.IsActive})");
+            }
             ClearInlineSuggestion();
             return;
         }
@@ -59,7 +94,12 @@ public partial class VimEditorControl
     {
         if (!_engine.Options.InlineSuggest) return false;
         if (_engine.Mode != VimMode.Insert) return false;
-        if (_lspView.CompletionVisible || _pathCompletionManager.Visible) return false;
+
+        // 補完ポップアップとは<b>共存する</b>。両者は役割が違う——ポップアップは識別子 1 つの候補一覧、
+        // 先読みは行全体の予想。かつて排他にしていたが、`.cs` は打鍵した瞬間にポップアップが出るので、
+        // 実質「先読みが一度も出ない」エディタになっていた。Tab の取り合いは受け入れ側で解いてある
+        // （先読みが出ていれば Tab は先読み、ポップアップは Enter でも確定できる）。
+        if (_pathCompletionManager.Visible) return false;   // パス補完は Tab をもっと強く握る
         if (_snippetTabStopManager.IsActive) return false;
         if (_multiCursorManager.IsActive) return false;
 
@@ -111,6 +151,8 @@ public partial class VimEditorControl
             int generation = ++_inlineSuggestionGeneration;
 
             var builtIn = BufferLinePredictor.Predict(lines, cursor.Line, cursor.Column);
+            InlineLog($"tick: 内蔵={(builtIn is { } b ? "「" + b.Text + "」" : "なし")} " +
+                $"供給元={(_inlineSuggestionProvider is null ? "無し" : "有り")} 行={cursor.Line} 桁={cursor.Column}");
             if (builtIn is { } immediate)
                 SetInlineSuggestion(immediate, cursor.Line, cursor.Column);
 
@@ -139,16 +181,33 @@ public partial class VimEditorControl
             catch (OperationCanceledException) { return; }
             catch { return; }   // 供給元の失敗で入力を邪魔しない
 
-            if (suggestion is not { Text.Length: > 0 } result) return;
+            if (suggestion is not { Text.Length: > 0 } result)
+            {
+                InlineLog("供給元: なし");
+                return;
+            }
 
             await Dispatcher.BeginInvoke(() =>
             {
                 // 待っている間に打たれていたら捨てる。古い予測で本文を上書きさせない。
-                if (generation != _inlineSuggestionGeneration) return;
-                if (!CanShowInlineSuggestion()) return;
+                if (generation != _inlineSuggestionGeneration)
+                {
+                    InlineLog($"供給元: 「{result.Text}」を捨てた（世代が進んだ）");
+                    return;
+                }
+                if (!CanShowInlineSuggestion())
+                {
+                    InlineLog($"供給元: 「{result.Text}」を捨てた（出せない状況になった）");
+                    return;
+                }
                 var cursor = _engine.Cursor;
-                if (cursor.Line != context.Line || cursor.Column != context.Column) return;
+                if (cursor.Line != context.Line || cursor.Column != context.Column)
+                {
+                    InlineLog($"供給元: 「{result.Text}」を捨てた（キャレットが動いた）");
+                    return;
+                }
 
+                InlineLog($"供給元: 「{result.Text}」を採用");
                 SetInlineSuggestion(result, cursor.Line, cursor.Column);
             });
         });
@@ -156,6 +215,7 @@ public partial class VimEditorControl
 
     private void SetInlineSuggestion(InlineSuggestion suggestion, int line, int column)
     {
+        InlineLog($"表示: 「{suggestion.FirstLine}」 行={line} 桁={column}");
         _inlineSuggestion = suggestion;
         _inlineSuggestionLine = line;
         _inlineSuggestionColumn = column;

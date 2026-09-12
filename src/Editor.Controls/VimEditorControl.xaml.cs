@@ -4405,18 +4405,19 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
                 if (actualKey == Key.Tab)
                 {
-                    // Let OnKeyDown handle Tab when a completion popup is visible.
-                    if (_lspView.CompletionVisible || _pathCompletionManager.Visible) return;
-
                     bool shift = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
 
-                    // 入力の先読みを Tab で受け入れる。提案はポップアップもスニペットも
-                    // 動いていないときにしか出ないので、下の Tab 用途とは競合しない。
+                    // 入力の先読みが出ていれば Tab はそちらを取る——補完ポップアップより
+                    // 情報量が多い（識別子 1 つではなく行全体）うえ、ポップアップは Enter でも
+                    // 確定できるので、こちらを譲っても行き場が無くならない。
                     if (!shift && AcceptInlineSuggestion(wordOnly: false))
                     {
                         e.Handled = true;
                         return;
                     }
+
+                    // Let OnKeyDown handle Tab when a completion popup is visible.
+                    if (_lspView.CompletionVisible || _pathCompletionManager.Visible) return;
 
                     // Snippet: Shift+Tab → go back to previous tab stop
                     if (shift && _snippetTabStopManager.TryGoBack())
