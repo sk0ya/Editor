@@ -1,4 +1,4 @@
-using Editor.Controls.Git;
+﻿using Editor.Controls.Git;
 using Editor.Core.Config;
 using Editor.Core.Lsp;
 using Editor.Core.Editing;
@@ -28,6 +28,15 @@ public sealed class VimEditorControlOptions
     /// are unavailable rather than editing a table nobody reads.
     /// </summary>
     public ILspServerAdmin? LspServerAdmin { get; init; }
+
+    /// <summary>
+    /// 入力の先読みをホストから供給する。キャレットの先に薄く出す提案を返し、内蔵の
+    /// <see cref="Editor.Core.Completion.BufferLinePredictor"/> の答えを置き換える
+    /// （内蔵の提案が先に出るので、遅い供給元を待つあいだ何も出ない時間はできない）。
+    /// 出せないときは null を返す。打鍵の途中で何度も呼ばれ、古くなった要求はキャンセルされる。
+    /// </summary>
+    public Func<Editor.Core.Completion.InlineSuggestionContext, CancellationToken,
+        Task<Editor.Core.Completion.InlineSuggestion?>>? InlineSuggestionProvider { get; init; }
 
     /// <summary>Optional host-side semantic completion provider used when LSP has no usable result.</summary>
     public Func<string, string, int, int, CancellationToken,

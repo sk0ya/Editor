@@ -1,4 +1,4 @@
-using Editor.Core.Engine;
+﻿using Editor.Core.Engine;
 using Editor.Core.Models;
 using Editor.Core.Snippets;
 
@@ -20,6 +20,10 @@ public sealed class SnippetTabStopManager(
 {
     private SnippetTabStop[]? _tabStops;
     private int _index = -1;
+
+    /// <summary>スニペットの穴埋めが進行中か。進行中は Tab がタブストップ移動を意味するので、
+    /// 同じ Tab を取り合う機能（入力の先読みなど）はここを見て引き下がる。</summary>
+    public bool IsActive => _tabStops is { Length: > 0 } && _index >= 0;
 
     /// <summary>Advance to the next tab stop (Tab). Returns false if there is no active snippet or no next stop.</summary>
     public bool TryAdvance()

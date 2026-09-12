@@ -1,4 +1,4 @@
-namespace Editor.Core.Config;
+﻿namespace Editor.Core.Config;
 
 public class VimOptions
 {
@@ -74,6 +74,9 @@ public class VimOptions
 
     // LSP Breadcrumb (symbol path shown in a clickable bar above the editor)
     public bool Breadcrumb { get; set; } = true;
+
+    /// <summary>入力の先読み（キャレットの先に薄く出る提案）。Tab で受け入れ、Ctrl+→ で 1 語ずつ。</summary>
+    public bool InlineSuggest { get; set; } = true;
 
     // Folding
     public string FoldMethod { get; set; } = "manual"; // manual, indent, marker, syntax
@@ -172,6 +175,7 @@ public class VimOptions
             "inlayhints" or "ih"               => Set(() => InlayHints = value),
             "semantictokens" or "st"           => Set(() => SemanticTokens = value),
             "breadcrumb" or "bc"               => Set(() => Breadcrumb = value),
+            "inlinesuggest" or "isg"           => Set(() => InlineSuggest = value),
             "compatible" or "cp"               => null,
             "modeline" or "ml"                 => Set(() => Modeline = value),
             "timeout" or "to"                  => Set(() => Timeout = value),

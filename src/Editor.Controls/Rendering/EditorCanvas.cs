@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Automation.Peers;
@@ -660,6 +660,56 @@ public partial class EditorCanvas : FrameworkElement
         _spellErrors = errors;
         InvalidateVisual();
     }
+
+    // 入力の先読み。キャレットの先に薄く出す 1 行分の提案（本文ではないので、
+    // 保存にも検索にも一切入らない）。
+    private string? _inlineSuggestionText;
+    private int _inlineSuggestionLine = -1;
+    private int _inlineSuggestionColumn;
+
+    /// <summary>キャレットの先に薄く出す提案を差し替える。<paramref name="text"/> が null／空なら消す。</summary>
+    public void SetInlineSuggestion(string? text, int line, int column)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            if (_inlineSuggestionText is null) return;
+            _inlineSuggestionText = null;
+            _inlineSuggestionLine = -1;
+            InvalidateVisual();
+            return;
+        }
+
+        if (_inlineSuggestionText == text && _inlineSuggestionLine == line && _inlineSuggestionColumn == column)
+            return;
+
+        _inlineSuggestionText = text;
+        _inlineSuggestionLine = line;
+        _inlineSuggestionColumn = column;
+        InvalidateVisual();
+    }
+
+    /// <summary>提案を本文と同じ字形で、薄く描く。色はテーマの前景をそのまま薄めたもの
+    /// ——固定色にすると、明るいテーマで見えなくなるか、暗いテーマで主張しすぎる。</summary>
+    private void DrawInlineSuggestion(
+        DrawingContext dc, GlyphMetrics metrics, int lineIndex, string lineText, double y, double textLeft)
+    {
+        if (_inlineSuggestionText is null || _inlineSuggestionLine != lineIndex) return;
+
+        // キャレットが提案の起点から離れたら描かない。マウスクリックのように
+        // 提案を作った経路を通らない移動でも、ずれた場所に薄い文字が残らないための最後の砦。
+        if (_cursor.Line != _inlineSuggestionLine || _cursor.Column != _inlineSuggestionColumn) return;
+
+        int col = Math.Min(_inlineSuggestionColumn, lineText.Length);
+        double x = textLeft + metrics.GetVisualX(lineText, col) - _scrollOffsetX;
+
+        var ft = metrics.FormatText(_inlineSuggestionText, Theme.Foreground);
+        dc.PushOpacity(InlineSuggestionOpacity);
+        dc.DrawText(ft, new Point(x, y));
+        dc.Pop();
+    }
+
+    /// <summary>提案の薄さ。読めるが本文と見分けがつく、の線。</summary>
+    private const double InlineSuggestionOpacity = 0.42;
 
     // Full-width space / trailing whitespace markers: line → list of issues (see 'highlightwhitespace')
     private Dictionary<int, List<WhitespaceIssue>> _whitespaceIssues = [];
@@ -1609,6 +1659,9 @@ public partial class EditorCanvas : FrameworkElement
 
                 // LSP inlay hints (inline ghost text)
                 LspOverlayRenderer.DrawInlayHints(dc, metrics, _inlayHintsByLine, l, lineText, y, textLeft, _scrollOffsetX);
+
+                // 入力の先読み（キャレットの先に薄く出す提案）
+                DrawInlineSuggestion(dc, metrics, l, lineText, y, textLeft);
 
                 // LSP diagnostics (wavy underlines)
                 DrawDiagnostics(dc, l, y, textLeft, lineText);

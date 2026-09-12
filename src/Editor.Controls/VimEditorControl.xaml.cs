@@ -775,6 +775,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _snippetTabStopManager = new SnippetTabStopManager(_engine, ProcessKey, ClearSelectionRangeState, ProcessVimEvents, UpdateAll);
 
         _gitProvider = options.GitServiceFactory?.Invoke() ?? NullEditorGitService.Instance;
+        _inlineSuggestionProvider = options.InlineSuggestionProvider;
         _lspWorkspace = options.LspWorkspace;
         _lspView = options.LspViewFactory?.Invoke()
             ?? (_lspWorkspace is null
@@ -3384,6 +3385,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _lspView.HideCodeActions();
         // 説明ポップアップも同じ——クリックは「読む」から「編集する」への切り替えなので引っ込める。
         HideHoverInfo();
+        // 入力の先読みも、キャレットが飛べば手掛かりごと変わる。
+        ClearInlineSuggestion();
 
         // Vim disabled: drop any plain selection and move the caret like a text box.
         if (!_engine.VimEnabled)
@@ -4389,12 +4392,31 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             // confirm kanji). Do NOT intercept — let the IME finalize the composition.
             if (e.Key != Key.ImeProcessed)
             {
+                // Ctrl+→ は提案を 1 語ぶんだけ受け入れる。提案が出ていないときは
+                // いつもどおりのカーソル移動のまま。
+                if (actualKey == Key.Right
+                    && (e.KeyboardDevice.Modifiers & ModifierKeys.Control) != 0
+                    && InlineSuggestionVisible
+                    && AcceptInlineSuggestion(wordOnly: true))
+                {
+                    e.Handled = true;
+                    return;
+                }
+
                 if (actualKey == Key.Tab)
                 {
                     // Let OnKeyDown handle Tab when a completion popup is visible.
                     if (_lspView.CompletionVisible || _pathCompletionManager.Visible) return;
 
                     bool shift = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
+
+                    // 入力の先読みを Tab で受け入れる。提案はポップアップもスニペットも
+                    // 動いていないときにしか出ないので、下の Tab 用途とは競合しない。
+                    if (!shift && AcceptInlineSuggestion(wordOnly: false))
+                    {
+                        e.Handled = true;
+                        return;
+                    }
 
                     // Snippet: Shift+Tab → go back to previous tab stop
                     if (shift && _snippetTabStopManager.TryGoBack())
@@ -4920,6 +4942,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             }
         }
 
+        UpdateInlineSuggestion();
         ArmMappingTimeout();
     }
 

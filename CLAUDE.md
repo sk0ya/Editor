@@ -252,6 +252,35 @@ Filetype-aware editing aids live in `Editor.Core/Editing/` (pure .NET, no WPF):
 
 `VimEngine` calls the resolved assist in `InsertNewline` (Enter), `TryEditAssistTab` (Tab), and `OpenLineBelow`/`OpenLineAbove` (`o`/`O`), falling back to default behaviour when the assist declines. The Enter/Tab path covers both Vim Insert mode and the plain (Vim-disabled) edit mode. **To add smart editing for a new filetype, implement `IEditAssist` and register it — no `VimEngine` changes needed.**
 
+## Inline suggestions (ghost text)
+
+The prediction shown in faint text ahead of the caret, accepted with **Tab** (whole line) or **Ctrl+Right**
+(one word). `set inlinesuggest` / `set isg` turns it off; on by default.
+
+- **`Editor.Core/Completion/`** (pure, no WPF) — `InlineSuggestion` (the text to insert at the caret, plus
+  where it came from; `FirstLine` and `NextWordLength()` are the two ways it gets accepted) and
+  **`BufferLinePredictor.Predict(lines, line, column)`**, which answers from *earlier lines of the same
+  buffer*: it takes the caret line's text as the clue and returns the rest of the nearest line that starts the
+  same way, searching outward from the caret and stopping at the first hit (so it never walks the whole file,
+  and the only allocation is slicing the one line it keeps). It deliberately stays quiet — caret not at
+  end of line, clue under 3 characters, no match within `SearchRadius` → nothing. **A wrong suggestion
+  lingering in faint text is worse than no suggestion**, which is why the "don't show" conditions carry most
+  of the tests.
+- **`VimEditorControl.InlineSuggestion.cs`** — the state machine. Suggestions appear only in Insert mode,
+  at end of line, with no completion popup, no active snippet, and no multi-cursor: each of those also wants
+  Tab, and overlapping them makes it unreadable which one will take it. A keystroke that matches the first
+  character of the live suggestion just trims that character instead of recomputing (the suggestion shrinks
+  in place rather than flickering). Everything else restarts a 120ms debounce.
+- **Host provider** — `VimEditorControlOptions.InlineSuggestionProvider` takes
+  `(InlineSuggestionContext, CancellationToken) -> Task<InlineSuggestion?>`, for a host that has something
+  smarter (a local LLM, say). The built-in prediction is shown **first** and the host's answer replaces it
+  when it arrives, so a slow provider never leaves a gap; stale answers are dropped by generation + caret
+  check, and a provider that throws is ignored rather than allowed to disturb typing.
+- **Rendering** — `EditorCanvas.SetInlineSuggestion(text, line, column)`, drawn at `PushOpacity` over the
+  theme's own foreground (a fixed grey disappears in light themes and shouts in dark ones). The canvas
+  refuses to draw when the caret has left the anchor, so a caret move that skips the control's own paths
+  (a mouse click, say) can't leave faint text stranded.
+
 ## Clipboard Image Paste (Markdown)
 
 Pasting into a `.md`/`.markdown` file while the system clipboard holds an **image** saves the image to disk and inserts a Markdown link (`![alt](path)`) instead of pasting text. Triggered by `p`/`P` (Normal mode) or `Ctrl+V` (Insert mode); non-image pastes and non-Markdown files fall through to the normal paste path.
