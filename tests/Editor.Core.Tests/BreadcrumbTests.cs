@@ -191,4 +191,141 @@ public class BreadcrumbTests
             """;
         Assert.Equal(["Real"], Path(text, "doc.md", 6, 0));
     }
+    // ── DocumentSymbolExtractor (XML) ──
+
+    private const string Xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net9.0</TargetFramework>
+          </PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="xunit" Version="2.9.0" />
+          </ItemGroup>
+        </Project>
+        """;
+
+    [Fact]
+    public void Xml_InsideNestedElement_FullPath()
+        => Assert.Equal(["Project", "PropertyGroup", "TargetFramework"], Path(Xml, "a.csproj", 3, 25));
+
+    [Fact]
+    public void Xml_SelfClosingElementIsASegment()
+        => Assert.Equal(["Project", "ItemGroup", "PackageReference#xunit"], Path(Xml, "a.csproj", 6, 20));
+
+    [Fact]
+    public void Xml_BetweenSiblings_StopsAtParent()
+        => Assert.Equal(["Project"], Path(Xml, "a.csproj", 5, 0));
+
+    [Fact]
+    public void Xml_DetectedByDeclarationWhenExtensionIsUnknown()
+        => Assert.Equal(["Project", "PropertyGroup", "TargetFramework"], Path(Xml, "dump.txt", 3, 25));
+
+    [Fact]
+    public void Xml_XamlWithoutDeclaration_UsesNameAttribute()
+    {
+        var text = """
+            <Window x:Class="App.MainWindow">
+              <Grid x:Name="Root">
+                <Button Content="OK" />
+              </Grid>
+            </Window>
+            """;
+        Assert.Equal(["Window", "Grid#Root", "Button"], Path(text, "MainWindow.xaml", 2, 10));
+    }
+
+    [Fact]
+    public void Xml_IgnoresTagsInCommentsAndCdata()
+    {
+        var text = """
+            <root>
+              <!-- <ghost> -->
+              <data><![CDATA[ <ghost2> ]]></data>
+              <real>x</real>
+            </root>
+            """;
+        Assert.Equal(["root", "real"], Path(text, "a.xml", 3, 9));
+    }
+
+    [Fact]
+    public void Xml_AngleBracketInAttributeValueDoesNotEndTag()
+    {
+        var text = """
+            <root>
+              <rule pattern="a > b">
+                <hit/>
+              </rule>
+            </root>
+            """;
+        Assert.Equal(["root", "rule", "hit"], Path(text, "a.xml", 2, 6));
+    }
+
+    [Fact]
+    public void Xml_SiblingsOnOneLine_ResolveByColumn()
+    {
+        var text = "<a><b/><c>x</c></a>";
+        Assert.Equal(["a", "b"], Path(text, "a.xml", 0, 4));
+        Assert.Equal(["a", "c"], Path(text, "a.xml", 0, 11));
+    }
+
+    [Fact]
+    public void Xml_UnclosedTagWhileTyping_StillGivesAPath()
+    {
+        var text = """
+            <root>
+              <section>
+                text
+            """;
+        Assert.Equal(["root", "section"], Path(text, "a.xml", 2, 4));
+    }
+
+    [Fact]
+    public void Xml_StrayClosingTagIsIgnored()
+    {
+        var text = """
+            <root>
+              </nope>
+              <ok>x</ok>
+            </root>
+            """;
+        Assert.Equal(["root", "ok"], Path(text, "a.xml", 2, 7));
+    }
+
+    [Fact]
+    public void Xml_DoctypeWithInternalSubsetIsSkipped()
+    {
+        var text = """
+            <?xml version="1.0"?>
+            <!DOCTYPE root [
+              <!ELEMENT root (#PCDATA)>
+            ]>
+            <root>
+              <child>x</child>
+            </root>
+            """;
+        Assert.Equal(["root", "child"], Path(text, "a.xml", 5, 10));
+    }
+
+    [Fact]
+    public void Xml_LongIncludePath_KeepsTheFileName()
+    {
+        var text = """
+            <Project>
+              <ItemGroup>
+                <ProjectReference Include="..\..\..\Editor\src\Editor.Controls\Editor.Controls.csproj" />
+              </ItemGroup>
+            </Project>
+            """;
+        Assert.Equal(["Project", "ItemGroup", "ProjectReference#Editor.Controls.csproj"],
+            Path(text, "a.csproj", 2, 30));
+    }
+
+    [Fact]
+    public void Xml_SegmentJumpsToTagName()
+    {
+        var symbols = DocumentSymbolExtractor.Extract(Lines(Xml), "a.csproj");
+        var seg = BreadcrumbBuilder.GetSegments(symbols, 3, 25).Last();
+        Assert.Equal(3, seg.Line);
+        Assert.Equal(5, seg.Column); // just past '<' — the tag name itself
+    }
 }

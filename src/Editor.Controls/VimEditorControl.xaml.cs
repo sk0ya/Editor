@@ -1172,6 +1172,20 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         BreadcrumbBar.Visibility = Visibility.Visible;
+
+        // XML/XAML paths are deep (Window › Grid › Border › ContentPresenter › …) and overflow
+        // the bar. The innermost segment is the one that says where the cursor is, so let the
+        // overflow fall off the left edge rather than clipping the tail.
+        BreadcrumbScroll.UpdateLayout();
+        BreadcrumbScroll.ScrollToRightEnd();
+    }
+
+    // The bar has no visible scrollbar; the wheel scrolls it sideways so the hidden outer
+    // segments stay reachable.
+    private void BreadcrumbScroll_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        BreadcrumbScroll.ScrollToHorizontalOffset(BreadcrumbScroll.HorizontalOffset - e.Delta);
+        e.Handled = true;
     }
 
     private TextBlock MakeBreadcrumbSeparator(System.Windows.Media.FontFamily mono) => new()

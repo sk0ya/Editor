@@ -210,8 +210,10 @@
                 Background="#21222C"
                 BorderBrush="#191A21"
                 BorderThickness="0,0,0,1">
-            <ScrollViewer HorizontalScrollBarVisibility="Hidden"
-                          VerticalScrollBarVisibility="Disabled">
+            <ScrollViewer x:Name="BreadcrumbScroll"
+                          HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Disabled"
+                          PreviewMouseWheel="BreadcrumbScroll_PreviewMouseWheel">
                 <StackPanel x:Name="BreadcrumbPanel" Orientation="Horizontal"
                             Margin="6,2"/>
             </ScrollViewer>
