@@ -63,6 +63,18 @@ public class SyntaxEngineTests
     }
 
     [Fact]
+    public void TokenizeVisible_CharacterHugeFile_SkipsSyntaxEvenWhenItIsOneLine()
+    {
+        var engine = new SyntaxEngine();
+        engine.SetLanguage("JavaScript");
+        var lines = new[] { new string('x', SyntaxEngine.LargeFileCharacterThreshold + 1) };
+
+        var tokens = engine.TokenizeVisible(lines, 0, 0);
+
+        Assert.Empty(tokens);
+    }
+
+    [Fact]
     public void Registry_ResolvesLuaAndRubyByExtension()
     {
         var engine = new SyntaxEngine();

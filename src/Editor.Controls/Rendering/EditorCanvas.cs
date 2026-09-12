@@ -26,6 +26,8 @@ public partial class EditorCanvas : FrameworkElement
     // Character-boundary X positions measured by WPF's text formatter. Unchanged line strings
     // retain their entry across edits; changed/deleted strings are pruned in SetLines.
     private readonly Dictionary<string, double[]> _textBoundaryCache = [];
+    private const int LongLineCharacterThreshold = TextBoundaryMeasurer.ExactCharacterLimit;
+    private bool _hasLongLine;
     private double _scrollOffsetY;
     private double _scrollOffsetX;
     private int _visibleLines;
@@ -68,6 +70,11 @@ public partial class EditorCanvas : FrameworkElement
     private int _imeCandidateSelection = -1;
     private VisualLineSegment[] _visualLines = [new VisualLineSegment(0, 0, false)];
     private bool _wrapLines;
+
+    // Wrapping a multi-megabyte minified line would create one visual-line entry per screen
+    // width and can exhaust memory. Such documents use horizontal scrolling instead; ordinary
+    // documents continue to honor the user's wrap setting.
+    private bool EffectiveWrapLines => _wrapLines && !_hasLongLine;
 
     // UI Automation's TextPattern selection is initiated by an external client. The
     // containing VimEditorControl subscribes so that LSP commands see the same selection
@@ -269,7 +276,7 @@ public partial class EditorCanvas : FrameworkElement
     // occupies ScrollbarSize px that text must not scroll under, otherwise the last
     // line / rightmost column ends up hidden behind the bar. These give the height/
     // width actually usable for text, so scroll clamping keeps content clear of the bars.
-    private bool HorizontalBarPresent => _showScrollbar && !_wrapLines && TotalContentWidth > RenderSize.Width + 1;
+    private bool HorizontalBarPresent => _showScrollbar && !EffectiveWrapLines && TotalContentWidth > RenderSize.Width + 1;
     private bool VerticalBarPresent => _showScrollbar && TotalContentHeight > RenderSize.Height + 1;
     private double UsableViewportHeight => Math.Max(0, RenderSize.Height - (HorizontalBarPresent ? OverlayRenderer.ScrollbarSize : 0));
     private double UsableViewportWidth => Math.Max(0, RenderSize.Width - (VerticalBarPresent ? OverlayRenderer.ScrollbarSize : 0));
@@ -362,6 +369,7 @@ public partial class EditorCanvas : FrameworkElement
             return;
 
         _lines = lines.Length > 0 ? lines : [""];
+        _hasLongLine = _lines.Any(line => line.Length > LongLineCharacterThreshold);
         // A TextBuffer snapshot is a new array after every edit, but almost all of its line
         // strings are unchanged. Keep those measurements and discard only stale line text.
         // This also bounds the cache to the current document instead of clearing it globally.
@@ -774,11 +782,11 @@ public partial class EditorCanvas : FrameworkElement
     public void ScrollTo(double offsetY, double offsetX = 0)
     {
         double maxOffsetY = MaxScrollOffsetY;
-        double maxOffsetX = _wrapLines
+        double maxOffsetX = EffectiveWrapLines
             ? 0
             : Math.Max(0, TotalContentWidth - UsableViewportWidth);
         _scrollOffsetY = Math.Clamp(offsetY, 0, maxOffsetY);
-        _scrollOffsetX = _wrapLines ? 0 : Math.Clamp(offsetX, 0, maxOffsetX);
+        _scrollOffsetX = EffectiveWrapLines ? 0 : Math.Clamp(offsetX, 0, maxOffsetX);
         ScrollChanged?.Invoke(_scrollOffsetY, _scrollOffsetX);
         InvalidateVisual();
     }
@@ -802,7 +810,7 @@ public partial class EditorCanvas : FrameworkElement
         // The horizontal extent (maxLineWidth) only matters when not wrapping, and only changes
         // when the line array changes. Reuse the cached value to skip the O(total chars) scan on
         // edits that don't touch text (cursor/mode/fold/line-number toggles).
-        bool needMaxWidth = !_wrapLines;
+        bool needMaxWidth = !EffectiveWrapLines;
         bool widthCached = needMaxWidth && ReferenceEquals(_maxLineWidthCacheLines, _lines);
         double maxLineWidth = widthCached ? _cachedMaxLineWidth : 0;
 
@@ -812,7 +820,7 @@ public partial class EditorCanvas : FrameworkElement
             string lineText = safeLine < _lines.Length ? _lines[safeLine] : string.Empty;
             SetActiveLine(safeLine);
 
-            if (!_wrapLines || lineText.Length == 0 || availableTextWidth <= 1)
+            if (!EffectiveWrapLines || lineText.Length == 0 || availableTextWidth <= 1)
             {
                 if (needMaxWidth && !widthCached)
                     maxLineWidth = Math.Max(maxLineWidth, GetVisualX(lineText, lineText.Length));
@@ -841,7 +849,7 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         _visualLines = visualLines.ToArray();
-        _contentWidth = _wrapLines ? RenderSize.Width : gutterWidth + maxLineWidth;
+        _contentWidth = EffectiveWrapLines ? RenderSize.Width : gutterWidth + maxLineWidth;
 
         ClampScrollOffsets(raiseScrollChanged: true);
         ScrollMetricsChanged?.Invoke();
@@ -897,12 +905,12 @@ public partial class EditorCanvas : FrameworkElement
     private void ClampScrollOffsets(bool raiseScrollChanged)
     {
         double maxOffsetY = MaxScrollOffsetY;
-        double maxOffsetX = _wrapLines
+        double maxOffsetX = EffectiveWrapLines
             ? 0
             : Math.Max(0, TotalContentWidth - UsableViewportWidth);
 
         double newOffsetY = Math.Clamp(_scrollOffsetY, 0, maxOffsetY);
-        double newOffsetX = _wrapLines ? 0 : Math.Clamp(_scrollOffsetX, 0, maxOffsetX);
+        double newOffsetX = EffectiveWrapLines ? 0 : Math.Clamp(_scrollOffsetX, 0, maxOffsetX);
 
         bool changed = newOffsetY != _scrollOffsetY || newOffsetX != _scrollOffsetX;
         _scrollOffsetY = newOffsetY;
@@ -1321,7 +1329,7 @@ public partial class EditorCanvas : FrameworkElement
         if (_lineHeight <= 0) return -1;
         int visualLine = GetVisualLineIndexFromY(point.Y);
         var segment = GetVisualSegment(visualLine);
-        if (_wrapLines && segment.IsContinuation)
+        if (EffectiveWrapLines && segment.IsContinuation)
             return -1;
         return segment.BufferLine;
     }
@@ -1375,9 +1383,9 @@ public partial class EditorCanvas : FrameworkElement
         line = Math.Clamp(line, 0, Math.Max(0, _lines.Length - 1));
 
         string hitLine = line < _lines.Length ? _lines[line] : string.Empty;
-        double visualX = point.X - gutterWidth + (_wrapLines ? 0 : _scrollOffsetX);
+        double visualX = point.X - gutterWidth + (EffectiveWrapLines ? 0 : _scrollOffsetX);
 
-        if (_wrapLines)
+        if (EffectiveWrapLines)
         {
             // segmentText is a substring, so its indices don't match the absolute buffer columns
             // that table overrides are keyed by — skip overrides here rather than mis-apply them.
@@ -1440,7 +1448,7 @@ public partial class EditorCanvas : FrameworkElement
         // Reserve space at the bottom for the horizontal scrollbar so it never
         // overlaps the last line of text. Content (text/gutter/minimap) is clipped
         // to contentBottom; the scrollbars themselves are drawn afterwards.
-        bool needHorizBar = _showScrollbar && !_wrapLines && TotalContentWidth > size.Width + 1;
+        bool needHorizBar = _showScrollbar && !EffectiveWrapLines && TotalContentWidth > size.Width + 1;
         double contentBottom = needHorizBar ? Math.Max(0, size.Height - OverlayRenderer.ScrollbarSize) : size.Height;
         dc.PushClip(new RectangleGeometry(new Rect(0, 0, size.Width, contentBottom)));
 
@@ -1482,8 +1490,8 @@ public partial class EditorCanvas : FrameworkElement
             // Preview text (from :s) doesn't share column positions with the real buffer line,
             // so table overrides (keyed by real-buffer columns) must not be applied to it.
             SetActiveLine(isPreviewLine ? -1 : l);
-            _scrollOffsetX = _wrapLines ? GetVisualX(lineText, segment.StartColumn) : baseOffsetX;
-            bool drawNumberAndFold = !_wrapLines || !segment.IsContinuation;
+            _scrollOffsetX = EffectiveWrapLines ? GetVisualX(lineText, segment.StartColumn) : baseOffsetX;
+            bool drawNumberAndFold = !EffectiveWrapLines || !segment.IsContinuation;
 
             // Current line highlight
             if (l == _cursor.Line && Theme.CurrentLineBg != null && size.Width > textLeft)
@@ -1555,6 +1563,16 @@ public partial class EditorCanvas : FrameworkElement
             // crash the host app). Catch per-line, and always Pop the clip so it stays balanced.
             try
             {
+                // A bundled file can put megabytes on one physical line. Do not run overlays,
+                // syntax segment merging, or WPF formatting for the whole line; all of those
+                // are either invisible outside the viewport or scale with the line length.
+                if (lineText.Length > LongLineCharacterThreshold)
+                {
+                    DrawLineText(dc, l, lineText, y, textLeft);
+                    DrawCursor(dc, l, y, textLeft, lineText);
+                    continue;
+                }
+
                 // Selection highlight
                 DrawSelection(dc, l, y, textLeft, lineText);
 
@@ -1696,7 +1714,7 @@ public partial class EditorCanvas : FrameworkElement
     private const double ScrollbarHitSize = 16.0;
 
     private OverlayRenderer.ScrollbarLayout ComputeScrollbarLayout(Size size) =>
-        OverlayRenderer.ComputeScrollbarLayout(size, _wrapLines, TotalContentHeight, TotalContentWidth, MaxScrollOffsetY, _scrollOffsetY, _scrollOffsetX);
+        OverlayRenderer.ComputeScrollbarLayout(size, EffectiveWrapLines, TotalContentHeight, TotalContentWidth, MaxScrollOffsetY, _scrollOffsetY, _scrollOffsetX);
 
     private bool IsOverScrollbar(System.Windows.Point point)
     {
@@ -2142,6 +2160,12 @@ public partial class EditorCanvas : FrameworkElement
 
     private void DrawLineText(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft)
     {
+        if (lineText.Length > LongLineCharacterThreshold)
+        {
+            DrawLongLineText(dc, lineText, y, textLeft);
+            return;
+        }
+
         if (lineIndex == _cursor.Line &&
             _mode is VimMode.Insert or VimMode.Replace &&
             !string.IsNullOrEmpty(_imeCompositionText))
@@ -2170,6 +2194,24 @@ public partial class EditorCanvas : FrameworkElement
         DrawLineTextWithSegments(dc, lineText, y, textLeft, segments);
     }
 
+    private void DrawLongLineText(DrawingContext dc, string lineText, double y, double textLeft)
+    {
+        double charWidth = Math.Max(1, _charWidth);
+        int visibleColumns = _visibleColumns > 0
+            ? _visibleColumns + 4
+            : (int)Math.Ceiling(Math.Max(1, RenderSize.Width) / charWidth) + 4;
+        int start = (int)Math.Floor(Math.Max(0, _scrollOffsetX) / charWidth) - 2;
+        start = Math.Clamp(start, 0, Math.Max(0, lineText.Length - 1));
+        int length = Math.Min(lineText.Length - start, Math.Max(1, visibleColumns));
+        string visibleText = lineText.Substring(start, length);
+
+        // GetVisualX uses the same constant-width approximation for long lines, so the slice
+        // remains aligned with the horizontal scrollbar without shaping the hidden tail.
+        double x = textLeft + GetVisualX(lineText, start) - _scrollOffsetX;
+        var formatted = FormatText(visibleText, Theme.Foreground);
+        dc.DrawText(formatted, new Point(x, y + (_lineHeight - formatted.Height) / 2));
+    }
+
     /// <summary>
     /// Builds the colored segments for a line by layering LSP semantic tokens on top of the
     /// regex-based syntax tokens. Regex tokens form the base layer (so keywords/strings/comments
@@ -2181,6 +2223,8 @@ public partial class EditorCanvas : FrameworkElement
     private List<(int StartCol, int Length, Brush? Brush, bool Italic, bool Deprecated)>? BuildColorSegments(
         int lineIndex, int lineLength)
     {
+        if (lineLength > LongLineCharacterThreshold) return null;
+
         _semanticTokensByLine.TryGetValue(lineIndex, out var semTokens);
         _tokensByLine.TryGetValue(lineIndex, out var regexTokens);
         bool hasSem = semTokens is { Count: > 0 };
@@ -2357,7 +2401,7 @@ public partial class EditorCanvas : FrameworkElement
 
     private void DrawListChars(DrawingContext dc, string lineText, double y, double textLeft)
     {
-        if (!_showList) return;
+        if (!_showList || lineText.Length > LongLineCharacterThreshold) return;
         var brush = Theme.ListCharBrush;
 
         // Pre-format each glyph once per line (not per character)
@@ -2658,7 +2702,7 @@ public partial class EditorCanvas : FrameworkElement
         int cursorVisualLine = GetCursorVisualLine();
         var segment = GetVisualSegment(cursorVisualLine);
         SetActiveLine(_cursor.Line);
-        double lineOffsetX = _wrapLines ? GetVisualX(line, segment.StartColumn) : _scrollOffsetX;
+        double lineOffsetX = EffectiveWrapLines ? GetVisualX(line, segment.StartColumn) : _scrollOffsetX;
         double x = gutterWidth + GetVisualX(line, cursorCol) - lineOffsetX;
         double y = cursorVisualLine * _lineHeight - _scrollOffsetY;
         return new Point(Math.Max(gutterWidth, x), y);
@@ -2765,6 +2809,9 @@ public partial class EditorCanvas : FrameworkElement
     private double GetVisualX(string line, int col)
     {
         int limit = Math.Clamp(col, 0, line.Length);
+        if (line.Length > LongLineCharacterThreshold)
+            return limit * Math.Max(1, _charWidth);
+
         if (_activeLineOverrides == null || _activeLineOverrides.Count == 0)
             return GetTextBoundaries(line)[limit];
 
@@ -2783,6 +2830,12 @@ public partial class EditorCanvas : FrameworkElement
     /// <summary>Convert a visual X pixel offset to a character index in <paramref name="line"/>.</summary>
     private int VisualXToCol(string line, double visualX)
     {
+        if (line.Length > LongLineCharacterThreshold)
+        {
+            double charWidth = Math.Max(1, _charWidth);
+            return Math.Clamp((int)Math.Round(Math.Max(0, visualX) / charWidth), 0, line.Length);
+        }
+
         int i = 0;
         while (i < line.Length)
         {
@@ -2965,7 +3018,7 @@ public partial class EditorCanvas : FrameworkElement
         else if (cursorY + _lineHeight > _scrollOffsetY + viewHeight - margin)
             _scrollOffsetY = cursorY + _lineHeight + margin - viewHeight;
 
-        if (_wrapLines)
+        if (EffectiveWrapLines)
         {
             _scrollOffsetX = 0;
         }
@@ -2990,11 +3043,11 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         double maxOffsetY = MaxScrollOffsetY;
-        double maxOffsetX = _wrapLines
+        double maxOffsetX = EffectiveWrapLines
             ? 0
             : Math.Max(0, TotalContentWidth - UsableViewportWidth);
         _scrollOffsetY = Math.Clamp(_scrollOffsetY, 0, maxOffsetY);
-        _scrollOffsetX = _wrapLines ? 0 : Math.Clamp(_scrollOffsetX, 0, maxOffsetX);
+        _scrollOffsetX = EffectiveWrapLines ? 0 : Math.Clamp(_scrollOffsetX, 0, maxOffsetX);
         ScrollChanged?.Invoke(_scrollOffsetY, _scrollOffsetX);
     }
 

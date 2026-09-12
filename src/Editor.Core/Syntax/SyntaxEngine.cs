@@ -18,6 +18,7 @@ public interface ISyntaxLanguage
 public class SyntaxEngine
 {
     public const int LargeFileLineThreshold = 5000;
+    public const int LargeFileCharacterThreshold = 1_000_000;
     public const int VisibleRangeContextLineCount = 200;
 
     private readonly SyntaxLanguageRegistry _languages;
@@ -60,6 +61,7 @@ public class SyntaxEngine
     public LineTokens[] TokenizeVisible(string[] lines, int firstLine, int lastLine)
     {
         if (_currentLanguage == null || lines.Length == 0) return [];
+        if (ExceedsCharacterBudget(lines)) return [];
         if (lines.Length <= LargeFileLineThreshold) return Tokenize(lines);
         if (RequiresFullDocumentContext(_currentLanguage)) return Tokenize(lines);
 
@@ -89,6 +91,18 @@ public class SyntaxEngine
         _cachedVisibleStart = firstLine;
         _cachedVisibleEnd = lastLine;
         return _cachedVisibleTokens;
+    }
+
+    private static bool ExceedsCharacterBudget(string[] lines)
+    {
+        int total = 0;
+        foreach (var line in lines)
+        {
+            total += line.Length;
+            if (total > LargeFileCharacterThreshold)
+                return true;
+        }
+        return false;
     }
 
     public SyntaxToken[] TokenizeLine(string[] allLines, int lineIndex)

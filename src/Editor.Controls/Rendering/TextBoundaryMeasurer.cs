@@ -11,8 +11,16 @@ namespace Editor.Controls.Rendering;
 /// </summary>
 internal static class TextBoundaryMeasurer
 {
+    // A minified bundle can contain millions of UTF-16 code units on one line. Building a WPF
+    // caret boundary for every one is unnecessary for rendering and can block the UI thread.
+    internal const int ExactCharacterLimit = 32_768;
+    private const int ApproximationSampleLength = 4_096;
+
     public static double[] Measure(string text, Typeface typeface, double fontSize, double pixelsPerDip)
     {
+        if (text.Length > ExactCharacterLimit)
+            return MeasureApproximate(text, typeface, fontSize, pixelsPerDip);
+
         var boundaries = new double[text.Length + 1];
         if (text.Length == 0) return boundaries;
 
@@ -48,6 +56,25 @@ internal static class TextBoundaryMeasurer
         for (int i = start + 1; i <= text.Length; i++)
             boundaries[i] = offset;
 
+        return boundaries;
+    }
+
+    private static double[] MeasureApproximate(string text, Typeface typeface, double fontSize, double pixelsPerDip)
+    {
+        var boundaries = new double[text.Length + 1];
+        if (text.Length == 0) return boundaries;
+
+        // Bundler output is overwhelmingly ASCII and normally uses a monospace editor font.
+        // Measure only a short prefix, then use its average advance for the rest. EditorCanvas
+        // avoids this allocation entirely for long lines; this fallback protects direct callers.
+        int sampleLength = Math.Min(text.Length, ApproximationSampleLength);
+        var sample = Measure(text[..sampleLength], typeface, fontSize, pixelsPerDip);
+        double average = sample[^1] / sampleLength;
+        if (!double.IsFinite(average) || average <= 0)
+            average = Math.Max(1, fontSize * 0.5);
+
+        for (int i = 1; i < boundaries.Length; i++)
+            boundaries[i] = average * i;
         return boundaries;
     }
 
