@@ -19,9 +19,23 @@ public static class WhitespaceIssueDetector
     private const char IdeographicSpace = '　';
 
     public static Dictionary<int, List<WhitespaceIssue>> Detect(IReadOnlyList<string> lines)
+        => Detect(lines, 0, lines.Count - 1);
+
+    /// <summary>
+    /// <paramref name="firstLine"/>〜<paramref name="lastLine"/>（両端を含む）だけを走査する。
+    /// 結果のキーは絶対行番号のまま。
+    ///
+    /// <para>この目印は可視行の描画時にしか引かれないので、打鍵のたびに全行を走らせる理由がない
+    /// （7000 行の .cs で実測 1.26ms/打鍵）。スクロールとサイズ変更で再計算する呼び出し側と
+    /// 組にして使う。</para>
+    /// </summary>
+    public static Dictionary<int, List<WhitespaceIssue>> Detect(
+        IReadOnlyList<string> lines, int firstLine, int lastLine)
     {
         var result = new Dictionary<int, List<WhitespaceIssue>>();
-        for (int i = 0; i < lines.Count; i++)
+        firstLine = Math.Max(0, firstLine);
+        lastLine = Math.Min(lastLine, lines.Count - 1);
+        for (int i = firstLine; i <= lastLine; i++)
         {
             var line = lines[i];
             if (line.Length == 0) continue;

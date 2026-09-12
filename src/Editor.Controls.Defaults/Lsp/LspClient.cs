@@ -362,8 +362,12 @@ public sealed class LspClient : ILspClient
         return result.Count > 0 ? result : ["."];
     }
 
+    /// <summary>未送信の <c>didChange</c> をまとめる単位。文書ごとに 1 つ。</summary>
+    private static string ChangeCoalesceKey(string uri) => "textDocument/didChange " + uri;
+
     public Task OpenDocumentAsync(string uri, string languageId, string text)
     {
+        _process.DropCoalesceKey(ChangeCoalesceKey(uri));
         lock (_documentGate) _documentTexts[uri] = text;
         _process.SendNotification("textDocument/didOpen", new
         {
@@ -372,24 +376,36 @@ public sealed class LspClient : ILspClient
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 打鍵ごとに呼ばれる。本文の差分計算・JSON 化・パイプ書き込みは<b>送信直前に書き込みスレッドで</b>
+    /// 行う（ここでやると 1 打鍵あたり数 ms を UI スレッドから奪う。数百 KB のファイルでは実測 1.6〜4ms、
+    /// さらに LOH 割り当てで GC を誘発し、サーバーが stdin を読み遅れれば書き込み自体がブロックする）。
+    ///
+    /// <para>未送信の版は追い越された時点で捨てられ、本文も作られない。「最後に送った本文」を基準に
+    /// 差分を作るのは送信直前なので、間を飛ばしてもサーバーの持つ内容とずれない。</para>
+    /// </summary>
     public Task ChangeDocumentAsync(string uri, int version, string text)
     {
-        string previousText;
-        lock (_documentGate)
+        _process.SendNotification("textDocument/didChange", () =>
         {
-            previousText = _documentTexts.GetValueOrDefault(uri, "");
-            _documentTexts[uri] = text;
-        }
-        _process.SendNotification("textDocument/didChange", new
-        {
-            textDocument = new { uri, version },
-            contentChanges = new[] { CreateContentChange(_textDocumentSyncKind, previousText, text) }
-        });
+            string previousText;
+            lock (_documentGate)
+            {
+                previousText = _documentTexts.GetValueOrDefault(uri, "");
+                _documentTexts[uri] = text;
+            }
+            return new
+            {
+                textDocument = new { uri, version },
+                contentChanges = new[] { CreateContentChange(_textDocumentSyncKind, previousText, text) }
+            };
+        }, ChangeCoalesceKey(uri));
         return Task.CompletedTask;
     }
 
     public Task CloseDocumentAsync(string uri)
     {
+        _process.DropCoalesceKey(ChangeCoalesceKey(uri));
         lock (_documentGate) _documentTexts.Remove(uri);
         lock (_diagnosticGate) _diagnosticResultIds.Remove(uri);
         _process.SendNotification("textDocument/didClose", new { textDocument = new { uri } });
@@ -414,10 +430,21 @@ public sealed class LspClient : ILspClient
         if (syncKind != 2)
             return new { text };
 
-        var normalized = previousText.Replace("\r\n", "\n").Replace('\r', '\n');
-        var lastNewline = normalized.LastIndexOf('\n');
-        var endLine = lastNewline < 0 ? 0 : normalized.Count(c => c == '\n');
-        var endCharacter = lastNewline < 0 ? normalized.Length : normalized.Length - lastNewline - 1;
+        // 置き換える範囲＝前回の本文全体。その末尾が何行目の何桁かだけが要る。
+        // 以前はここで `Replace("\r\n","\n").Replace('\r','\n')` と LINQ の Count を使っていたが、
+        // 数百 KB の本文を 2 回コピーしてもう 1 回走査するので、打鍵ごとに数 ms かかっていた
+        // （7000 行の .cs で実測 2.4ms）。求める答えは「改行の数」と「最後の改行以降の長さ」だけなので、
+        // 割り当てなしの 1 パスで同じ値を出す（\r\n と単独 \r はどちらも 1 改行）。
+        int endLine = 0, lastLineStart = 0;
+        for (int i = 0; i < previousText.Length; i++)
+        {
+            char c = previousText[i];
+            if (c == '\r' && i + 1 < previousText.Length && previousText[i + 1] == '\n') i++;
+            else if (c != '\n' && c != '\r') continue;
+            endLine++;
+            lastLineStart = i + 1;
+        }
+        int endCharacter = previousText.Length - lastLineStart;
         return new
         {
             range = new

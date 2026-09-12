@@ -343,6 +343,43 @@ public sealed class LspProtocolTests
         Assert.Equal("updated", json.RootElement.GetProperty("text").GetString());
     }
 
+    /// <summary>
+    /// 置き換え範囲の計算は、打鍵ごとに数百 KB を 2 回コピーしていた正規化版から
+    /// 割り当てなしの 1 パスへ書き換えてある。答えが変わっていないことを、改行の形を
+    /// 網羅して元の式（下の参照実装）と突き合わせる。
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("a")]
+    [InlineData("a\n")]
+    [InlineData("a\nb")]
+    [InlineData("a\r\nb")]
+    [InlineData("a\rb")]
+    [InlineData("a\r\n")]
+    [InlineData("a\r")]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData("a\n\nb")]
+    [InlineData("a\r\n\r\nbc")]
+    [InlineData("行1\r\n行2\n行3\r最後")]
+    [InlineData("mixed\r\n\n\r end")]
+    public void Incremental_range_matches_the_old_normalizing_computation(string previousText)
+    {
+        var change = LspClient.CreateContentChange(2, previousText, "updated");
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(change));
+        var end = json.RootElement.GetProperty("range").GetProperty("end");
+
+        // 書き換え前の実装そのまま。
+        var normalized = previousText.Replace("\r\n", "\n").Replace('\r', '\n');
+        var lastNewline = normalized.LastIndexOf('\n');
+        var expectedLine = lastNewline < 0 ? 0 : normalized.Count(c => c == '\n');
+        var expectedCharacter = lastNewline < 0 ? normalized.Length : normalized.Length - lastNewline - 1;
+
+        Assert.Equal(expectedLine, end.GetProperty("line").GetInt32());
+        Assert.Equal(expectedCharacter, end.GetProperty("character").GetInt32());
+        Assert.Equal(previousText.Length, json.RootElement.GetProperty("rangeLength").GetInt32());
+    }
+
     [Fact]
     public void Full_sync_keeps_the_range_less_change_shape()
     {

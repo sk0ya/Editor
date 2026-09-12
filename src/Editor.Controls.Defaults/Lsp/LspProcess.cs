@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -16,6 +16,11 @@ internal sealed class LspProcess : IDisposable
     private readonly Stream _stdout;
     private readonly object _writeLock = new();
     private readonly Dictionary<int, TaskCompletionSource<JsonElement?>> _pending = new();
+
+    /// <summary>送信は専用スレッド 1 本に集約する。呼び出しスレッド（UI スレッド）は積むだけで返り、
+    /// JSON 化もパイプ書き込みもここでしか起きない。1 本なので、積んだ順＝サーバーへ届く順。</summary>
+    private readonly OutgoingMessageQueue _sendQueue = new();
+    private readonly SemaphoreSlim _sendSignal = new(0);
     private int _nextId;
     private bool _disposed;
     private int _exitRaised;
@@ -97,6 +102,9 @@ internal sealed class LspProcess : IDisposable
 
         var thread = new Thread(ReadLoop) { IsBackground = true, Name = "LspStdout" };
         thread.Start();
+
+        var writer = new Thread(WriteLoop) { IsBackground = true, Name = "LspStdin" };
+        writer.Start();
     }
 
     /// <summary>
@@ -112,18 +120,14 @@ internal sealed class LspProcess : IDisposable
 
         lock (_pending) _pending[id] = tcs;
 
-        try
-        {
-            WriteMessage(JsonSerializer.Serialize(new { jsonrpc = "2.0", id, method, @params }));
-        }
-        catch (Exception ex)
-        {
-            RemovePending(id);
-            // Dispose が先に TrySetCanceled 済みのことがある。SetException だと
-            // InvalidOperationException になって本来の送信失敗が失われる。
-            tcs.TrySetException(ex);
-            return await tcs.Task.ConfigureAwait(false);
-        }
+        // 送信そのものは書き込みスレッドが行う（呼び出し元＝多くは UI スレッドを、
+        // シリアライズとパイプ書き込みで止めないため）。失敗は下のコールバックで
+        // 同じ形に畳む: Dispose が先に TrySetCanceled 済みのことがあるので SetException
+        // ではなく TrySetException——SetException だと InvalidOperationException になって
+        // 本来の送信失敗が失われる。
+        Enqueue(
+            () => new { jsonrpc = "2.0", id, method, @params },
+            onFailure: ex => { RemovePending(id); tcs.TrySetException(ex); });
 
         // キャンセルとタイムアウトを 1 本のトークンに合成する。応答が届けば下の await が返り、
         // using による破棄でタイマーも登録も解放されるので、待ち受けが残り続けることはない。
@@ -160,9 +164,61 @@ internal sealed class LspProcess : IDisposable
     }
 
     public void SendNotification(string method, object? @params)
+        => Enqueue(() => new { jsonrpc = "2.0", method, @params });
+
+    /// <summary>
+    /// 本文の組み立てを送信直前まで遅らせる通知。<paramref name="coalesceKey"/> が同じ未送信の通知は
+    /// 新しいものへ置き換えられる（キュー内の位置は動かさない）。
+    ///
+    /// <para>打鍵ごとの <c>didChange</c> のためにある。本文（数百 KB になる）の生成・JSON 化・
+    /// パイプ書き込みを呼び出しスレッド（UI スレッド）でやると、それだけで 1 打鍵あたり数 ms 、
+    /// さらにサーバーが stdin を読み遅れていれば書き込み自体がブロックする。遅延生成にすると、
+    /// 追い越された版は<b>作られもしない</b>ので、速く打つほど仕事が減る。</para>
+    ///
+    /// <para>位置を動かさないのが重要: あとから積まれた要求（補完など）が、古い本文のまま
+    /// 先にサーバーへ届いてしまうのを防ぐ。</para>
+    /// </summary>
+    public void SendNotification(string method, Func<object?> paramsFactory, string coalesceKey)
+        => Enqueue(() => new { jsonrpc = "2.0", method, @params = paramsFactory() }, coalesceKey);
+
+    /// <summary>指定キーの未送信通知の追跡をやめる（以降の同キー通知は新しい項目として積まれる）。
+    /// <c>didOpen</c>/<c>didClose</c> の前に呼び、文書の開き直しをまたいで古い項目へ
+    /// 差し替わらないようにする。</summary>
+    public void DropCoalesceKey(string coalesceKey) => _sendQueue.DropCoalesceKey(coalesceKey);
+
+    private void Enqueue(Func<object> payloadFactory, string? coalesceKey = null, Action<Exception>? onFailure = null)
     {
-        try { WriteMessage(JsonSerializer.Serialize(new { jsonrpc = "2.0", method, @params })); }
-        catch { }
+        if (_disposed)
+        {
+            onFailure?.Invoke(new ObjectDisposedException(nameof(LspProcess)));
+            return;
+        }
+
+        if (_sendQueue.Enqueue(new OutgoingMessage(payloadFactory, coalesceKey, onFailure)))
+            _sendSignal.Release();
+    }
+
+    /// <summary>書き込みスレッドの本体。JSON 化とパイプ書き込みはすべてここで起きる。</summary>
+    private void WriteLoop()
+    {
+        while (!_disposed)
+        {
+            try { _sendSignal.Wait(); }
+            catch { return; }   // Dispose 済み
+            if (_disposed) return;
+
+            if (!_sendQueue.TryDequeue(out var message)) continue;
+
+            try
+            {
+                WriteMessage(JsonSerializer.Serialize(message.PayloadFactory()));
+            }
+            catch (Exception ex)
+            {
+                Log($"send failed: {ex.Message}");
+                try { message.OnFailure?.Invoke(ex); } catch { }
+            }
+        }
     }
 
     private void WriteMessage(string json)
@@ -388,6 +444,9 @@ internal sealed class LspProcess : IDisposable
         if (_disposed) return;
         _disposed = true;
         Interlocked.Exchange(ref _exitRaised, 1);  // this is deliberate — suppress the Exited/reconnect path
+        // 書き込みスレッドを起こして畳む。積み残しは送らない（相手をこれから殺すので送っても届かない）。
+        _sendQueue.Clear();
+        try { _sendSignal.Release(); } catch { }
         try { _process.Kill(); } catch { }
         _process.Dispose();
         lock (_pending)

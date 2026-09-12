@@ -430,6 +430,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private IReadOnlyList<DocumentSymbol> _fallbackSymbols = [];
     private long _fallbackSymbolsVersion = -1;
     private VimBuffer? _fallbackSymbolsBuffer;
+    /// <summary>フォールバック見出しの作り直しを遅らせるタイマー。使われるまで作らない
+    /// （言語サーバーが見出しを返すファイルでは一度も要らない）。</summary>
+    private System.Windows.Threading.DispatcherTimer? _fallbackSymbolDebounce;
     // Identity of the segments currently rendered, to skip rebuilding the bar when unchanged.
     private string _lastBreadcrumbKey = "\0";
 
@@ -1126,19 +1129,72 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         BuildBreadcrumbBar(segments);
     }
 
-    /// <summary>Heuristic document symbols for the breadcrumb fallback, recomputed only when the
-    /// buffer text version changes (re-parsing the whole file on every cursor move would be wasteful).</summary>
+    /// <summary>
+    /// Heuristic document symbols for the breadcrumb fallback (used while the language server has no
+    /// symbols for this file — not yet started, still analysing, or absent entirely).
+    ///
+    /// <para>抽出はファイル全体を舐める。7000 行の <c>.cs</c> で実測 8ms あり、打鍵ごとにやると
+    /// それだけで入力が引っかかる（サーバーの起動に数十秒かかる C# では、その間ずっと）。
+    /// ファイルを切り替えた最初の 1 回だけ同期で作り、以降は手が止まってから背景スレッドで作り直す
+    /// ——パンくずの見出しが数百 ms 古いことに実害はない。</para>
+    /// </summary>
     private IReadOnlyList<DocumentSymbol> GetFallbackSymbols()
     {
         var buf = _engine.CurrentBuffer;
         long v = buf.Text.Version;
-        if (!ReferenceEquals(_fallbackSymbolsBuffer, buf) || _fallbackSymbolsVersion != v)
+        if (ReferenceEquals(_fallbackSymbolsBuffer, buf) && _fallbackSymbolsVersion == v)
+            return _fallbackSymbols;
+
+        if (!ReferenceEquals(_fallbackSymbolsBuffer, buf))
         {
+            // 別のファイルへ切り替わった直後。前のファイルの見出しを出すわけにはいかないので同期で作る。
             _fallbackSymbolsBuffer = buf;
             _fallbackSymbolsVersion = v;
-            _fallbackSymbols = Editor.Core.Navigation.DocumentSymbolExtractor.Extract(GetCachedLines(buf), buf.FilePath);
+            _fallbackSymbols = Editor.Core.Navigation.DocumentSymbolExtractor.Extract(
+                GetCachedLines(buf), buf.FilePath);
+            return _fallbackSymbols;
         }
-        return _fallbackSymbols;
+
+        ScheduleFallbackSymbolRefresh();
+        return _fallbackSymbols;   // 1 つ前の版。行がずれて見えるのは次の Tick までの間だけ。
+    }
+
+    /// <summary>編集が止まってから、フォールバック見出しを背景スレッドで作り直す。</summary>
+    private void ScheduleFallbackSymbolRefresh()
+    {
+        _fallbackSymbolDebounce ??= CreateFallbackSymbolDebounce();
+        _fallbackSymbolDebounce.Stop();
+        _fallbackSymbolDebounce.Start();
+    }
+
+    private System.Windows.Threading.DispatcherTimer CreateFallbackSymbolDebounce()
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(250)
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            var buf = _engine.CurrentBuffer;
+            long version = buf.Text.Version;
+            var lines = GetCachedLines(buf);   // この版のスナップショット（以後書き換わらない）
+            var filePath = buf.FilePath;
+            _ = Task.Run(() =>
+            {
+                var symbols = Editor.Core.Navigation.DocumentSymbolExtractor.Extract(lines, filePath);
+                Dispatcher.BeginInvoke(() =>
+                {
+                    // 待っている間にさらに編集されていたら、この結果は捨てて次の Tick に任せる。
+                    if (!ReferenceEquals(_engine.CurrentBuffer, buf) || buf.Text.Version != version) return;
+                    _fallbackSymbolsBuffer = buf;
+                    _fallbackSymbolsVersion = version;
+                    _fallbackSymbols = symbols;
+                    RefreshBreadcrumbBar();
+                });
+            });
+        };
+        return timer;
     }
 
     private void BuildBreadcrumbBar(IReadOnlyList<BreadcrumbSegment> segments)
@@ -6798,10 +6854,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Canvas.SetMinimap(!_minimalChrome && _engine.Options.Minimap);
             Canvas.SetColorPreview(_engine.Options.ColorPreview);
             Canvas.SetSaveDiff(Editor.Core.Editing.SaveDiff.Compute(buf.Text.SavedLines, lines));
-            Canvas.SetWhitespaceIssues(_engine.Options.HighlightWhitespace
-                ? Editor.Core.Editing.WhitespaceIssueDetector.Detect(lines)
-                : []);
 
+            // 空白の目印は可視行ぶんだけ（UpdateViewportDecorations 内）。全行を走らせていた頃は
+            // 打鍵ごとにファイル全体を舐めていた。
             UpdateViewportDecorations();
             UpdateSearchHighlights(_engine.SearchPattern);
         }
@@ -6855,6 +6910,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         {
             Canvas.SetTokens([]);
         }
+
+        Canvas.SetWhitespaceIssues(_engine.Options.HighlightWhitespace
+            ? Editor.Core.Editing.WhitespaceIssueDetector.Detect(lines, firstLine, lastLine)
+            : []);
 
         if (_engine.Options.Spell && _engine.SpellChecker.IsLoaded)
         {

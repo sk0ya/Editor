@@ -106,6 +106,18 @@ only a host can define.
 JSON-RPC read loop). Marshalling to a dispatcher is the subscriber's job — `LspViewBridge` is what does
 it for the control, and every member/event of `IEditorLspView` is dispatcher-thread only.
 
+**Sending is off the UI thread too, and `didChange` is coalesced.** `LspProcess` owns a second background
+thread (`LspStdin`); callers only push onto `OutgoingMessageQueue` and return. Serialization *and* the pipe
+write happen there, so a server that is slow to read its stdin (Roslyn re-analyses on every change) can never
+block a keystroke — one queue, so **enqueue order is delivery order**. `didChange` goes through the overload
+that takes a `Func<object?>` plus a coalesce key: the body is built **just before it is sent**, and a pending
+change for the same document is replaced by the newer one, so overtaken versions are never even serialized
+(a 300KB `.cs` cost 1.6–4ms of UI thread per keystroke before this). The diff is taken against *the last text
+actually sent* — updated inside that same deferred factory — so skipping versions cannot desync the server.
+Replacement **keeps the queue position**: move it to the back and a completion request queued in between would
+reach the server ahead of the text it is about to be answered against. `DropCoalesceKey` is called around
+`didOpen`/`didClose` so a reopen never folds into the old entry.
+
 **Code actions / refactorings.** A code action is *not* just `{title, kind, edit}` — `edit` is usually absent:
 Roslyn returns `data` only and builds the edit in `codeAction/resolve`, tsserver returns a `command` whose edit
 comes back as a **server-initiated `workspace/applyEdit`**. So `LspCodeAction` carries `Command` + `RawJson`
