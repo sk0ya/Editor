@@ -322,7 +322,9 @@ public record LspCodeLens(
     string? RawJson = null)
 {
     public bool NeedsResolve => Command is null && RawJson is not null;
-    public string Title => Command?.Title ?? Command?.Command ?? "CodeLens";
+    public string Title => string.IsNullOrWhiteSpace(Command?.Title)
+        ? Command?.Command ?? "CodeLens"
+        : Command.Title!;
 }
 
 public static class LspCodeLensParser
@@ -359,7 +361,8 @@ public static class LspCodeLensParser
         if (el.ValueKind != JsonValueKind.Object ||
             !el.TryGetProperty("command", out var commandEl) ||
             commandEl.ValueKind != JsonValueKind.String ||
-            commandEl.GetString() is not { Length: > 0 } command)
+            commandEl.GetString() is not { } command ||
+            string.IsNullOrWhiteSpace(command))
             return null;
 
         string? title = el.TryGetProperty("title", out var titleEl) ? titleEl.GetString() : null;

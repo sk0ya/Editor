@@ -496,7 +496,10 @@ public partial class EditorCanvas : FrameworkElement
 
     public void SetCodeLenses(IReadOnlyList<LspCodeLens>? lenses)
     {
-        _codeLenses = lenses ?? [];
+        // ホストが未解決レンズを渡しても、描画境界で実行可能性を再確認する。
+        _codeLenses = (lenses ?? [])
+            .Where(lens => !string.IsNullOrWhiteSpace(lens.Command?.Command))
+            .ToArray();
         _codeLensesByLine = _codeLenses
             .Where(lens => lens.Range.Start.Line >= 0 && !string.IsNullOrWhiteSpace(lens.Title))
             .GroupBy(lens => lens.Range.Start.Line)

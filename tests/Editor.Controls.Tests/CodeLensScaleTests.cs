@@ -26,4 +26,27 @@ public sealed class CodeLensScaleTests
             Assert.Equal(lenses.Length, indexed.Count);
         });
     }
+
+    [Fact]
+    public void Canvas_does_not_index_unresolved_code_lenses()
+    {
+        WpfTestHost.Run(() =>
+        {
+            var executable = new LspCodeLens(
+                new LspRange(new(0, 0), new(0, 1)),
+                new LspCodeActionCommand("test.run", "Run"));
+            var unresolved = new LspCodeLens(
+                new LspRange(new(1, 0), new(1, 1)),
+                RawJson: "{}");
+            var canvas = new EditorCanvas();
+
+            canvas.SetCodeLenses([executable, unresolved]);
+
+            var indexed = (System.Collections.IDictionary)typeof(EditorCanvas)
+                .GetField("_codeLensesByLine", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(canvas)!;
+            Assert.Single(indexed);
+            Assert.Contains(0, indexed.Keys.Cast<int>());
+        });
+    }
 }

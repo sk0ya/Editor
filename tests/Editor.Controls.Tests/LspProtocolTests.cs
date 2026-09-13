@@ -77,7 +77,7 @@ public sealed class LspProtocolTests
         var visible = await LspViewBridge.ResolveExecutableCodeLensesAsync(
             [unresolved, unresolvedWithoutCommand, alreadyExecutable],
             supportsResolve: true,
-            resolve: lens =>
+            resolve: (lens, _) =>
             {
                 resolveCalls++;
                 return Task.FromResult<LspCodeLens?>(ReferenceEquals(lens, unresolved) ? resolved : null);
@@ -96,9 +96,28 @@ public sealed class LspProtocolTests
 
         var visible = await LspViewBridge.ResolveExecutableCodeLensesAsync(
             [unresolved], supportsResolve: false,
-            resolve: _ => throw new InvalidOperationException("resolve must not be called"));
+            resolve: (_, _) => throw new InvalidOperationException("resolve must not be called"));
 
         Assert.Empty(visible);
+    }
+
+    [Fact]
+    public void Code_lens_parser_rejects_blank_commands_and_uses_command_name_without_a_title()
+    {
+        using var json = JsonDocument.Parse("""
+        [
+          {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},
+           "command":{"command":"   ","title":"ignored"}},
+          {"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},
+           "command":{"command":"test.run","title":"   "}}
+        ]
+        """);
+
+        var lenses = LspCodeLensParser.Parse(json.RootElement);
+
+        Assert.Equal(2, lenses.Count);
+        Assert.True(lenses[0].NeedsResolve);
+        Assert.Equal("test.run", lenses[1].Title);
     }
 
     [Fact]

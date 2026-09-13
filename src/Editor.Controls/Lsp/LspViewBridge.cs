@@ -80,7 +80,9 @@ public sealed class LspViewBridge : IEditorLspView
     // Code lenses
     private IReadOnlyList<LspCodeLens> _codeLenses = [];
     private System.Threading.Timer? _codeLensDebounce;
+    private CancellationTokenSource? _codeLensCts;
     private const int CodeLensDebounceMs = 700;
+    private const int CodeLensResolveConcurrency = 8;
 
     // Semantic tokens
     private bool _semanticTokensEnabled = false;
@@ -206,6 +208,7 @@ public sealed class LspViewBridge : IEditorLspView
     public void OnFileOpened(string? filePath, string text)
     {
         Interlocked.Increment(ref _documentGeneration);
+        CancelCodeLensRequests();
         HideCompletion();
         HideSignatureHelp();
         HideCodeActions();
@@ -318,7 +321,7 @@ public sealed class LspViewBridge : IEditorLspView
         if (_semanticTokensEnabled)
             _ = RequestSemanticTokensInternalAsync(doc);
         _ = RequestDocumentLinksInternalAsync(doc);
-        _ = RequestCodeLensesInternalAsync(doc);
+        StartCodeLensRefresh(doc);
     }
 
     private void OnDocumentDiagnostics(IReadOnlyList<LspDiagnostic> diagnostics)
@@ -355,6 +358,7 @@ public sealed class LspViewBridge : IEditorLspView
     public void OnTextChanged(string text)
     {
         Interlocked.Increment(ref _documentGeneration);
+        CancelCodeLensRequests();
         if (_codeActionsVisible)
         {
             HideCodeActions();
@@ -418,28 +422,51 @@ public sealed class LspViewBridge : IEditorLspView
         {
             var doc = _document;
             if (doc?.IsConnected == true && _documentReady)
-                _ = RequestCodeLensesInternalAsync(doc);
+                StartCodeLensRefresh(doc);
         }, null, CodeLensDebounceMs, Timeout.Infinite);
     }
 
-    private async Task RequestCodeLensesInternalAsync(ILspDocument doc)
+    private void StartCodeLensRefresh(ILspDocument doc)
+    {
+        if (!ReferenceEquals(_document, doc) || !_documentReady || !doc.IsConnected)
+            return;
+
+        var cts = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(ref _codeLensCts, cts);
+        previous?.Cancel();
+        previous?.Dispose();
+        _ = RequestCodeLensesInternalAsync(doc, cts.Token);
+    }
+
+    private async Task RequestCodeLensesInternalAsync(ILspDocument doc, CancellationToken ct)
     {
         try
         {
             var generation = Volatile.Read(ref _documentGeneration);
-            var lenses = await doc.RequestCodeLensesAsync();
+            var lenses = await doc.RequestCodeLensesAsync(ct);
             lenses = await ResolveExecutableCodeLensesAsync(
-                lenses, doc.ServerSupportsCodeLensResolve, lens => doc.ResolveCodeLensAsync(lens));
+                lenses, doc.ServerSupportsCodeLensResolve,
+                (lens, token) => doc.ResolveCodeLensAsync(lens, token), ct);
+            ct.ThrowIfCancellationRequested();
             if (!ReferenceEquals(_document, doc) || generation != Volatile.Read(ref _documentGeneration))
                 return;
             await _dispatcher.InvokeAsync(() =>
             {
+                if (ct.IsCancellationRequested) return;
                 if (!ReferenceEquals(_document, doc) || generation != Volatile.Read(ref _documentGeneration)) return;
                 _codeLenses = lenses;
                 CodeLensesChanged?.Invoke(_codeLenses);
             });
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch { }
+    }
+
+    private void CancelCodeLensRequests()
+    {
+        var cts = Interlocked.Exchange(ref _codeLensCts, null);
+        cts?.Cancel();
+        cts?.Dispose();
     }
 
     /// <summary>
@@ -450,11 +477,14 @@ public sealed class LspViewBridge : IEditorLspView
     internal static async Task<IReadOnlyList<LspCodeLens>> ResolveExecutableCodeLensesAsync(
         IReadOnlyList<LspCodeLens> lenses,
         bool supportsResolve,
-        Func<LspCodeLens, Task<LspCodeLens?>> resolve)
+        Func<LspCodeLens, CancellationToken, Task<LspCodeLens?>> resolve,
+        CancellationToken ct = default)
     {
         var resolved = new LspCodeLens?[lenses.Count];
+        using var gate = new SemaphoreSlim(CodeLensResolveConcurrency);
         var tasks = lenses.Select(async (lens, index) =>
         {
+            ct.ThrowIfCancellationRequested();
             if (HasExecutableCommand(lens))
             {
                 resolved[index] = lens;
@@ -466,7 +496,16 @@ public sealed class LspViewBridge : IEditorLspView
 
             try
             {
-                var candidate = await resolve(lens);
+                await gate.WaitAsync(ct);
+                LspCodeLens? candidate;
+                try
+                {
+                    candidate = await resolve(lens, ct);
+                }
+                finally
+                {
+                    gate.Release();
+                }
                 if (candidate is not null && HasExecutableCommand(candidate))
                     resolved[index] = candidate;
             }
@@ -477,11 +516,12 @@ public sealed class LspViewBridge : IEditorLspView
         });
 
         await Task.WhenAll(tasks);
+        ct.ThrowIfCancellationRequested();
         return resolved.OfType<LspCodeLens>().ToArray();
     }
 
     private static bool HasExecutableCommand(LspCodeLens lens) =>
-        lens.Command is { Command.Length: > 0 };
+        lens.Command is { Command: { } command } && !string.IsNullOrWhiteSpace(command);
 
     private void ScheduleSemanticTokenRefresh()
     {
@@ -1328,6 +1368,7 @@ public sealed class LspViewBridge : IEditorLspView
     {
         if (_viewDisposed) return;
         _viewDisposed = true;
+        CancelCodeLensRequests();
         _highlightCts?.Cancel();
         _highlightCts?.Dispose();
         _completionCts?.Cancel();
