@@ -205,6 +205,7 @@ public sealed class LspViewBridge : IEditorLspView
     /// <summary>Call when a file is opened or the active buffer changes.</summary>
     public void OnFileOpened(string? filePath, string text)
     {
+        Interlocked.Increment(ref _documentGeneration);
         HideCompletion();
         HideSignatureHelp();
         HideCodeActions();
@@ -425,22 +426,62 @@ public sealed class LspViewBridge : IEditorLspView
     {
         try
         {
+            var generation = Volatile.Read(ref _documentGeneration);
             var lenses = await doc.RequestCodeLensesAsync();
-            // A server may advertise codeLens but return items without a command. Those
-            // items are only actionable when codeLens/resolve is also supported; otherwise
-            // rendering the fallback title "CodeLens" creates a link that can never do
-            // anything. Keep unresolved items only when the second leg is available.
-            if (!doc.ServerSupportsCodeLensResolve)
-                lenses = lenses.Where(lens => lens.Command is not null).ToArray();
+            lenses = await ResolveExecutableCodeLensesAsync(
+                lenses, doc.ServerSupportsCodeLensResolve, lens => doc.ResolveCodeLensAsync(lens));
+            if (!ReferenceEquals(_document, doc) || generation != Volatile.Read(ref _documentGeneration))
+                return;
             await _dispatcher.InvokeAsync(() =>
             {
-                if (!ReferenceEquals(_document, doc)) return;
+                if (!ReferenceEquals(_document, doc) || generation != Volatile.Read(ref _documentGeneration)) return;
                 _codeLenses = lenses;
                 CodeLensesChanged?.Invoke(_codeLenses);
             });
         }
         catch { }
     }
+
+    /// <summary>
+    /// CodeLensは描画前に実行可能性を確定させる。
+    /// 未解決レンズをそのまま描画すると、Titleの既定値「CodeLens」だけが表示され、
+    /// クリックしてからコマンドなしと判明するため、ユーザーには壊れたリンクに見える。
+    /// </summary>
+    internal static async Task<IReadOnlyList<LspCodeLens>> ResolveExecutableCodeLensesAsync(
+        IReadOnlyList<LspCodeLens> lenses,
+        bool supportsResolve,
+        Func<LspCodeLens, Task<LspCodeLens?>> resolve)
+    {
+        var resolved = new LspCodeLens?[lenses.Count];
+        var tasks = lenses.Select(async (lens, index) =>
+        {
+            if (HasExecutableCommand(lens))
+            {
+                resolved[index] = lens;
+                return;
+            }
+
+            if (!supportsResolve || !lens.NeedsResolve)
+                return;
+
+            try
+            {
+                var candidate = await resolve(lens);
+                if (candidate is not null && HasExecutableCommand(candidate))
+                    resolved[index] = candidate;
+            }
+            catch
+            {
+                // 1件のresolve失敗で、同じ応答に含まれる有効なCodeLensまで隠さない。
+            }
+        });
+
+        await Task.WhenAll(tasks);
+        return resolved.OfType<LspCodeLens>().ToArray();
+    }
+
+    private static bool HasExecutableCommand(LspCodeLens lens) =>
+        lens.Command is { Command.Length: > 0 };
 
     private void ScheduleSemanticTokenRefresh()
     {

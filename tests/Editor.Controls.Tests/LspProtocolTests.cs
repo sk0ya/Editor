@@ -61,6 +61,47 @@ public sealed class LspProtocolTests
     }
 
     [Fact]
+    public async Task Code_lens_display_filter_drops_non_executable_results_after_resolve()
+    {
+        static LspRange Range(int line) => new(
+            new LspPosition(line, 0), new LspPosition(line, 1));
+
+        var unresolved = new LspCodeLens(Range(1), DataJson: "{\"id\":1}", RawJson: "{}");
+        var unresolvedWithoutCommand = new LspCodeLens(Range(2), DataJson: "{\"id\":2}", RawJson: "{}");
+        var alreadyExecutable = new LspCodeLens(
+            Range(3), new LspCodeActionCommand("already.run", "Already"), RawJson: "{}");
+        var resolved = new LspCodeLens(
+            Range(1), new LspCodeActionCommand("test.run", "Run tests"));
+        var resolveCalls = 0;
+
+        var visible = await LspViewBridge.ResolveExecutableCodeLensesAsync(
+            [unresolved, unresolvedWithoutCommand, alreadyExecutable],
+            supportsResolve: true,
+            resolve: lens =>
+            {
+                resolveCalls++;
+                return Task.FromResult<LspCodeLens?>(ReferenceEquals(lens, unresolved) ? resolved : null);
+            });
+
+        Assert.Equal(2, resolveCalls);
+        Assert.Equal([resolved, alreadyExecutable], visible);
+    }
+
+    [Fact]
+    public async Task Code_lens_display_filter_never_keeps_unresolved_results_without_resolve_support()
+    {
+        var unresolved = new LspCodeLens(
+            new LspRange(new LspPosition(1, 0), new LspPosition(1, 1)),
+            DataJson: "{\"id\":1}", RawJson: "{}");
+
+        var visible = await LspViewBridge.ResolveExecutableCodeLensesAsync(
+            [unresolved], supportsResolve: false,
+            resolve: _ => throw new InvalidOperationException("resolve must not be called"));
+
+        Assert.Empty(visible);
+    }
+
+    [Fact]
     public async Task Lsp_json_elements_survive_the_async_send_queue()
     {
         // LspProcess は要求本文を送信専用スレッドで後から JSON 化する。

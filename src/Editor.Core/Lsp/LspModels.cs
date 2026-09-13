@@ -322,7 +322,7 @@ public record LspCodeLens(
     string? RawJson = null)
 {
     public bool NeedsResolve => Command is null && RawJson is not null;
-    public string Title => Command?.Title ?? "CodeLens";
+    public string Title => Command?.Title ?? Command?.Command ?? "CodeLens";
 }
 
 public static class LspCodeLensParser
