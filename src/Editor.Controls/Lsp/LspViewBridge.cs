@@ -300,7 +300,16 @@ public sealed class LspViewBridge : IEditorLspView
         {
             if (!ReferenceEquals(_document, doc)) return;   // file switched while queued
             var wasReady = _documentReady;
-            _documentReady = doc.IsReady;
+            _documentReady = doc.IsReady && doc.IsConnected;
+            if (!_documentReady)
+            {
+                CancelCodeLensRequests();
+                if (_codeLenses.Count > 0)
+                {
+                    _codeLenses = [];
+                    CodeLensesChanged?.Invoke(_codeLenses);
+                }
+            }
             if (_documentReady && !wasReady) OnDocumentReady(doc);
             StateChanged?.Invoke();
         });
