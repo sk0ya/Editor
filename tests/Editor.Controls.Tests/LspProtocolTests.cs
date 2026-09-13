@@ -61,6 +61,112 @@ public sealed class LspProtocolTests
     }
 
     [Fact]
+    public async Task Lsp_json_elements_survive_the_async_send_queue()
+    {
+        // LspProcess は要求本文を送信専用スレッドで後から JSON 化する。
+        // codeLens/resolve の payload が JsonDocument の破棄後も有効で、サーバーから
+        // command が戻り、CodeLens が実行可能な形へ解決されることを実機相当の往復で確認する。
+        var scriptPath = Path.Combine(Path.GetTempPath(), $"loomo-lsp-{Guid.NewGuid():N}.ps1");
+        await File.WriteAllTextAsync(scriptPath, """"
+            $stdinStream = [Console]::OpenStandardInput()
+            $stdoutStream = [Console]::OpenStandardOutput()
+
+            function Read-Line([System.IO.Stream] $stream) {
+                $builder = [System.Text.StringBuilder]::new()
+                while ($true) {
+                    $byte = $stream.ReadByte()
+                    if ($byte -lt 0) { return $null }
+                    if ($byte -eq 10) { return $builder.ToString() }
+                    if ($byte -ne 13) { [void]$builder.Append([char]$byte) }
+                }
+            }
+
+            function Send([string] $json) {
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $header = [System.Text.Encoding]::ASCII.GetBytes("Content-Length: $($bytes.Length)`r`n`r`n")
+                $stdoutStream.Write($header, 0, $header.Length)
+                $stdoutStream.Write($bytes, 0, $bytes.Length)
+                $stdoutStream.Flush()
+            }
+
+            while ($true) {
+                $length = $null
+                while (($line = Read-Line $stdinStream) -ne '') {
+                    if ($null -eq $line) { exit }
+                    if ($line -match '^Content-Length:\s*(\d+)$') { $length = [int]$Matches[1] }
+                }
+                if ($null -eq $length) { exit }
+
+                $body = [byte[]]::new($length)
+                $read = 0
+                while ($read -lt $length) {
+                    $count = $stdinStream.Read($body, $read, $length - $read)
+                    if ($count -le 0) { exit }
+                    $read += $count
+                }
+                $message = ConvertFrom-Json ([System.Text.Encoding]::UTF8.GetString($body))
+
+                if ($message.method -eq 'initialize') {
+                    Send (('{"jsonrpc":"2.0","id":' + $message.id +
+                        ',"result":{"capabilities":{"codeLensProvider":{"resolveProvider":true}}}}'))
+                }
+                elseif ($message.method -eq 'codeLens/resolve') {
+                    if ($message.params.data.handle -ne 17) { exit 9 }
+                    Send (('{"jsonrpc":"2.0","id":' + $message.id +
+                        ',"result":{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":3}},' +
+                        '"command":{"title":"Run tests","command":"test.run","arguments":[]}}}'))
+                }
+                elseif ($message.method -eq 'codeAction/resolve') {
+                    if ($message.params.data.handle -ne 17) { exit 11 }
+                    Send (('{"jsonrpc":"2.0","id":' + $message.id +
+                        ',"result":{"title":"Extract method","kind":"refactor.extract",' +
+                        '"edit":{"changes":{"file:///c:/tmp/a.cs":[]}}}}'))
+                }
+                elseif ($message.method -eq 'workspace/executeCommand') {
+                    if ($message.params.command -ne 'test.run' -or
+                        $message.params.arguments[0].id -ne 17) { exit 10 }
+                    Send ('{"jsonrpc":"2.0","id":' + $message.id + ',"result":null}')
+                }
+            }
+            """", new System.Text.UTF8Encoding(false));
+
+        try
+        {
+            using var client = new LspClient("powershell.exe", [
+                "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath
+            ]) { RequestTimeout = TimeSpan.FromSeconds(3) };
+            await client.InitializeAsync("file:///c:/tmp/");
+
+            using var raw = JsonDocument.Parse("""
+                [{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":3}},
+                  "data":{"handle":17}}]
+                """);
+            var lens = Assert.Single(LspCodeLensParser.Parse(raw.RootElement));
+            Assert.True(lens.NeedsResolve);
+
+            var resolved = await client.ResolveCodeLensAsync(lens);
+
+            Assert.NotNull(resolved);
+            Assert.Equal("Run tests", resolved!.Title);
+            Assert.Equal("test.run", resolved.Command!.Command);
+            Assert.True(await client.ExecuteCommandAsync(
+                new LspCodeActionCommand("test.run", "Run tests", ["{\"id\":17}"])));
+
+            using var actionJson = JsonDocument.Parse("""
+                {"title":"Extract method","kind":"refactor.extract","data":{"handle":17}}
+                """);
+            var action = LspClient.ParseCodeAction(actionJson.RootElement);
+            var resolvedAction = await client.ResolveCodeActionAsync(action!);
+            Assert.NotNull(resolvedAction);
+            Assert.Equal("Extract method", resolvedAction!.Title);
+        }
+        finally
+        {
+            try { File.Delete(scriptPath); } catch { }
+        }
+    }
+
+    [Fact]
     public void Semantic_token_delta_applies_edits_to_the_encoded_stream()
     {
         using var edits = JsonDocument.Parse("""

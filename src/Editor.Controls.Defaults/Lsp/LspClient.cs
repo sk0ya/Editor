@@ -1013,7 +1013,12 @@ public sealed class LspClient : ILspClient
         try
         {
             using var payload = JsonDocument.Parse(raw);
-            var result = await _process.SendRequestAsync("codeAction/resolve", payload.RootElement, ct);
+            // SendRequestAsync は送信専用スレッドへ payload を渡す。JsonDocument を
+            // このメソッドの return 前に破棄するため、RootElement は必ず Clone する。
+            // Clone しないとキューが後からシリアライズする時点で無効になり、
+            // Roslyn の codeAction/resolve が「何も起きない」状態へ畳まれる。
+            var result = await _process.SendRequestAsync(
+                "codeAction/resolve", payload.RootElement.Clone(), ct);
             if (result is null || result.Value.ValueKind != JsonValueKind.Object) return null;
             return ParseCodeAction(result.Value);
         }
@@ -1030,10 +1035,12 @@ public sealed class LspClient : ILspClient
             foreach (var json in command.ArgumentsJson ?? [])
                 documents.Add(JsonDocument.Parse(json));
 
+            // 引数も送信専用スレッドで後からシリアライズされるため、各 RootElement を
+            // Clone して JsonDocument の寿命から切り離す。
             await _process.SendRequestAsync("workspace/executeCommand", new
             {
                 command = command.Command,
-                arguments = documents.Select(d => d.RootElement).ToArray()
+                arguments = documents.Select(d => d.RootElement.Clone()).ToArray()
             }, ct);
             return true;
         }
@@ -1809,7 +1816,10 @@ public sealed class LspClient : ILspClient
         try
         {
             using var payload = JsonDocument.Parse(raw);
-            var result = await _process.SendRequestAsync("codeLens/resolve", payload.RootElement, ct);
+            // SendRequestAsync は送信専用スレッドへ payload を渡す。JsonDocument を
+            // このメソッドの return 前に破棄するため、RootElement は必ず Clone する。
+            var result = await _process.SendRequestAsync(
+                "codeLens/resolve", payload.RootElement.Clone(), ct);
             if (result is null || result.Value.ValueKind != JsonValueKind.Object) return null;
             using var wrapper = JsonDocument.Parse($"[{result.Value.GetRawText()}]");
             return LspCodeLensParser.Parse(wrapper.RootElement).FirstOrDefault();

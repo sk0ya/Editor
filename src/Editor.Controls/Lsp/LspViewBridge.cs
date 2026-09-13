@@ -426,6 +426,12 @@ public sealed class LspViewBridge : IEditorLspView
         try
         {
             var lenses = await doc.RequestCodeLensesAsync();
+            // A server may advertise codeLens but return items without a command. Those
+            // items are only actionable when codeLens/resolve is also supported; otherwise
+            // rendering the fallback title "CodeLens" creates a link that can never do
+            // anything. Keep unresolved items only when the second leg is available.
+            if (!doc.ServerSupportsCodeLensResolve)
+                lenses = lenses.Where(lens => lens.Command is not null).ToArray();
             await _dispatcher.InvokeAsync(() =>
             {
                 if (!ReferenceEquals(_document, doc)) return;
