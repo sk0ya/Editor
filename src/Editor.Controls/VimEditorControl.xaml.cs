@@ -1058,7 +1058,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             SyncViewportState();
             UpdateViewportDecorations();
             HideDataTip();
-            HideHoverInfoUnlessPinned();
+            HideHoverInfoUnlessHeld();
             NotifyImeLayoutChanged();
             ViewportScrolled?.Invoke(this, EventArgs.Empty);
         };
@@ -3385,7 +3385,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _lspView.HideCodeActions();
         // 説明ポップアップも同じ——クリックは「読む」から「編集する」への切り替えなので引っ込める
         // （ピン留めしてあるものだけは、そのために留めたので残す）。
-        HideHoverInfoUnlessPinned();
+        HideHoverInfoUnlessHeld();
         // 入力の先読みも、キャレットが飛べば手掛かりごと変わる。
         ClearInlineSuggestion();
 
@@ -3493,12 +3493,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.ContextMenu = menu.Items.Count > 0 ? menu : null;
     }
 
-    private ContextMenu BuildContextMenu()
+    /// <summary>配色とスタイルを<b>今の</b> <see cref="EditorTheme"/> から載せた、空のメニュー。
+    /// 本文の右クリックメニューとホバーのポップアップのメニューで見た目を揃えるため、
+    /// メニューの外装を組むのはここだけにする。</summary>
+    private ContextMenu CreateThemedMenu()
     {
-        bool isVisual = _engine.Mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock;
         var sep = (Style)FindResource("EditorMenuSeparator");
-        var itemStyle = (Style)FindResource("EditorMenuItem");
-
         var menu = new ContextMenu { Style = (Style)FindResource("EditorContextMenu") };
         // 配色は今の EditorTheme から引く（固定の Dracula ではない——ライトテーマのエディタで
         // 真っ黒なメニューが出ていた）。リソースをメニュー自身に載せるので、サブメニューの
@@ -3511,12 +3511,22 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // ホストが ContextMenuBuilding で足す項目とその**子孫**（サブメニューの中身）にも同じ
         // 見た目を効かせるため、暗黙スタイルとして載せる。以前は追加後に一段だけ Style を
         // 代入しており、サブメニューの子項目は WPF 既定の白いメニューのままだった。
-        menu.Resources[typeof(MenuItem)] = itemStyle;
+        menu.Resources[typeof(MenuItem)] = (Style)FindResource("EditorMenuItem");
         menu.Resources[typeof(Separator)] = sep;
         // メニューの中の Separator は暗黙スタイルでは決まらない——WPF は容器を用意するときに
         // MenuItem.SeparatorStyleKey で引いたスタイルを直接代入するため、そちらを上書きしないと
         // ホストが足した区切り線だけ既定の白い線で描かれる（実際にそうなっていた）。
         menu.Resources[MenuItem.SeparatorStyleKey] = sep;
+        return menu;
+    }
+
+    private ContextMenu BuildContextMenu()
+    {
+        bool isVisual = _engine.Mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock;
+        var sep = (Style)FindResource("EditorMenuSeparator");
+        var itemStyle = (Style)FindResource("EditorMenuItem");
+
+        var menu = CreateThemedMenu();
 
         MenuItem MakeItem(string header, string gesture, Action onClick)
         {

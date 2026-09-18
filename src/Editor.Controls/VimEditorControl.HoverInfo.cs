@@ -69,6 +69,10 @@ public partial class VimEditorControl
     private bool _hoverPinned;
     /// <summary>ポップアップを押した位置。離した位置と比べて「クリック」か「選択のドラッグ」かを見分ける。</summary>
     private Point _hoverPressPoint;
+    /// <summary>ポップアップの右クリックメニューを開いている間。</summary>
+    private bool _hoverContextMenuOpen;
+    /// <summary>メニューが結局開かなかったときに、引き止めを解くための見張り。</summary>
+    private System.Windows.Threading.DispatcherTimer? _hoverMenuGuard;
     private CancellationTokenSource? _hoverCts;
     private TextHover _pendingHover;
     private (int Line, int Start, int End)? _shownHoverSpan;
@@ -131,7 +135,7 @@ public partial class VimEditorControl
         _hoverInfoWindow = null;
     }
 
-    private void OnHoverInfoWindowDeactivated(object? sender, EventArgs e) => HideHoverInfoUnlessPinned();
+    private void OnHoverInfoWindowDeactivated(object? sender, EventArgs e) => HideHoverInfoUnlessHeld();
 
     private void OnCanvasTextHoverChanged(TextHover hover)
     {
@@ -188,7 +192,7 @@ public partial class VimEditorControl
         timer.Tick += (_, _) =>
         {
             timer.Stop();
-            if (!_pointerInHoverPopup) HideHoverInfoUnlessPinned();
+            if (!_pointerInHoverPopup) HideHoverInfoUnlessHeld();
         };
         return timer;
     }
@@ -218,7 +222,7 @@ public partial class VimEditorControl
 
         var diagnostics = Canvas.DiagnosticsAt(hover.Line, hover.StartColumn);
         var blocks = HoverMarkdown.Parse(markdown);
-        if (diagnostics.Count == 0 && blocks.Count == 0) { HideHoverInfoUnlessPinned(); return; }
+        if (diagnostics.Count == 0 && blocks.Count == 0) { HideHoverInfoUnlessHeld(); return; }
 
         _shownHoverSpan = (hover.Line, hover.StartColumn, hover.EndColumn);
         ShowHoverInfo(hover.Anchor, diagnostics, blocks);
@@ -322,10 +326,12 @@ public partial class VimEditorControl
     {
         _hoverDwell?.Stop();
         _hoverClose?.Stop();
+        _hoverMenuGuard?.Stop();
         _hoverCts?.Cancel();
         _shownHoverSpan = null;
         _pointerInHoverPopup = false;
         _hoverPinned = false;
+        _hoverContextMenuOpen = false;
         _hoverFixesExpanded = false;
         _hoverFixesLoaded = false;
         _hoverFixesLoading = false;
@@ -338,13 +344,18 @@ public partial class VimEditorControl
         if (_hoverPopup is not null) _hoverPopup.IsOpen = false;
     }
 
-    /// <summary>ピン留めされていなければ閉じる。「マウスが離れた」「別のアプリへ切り替えた」「打鍵した」
-    /// ——<b>たぶんもう用は無い</b>という推測で閉じる経路はすべてこちらを通す。ピンはその推測を止める札。</summary>
-    private void HideHoverInfoUnlessPinned()
+    /// <summary>引き止めている理由が無ければ閉じる。「マウスが離れた」「別のアプリへ切り替えた」
+    /// 「打鍵した」——<b>たぶんもう用は無い</b>という推測で閉じる経路はすべてこちらを通す。</summary>
+    private void HideHoverInfoUnlessHeld()
     {
-        if (_hoverPinned) return;
+        if (IsHoverHeld) return;
         HideHoverInfo();
     }
+
+    /// <summary>閉じる推測を止めている理由があるか。ピン留めのほか、<b>右クリックメニューを開いている間</b>も
+    /// 止める——メニューは別ウィンドウなので、そちらへマウスを移した瞬間にポップアップの
+    /// <c>MouseLeave</c> が起き、メニューごと消えていた（「右クリックしても何も出ない」の正体）。</summary>
+    private bool IsHoverHeld => _hoverPinned || _hoverContextMenuOpen;
 
     /// <summary>ピン留めの入切。留めている間は Escape（と押し直し）だけが閉じる合図になる。</summary>
     private void ToggleHoverPin()
@@ -360,6 +371,88 @@ public partial class VimEditorControl
         // 外した＝もう用が無い。マウスがポップアップの上に残っているなら、
         // 「離れたら閉じる」という普段の作法へ戻すだけにする。
         if (!_hoverPinned && !_pointerInHoverPopup) HideHoverInfo();
+    }
+
+    /// <summary>ポップアップの右クリックメニュー。本文の右クリックと同じ外装
+    /// （<c>CreateThemedMenu</c>）を使うので、テーマも見た目も揃う。</summary>
+    private ContextMenu BuildHoverContextMenu()
+    {
+        var itemStyle = (Style)FindResource("EditorMenuItem");
+        var menu = CreateThemedMenu();
+        var selected = HoverSelectionText();
+
+        MenuItem Item(string header, string gesture, Action onClick, bool enabled = true)
+        {
+            var item = new MenuItem
+            {
+                Header = header,
+                InputGestureText = gesture,
+                Style = itemStyle,
+                IsEnabled = enabled,
+            };
+            item.Click += (_, _) => onClick();
+            return item;
+        }
+
+        // 何がコピーされるのかを名前で言い切る（「コピー」だけだと、選んだ分なのか全体なのか分からない）。
+        menu.Items.Add(selected.Length > 0
+            ? Item("選択範囲をコピー", "Ctrl+C", CopyHoverInfo)
+            : Item("すべてコピー", "Ctrl+Shift+C", CopyHoverInfo,
+                enabled: _hoverDiagnostics.Count > 0 || _hoverBlocks.Count > 0));
+        // 「すべて選択」にキーは割り当てない。Ctrl+A は本文の編集でよく使う和音で、ホバーが
+        // 出ているだけで奪うには重すぎる（Ctrl+Shift+K / Ctrl+Shift+C は本文が使わない和音）。
+        menu.Items.Add(Item("すべて選択", "", SelectAllHoverText));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item(
+            _hoverPinned ? "ピン留めを解除" : "ピン留め", "Ctrl+Shift+K", ToggleHoverPin));
+        menu.Items.Add(Item("閉じる", "Esc", HideHoverInfo));
+
+        // 閉じたら引き止める理由が消えるので、普段の作法（マウスが乗っていなければ閉じる）へ戻す。
+        menu.Closed += (_, _) => ReleaseHoverContextMenu();
+        return menu;
+    }
+
+    /// <summary>右クリックメニューが出ている間としてポップアップを引き止める。</summary>
+    private void HoldHoverForContextMenu()
+    {
+        _hoverContextMenuOpen = true;
+        // 結局どちらのメニューも開かなかったときに、引き止めたまま残さないための保険。
+        _hoverMenuGuard ??= CreateHoverMenuGuardTimer();
+        _hoverMenuGuard.Stop();
+        _hoverMenuGuard.Start();
+    }
+
+    private void ReleaseHoverContextMenu()
+    {
+        _hoverMenuGuard?.Stop();
+        _hoverContextMenuOpen = false;
+        if (!_pointerInHoverPopup) HideHoverInfoUnlessHeld();
+    }
+
+    private System.Windows.Threading.DispatcherTimer CreateHoverMenuGuardTimer()
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(400),
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (IsHoverContextMenuOpen()) return;
+            ReleaseHoverContextMenu();
+        };
+        return timer;
+    }
+
+    private bool IsHoverContextMenuOpen() =>
+        _hoverPopupBorder?.ContextMenu is { IsOpen: true } ||
+        _hoverPopupViewer?.ContextMenu is { IsOpen: true };
+
+    /// <summary>ポップアップの説明をすべて選ぶ。</summary>
+    private void SelectAllHoverText()
+    {
+        if (_hoverPopupViewer?.Document is not { } document) return;
+        _hoverPopupViewer.Selection?.Select(document.ContentStart, document.ContentEnd);
     }
 
     /// <summary>ポップアップへ貸していた入力フォーカスを本文へ返す。選択はそのまま残る。</summary>
@@ -499,7 +592,7 @@ public partial class VimEditorControl
             if (Mouse.LeftButton == MouseButtonState.Pressed) return;
             _pointerInHoverPopup = false;
             ShowHoverChrome(false);
-            HideHoverInfoUnlessPinned();
+            HideHoverInfoUnlessHeld();
         };
         // 修正行以外を押したら閉じる（押しても何も起きない板を本文の上にかぶせたままにしない）。
         // 修正行と印は自分で Handled にするので、ここへは上がってこない。
@@ -511,13 +604,28 @@ public partial class VimEditorControl
         _hoverPopupBorder.PreviewMouseLeftButtonUp += (_, _) =>
             Dispatcher.BeginInvoke(
                 ReturnFocusToBuffer, System.Windows.Threading.DispatcherPriority.Background);
+        // 右クリックメニューは押されたときに組む（本文の右クリックと同じ作法——そのときの
+        // 選択やピンの状態で項目名が変わるので、使い回さず作り直す）。
+        // 表示器と枠の<b>両方</b>に載せる：文字の上で押したときは表示器が、印や余白で押したときは
+        // 枠が最も内側の持ち主になる。同じ実体を二つの要素に持たせると置き場所の解決が濁るので、
+        // それぞれに作る（開くのは片方だけ）。
+        _hoverPopupBorder.PreviewMouseRightButtonDown += (_, _) =>
+        {
+            // 引き止めるのは<b>メニューが開く前</b>。メニューが出た拍子にポップアップの
+            // MouseLeave が走るので、menu.Opened を待ってからでは間に合わず、ポップアップが
+            // 閉じてメニューも道連れになる——「右クリックしても何も出ない」の正体（実測）。
+            HoldHoverForContextMenu();
+            _hoverPopupBorder.ContextMenu = BuildHoverContextMenu();
+            if (_hoverPopupViewer is not null)
+                _hoverPopupViewer.ContextMenu = BuildHoverContextMenu();
+        };
         _hoverPopupBorder.MouseLeftButtonUp += (_, e) =>
         {
             if (e.Handled) return;
             // 「押して離した」だけが閉じる合図。文字を選ぶドラッグの終わりで閉じては、
             // 選んだそばから消えてコピーできない。
             if (IsHoverDrag(e.GetPosition(_hoverPopupBorder)) || HasHoverSelection()) return;
-            HideHoverInfoUnlessPinned();
+            HideHoverInfoUnlessHeld();
         };
 
         _hoverPopup = new Popup
@@ -628,11 +736,13 @@ public partial class VimEditorControl
     internal FrameworkElement? HoverPopupBorderForTest => _hoverPopupBorder;
 
     /// <summary>テスト用：説明の全体を選んだことにする（実マウスのドラッグの代わり）。</summary>
-    internal void SelectAllHoverTextForTest()
-    {
-        if (_hoverPopupViewer?.Document is not { } document) return;
-        _hoverPopupViewer.Selection?.Select(document.ContentStart, document.ContentEnd);
-    }
+    internal void SelectAllHoverTextForTest() => SelectAllHoverText();
+
+    /// <summary>テスト用：右クリックで組まれるメニュー。</summary>
+    internal ContextMenu BuildHoverContextMenuForTest() => BuildHoverContextMenu();
+
+    /// <summary>テスト用：右クリックメニューが開いている間として扱わせる。</summary>
+    internal void SetHoverContextMenuOpenForTest(bool open) => _hoverContextMenuOpen = open;
 
     /// <summary>テスト用：いま選ばれている文字。</summary>
     internal string HoverSelectionTextForTest => HoverSelectionText();
@@ -662,7 +772,7 @@ public partial class VimEditorControl
     {
         _pointerInHoverPopup = inside;
         ShowHoverChrome(inside);
-        if (!inside) HideHoverInfoUnlessPinned();
+        if (!inside) HideHoverInfoUnlessHeld();
     }
 
     /// <summary>キャレット位置の説明を同じポップアップで出す（<c>K</c> / メニューの「Hover Info」）。</summary>

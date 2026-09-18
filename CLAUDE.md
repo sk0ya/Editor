@@ -189,7 +189,14 @@ swallowed input). Because focus lives in the buffer, **plain `Ctrl+C` is taken o
 selection**, otherwise it falls through to yank. Closing rules had to
 learn about dragging too: `MouseLeave` is ignored while the left button is down, and a `MouseLeftButtonUp`
 closes only when it was a real click (moved ≤ 3px) with nothing selected — otherwise a drag-select ended by
-destroying its own selection. The `Paragraph` code block loses the old `CornerRadius`; that is the price of
+destroying its own selection. The popup has its own **right-click menu** (copy / select all / pin / close),
+built fresh per click through the same `CreateThemedMenu` as the buffer's, and assigned to **both** the
+viewer and the border (whichever is the innermost owner under the pointer). A `ContextMenu` opens and stays
+open fine inside a `Popup` — what killed it was this side: the menu appearing fires the popup's `MouseLeave`,
+so the hold must be taken on `PreviewMouseRightButtonDown`, **before** the menu opens; waiting for
+`menu.Opened` is already too late and the popup takes the menu down with it. Hence
+`HideHoverInfoUnlessPinned` became **`HideHoverInfoUnlessHeld`** — held = pinned **or** menu open — with a
+400ms guard timer that releases the hold if no menu actually opened. The `Paragraph` code block loses the old `CornerRadius`; that is the price of
 being selectable. 📋 copies via `Editor.Core/Text/HoverCopyText.cs` (pure, tested) — the **selection if there
 is one**, else the whole popup in the **same order it is shown** (diagnostics → signature → prose, no fence
 markers, rules dropped). It also owns `Origin()`, so the displayed and copied spelling of `Roslyn(CS0219)`
