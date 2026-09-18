@@ -91,46 +91,51 @@ internal static class LspOverlayRenderer
         }
     }
 
-    public static void DrawCodeLenses(
-        DrawingContext dc, EditorTheme theme, GlyphMetrics metrics,
-        IReadOnlyList<LspCodeLens> lenses, int line, double y, double textLeft,
-        string lineText, double scrollOffsetX, double viewportWidth,
-        IList<(Rect Bounds, LspCodeLens Lens)> hitRects)
-    {
-        if (lenses.Count == 0) return;
-        var lineLenses = lenses.Where(l => l.Range.Start.Line == line && !string.IsNullOrWhiteSpace(l.Title)).ToArray();
-        DrawCodeLensLine(dc, theme, metrics, lineLenses, y, textLeft, lineText,
-            scrollOffsetX, viewportWidth, hitRects);
-    }
-
-    /// <summary>1行分に絞り込まれたCodeLensを描画する。大量のレンズを持つ文書では、
-    /// 呼び出し側が行番号インデックスを使うことで、可視行ごとの全件走査を避けられる。</summary>
-    public static void DrawCodeLensLine(
+    /// <summary>
+    /// 宣言行の直上に挿し込んだ注釈行（<c>VisualLineSegment.IsCodeLens</c>）へCodeLensを描く。
+    /// 本文には重ならないので、コードの行末を隠さずに済む。ラベルは宣言行のインデントに
+    /// 揃えるので、どの宣言に属する注釈かが縦の位置だけで読める。
+    /// </summary>
+    /// <param name="declarationText">注釈が属する宣言行の本文（インデント合わせに使う）。</param>
+    public static void DrawCodeLensRow(
         DrawingContext dc, EditorTheme theme, GlyphMetrics metrics,
         IReadOnlyList<LspCodeLens> lineLenses, double y, double textLeft,
-        string lineText, double scrollOffsetX, double viewportWidth,
+        string declarationText, double scrollOffsetX, double viewportWidth,
         IList<(Rect Bounds, LspCodeLens Lens)> hitRects)
     {
         if (lineLenses.Count == 0) return;
 
-        // CodeLens has no virtual-line primitive in the canvas. Render the labels in the
-        // trailing part of the declaration line, preserving source text and making the label
-        // itself a precise Ctrl+Click target. Multiple lenses share the same compact row.
-        double right = viewportWidth - 6;
-        var bg = new SolidColorBrush(Color.FromArgb(0x38, 0x88, 0x88, 0xAA));
-        foreach (var lens in lineLenses.Reverse())
+        int indentChars = 0;
+        while (indentChars < declarationText.Length && char.IsWhiteSpace(declarationText[indentChars]))
+            indentChars++;
+
+        double x = textLeft + metrics.GetVisualX(declarationText, indentChars) - scrollOffsetX;
+        bool first = true;
+
+        foreach (var lens in lineLenses)
         {
-            var text = metrics.FormatScaledText(lens.Title, theme.LinkColor, 0.82);
-            double width = text.Width + 10;
-            double x = right - width;
-            if (x < textLeft) break;
-            var bounds = new Rect(x, y + 1, width, Math.Max(1, metrics.LineHeight - 2));
-            dc.DrawRoundedRectangle(bg, null, bounds, 2, 2);
-            dc.DrawText(text, new Point(x + 5, y + (metrics.LineHeight - text.Height) / 2));
-            hitRects.Add((bounds, lens));
-            right = x - 4;
+            if (string.IsNullOrWhiteSpace(lens.Title)) continue;
+
+            if (!first)
+            {
+                var separator = metrics.FormatScaledText("|", theme.TokenComment, LensScale);
+                dc.DrawText(separator, new Point(x + LensGap, y + (metrics.LineHeight - separator.Height) / 2));
+                x += LensGap * 2 + separator.Width;
+            }
+            first = false;
+
+            var text = metrics.FormatScaledText(lens.Title, theme.LinkColor, LensScale);
+            if (x > viewportWidth) break;
+
+            dc.DrawText(text, new Point(x, y + (metrics.LineHeight - text.Height) / 2));
+            // 当たり判定は行の高さいっぱいに取る——文字が小さいので、字面ちょうどだと押しにくい。
+            hitRects.Add((new Rect(x, y, text.Width, metrics.LineHeight), lens));
+            x += text.Width;
         }
     }
+
+    private const double LensScale = 0.82;
+    private const double LensGap = 5;
 
     public static void DrawSignatureHelp(
         DrawingContext dc, EditorTheme theme, GlyphMetrics metrics,

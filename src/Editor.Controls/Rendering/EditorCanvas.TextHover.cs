@@ -102,6 +102,9 @@ public partial class EditorCanvas
         // Y は行へ丸められるので、最終行より下は自分で弾く。
         int visualLine = (int)((point.Y + _scrollOffsetY) / _lineHeight);
         if (point.Y < 0 || visualLine < 0 || visualLine >= TotalVisualLines) return false;
+        // CodeLensの注釈行には本文が無い——同じバッファ行を指すので、弾かないと
+        // ラベルの上で宣言行のホバーが出てしまう。
+        if (GetVisualSegment(visualLine).IsCodeLens) return false;
 
         var (hitLine, col) = HitTest(point);
         if (hitLine < 0 || hitLine >= _lines.Length) return false;

@@ -135,14 +135,14 @@ public partial class EditorCanvas
     internal int AutomationOffset(CursorPosition p) { int line = Math.Clamp(p.Line, 0, _lines.Length - 1), offset = 0; for (int i = 0; i < line; i++) offset += _lines[i].Length + 1; return offset + Math.Clamp(p.Column, 0, _lines[line].Length); }
     internal CursorPosition AutomationPosition(int offset) { offset = Math.Clamp(offset, 0, AutomationText.Length); for (int i = 0; i < _lines.Length; i++) { if (offset <= _lines[i].Length) return new(i, offset); offset -= _lines[i].Length + 1; } return new(_lines.Length - 1, _lines[^1].Length); }
     internal int AutomationOffsetFromPoint(Point point) { var (line, col) = HitTest(point); return AutomationOffset(new(line, col)); }
-    internal void AutomationScrollToOffset(int offset) { var p = AutomationPosition(offset); int visual = Array.FindIndex(_visualLines, v => v.BufferLine == p.Line); if (visual >= 0) { _scrollOffsetY = Math.Clamp(visual * _lineHeight, 0, MaxScrollOffsetY); InvalidateVisual(); ScrollChanged?.Invoke(_scrollOffsetX, _scrollOffsetY); } }
+    internal void AutomationScrollToOffset(int offset) { var p = AutomationPosition(offset); int visual = GetTextVisualLine(p.Line); if (visual >= 0) { _scrollOffsetY = Math.Clamp(visual * _lineHeight, 0, MaxScrollOffsetY); InvalidateVisual(); ScrollChanged?.Invoke(_scrollOffsetX, _scrollOffsetY); } }
     internal double[] AutomationBoundingRectangles(int start, int end)
     {
         var a = AutomationPosition(start); var b = AutomationPosition(end); var result = new List<double>();
         for (int line = a.Line; line <= b.Line; line++)
         {
             int sc = line == a.Line ? a.Column : 0, ec = line == b.Line ? b.Column : _lines[line].Length;
-            int visual = Array.FindIndex(_visualLines, v => v.BufferLine == line); if (visual < 0) continue;
+            int visual = GetTextVisualLine(line); if (visual < 0) continue;
             var (_, _, _, _, gutter) = GetGutterMetrics(); Point local = new(gutter + sc * _charWidth - _scrollOffsetX, visual * _lineHeight - _scrollOffsetY);
             Point screen = PresentationSource.FromVisual(this) is null ? local : PointToScreen(local);
             result.Add(screen.X); result.Add(screen.Y); result.Add(Math.Max(_charWidth, (ec - sc) * _charWidth)); result.Add(_lineHeight);

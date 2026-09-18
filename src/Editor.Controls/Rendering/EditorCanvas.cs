@@ -15,7 +15,10 @@ namespace Editor.Controls.Rendering;
 
 public partial class EditorCanvas : FrameworkElement
 {
-    private readonly record struct VisualLineSegment(int BufferLine, int StartColumn, bool IsContinuation);
+    // IsCodeLens = 本文を持たない注釈行。宣言行の直上に1行分だけ挿し込み、CodeLensのラベルを
+    // 行間に置く（VS Code と同じ見え方）。行高は本文行と同じ＝ y = index * _lineHeight の
+    // 一様グリッドを崩さないので、スクロール・ヒットテストの計算は従来のまま使える。
+    private readonly record struct VisualLineSegment(int BufferLine, int StartColumn, bool IsContinuation, bool IsCodeLens = false);
 
     private Typeface _typeface = new("Consolas");
     private Typeface _italicTypeface = new(new FontFamily("Consolas"), FontStyles.Italic, FontWeights.Normal, FontStretches.Normal);
@@ -500,12 +503,29 @@ public partial class EditorCanvas : FrameworkElement
         _codeLenses = (lenses ?? [])
             .Where(lens => !string.IsNullOrWhiteSpace(lens.Command?.Command))
             .ToArray();
+        var previousLines = _codeLensesByLine;
         _codeLensesByLine = _codeLenses
             .Where(lens => lens.Range.Start.Line >= 0 && !string.IsNullOrWhiteSpace(lens.Title))
             .GroupBy(lens => lens.Range.Start.Line)
             .ToDictionary(group => group.Key, group => (IReadOnlyList<LspCodeLens>)group.ToArray());
         _codeLensHitRects.Clear();
+
+        // レンズが載る行が増減したときだけ行レイアウトを組み直す。タイトルだけが変わった
+        // 再解決では行数は変わらないので、スクロール指標の再計算まで走らせない。
+        if (!SameLines(previousLines, _codeLensesByLine))
+            RebuildVisualLayout();
+
         InvalidateVisual();
+
+        static bool SameLines(
+            IReadOnlyDictionary<int, IReadOnlyList<LspCodeLens>> a,
+            IReadOnlyDictionary<int, IReadOnlyList<LspCodeLens>> b)
+        {
+            if (a.Count != b.Count) return false;
+            foreach (var line in a.Keys)
+                if (!b.ContainsKey(line)) return false;
+            return true;
+        }
     }
 
     public void SetSemanticTokens(SemanticToken[] tokens)
@@ -873,6 +893,11 @@ public partial class EditorCanvas : FrameworkElement
             string lineText = safeLine < _lines.Length ? _lines[safeLine] : string.Empty;
             SetActiveLine(safeLine);
 
+            // CodeLensの注釈行は宣言行の「直上」に入れる。折り返しがあっても入るのは先頭の
+            // ビジュアル行の前だけ＝継続行の間に割り込むことはない。
+            if (_codeLensesByLine.ContainsKey(safeLine))
+                visualLines.Add(new VisualLineSegment(safeLine, 0, false, IsCodeLens: true));
+
             if (!EffectiveWrapLines || lineText.Length == 0 || availableTextWidth <= 1)
             {
                 if (needMaxWidth && !widthCached)
@@ -972,6 +997,26 @@ public partial class EditorCanvas : FrameworkElement
         if (raiseScrollChanged && changed)
             ScrollChanged?.Invoke(_scrollOffsetY, _scrollOffsetX);
     }
+
+    /// <summary>
+    /// バッファ行に対応する「本文の」ビジュアル行インデックス。折りたたみ・折り返し・CodeLensの
+    /// 注釈行をすべて織り込んだ、キャンバスが実際に使っている行番号を返す（畳まれていれば -1）。
+    /// ホストが <c>zt</c> 相当の位置合わせをするときは、折りたたみだけから計算すると注釈行の
+    /// ぶんだけずれるので、この値を使う。
+    /// </summary>
+    public int GetTextVisualLine(int bufferLine)
+    {
+        for (int i = 0; i < _visualLines.Length; i++)
+        {
+            var segment = _visualLines[i];
+            if (!segment.IsCodeLens && segment.BufferLine == bufferLine)
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>行番号の上限（本文行に加えてCodeLensの注釈行も含む、実際の表示行数）。</summary>
+    public int VisualLineCount => TotalVisualLines;
 
     private VisualLineSegment GetVisualSegment(int visualLine)
     {
@@ -1111,16 +1156,18 @@ public partial class EditorCanvas : FrameworkElement
 
         var (line, col) = HitTest(point);
 
+        // CodeLensは本文に重ならない専用の注釈行に出るので、修飾キー無しのクリックで実行する
+        // （行末に重ねていた頃は本文のクリックと区別が付かず、Ctrlが必要だった）。
+        if (TryGetCodeLensAt(point, out var codeLens))
+        {
+            CodeLensClicked?.Invoke(codeLens);
+            e.Handled = true;
+            return;
+        }
+
         // Ctrl+Click on a detected URL or file path opens it instead of moving the cursor
         if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0)
         {
-            if (TryGetCodeLensAt(point, out var codeLens))
-            {
-                CodeLensClicked?.Invoke(codeLens);
-                e.Handled = true;
-                return;
-            }
-
             var documentLink = GetDocumentLinkAt(line, col);
             if (documentLink is not null)
             {
@@ -1309,13 +1356,14 @@ public partial class EditorCanvas : FrameworkElement
             // 本文ホバー（型と説明のツールチップ）。常時動く——DataTip と違い停止中に限らない。
             UpdateTextHover(point);
 
-            // Ctrl+hover over a link shows a hand cursor as a clickability cue
+            // CodeLensは修飾キー無しで押せるので、ホバーだけで手の形にする。
+            // リンクの類は従来どおり Ctrl+ホバーがクリック可能のサイン。
             bool ctrlDown = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0;
-            bool onLink = false;
-            if (ctrlDown)
+            bool onLink = TryGetCodeLensAt(point, out _);
+            if (!onLink && ctrlDown)
             {
                 var (hLine, hCol) = HitTest(point);
-                onLink = TryGetCodeLensAt(point, out _) || GetDocumentLinkAt(hLine, hCol) is not null || GetLinkAt(hLine, hCol) != null;
+                onLink = GetDocumentLinkAt(hLine, hCol) is not null || GetLinkAt(hLine, hCol) != null;
             }
             Cursor = onLink ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.IBeam;
         }
@@ -1382,6 +1430,8 @@ public partial class EditorCanvas : FrameworkElement
         if (_lineHeight <= 0) return -1;
         int visualLine = GetVisualLineIndexFromY(point.Y);
         var segment = GetVisualSegment(visualLine);
+        // 注釈行にはブレークポイントも折りたたみも無い＝ガターは無反応にする。
+        if (segment.IsCodeLens) return -1;
         if (EffectiveWrapLines && segment.IsContinuation)
             return -1;
         return segment.BufferLine;
@@ -1399,7 +1449,8 @@ public partial class EditorCanvas : FrameworkElement
         for (int i = 0; i < _visualLines.Length; i++)
         {
             var segment = _visualLines[i];
-            if (segment.BufferLine != _cursor.Line)
+            // 注釈行はキャレットの居場所ではない（同じバッファ行を指すので、外すと1行上にずれる）。
+            if (segment.IsCodeLens || segment.BufferLine != _cursor.Line)
                 continue;
 
             if (firstForLine < 0)
@@ -1420,7 +1471,7 @@ public partial class EditorCanvas : FrameworkElement
         if (firstForLine >= 0)
             return firstForLine;
 
-        int fallback = Array.FindIndex(_visualLines, s => s.BufferLine >= _cursor.Line);
+        int fallback = Array.FindIndex(_visualLines, s => !s.IsCodeLens && s.BufferLine >= _cursor.Line);
         return fallback >= 0 ? fallback : _visualLines.Length - 1;
     }
 
@@ -1538,6 +1589,35 @@ public partial class EditorCanvas : FrameworkElement
             double y = vi * _lineHeight - _scrollOffsetY;
             if (y + _lineHeight < 0 || y > contentBottom) continue;
 
+            // CodeLensの注釈行——本文は持たないので、ガター背景とラベルだけを描いて次の行へ。
+            if (segment.IsCodeLens)
+            {
+                if (_showLineNumbers)
+                    dc.DrawRectangle(Theme.LineNumberBg, null, new Rect(0, y, gutterWidth, _lineHeight));
+
+                if (_codeLensesByLine.TryGetValue(l, out var rowLenses) && size.Width > textLeft)
+                {
+                    dc.PushClip(new RectangleGeometry(new Rect(textLeft, y, size.Width - textLeft, _lineHeight)));
+                    try
+                    {
+                        string declarationText = l < _lines.Length ? _lines[l] : string.Empty;
+                        SetActiveLine(l);
+                        _scrollOffsetX = baseOffsetX;
+                        LspOverlayRenderer.DrawCodeLensRow(dc, Theme, metrics, rowLenses, y, textLeft,
+                            declarationText, baseOffsetX, size.Width, _codeLensHitRects);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"EditorCanvas: failed rendering code lens row {l}: {ex}");
+                    }
+                    finally
+                    {
+                        dc.Pop();
+                    }
+                }
+                continue;
+            }
+
             bool isPreviewLine = _substitutePreviewLines.TryGetValue(l, out var previewLine);
             string lineText = isPreviewLine ? previewLine! : l < _lines.Length ? _lines[l] : "";
             // Preview text (from :s) doesn't share column positions with the real buffer line,
@@ -1644,10 +1724,7 @@ public partial class EditorCanvas : FrameworkElement
                 // Text with syntax coloring
                 DrawLineText(dc, l, lineText, y, textLeft);
 
-                // LSP code lenses are compact clickable annotations on declaration lines.
-                if (_codeLensesByLine.TryGetValue(l, out var lineLenses))
-                    LspOverlayRenderer.DrawCodeLensLine(dc, Theme, metrics, lineLenses,
-                        y, textLeft, lineText, _scrollOffsetX, size.Width, _codeLensHitRects);
+                // CodeLensは宣言行の直上の注釈行に描く（このループの先頭の分岐）。本文行には出さない。
 
                 // LSP document links (capability-driven; Ctrl+Click opens the target)
                 LspOverlayRenderer.DrawDocumentLinks(dc, Theme, metrics, _documentLinks,

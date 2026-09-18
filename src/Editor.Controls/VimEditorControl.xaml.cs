@@ -7028,6 +7028,15 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (cursorVisual < 0) cursorVisual = _engine.Cursor.Line;
         int totalVisible = visMap.Length > 0 ? visMap.Length : buf.Text.LineCount;
 
+        // キャンバスは折りたたみに加えてCodeLensの注釈行も行として持つ。折りたたみだけから
+        // 数えると、その注釈行のぶんだけ目標行がずれるので、キャンバス側の行番号を優先する。
+        int canvasVisual = Canvas.GetTextVisualLine(_engine.Cursor.Line);
+        if (canvasVisual >= 0)
+        {
+            cursorVisual = canvasVisual;
+            totalVisible = Canvas.VisualLineCount;
+        }
+
         var visible = Canvas.VisibleLines;
         var targetTopLine = align switch
         {
