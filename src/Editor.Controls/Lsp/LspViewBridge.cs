@@ -678,14 +678,29 @@ public sealed class LspViewBridge : IEditorLspView
     /// <summary>Request hover info at the given position.</summary>
     public async Task<string?> RequestHoverAsync(int line, int character)
     {
+        // 二段構えなので、遅いときにどちらが遅いのかが分からないと手が打てない
+        // （サーバーが空を返すと、そのぶんがホスト側の計算に上乗せされる）。
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         var doc = _document;
         if (_documentReady && doc?.IsConnected == true)
         {
             var hover = await doc.RequestHoverAsync(line, character);
-            if (!string.IsNullOrWhiteSpace(hover?.Value)) return hover.Value;
+            if (!string.IsNullOrWhiteSpace(hover?.Value))
+            {
+                Log($"hover: lsp answered in {watch.ElapsedMilliseconds}ms");
+                return hover.Value;
+            }
+            Log($"hover: lsp empty after {watch.ElapsedMilliseconds}ms");
         }
         if (HostHoverProvider is { } provider)
-            return await provider(line, character, CancellationToken.None);
+        {
+            var beforeHost = watch.ElapsedMilliseconds;
+            var result = await provider(line, character, CancellationToken.None);
+            Log($"hover: host took {watch.ElapsedMilliseconds - beforeHost}ms " +
+                $"(request total {watch.ElapsedMilliseconds}ms)");
+            return result;
+        }
+        Log($"hover: nothing to ask, {watch.ElapsedMilliseconds}ms");
         return null;
     }
 

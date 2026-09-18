@@ -121,9 +121,15 @@ public sealed class VimEditorControlOptions
     /// </summary>
     public bool HoverInfoEnabled { get; init; } = true;
 
-    /// <summary>ホバーの説明を出すまでの待ち時間（ms、既定 400）。マウスを掃くように動かしている間は
-    /// 問い合わせない。</summary>
-    public int HoverInfoDelayMs { get; init; } = 400;
+    /// <summary>ホバーの説明を出すまでの待ち時間（ms、既定 250）。マウスを掃くように動かしている間は
+    /// 問い合わせない。
+    ///
+    /// <para>既定は<b>実測で決めてある</b>。温まった言語サーバーの hover 応答は 3〜55ms、
+    /// ポップアップの組み立ては 4〜83ms しかかからないので、以前の 400 では「出るまで」の
+    /// 77〜98% がこの待ちだった——遅さの正体は問い合わせではなく待ちの方。
+    /// 冷えている初回だけは別物（Roslyn がソリューションを読む 5.5 秒がまるごと乗る）で、
+    /// そちらは待ちを削っても効かないので、長引くときは「取得しています」の板を先に出している。</para></summary>
+    public int HoverInfoDelayMs { get; init; } = 250;
 
     public SyntaxLanguageRegistry? SyntaxLanguages { get; init; }
     public EditorCommandRegistry? Commands { get; init; }

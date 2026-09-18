@@ -158,6 +158,16 @@ Servers answer in **Markdown**, so `Editor.Core/Text/HoverMarkdown.cs` (pure, te
 into code / text / rule blocks and `Rendering/HoverContentBuilder.cs` renders them, running code fences
 through the editor's own `SyntaxEngine` so a signature is coloured like code. Off switch:
 `VimEditorControlOptions.HoverInfoEnabled` / `HoverInfoDelayMs` (runtime: `VimEditorControl.HoverInfoEnabled`).
+
+**Latency is the dwell, not the server** (measured with `SK0YA_EDITOR_IDE_DIAG=1`, which logs
+`shown: dwell X + request Y + build Z` and the LSP/host split to `%TEMP%\editor-lsp-debug.log`). A warm
+Roslyn answers hover in **3–55ms** and the popup builds in **4–83ms**, so at the old 400ms dwell **77–98% of
+the wait was the dwell itself**; the default is now **250ms**. The cold first hover is a different animal —
+**5.5s**, all of it Roslyn loading the solution — and no dwell change touches it, so a request still
+outstanding after 300ms puts up a 「説明を取得しています…」 popup rather than dead air. Because
+`RequestHoverAsync` has **no cancellation** (a started host computation cannot be stopped), a shorter dwell
+must not be allowed to stack work: the dwell tick re-arms instead of firing while `_hoverRequestInFlight`,
+capping it at one in-flight request.
 Distinct from the debug **DataTip** (`VimEditorControl.Debug.cs`), which evaluates a *value* while stopped.
 
 **Pinning (📌 / `Ctrl+Shift+K`) and copying (📋 / `Ctrl+Shift+C`).** The popup used to close on *every*

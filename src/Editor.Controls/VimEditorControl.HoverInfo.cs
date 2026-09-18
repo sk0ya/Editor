@@ -53,7 +53,10 @@ public partial class VimEditorControl
 {
     private SyntaxLanguageRegistry? _syntaxLanguages;
     private bool _hoverInfoEnabled = true;
-    private int _hoverInfoDwellMs = 400;
+    /// <summary>マウスが止まってから問い合わせるまでの待ち。<b>実測で決めた値</b>——温まった
+    /// 言語サーバーの hover 応答は 3〜55ms、組み立ては 4〜83ms しかかからず、以前の 400ms では
+    /// 出るまでの 77〜98% がこの待ちだった（つまり待ちそのものが遅さの正体）。</summary>
+    private int _hoverInfoDwellMs = 250;
 
     private System.Windows.Threading.DispatcherTimer? _hoverDwell;
     private System.Windows.Threading.DispatcherTimer? _hoverClose;
@@ -77,6 +80,8 @@ public partial class VimEditorControl
     private TextHover _pendingHover;
     private (int Line, int Start, int End)? _shownHoverSpan;
     private bool _pointerInHoverPopup;
+    /// <summary>問い合わせが走っている間。取り消せないので、同時に二つ走らせない。</summary>
+    private bool _hoverRequestInFlight;
     private Window? _hoverInfoWindow;
 
     // いま出ているポップアップの中身。電球の開閉で組み直すために持っておく。
@@ -175,6 +180,10 @@ public partial class VimEditorControl
         timer.Tick += async (_, _) =>
         {
             timer.Stop();
+            // 問い合わせは<b>取り消せない</b>（RequestHoverAsync に取り消しの口が無く、ホスト側の
+            // Roslyn 計算は走り出したら止まらない）。待ちを短くしたぶん、走っている最中に次を
+            // 投げると冷えているときほど計算が積み上がるので、空くまで待ち直す。
+            if (_hoverRequestInFlight) { timer.Start(); return; }
             // async void 相当のハンドラ。ここから漏れた例外はディスパッチャ未処理例外＝アプリ停止になる。
             // ホバーは補助的表示なので、出せないときは黙って出さない（編集の邪魔をしない）。
             try { await RequestAndShowHoverInfoAsync(_pendingHover); }
@@ -206,26 +215,88 @@ public partial class VimEditorControl
         if (requireActiveWindow && Window.GetWindow(this) is { IsActive: false }) return;
         if (_dataTipPopup is { IsOpen: true }) return;   // デバッグ中の値表示を上書きしない
 
+        // 「出るのが遅い」の内訳を測る。マウスが止まってからポップアップが出るまでは
+        // 「待ち（dwell）＋問い合わせ＋組み立て」で、どれが効いているかで打ち手が変わる。
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
         _hoverCts?.Cancel();
         var cts = new CancellationTokenSource();
         _hoverCts = cts;
 
+        // 長引くときは、まず「取得しています」の板を出す（下の <see cref="SchedulePendingHover"/>）。
+        var pending = SchedulePendingHover(hover, cts);
         string? markdown;
+        _hoverRequestInFlight = true;
         try
         {
             markdown = await _lspView.RequestHoverAsync(hover.Line, hover.StartColumn);
         }
         catch (OperationCanceledException) { return; }
         catch { return; }   // サーバーが応えないだけ。ホバーは補助的表示なので黙って諦める。
+        finally
+        {
+            _hoverRequestInFlight = false;
+            pending.Stop();
+        }
 
         if (cts.IsCancellationRequested || cts != _hoverCts) return;
 
+        var requestMs = watch.ElapsedMilliseconds;
         var diagnostics = Canvas.DiagnosticsAt(hover.Line, hover.StartColumn);
         var blocks = HoverMarkdown.Parse(markdown);
         if (diagnostics.Count == 0 && blocks.Count == 0) { HideHoverInfoUnlessHeld(); return; }
 
         _shownHoverSpan = (hover.Line, hover.StartColumn, hover.EndColumn);
         ShowHoverInfo(hover.Anchor, diagnostics, blocks);
+        HoverLog(
+            $"shown: dwell {_hoverInfoDwellMs}ms + request {requestMs}ms + " +
+            $"build {watch.ElapsedMilliseconds - requestMs}ms = " +
+            $"{_hoverInfoDwellMs + watch.ElapsedMilliseconds}ms from the mouse stopping");
+    }
+
+    /// <summary>問い合わせが長引くとき、先に「取得しています」の板を出す。言語サーバーが冷えている
+    /// 初回は実測で <b>5.5 秒</b>かかることがあり（Roslyn がソリューションを読んでいる間）、その間ずっと
+    /// 何も出ないと「ホバーが効かない」としか見えない。出しておけば、待てば出ると分かる。</summary>
+    private System.Windows.Threading.DispatcherTimer SchedulePendingHover(
+        TextHover hover, CancellationTokenSource cts)
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(PendingHoverDelayMs),
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (cts.IsCancellationRequested || cts != _hoverCts) return;
+            // すでに何か出ているなら触らない（読んでいる説明を「取得しています」で潰さない）。
+            if (_hoverPopup is { IsOpen: true }) return;
+            _shownHoverSpan = null;   // 仮の表示なので、答えが来たら開き直させる
+            ShowHoverInfo(hover.Anchor, [], [PendingHoverBlock]);
+        };
+        timer.Start();
+        return timer;
+    }
+
+    /// <summary>これを超えて答えが来ないときだけ、仮の板を出す。ふだん（実測 3〜55ms）は出ない。</summary>
+    private const int PendingHoverDelayMs = 300;
+
+    private static readonly HoverBlock PendingHoverBlock =
+        new(HoverBlockKind.Text, [new HoverSpan("説明を取得しています…", HoverSpanStyle.Normal)]);
+
+    private static readonly bool HoverDiagnosticLogEnabled =
+        string.Equals(
+            Environment.GetEnvironmentVariable("SK0YA_EDITOR_IDE_DIAG"), "1", StringComparison.Ordinal);
+
+    private static void HoverLog(string message)
+    {
+        if (!HoverDiagnosticLogEnabled) return;
+        try
+        {
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "editor-lsp-debug.log"),
+                $"[{DateTime.Now:HH:mm:ss.fff}] {message}\n");
+        }
+        catch { }
     }
 
     private void ShowHoverInfo(
