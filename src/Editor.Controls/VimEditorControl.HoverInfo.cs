@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using Editor.Controls.Rendering;
 using Editor.Core.Lsp;
@@ -31,6 +32,18 @@ namespace Editor.Controls;
 /// 診断の数だけ Roslyn／言語サーバーの計算が積み上がる（ホストの provider には取り消しの口が無く、
 /// 走り出したものは止められない）。Loomo の右クリック「Quick Fix」が<b>開いたときに</b>詰めるのと同じ作法。</para>
 ///
+/// <para><b>ピン留め（📌 / Ctrl+Shift+K）と写し（📋 / Ctrl+Shift+C）。</b>この表示はもともと
+/// <b>打鍵・ウィンドウの非アクティブ化・マウスが語から離れる・スクロール・クリック</b>のどれでも消えた。
+/// どれも「たぶんもう用は無い」という<b>推測</b>で、読んでいる最中に消えないためだけの作りだったが、
+/// その推測は<b>説明を持ち出したい人</b>を締め出していた——スクリーンショットを撮る手（Win+Shift+S も
+/// PrintScreen も、打鍵かつ非アクティブ化）が全部ふさがっていて、画面に出ている説明を画像にする方法が
+/// 無かった。ピンはその推測を止める札で、留めている間は Escape（と 📌 の押し直し）だけが閉じる合図になる。
+/// 中身も <c>TextBlock</c> のままでは選択できず読めても取り出せないので、📋 で
+/// <see cref="Editor.Core.Text.HoverCopyText"/> を通した素のテキストをクリップボードへ渡す。</para>
+///
+/// <para>両方とも<b>幅を予約しない</b>：印はポップアップへマウスを入れたときだけ右上に現れ、離れれば消える。
+/// 撮るときはマウスがキャプチャツールへ抜けているので、<b>画像には印が写らない</b>。</para>
+///
 /// <para>デバッグ中の DataTip（<c>VimEditorControl.Debug.cs</c>）とは別物：あちらは停止中に式の<b>値</b>を
 /// 評価して出すもので、こちらは常時の<b>型と説明</b>。同時に開くことは無い（DataTip が有効な位置では
 /// どちらもマウス位置に出るため、ポップアップは相互に閉じる）。</para>
@@ -46,6 +59,13 @@ public partial class VimEditorControl
     private Popup? _hoverPopup;
     private Border? _hoverPopupBorder;
     private ScrollViewer? _hoverPopupScroll;
+    private StackPanel? _hoverChrome;
+    private Border? _hoverPinChip;
+    private TextBlock? _hoverPinGlyph;
+    private Border? _hoverCopyChip;
+    private TextBlock? _hoverCopyGlyph;
+    /// <summary>ピン留め中か。閉じる合図を Escape だけに絞り、「たぶんもう用は無い」で閉じる経路を止める。</summary>
+    private bool _hoverPinned;
     private CancellationTokenSource? _hoverCts;
     private TextHover _pendingHover;
     private (int Line, int Start, int End)? _shownHoverSpan;
@@ -89,7 +109,9 @@ public partial class VimEditorControl
     }
 
     /// <summary>ウィンドウが非アクティブになったら閉じる。<see cref="Popup"/> は最前面に出るので、
-    /// 別のアプリへ切り替えた人の画面に説明の板だけが残ってしまう。</summary>
+    /// 別のアプリへ切り替えた人の画面に説明の板だけが残ってしまう。
+    /// ——ただしピン留めされていれば残す。スクリーンショットを撮る操作（Win+Shift+S など）は
+    /// <b>まさにこの非アクティブ化</b>なので、ここで閉じる限り画像には写らない。</summary>
     private void AttachHoverInfoWindowHook()
     {
         var window = Window.GetWindow(this);
@@ -106,11 +128,14 @@ public partial class VimEditorControl
         _hoverInfoWindow = null;
     }
 
-    private void OnHoverInfoWindowDeactivated(object? sender, EventArgs e) => HideHoverInfo();
+    private void OnHoverInfoWindowDeactivated(object? sender, EventArgs e) => HideHoverInfoUnlessPinned();
 
     private void OnCanvasTextHoverChanged(TextHover hover)
     {
         if (!_hoverInfoEnabled) return;
+        // ピン留め中は別の語へ移っても差し替えない（固定したのは<b>その</b>説明であって、
+        // マウスの行き先ではない）。
+        if (_hoverPinned) return;
         // 同じ語の上を動いているだけなら、開いているポップアップをそのまま保つ。
         if (_shownHoverSpan == (hover.Line, hover.StartColumn, hover.EndColumn) &&
             _hoverPopup is { IsOpen: true }) return;
@@ -160,7 +185,7 @@ public partial class VimEditorControl
         timer.Tick += (_, _) =>
         {
             timer.Stop();
-            if (!_pointerInHoverPopup) HideHoverInfo();
+            if (!_pointerInHoverPopup) HideHoverInfoUnlessPinned();
         };
         return timer;
     }
@@ -190,7 +215,7 @@ public partial class VimEditorControl
 
         var diagnostics = Canvas.DiagnosticsAt(hover.Line, hover.StartColumn);
         var blocks = HoverMarkdown.Parse(markdown);
-        if (diagnostics.Count == 0 && blocks.Count == 0) { HideHoverInfo(); return; }
+        if (diagnostics.Count == 0 && blocks.Count == 0) { HideHoverInfoUnlessPinned(); return; }
 
         _shownHoverSpan = (hover.Line, hover.StartColumn, hover.EndColumn);
         ShowHoverInfo(hover.Anchor, diagnostics, blocks);
@@ -201,6 +226,9 @@ public partial class VimEditorControl
     {
         EnsureHoverPopup();
         // 位置が変われば別の話。前の位置で開いていた候補は捨てて電球へ戻す。
+        // ピンも同じ——留めたのは前の説明なので、新しい説明には引き継がない。
+        _hoverPinned = false;
+        ShowHoverChrome(false);
         _hoverFixesExpanded = false;
         _hoverFixesLoaded = false;
         _hoverFixesLoading = false;
@@ -284,7 +312,8 @@ public partial class VimEditorControl
         _ = ApplyCodeActionAsync(action);
     }
 
-    /// <summary>ポップアップを閉じ、進行中の問い合わせを捨てる。</summary>
+    /// <summary>ポップアップを閉じ、進行中の問い合わせを捨てる。ピン留めも解く——
+    /// <b>本当に閉じる</b>経路（Escape・ファイルを開き直す・テーマ変更・アンロード・修正の適用）はこちら。</summary>
     private void HideHoverInfo()
     {
         _hoverDwell?.Stop();
@@ -292,13 +321,83 @@ public partial class VimEditorControl
         _hoverCts?.Cancel();
         _shownHoverSpan = null;
         _pointerInHoverPopup = false;
+        _hoverPinned = false;
         _hoverFixesExpanded = false;
         _hoverFixesLoaded = false;
         _hoverFixesLoading = false;
         _hoverHasDiagnostics = false;
         _hoverFixes = null;
         _hoverHiddenFixes = 0;
+        ShowHoverChrome(false);
         if (_hoverPopup is not null) _hoverPopup.IsOpen = false;
+    }
+
+    /// <summary>ピン留めされていなければ閉じる。「マウスが離れた」「別のアプリへ切り替えた」「打鍵した」
+    /// ——<b>たぶんもう用は無い</b>という推測で閉じる経路はすべてこちらを通す。ピンはその推測を止める札。</summary>
+    private void HideHoverInfoUnlessPinned()
+    {
+        if (_hoverPinned) return;
+        HideHoverInfo();
+    }
+
+    /// <summary>ピン留めの入切。留めている間は Escape（と押し直し）だけが閉じる合図になる。</summary>
+    private void ToggleHoverPin()
+    {
+        if (_hoverPopup is not { IsOpen: true }) return;
+
+        _hoverPinned = !_hoverPinned;
+        UpdateHoverChrome();
+        ActiveStatusBar.UpdateStatus(_hoverPinned
+            ? "Hover: ピン留めしました（Esc で閉じる）"
+            : "Hover: ピン留めを外しました");
+
+        // 外した＝もう用が無い。マウスがポップアップの上に残っているなら、
+        // 「離れたら閉じる」という普段の作法へ戻すだけにする。
+        if (!_hoverPinned && !_pointerInHoverPopup) HideHoverInfo();
+    }
+
+    /// <summary>いま出ている説明をそのままクリップボードへ。</summary>
+    private void CopyHoverInfo()
+    {
+        var text = HoverCopyText.Build(_hoverDiagnostics, _hoverBlocks);
+        if (text.Length == 0)
+        {
+            ActiveStatusBar.UpdateStatus("Hover: コピーできる文字がありません");
+            return;
+        }
+
+        try { Clipboard.SetText(text); }
+        catch
+        {
+            // クリップボードは他プロセスに握られていることがある。落とさず、黙って失敗しない。
+            ActiveStatusBar.UpdateStatus("Hover: クリップボードを開けませんでした");
+            return;
+        }
+
+        // マウスで押したときは印そのものが応える。キーで撮ったときはステータスバーが唯一の合図。
+        if (_hoverCopyGlyph is not null) _hoverCopyGlyph.Text = "✓";
+        ActiveStatusBar.UpdateStatus($"Hover: コピーしました（{text.Length} 文字）");
+    }
+
+    /// <summary>説明ポップアップが出ている間のキー。ピン留めと写しの合図をここで受け取り、
+    /// ピン中の Escape だけを「閉じる」に使う。それ以外のキーは、ピンが無ければポップアップを
+    /// 引っ込めてから、あれば<b>出したまま</b>、本来の処理へ通す。</summary>
+    /// <returns>このキーをここで使い切ったか（true なら本文へは渡さない）。</returns>
+    private bool HandleHoverPopupKey(Key key, ModifierKeys modifiers)
+    {
+        var chord = modifiers & (ModifierKeys.Control | ModifierKeys.Shift | ModifierKeys.Alt);
+        if (chord == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            // K はホバーそのもののキー、C は写し。どちらもポップアップが出ている間だけ効くので、
+            // 本文の編集から奪うキーにはならない。
+            if (key == Key.K) { ToggleHoverPin(); return true; }
+            if (key == Key.C) { CopyHoverInfo(); return true; }
+        }
+
+        if (!_hoverPinned) { HideHoverInfo(); return false; }
+        if (key != Key.Escape) return false;
+        HideHoverInfo();
+        return true;
     }
 
     private void EnsureHoverPopup()
@@ -311,6 +410,12 @@ public partial class VimEditorControl
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
+        // 印（📌 / 📋）は本文の<b>上へ重ねる</b>——列を分けて幅を予約すると、印を使わない大多数の
+        // ホバーまで細くなる。重ねてよいのは、出ているのがマウスを乗せている間だけだから。
+        var layout = new Grid();
+        layout.Children.Add(_hoverPopupScroll);
+        layout.Children.Add(BuildHoverChrome());
+
         _hoverPopupBorder = new Border
         {
             Background = _theme.Background,
@@ -319,14 +424,25 @@ public partial class VimEditorControl
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(10, 7, 10, 8),
             MaxWidth = 720,
-            Child = _hoverPopupScroll,
+            Child = layout,
         };
         // ポップアップの上へマウスを移した間は閉じない（長い説明を読む・スクロールするため）。
-        _hoverPopupBorder.MouseEnter += (_, _) => { _pointerInHoverPopup = true; _hoverClose?.Stop(); };
-        _hoverPopupBorder.MouseLeave += (_, _) => { _pointerInHoverPopup = false; HideHoverInfo(); };
+        // 印もこのときだけ出す：撮るころにはマウスは抜けているので、画像に印は写らない。
+        _hoverPopupBorder.MouseEnter += (_, _) =>
+        {
+            _pointerInHoverPopup = true;
+            _hoverClose?.Stop();
+            ShowHoverChrome(true);
+        };
+        _hoverPopupBorder.MouseLeave += (_, _) =>
+        {
+            _pointerInHoverPopup = false;
+            ShowHoverChrome(false);
+            HideHoverInfoUnlessPinned();
+        };
         // 修正行以外を押したら閉じる（押しても何も起きない板を本文の上にかぶせたままにしない）。
-        // 修正行は自分で Handled にするので、ここへは上がってこない。
-        _hoverPopupBorder.MouseLeftButtonUp += (_, e) => { if (!e.Handled) HideHoverInfo(); };
+        // 修正行と印は自分で Handled にするので、ここへは上がってこない。
+        _hoverPopupBorder.MouseLeftButtonUp += (_, e) => { if (!e.Handled) HideHoverInfoUnlessPinned(); };
 
         _hoverPopup = new Popup
         {
@@ -338,6 +454,75 @@ public partial class VimEditorControl
         };
     }
 
+    /// <summary>ポップアップ右上の印（ピン留めと写し）。既定は畳んだまま＝<b>幅も高さも取らない</b>ので、
+    /// 印を使わないホバーの見た目は前のまま。</summary>
+    private StackPanel BuildHoverChrome()
+    {
+        _hoverPinGlyph = new TextBlock { Text = "📌", FontSize = 11 };
+        _hoverPinChip = BuildHoverChip(_hoverPinGlyph, ToggleHoverPin);
+
+        _hoverCopyGlyph = new TextBlock { Text = "📋", FontSize = 11 };
+        _hoverCopyChip = BuildHoverChip(_hoverCopyGlyph, CopyHoverInfo);
+        _hoverCopyChip.ToolTip = "この説明をコピー（Ctrl+Shift+C）";
+
+        _hoverChrome = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            // 枠の内側の余白へ食い込ませて、本文の読める幅を削らない。
+            Margin = new Thickness(0, -4, -6, 0),
+            Visibility = Visibility.Collapsed,
+        };
+        _hoverChrome.Children.Add(_hoverCopyChip);
+        _hoverChrome.Children.Add(_hoverPinChip);
+        UpdateHoverChrome();
+        return _hoverChrome;
+    }
+
+    private Border BuildHoverChip(TextBlock glyph, Action onClick)
+    {
+        var chip = new Border
+        {
+            Child = glyph,
+            Padding = new Thickness(4, 1, 4, 2),
+            Margin = new Thickness(3, 0, 0, 0),
+            CornerRadius = new CornerRadius(3),
+            BorderThickness = new Thickness(1),
+            Cursor = System.Windows.Input.Cursors.Hand,
+        };
+        // Handled にして、ポップアップ全体の「クリックで閉じる」より先にここで受け取る。
+        chip.MouseLeftButtonUp += (_, e) => { e.Handled = true; onClick(); };
+        return chip;
+    }
+
+    /// <summary>印を出す／畳む。畳んである間はレイアウトに現れないので、幅の予約にならない。</summary>
+    private void ShowHoverChrome(bool visible)
+    {
+        if (_hoverChrome is null) return;
+        _hoverChrome.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible) UpdateHoverChrome();
+    }
+
+    /// <summary>印の見た目（ピンの入切・写しの合図・テーマ）を今の状態に合わせる。</summary>
+    private void UpdateHoverChrome()
+    {
+        if (_hoverPinChip is null || _hoverPinGlyph is null) return;
+
+        _hoverPinChip.Background = _hoverPinned ? _theme.CurrentLineBg : _theme.LineNumberBg;
+        _hoverPinChip.BorderBrush = _theme.IndentGuideBrush;
+        _hoverPinGlyph.Foreground = _hoverPinned ? _theme.Foreground : _theme.LineNumberFg;
+        _hoverPinChip.ToolTip = _hoverPinned
+            ? "ピン留め中（Esc で閉じる）"
+            : "ピン留め（Ctrl+Shift+K）— マウスを離しても、他のアプリへ切り替えても消えません";
+
+        if (_hoverCopyChip is null || _hoverCopyGlyph is null) return;
+        _hoverCopyChip.Background = _theme.LineNumberBg;
+        _hoverCopyChip.BorderBrush = _theme.IndentGuideBrush;
+        _hoverCopyGlyph.Text = "📋";
+        _hoverCopyGlyph.Foreground = _theme.LineNumberFg;
+    }
+
     /// <summary>テーマ変更をポップアップにも反映する（開いていなくても次回表示に効く）。</summary>
     private void ApplyThemeToHoverPopup()
     {
@@ -345,6 +530,7 @@ public partial class VimEditorControl
         _hoverPopupBorder.Background = _theme.Background;
         _hoverPopupBorder.BorderBrush = _theme.IndentGuideBrush;
         HideHoverInfo();   // 中身は表示時に組み直すので、古い配色のまま残さない
+        UpdateHoverChrome();
     }
 
     // ───────────────────────── テスト用の窓口 ─────────────────────────
@@ -358,6 +544,34 @@ public partial class VimEditorControl
     /// <summary>テスト用：いま出ているポップアップの中身（出ていなければ null）。</summary>
     internal FrameworkElement? HoverPopupContentForTest =>
         _hoverPopup is { IsOpen: true } ? _hoverPopupScroll?.Content as FrameworkElement : null;
+
+    /// <summary>テスト用：ピン留め中か。</summary>
+    internal bool HoverPinnedForTest => _hoverPinned;
+
+    /// <summary>テスト用：右上の印（出ていなければ null）。押す＝ピン留めの入切。</summary>
+    internal FrameworkElement? HoverPinChipForTest => _hoverPopup is { IsOpen: true } ? _hoverPinChip : null;
+
+    /// <summary>テスト用：右上の写しの印（出ていなければ null）。</summary>
+    internal FrameworkElement? HoverCopyChipForTest => _hoverPopup is { IsOpen: true } ? _hoverCopyChip : null;
+
+    /// <summary>テスト用：印を出しているか（＝マウスがポップアップの上に居るときだけ true）。</summary>
+    internal bool HoverChromeVisibleForTest => _hoverChrome is { Visibility: Visibility.Visible };
+
+    /// <summary>テスト用：ウィンドウが非アクティブになったのと同じ処理を走らせる
+    /// （テスト用ウィンドウは前面に来ないので、実際の切り替えでは確かめられない）。</summary>
+    internal void RaiseWindowDeactivatedForTest() => OnHoverInfoWindowDeactivated(null, EventArgs.Empty);
+
+    /// <summary>テスト用：ポップアップが出ている間のキーを 1 つ流す。</summary>
+    internal bool SendHoverPopupKeyForTest(Key key, ModifierKeys modifiers) =>
+        _hoverPopup is { IsOpen: true } && HandleHoverPopupKey(key, modifiers);
+
+    /// <summary>テスト用：マウスがポップアップへ出入りしたのと同じ処理を走らせる。</summary>
+    internal void SetPointerInHoverPopupForTest(bool inside)
+    {
+        _pointerInHoverPopup = inside;
+        ShowHoverChrome(inside);
+        if (!inside) HideHoverInfoUnlessPinned();
+    }
 
     /// <summary>キャレット位置の説明を同じポップアップで出す（<c>K</c> / メニューの「Hover Info」）。</summary>
     private async Task ShowHoverInfoAtCaretAsync()

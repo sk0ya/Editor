@@ -1058,7 +1058,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             SyncViewportState();
             UpdateViewportDecorations();
             HideDataTip();
-            HideHoverInfo();
+            HideHoverInfoUnlessPinned();
             NotifyImeLayoutChanged();
             ViewportScrolled?.Invoke(this, EventArgs.Empty);
         };
@@ -3383,8 +3383,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // Click-away dismisses the code-action popup: it is anchored to the cursor it was raised
         // at, so once the caret moves elsewhere it is stale paint.
         _lspView.HideCodeActions();
-        // 説明ポップアップも同じ——クリックは「読む」から「編集する」への切り替えなので引っ込める。
-        HideHoverInfo();
+        // 説明ポップアップも同じ——クリックは「読む」から「編集する」への切り替えなので引っ込める
+        // （ピン留めしてあるものだけは、そのために留めたので残す）。
+        HideHoverInfoUnlessPinned();
         // 入力の先読みも、キャレットが飛べば手掛かりごと変わる。
         ClearInlineSuggestion();
 
@@ -4067,8 +4068,6 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     {
         // Any key dismisses an open debug DataTip (it tracks the mouse-hovered value).
         if (_dataTipPopup is { IsOpen: true }) HideDataTip();
-        // 説明ポップアップも同じ（マウス位置に紐づく表示なので、打鍵を始めたら引っ込める）。
-        if (_hoverPopup is { IsOpen: true }) HideHoverInfo();
 
         // Reset the "Vim already handled this key" flag at the start of EVERY key.
         // OnKeyDown also resets it, but OnKeyDown does NOT fire for Key.ImeProcessed
@@ -4088,6 +4087,17 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Key.System => e.SystemKey,
             _ => e.Key
         };
+
+        // 説明ポップアップ（ホバー）が出ている間のキー。既定はこれまでどおり「打鍵を始めたら引っ込める」
+        // ——マウス位置に紐づく表示だから。ただしピン留めしてあれば出したままにし、その札の入切
+        // （Ctrl+Shift+K）と写し（Ctrl+Shift+C）、ピン中の Escape だけをここで使い切る。
+        if (_hoverPopup is { IsOpen: true } &&
+            HandleHoverPopupKey(actualKey, e.KeyboardDevice.Modifiers))
+        {
+            _keyDownHandledByVim = true;
+            e.Handled = true;
+            return;
+        }
 
         // Handle keys that WPF normally consumes (Tab, etc.)
         var mode = _engine.Mode;

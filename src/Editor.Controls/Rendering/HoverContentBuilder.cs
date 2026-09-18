@@ -117,13 +117,9 @@ internal static class HoverContentBuilder
         return text;
     }
 
-    private static string Origin(LspDiagnostic diagnostic) => (diagnostic.Source, diagnostic.Code) switch
-    {
-        (null or "", null or "") => "",
-        (null or "", var code) => code!,
-        (var source, null or "") => source!,
-        var (source, code) => $"{source}({code})",
-    };
+    /// <summary>出どころの綴りは<b>写し</b>（<see cref="HoverCopyText"/>）と同じものを使う——
+    /// 見えている文字列とコピーされる文字列がずれないように。</summary>
+    private static string Origin(LspDiagnostic diagnostic) => HoverCopyText.Origin(diagnostic);
 
     /// <summary>電球と、開いているときの中身（取得中／候補なし／候補の行）。</summary>
     private static IEnumerable<UIElement> BuildFixes(

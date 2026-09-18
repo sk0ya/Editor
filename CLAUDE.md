@@ -160,9 +160,26 @@ through the editor's own `SyntaxEngine` so a signature is coloured like code. Of
 `VimEditorControlOptions.HoverInfoEnabled` / `HoverInfoDelayMs` (runtime: `VimEditorControl.HoverInfoEnabled`).
 Distinct from the debug **DataTip** (`VimEditorControl.Debug.cs`), which evaluates a *value* while stopped.
 
+**Pinning (📌 / `Ctrl+Shift+K`) and copying (📋 / `Ctrl+Shift+C`).** The popup used to close on *every*
+one of: a keystroke, window deactivation, the pointer leaving it, a scroll, a click. Each is a **guess**
+that the reader is done — and together they made the thing impossible to **screenshot**, because
+Win+Shift+S and PrintScreen are themselves a keystroke plus a deactivation. Pinning suspends the guess:
+while pinned only `Escape` (and pressing 📌 again) closes it, and `OnCanvasTextHoverChanged` stops
+replacing it when the mouse moves to another word. So the split is **`HideHoverInfo()` = really close**
+(Escape, `LoadFile`, unload, theme change, applying a fix) vs **`HideHoverInfoUnlessPinned()` = the guess**
+— every "probably done" path must call the second one, or the pin silently does nothing there.
+Content is `TextBlock`s, which WPF cannot select, so 📋 copies instead: `Editor.Core/Text/HoverCopyText.cs`
+(pure, tested) renders the **same order as the popup** — diagnostics → signature → prose — with no fence
+markers and rules dropped, and owns `Origin()` so the displayed and copied spelling of `Roslyn(CS0219)`
+cannot drift. Both marks are **`Collapsed` until the pointer enters the popup**: they reserve no width,
+and by the time a capture happens the mouse has left, so **they are not in the picture**.
+
 **Key bindings:**
 - `K` (Normal mode) — hover info in the same popup (it used to be one status-bar line, which showed
   nothing but the ```` ```csharp ```` fence for Markdown servers)
+- `Ctrl+Shift+K` — pin / unpin the open hover popup (pinned: only `Escape` closes it)
+- `Ctrl+Shift+C` — copy the open hover popup's text
+  (both are live **only while the popup is open**, so they take nothing away from editing)
 - `Ctrl+Space` (Insert mode) — trigger completion popup
 - `↓`/`Ctrl+N`, `↑`/`Ctrl+P` — navigate completion list
 - `Tab`/`Enter` — insert selected completion item
