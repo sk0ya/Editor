@@ -168,18 +168,34 @@ while pinned only `Escape` (and pressing 📌 again) closes it, and `OnCanvasTex
 replacing it when the mouse moves to another word. So the split is **`HideHoverInfo()` = really close**
 (Escape, `LoadFile`, unload, theme change, applying a fix) vs **`HideHoverInfoUnlessPinned()` = the guess**
 — every "probably done" path must call the second one, or the pin silently does nothing there.
-Content is `TextBlock`s, which WPF cannot select, so 📋 copies instead: `Editor.Core/Text/HoverCopyText.cs`
-(pure, tested) renders the **same order as the popup** — diagnostics → signature → prose — with no fence
-markers and rules dropped, and owns `Origin()` so the displayed and copied spelling of `Roslyn(CS0219)`
-cannot drift. Both marks are **`Collapsed` until the pointer enters the popup**: they reserve no width,
-and by the time a capture happens the mouse has left, so **they are not in the picture**.
+Both marks are **`Collapsed` until the pointer enters the popup**: they reserve no width, and by the time
+a capture happens the mouse has left, so **they are not in the picture**.
+
+**The popup body is a `FlowDocument` in a `FlowDocumentScrollViewer`, not a `StackPanel` of `TextBlock`s** —
+`TextBlock` cannot be selected in WPF, so the text was readable but not extractable (a signature had to be
+retyped). `HoverContentBuilder.Build` therefore returns a `FlowDocument`: prose and **code fences are
+`Paragraph`s** (so the signature — the thing most worth taking — is inside the selection), while the
+**lightbulb, fix rows and separators stay `Border`s inside `BlockUIContainer`**, which keeps their look and
+their click handlers. The viewer is `IsSelectionEnabled=true` but **`Focusable=false`**: keyboard focus must
+stay in the buffer (Rider behaviour), and WPF selection works without it — `HoverSelectionTests` proves both
+halves with a real `VisualTreeHelper.HitTest` on a fix row (synthetic `RaiseEvent` would pass even if the
+viewer swallowed input) and a real selection round-trip. Because focus stays in the buffer, **plain `Ctrl+C`
+is taken only while the popup has a selection**, otherwise it falls through to yank. Closing rules had to
+learn about dragging too: `MouseLeave` is ignored while the left button is down, and a `MouseLeftButtonUp`
+closes only when it was a real click (moved ≤ 3px) with nothing selected — otherwise a drag-select ended by
+destroying its own selection. The `Paragraph` code block loses the old `CornerRadius`; that is the price of
+being selectable. 📋 copies via `Editor.Core/Text/HoverCopyText.cs` (pure, tested) — the **selection if there
+is one**, else the whole popup in the **same order it is shown** (diagnostics → signature → prose, no fence
+markers, rules dropped). It also owns `Origin()`, so the displayed and copied spelling of `Roslyn(CS0219)`
+cannot drift.
 
 **Key bindings:**
 - `K` (Normal mode) — hover info in the same popup (it used to be one status-bar line, which showed
   nothing but the ```` ```csharp ```` fence for Markdown servers)
 - `Ctrl+Shift+K` — pin / unpin the open hover popup (pinned: only `Escape` closes it)
-- `Ctrl+Shift+C` — copy the open hover popup's text
-  (both are live **only while the popup is open**, so they take nothing away from editing)
+- `Ctrl+Shift+C` — copy the open hover popup's text (the selection if there is one, else all of it)
+- `Ctrl+C` — same, but only while the hover popup has a selection; otherwise it stays yank
+  (all three are live **only while the popup is open**, so they take nothing away from editing)
 - `Ctrl+Space` (Insert mode) — trigger completion popup
 - `↓`/`Ctrl+N`, `↑`/`Ctrl+P` — navigate completion list
 - `Tab`/`Enter` — insert selected completion item

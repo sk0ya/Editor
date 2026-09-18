@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using Editor.Controls.Rendering;
@@ -58,7 +59,7 @@ public partial class VimEditorControl
     private System.Windows.Threading.DispatcherTimer? _hoverClose;
     private Popup? _hoverPopup;
     private Border? _hoverPopupBorder;
-    private ScrollViewer? _hoverPopupScroll;
+    private FlowDocumentScrollViewer? _hoverPopupViewer;
     private StackPanel? _hoverChrome;
     private Border? _hoverPinChip;
     private TextBlock? _hoverPinGlyph;
@@ -66,6 +67,8 @@ public partial class VimEditorControl
     private TextBlock? _hoverCopyGlyph;
     /// <summary>ピン留め中か。閉じる合図を Escape だけに絞り、「たぶんもう用は無い」で閉じる経路を止める。</summary>
     private bool _hoverPinned;
+    /// <summary>ポップアップを押した位置。離した位置と比べて「クリック」か「選択のドラッグ」かを見分ける。</summary>
+    private Point _hoverPressPoint;
     private CancellationTokenSource? _hoverCts;
     private TextHover _pendingHover;
     private (int Line, int Start, int End)? _shownHoverSpan;
@@ -256,14 +259,15 @@ public partial class VimEditorControl
 
     private void RenderHoverInfoContent()
     {
-        _hoverPopupScroll!.Content = HoverContentBuilder.Build(
+        _hoverPopupViewer!.Document = HoverContentBuilder.Build(
             _hoverDiagnostics, _hoverBlocks, _theme,
             new FontFamily($"{_editorFontFamily}, Consolas"), Math.Max(11, _editorFontSize - 1.5),
             _syntaxLanguages,
             new HoverFixSection(
                 _hoverHasDiagnostics, _hoverFixesExpanded, _hoverFixesLoading, _hoverFixesLoaded,
                 _hoverFixes, _hoverHiddenFixes, ToggleHoverFixes, OnHoverFixInvoked));
-        _hoverPopupScroll.ScrollToTop();
+        // 先頭へ戻す明示の呼び出しは要らない：組み直すたびに<b>別の</b> FlowDocument を渡しているので、
+        // 表示器は新しい文書の先頭から測り直す（FlowDocumentScrollViewer に ScrollToTop は無い）。
     }
 
     /// <summary>電球が押された。開くときに<b>初めて</b>候補を問い合わせる。</summary>
@@ -356,10 +360,28 @@ public partial class VimEditorControl
         if (!_hoverPinned && !_pointerInHoverPopup) HideHoverInfo();
     }
 
-    /// <summary>いま出ている説明をそのままクリップボードへ。</summary>
+    /// <summary>ポップアップの中で文字が選ばれているか。</summary>
+    private bool HasHoverSelection() => HoverSelectionText().Length > 0;
+
+    /// <summary>選ばれている文字（無ければ空）。</summary>
+    private string HoverSelectionText() => _hoverPopupViewer?.Selection?.Text ?? "";
+
+    /// <summary>押した位置から離れて離されたか（＝クリックではなく選択のドラッグ）。</summary>
+    private bool IsHoverDrag(Point released) =>
+        Math.Abs(released.X - _hoverPressPoint.X) > HoverDragThreshold ||
+        Math.Abs(released.Y - _hoverPressPoint.Y) > HoverDragThreshold;
+
+    /// <summary>この距離を超えて動いていたら、クリックではなく選択のドラッグとみなす。</summary>
+    private const double HoverDragThreshold = 3;
+
+    /// <summary>選んだ文字を——選んでいなければ説明まるごとを——クリップボードへ。</summary>
     private void CopyHoverInfo()
     {
-        var text = HoverCopyText.Build(_hoverDiagnostics, _hoverBlocks);
+        // 部分を選んでいるなら、その人が欲しいのは選んだところ。丸ごと渡すと選んだ意味が消える。
+        var selected = HoverSelectionText();
+        var text = selected.Length > 0
+            ? selected
+            : HoverCopyText.Build(_hoverDiagnostics, _hoverBlocks);
         if (text.Length == 0)
         {
             ActiveStatusBar.UpdateStatus("Hover: コピーできる文字がありません");
@@ -394,6 +416,15 @@ public partial class VimEditorControl
             if (key == Key.C) { CopyHoverInfo(); return true; }
         }
 
+        // 素の Ctrl+C は<b>ポップアップの中で文字を選んでいるときだけ</b>もらう。フォーカスは本文に
+        // 置いたままなので、選んだ人が普通に押すのはこれ——けれど選んでいなければヤンク（本文のコピー）
+        // のままでなければ困るので、条件は「選択がある」に絞る。
+        if (chord == ModifierKeys.Control && key == Key.C && HasHoverSelection())
+        {
+            CopyHoverInfo();
+            return true;
+        }
+
         if (!_hoverPinned) { HideHoverInfo(); return false; }
         if (key != Key.Escape) return false;
         HideHoverInfo();
@@ -404,16 +435,27 @@ public partial class VimEditorControl
     {
         if (_hoverPopup is not null) return;
 
-        _hoverPopupScroll = new ScrollViewer
+        // 中身は FlowDocument（<see cref="HoverContentBuilder"/>）。TextBlock を積んでいた頃は
+        // 読めても一文字も選べず、シグネチャは手で打ち直すしかなかった。
+        // Focusable=false は譲れない線：入力フォーカスは本文に置いたままにする（Rider と同じ）。
+        // WPF の選択はフォーカスを取れなくても働くので、選べることと焦点を渡さないことは両立する。
+        _hoverPopupViewer = new FlowDocumentScrollViewer
         {
             MaxHeight = 340,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            IsSelectionEnabled = true,
+            Focusable = false,
+            IsTabStop = false,
+            Padding = new Thickness(0),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            SelectionBrush = _theme.SelectionBg,
         };
         // 印（📌 / 📋）は本文の<b>上へ重ねる</b>——列を分けて幅を予約すると、印を使わない大多数の
         // ホバーまで細くなる。重ねてよいのは、出ているのがマウスを乗せている間だけだから。
         var layout = new Grid();
-        layout.Children.Add(_hoverPopupScroll);
+        layout.Children.Add(_hoverPopupViewer);
         layout.Children.Add(BuildHoverChrome());
 
         _hoverPopupBorder = new Border
@@ -436,13 +478,25 @@ public partial class VimEditorControl
         };
         _hoverPopupBorder.MouseLeave += (_, _) =>
         {
+            // ドラッグで文字を選んでいる最中は、枠からはみ出しても閉じない——選択は端まで引いて
+            // 伸ばすものなので、ここで閉じると「選べるが選び切れない」になる。
+            if (Mouse.LeftButton == MouseButtonState.Pressed) return;
             _pointerInHoverPopup = false;
             ShowHoverChrome(false);
             HideHoverInfoUnlessPinned();
         };
         // 修正行以外を押したら閉じる（押しても何も起きない板を本文の上にかぶせたままにしない）。
         // 修正行と印は自分で Handled にするので、ここへは上がってこない。
-        _hoverPopupBorder.MouseLeftButtonUp += (_, e) => { if (!e.Handled) HideHoverInfoUnlessPinned(); };
+        _hoverPopupBorder.PreviewMouseLeftButtonDown += (_, e) =>
+            _hoverPressPoint = e.GetPosition(_hoverPopupBorder);
+        _hoverPopupBorder.MouseLeftButtonUp += (_, e) =>
+        {
+            if (e.Handled) return;
+            // 「押して離した」だけが閉じる合図。文字を選ぶドラッグの終わりで閉じては、
+            // 選んだそばから消えてコピーできない。
+            if (IsHoverDrag(e.GetPosition(_hoverPopupBorder)) || HasHoverSelection()) return;
+            HideHoverInfoUnlessPinned();
+        };
 
         _hoverPopup = new Popup
         {
@@ -542,8 +596,24 @@ public partial class VimEditorControl
             new TextHover(line, column, column, new Point(0, 0)), requireActiveWindow: false);
 
     /// <summary>テスト用：いま出ているポップアップの中身（出ていなければ null）。</summary>
-    internal FrameworkElement? HoverPopupContentForTest =>
-        _hoverPopup is { IsOpen: true } ? _hoverPopupScroll?.Content as FrameworkElement : null;
+    internal FlowDocument? HoverPopupContentForTest =>
+        _hoverPopup is { IsOpen: true } ? _hoverPopupViewer?.Document : null;
+
+    /// <summary>テスト用：ポップアップを載せている表示器（選択の確認用）。</summary>
+    internal FlowDocumentScrollViewer? HoverPopupViewerForTest => _hoverPopupViewer;
+
+    /// <summary>テスト用：ポップアップの枠（クリックの届き先）。</summary>
+    internal FrameworkElement? HoverPopupBorderForTest => _hoverPopupBorder;
+
+    /// <summary>テスト用：説明の全体を選んだことにする（実マウスのドラッグの代わり）。</summary>
+    internal void SelectAllHoverTextForTest()
+    {
+        if (_hoverPopupViewer?.Document is not { } document) return;
+        _hoverPopupViewer.Selection?.Select(document.ContentStart, document.ContentEnd);
+    }
+
+    /// <summary>テスト用：いま選ばれている文字。</summary>
+    internal string HoverSelectionTextForTest => HoverSelectionText();
 
     /// <summary>テスト用：ピン留め中か。</summary>
     internal bool HoverPinnedForTest => _hoverPinned;

@@ -24,6 +24,13 @@ namespace Editor.Controls.Rendering;
 /// <para>コードフェンスは<b>エディタ本体と同じシンタックス着色</b>を通す（情報文字列 <c>csharp</c> を
 /// 拡張子 <c>.cs</c> に読み替えて既存の <see cref="SyntaxEngine"/> に食わせるだけ）。同じ色で出ないと、
 /// ポップアップの中のシグネチャがコードに見えない。</para>
+///
+/// <para><b>組み上がりは <see cref="FlowDocument"/>。</b>もとは <c>TextBlock</c> を
+/// <c>StackPanel</c> に積んでいたが、WPF の <c>TextBlock</c> は<b>選択できない</b>——読めるのに
+/// 一文字も持ち出せず、シグネチャは手で打ち直すしかなかった。<c>FlowDocument</c> なら同じ着色
+/// （<see cref="Run"/> 単位の前景色・太字・等幅）を保ったまま、文書全体をまたいでドラッグ選択できる。
+/// 押せる行（電球と修正）だけは見た目を変えずに済ませたいので <see cref="BlockUIContainer"/> に
+/// これまでの <see cref="Border"/> をそのまま入れてある——選択できる文字と押せる行が同居する形。</para>
 /// </summary>
 internal static class HoverContentBuilder
 {
@@ -50,7 +57,7 @@ internal static class HoverContentBuilder
         ["markdown"] = ".md", ["md"] = ".md",
     };
 
-    public static UIElement Build(
+    public static FlowDocument Build(
         IReadOnlyList<LspDiagnostic> diagnostics,
         IReadOnlyList<HoverBlock> blocks,
         EditorTheme theme,
@@ -59,38 +66,52 @@ internal static class HoverContentBuilder
         SyntaxLanguageRegistry? languages,
         HoverFixSection fixes = default)
     {
-        var stack = new StackPanel();
+        var document = new FlowDocument
+        {
+            // 段組みにさせない。既定の ColumnWidth のままだと、横に広いポップアップで本文が
+            // 二段に割れて読み順が壊れる。
+            ColumnWidth = double.PositiveInfinity,
+            PagePadding = new Thickness(0),
+            FontSize = fontSize,
+            Foreground = theme.Foreground,
+            TextAlignment = TextAlignment.Left,
+        };
 
         foreach (var diagnostic in diagnostics)
-            stack.Children.Add(BuildDiagnostic(diagnostic, theme, fontSize));
+            document.Blocks.Add(BuildDiagnostic(diagnostic, theme, fontSize));
 
         if (fixes.Show && fixes.OnApply is not null)
-            foreach (var element in BuildFixes(fixes, theme, fontSize))
-                stack.Children.Add(element);
+            foreach (var block in BuildFixes(fixes, theme, fontSize))
+                document.Blocks.Add(block);
 
         if (diagnostics.Count > 0 && blocks.Count > 0)
-            stack.Children.Add(BuildSeparator(theme));
+            document.Blocks.Add(BuildSeparator(theme));
 
         foreach (var block in blocks)
         {
             switch (block.Kind)
             {
                 case HoverBlockKind.Code:
-                    stack.Children.Add(BuildCode(block, theme, monoFont, fontSize, languages));
+                    document.Blocks.Add(BuildCode(block, theme, monoFont, fontSize, languages));
                     break;
                 case HoverBlockKind.Rule:
-                    stack.Children.Add(BuildSeparator(theme));
+                    document.Blocks.Add(BuildSeparator(theme));
                     break;
                 default:
-                    stack.Children.Add(BuildText(block, theme, monoFont, fontSize));
+                    document.Blocks.Add(BuildText(block, theme, monoFont, fontSize));
                     break;
             }
         }
 
-        return stack;
+        return document;
     }
 
-    private static UIElement BuildDiagnostic(LspDiagnostic diagnostic, EditorTheme theme, double fontSize)
+    /// <summary>押せる行を <see cref="FlowDocument"/> に置くための包み。段落まわりの既定の余白は
+    /// 使わない（間隔は中の <see cref="Border"/> がこれまでどおり持つ）。</summary>
+    private static BlockUIContainer Wrap(UIElement element) =>
+        new(element) { Margin = new Thickness(0) };
+
+    private static Block BuildDiagnostic(LspDiagnostic diagnostic, EditorTheme theme, double fontSize)
     {
         var brush = diagnostic.Severity switch
         {
@@ -100,10 +121,9 @@ internal static class HoverContentBuilder
             _ => theme.DiagnosticHint,
         };
 
-        var text = new TextBlock
+        var text = new Paragraph
         {
             FontSize = fontSize,
-            TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 2),
         };
         // 重大度は色の付いた丸で示す（アイコンフォントに依存しない）。
@@ -122,7 +142,7 @@ internal static class HoverContentBuilder
     private static string Origin(LspDiagnostic diagnostic) => HoverCopyText.Origin(diagnostic);
 
     /// <summary>電球と、開いているときの中身（取得中／候補なし／候補の行）。</summary>
-    private static IEnumerable<UIElement> BuildFixes(
+    private static IEnumerable<Block> BuildFixes(
         HoverFixSection fixes, EditorTheme theme, double fontSize)
     {
         // 件数は<b>数え終わってから</b>だけ出す。押す前に問い合わせない以上、そこに数字は無い。
@@ -147,9 +167,8 @@ internal static class HoverContentBuilder
             yield return Muted($"… 他 {fixes.Hidden} 件", theme, fontSize);
     }
 
-    private static UIElement Muted(string text, EditorTheme theme, double fontSize) => new TextBlock
+    private static Block Muted(string text, EditorTheme theme, double fontSize) => new Paragraph(new Run(text))
     {
-        Text = text,
         FontSize = fontSize,
         Foreground = theme.LineNumberFg,
         Margin = new Thickness(4, 1, 0, 1),
@@ -157,7 +176,7 @@ internal static class HoverContentBuilder
 
     /// <summary>電球。押すと候補の開閉を切り替える（既定は閉じたまま——読みに来ただけの人を邪魔しない）。
     /// <paramref name="count"/> は数え終わっていれば件数、まだなら null。</summary>
-    private static UIElement BuildFixToggle(
+    private static Block BuildFixToggle(
         int? count, bool expanded, EditorTheme theme, double fontSize, Action? onToggle)
     {
         var label = new TextBlock { FontSize = fontSize };
@@ -177,13 +196,13 @@ internal static class HoverContentBuilder
             BorderThickness = new Thickness(1),
             Cursor = System.Windows.Input.Cursors.Hand,
         };
-        if (onToggle is null) return row;
+        if (onToggle is null) return Wrap(row);
 
         row.MouseEnter += (_, _) => row.Background = theme.CurrentLineBg;
         row.MouseLeave += (_, _) => row.Background = expanded ? theme.CurrentLineBg : Brushes.Transparent;
         // Handled にして、ポップアップ全体の「クリックで閉じる」より先にここで受け取る。
         row.MouseLeftButtonUp += (_, e) => { e.Handled = true; onToggle(); };
-        return row;
+        return Wrap(row);
     }
 
     /// <summary>電球の目印（テストから引くための <see cref="FrameworkElement.Tag"/>）。</summary>
@@ -191,7 +210,7 @@ internal static class HoverContentBuilder
 
     /// <summary>押せる修正 1 件。<see cref="FrameworkElement.Tag"/> にアクションを載せてあるので、
     /// テストからも「どの行がどの修正か」を辿れる。</summary>
-    private static UIElement BuildFix(
+    private static Block BuildFix(
         LspCodeAction action, EditorTheme theme, double fontSize, Action<LspCodeAction> onApply)
     {
         var label = new TextBlock
@@ -215,22 +234,21 @@ internal static class HoverContentBuilder
         row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
         // Handled にして、ポップアップ全体の「クリックで閉じる」より先にここで受け取る。
         row.MouseLeftButtonUp += (_, e) => { e.Handled = true; onApply(action); };
-        return row;
+        return Wrap(row);
     }
 
-    private static UIElement BuildSeparator(EditorTheme theme) => new Border
+    private static Block BuildSeparator(EditorTheme theme) => Wrap(new Border
     {
         Height = 1,
         Background = theme.IndentGuideBrush,
         Margin = new Thickness(0, 5, 0, 5),
-    };
+    });
 
-    private static UIElement BuildText(HoverBlock block, EditorTheme theme, FontFamily monoFont, double fontSize)
+    private static Block BuildText(HoverBlock block, EditorTheme theme, FontFamily monoFont, double fontSize)
     {
-        var text = new TextBlock
+        var text = new Paragraph
         {
             FontSize = fontSize,
-            TextWrapping = TextWrapping.Wrap,
             Foreground = theme.Foreground,
             Margin = new Thickness(0, 0, 0, 2),
         };
@@ -254,19 +272,26 @@ internal static class HoverContentBuilder
         return text;
     }
 
-    private static UIElement BuildCode(
+    /// <summary>コードフェンス。<b>段落として</b>置く——ここがシグネチャで、ポップアップから
+    /// いちばん持ち出したい文字だから、選択できる側に残す。包み（<see cref="BlockUIContainer"/>）に
+    /// 逃がすと角丸は保てるが、その中身は選択の対象から外れてしまう。</summary>
+    private static Block BuildCode(
         HoverBlock block, EditorTheme theme, FontFamily monoFont, double fontSize,
         SyntaxLanguageRegistry? languages)
     {
         var lines = block.Code.Replace("\r\n", "\n").Split('\n');
         var tokens = Tokenize(lines, block.Language, languages);
 
-        var text = new TextBlock
+        var text = new Paragraph
         {
             FontFamily = monoFont,
             FontSize = fontSize,
             Foreground = theme.Foreground,
-            TextWrapping = TextWrapping.Wrap,
+            Background = theme.LineNumberBg,
+            BorderBrush = theme.IndentGuideBrush,
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(7, 4, 7, 5),
+            Margin = new Thickness(0, 0, 0, 3),
         };
 
         for (var i = 0; i < lines.Length; i++)
@@ -275,19 +300,10 @@ internal static class HoverContentBuilder
             AppendCodeLine(text, lines[i], tokens is null || i >= tokens.Length ? null : tokens[i].Tokens, theme);
         }
 
-        return new Border
-        {
-            Background = theme.LineNumberBg,
-            BorderBrush = theme.IndentGuideBrush,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(3),
-            Padding = new Thickness(7, 4, 7, 5),
-            Margin = new Thickness(0, 0, 0, 3),
-            Child = text,
-        };
+        return text;
     }
 
-    private static void AppendCodeLine(TextBlock text, string line, SyntaxToken[]? tokens, EditorTheme theme)
+    private static void AppendCodeLine(Paragraph text, string line, SyntaxToken[]? tokens, EditorTheme theme)
     {
         if (tokens is null || tokens.Length == 0)
         {

@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using Editor.Controls.Rendering;
@@ -202,15 +203,28 @@ public class HoverQuickFixTests
             message, DiagnosticSeverity.Warning);
 
     /// <summary>その目印（<see cref="FrameworkElement.Tag"/>）を載せた行。修正行はアクション自身、
-    /// 電球は <see cref="HoverContentBuilder.FixToggleTag"/> を載せている。</summary>
-    private static FrameworkElement? FindByTag(DependencyObject root, object tag)
+    /// 電球は <see cref="HoverContentBuilder.FixToggleTag"/> を載せている。
+    ///
+    /// <para>中身は <see cref="FlowDocument"/> になったので、押せる行は
+    /// <see cref="BlockUIContainer"/> の中にいる——文書側（Block）とビジュアル側の両方をたどる。</para></summary>
+    internal static FrameworkElement? FindByTag(DependencyObject root, object tag)
     {
         if (root is FrameworkElement element && Equals(element.Tag, tag)) return element;
 
-        var count = VisualTreeHelper.GetChildrenCount(root);
-        for (var i = 0; i < count; i++)
+        // 文書側。Block は Visual ではないので、ビジュアルツリーの走査には渡せない。
+        if (root is FlowDocument document) return FindInBlocks(document.Blocks, tag);
+        if (root is Section section) return FindInBlocks(section.Blocks, tag);
+        if (root is BlockUIContainer { Child: DependencyObject blockChild })
+            return FindByTag(blockChild, tag);
+        if (root is Block) return null;
+
+        if (root is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D)
         {
-            if (FindByTag(VisualTreeHelper.GetChild(root, i), tag) is { } found) return found;
+            var count = VisualTreeHelper.GetChildrenCount(root);
+            for (var i = 0; i < count; i++)
+            {
+                if (FindByTag(VisualTreeHelper.GetChild(root, i), tag) is { } found) return found;
+            }
         }
 
         // 未レイアウトの要素はビジュアルツリーに現れないことがあるので、論理側もたどる。
@@ -226,6 +240,15 @@ public class HoverQuickFixTests
             return FindByTag(borderChild, tag);
         if (root is ContentControl { Content: DependencyObject content })
             return FindByTag(content, tag);
+        return null;
+    }
+
+    private static FrameworkElement? FindInBlocks(BlockCollection blocks, object tag)
+    {
+        foreach (var block in blocks)
+        {
+            if (FindByTag(block, tag) is { } found) return found;
+        }
         return null;
     }
 
