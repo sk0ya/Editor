@@ -176,11 +176,17 @@ a capture happens the mouse has left, so **they are not in the picture**.
 retyped). `HoverContentBuilder.Build` therefore returns a `FlowDocument`: prose and **code fences are
 `Paragraph`s** (so the signature — the thing most worth taking — is inside the selection), while the
 **lightbulb, fix rows and separators stay `Border`s inside `BlockUIContainer`**, which keeps their look and
-their click handlers. The viewer is `IsSelectionEnabled=true` but **`Focusable=false`**: keyboard focus must
-stay in the buffer (Rider behaviour), and WPF selection works without it — `HoverSelectionTests` proves both
-halves with a real `VisualTreeHelper.HitTest` on a fix row (synthetic `RaiseEvent` would pass even if the
-viewer swallowed input) and a real selection round-trip. Because focus stays in the buffer, **plain `Ctrl+C`
-is taken only while the popup has a selection**, otherwise it falls through to yank. Closing rules had to
+their click handlers. The viewer must be **`Focusable=true`**: WPF text selection only starts once the control can take focus, so
+with `Focusable=false` a drag selects **nothing, silently** — no exception, no warning, and no test goes red
+(measured: false → empty, true → the text; `FlowDocument.ColumnWidth` is irrelevant, that was the wrong
+suspect). Keyboard focus still belongs to the buffer, so it is only *borrowed*: `ReturnFocusToBuffer` hands it
+back on `PreviewMouseLeftButtonUp` (posted at `Background` priority — returning it inline pre-empts the
+selection being finalized) and again in `HideHoverInfo`. That is safe because **the selection survives losing
+focus**, opening the popup steals nothing (the `Popup` itself is `Focusable=false`), and window activation is
+never taken. `Viewer_IsFocusable_OrDraggingSelectsNothing` guards the invariant; `HoverSelectionTests` also
+covers a real `VisualTreeHelper.HitTest` on a fix row (a synthetic `RaiseEvent` would pass even if the viewer
+swallowed input). Because focus lives in the buffer, **plain `Ctrl+C` is taken only while the popup has a
+selection**, otherwise it falls through to yank. Closing rules had to
 learn about dragging too: `MouseLeave` is ignored while the left button is down, and a `MouseLeftButtonUp`
 closes only when it was a real click (moved ≤ 3px) with nothing selected — otherwise a drag-select ended by
 destroying its own selection. The `Paragraph` code block loses the old `CornerRadius`; that is the price of

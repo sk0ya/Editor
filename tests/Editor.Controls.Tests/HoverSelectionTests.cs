@@ -34,12 +34,12 @@ public class HoverSelectionTests
                     Show: true, Expanded: true, Loading: false, Loaded: true,
                     Fixes: [fix], Hidden: 0, OnToggle: null, OnApply: _ => { }));
 
-            // 本物と同じ設定の表示器（Focusable=false が効いていても押せることを見る）。
+            // 本物と同じ設定の表示器。
             var viewer = new FlowDocumentScrollViewer
             {
                 Document = document,
                 IsSelectionEnabled = true,
-                Focusable = false,
+                Focusable = true,
                 IsTabStop = false,
                 Padding = new Thickness(0),
                 Background = Brushes.Transparent,
@@ -69,6 +69,24 @@ public class HoverSelectionTests
             {
                 if (window is not null) { window.Close(); window.Content = null; }
             }
+        });
+    }
+
+    /// <summary>WPF のテキスト選択は<b>フォーカスを取れたときだけ</b>始まる。ここを false にすると
+    /// ドラッグしても一文字も選べない——しかも例外も警告も出ず、他のどのテストも赤くならない
+    /// （実測で判明：false は空、true は選択が返る）。焦点は
+    /// <c>ReturnFocusToBuffer</c> がマウスを離した直後に本文へ返すので、借りるのは一瞬。</summary>
+    [Fact]
+    public void Viewer_IsFocusable_OrDraggingSelectsNothing()
+    {
+        WithHover(editor =>
+        {
+            var viewer = editor.HoverPopupViewerForTest;
+
+            Assert.NotNull(viewer);
+            Assert.True(viewer!.Focusable, "Focusable=false だとドラッグ選択が黙って効かなくなる");
+            Assert.True(viewer.IsSelectionEnabled);
+            Assert.False(viewer.IsTabStop, "Tab の巡回先にはしない（焦点はマウスのときだけ借りる）");
         });
     }
 

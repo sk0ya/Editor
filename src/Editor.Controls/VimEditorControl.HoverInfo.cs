@@ -333,6 +333,8 @@ public partial class VimEditorControl
         _hoverFixes = null;
         _hoverHiddenFixes = 0;
         ShowHoverChrome(false);
+        // 焦点を貸したまま閉じると、キーの行き先が消えたポップアップになる。
+        ReturnFocusToBuffer();
         if (_hoverPopup is not null) _hoverPopup.IsOpen = false;
     }
 
@@ -358,6 +360,15 @@ public partial class VimEditorControl
         // 外した＝もう用が無い。マウスがポップアップの上に残っているなら、
         // 「離れたら閉じる」という普段の作法へ戻すだけにする。
         if (!_hoverPinned && !_pointerInHoverPopup) HideHoverInfo();
+    }
+
+    /// <summary>ポップアップへ貸していた入力フォーカスを本文へ返す。選択はそのまま残る。</summary>
+    private void ReturnFocusToBuffer()
+    {
+        if (_hoverPopupViewer is not { IsKeyboardFocusWithin: true }) return;
+        Canvas.Focus();
+        // クリックで本文へ戻るときと同じ作法（共有 HWND なので TSF の焦点も指し直す）。
+        AssertImeStoreFocus();
     }
 
     /// <summary>ポップアップの中で文字が選ばれているか。</summary>
@@ -437,16 +448,21 @@ public partial class VimEditorControl
 
         // 中身は FlowDocument（<see cref="HoverContentBuilder"/>）。TextBlock を積んでいた頃は
         // 読めても一文字も選べず、シグネチャは手で打ち直すしかなかった。
-        // Focusable=false は譲れない線：入力フォーカスは本文に置いたままにする（Rider と同じ）。
-        // WPF の選択はフォーカスを取れなくても働くので、選べることと焦点を渡さないことは両立する。
+        //
+        // Focusable は true でなければならない。WPF のテキスト選択はフォーカスを取れたときだけ
+        // 始まる——false のままだとドラッグしても<b>一文字も選べない</b>（実測：Focusable=false は
+        // 空、true は選択が返る。ColumnWidth は無関係だった）。とはいえ入力フォーカスの置き場は
+        // 本文であり続けるので、<see cref="ReturnFocusToBuffer"/> でマウスを離した直後に返す。
+        // 選択はフォーカスを返しても残るので（これも実測）、「選ぶ間だけ借りる」で両立する。
+        // 開いただけでは奪わない（Popup 自体が Focusable=false なので、焦点は押されて初めて動く）。
         _hoverPopupViewer = new FlowDocumentScrollViewer
         {
             MaxHeight = 340,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             IsSelectionEnabled = true,
-            Focusable = false,
-            IsTabStop = false,
+            Focusable = true,
+            IsTabStop = false,     // Tab の巡回先にはしない（借りるのはマウスのときだけ）
             Padding = new Thickness(0),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
@@ -489,6 +505,12 @@ public partial class VimEditorControl
         // 修正行と印は自分で Handled にするので、ここへは上がってこない。
         _hoverPopupBorder.PreviewMouseLeftButtonDown += (_, e) =>
             _hoverPressPoint = e.GetPosition(_hoverPopupBorder);
+        // 押して離したら、借りていた入力フォーカスを本文へ返す。Preview 段で拾うのは、
+        // 修正行や印が Handled にしたクリックでも必ず通るため。実際に返すのは<b>後回し</b>で、
+        // その場で返すと選択を締めくくる処理より先に割り込んでしまう。
+        _hoverPopupBorder.PreviewMouseLeftButtonUp += (_, _) =>
+            Dispatcher.BeginInvoke(
+                ReturnFocusToBuffer, System.Windows.Threading.DispatcherPriority.Background);
         _hoverPopupBorder.MouseLeftButtonUp += (_, e) =>
         {
             if (e.Handled) return;
