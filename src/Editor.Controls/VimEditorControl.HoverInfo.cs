@@ -560,6 +560,13 @@ public partial class VimEditorControl
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             SelectionBrush = _theme.SelectionBg,
+            // 既定の 0.4 を掛けると、もともと半透明のテーマ色がほとんど見えなくなる。
+            // 濃さはテーマのブラシ自身が持っているので、ここでは薄めない。
+            SelectionOpacity = 1.0,
+            // 焦点を本文へ返した瞬間に<b>強調の描画だけ</b>が消えるのを止める（既定は消える）。
+            // 選択の中身は焦点を失っても残るので前は気づけなかったが、実測では選択色の画素が
+            // 4032 → 0 になっていた。選んだ範囲が見えないのでは、選べないのと変わらない。
+            IsInactiveSelectionHighlightEnabled = true,
         };
         // 印（📌 / 📋）は本文の<b>上へ重ねる</b>——列を分けて幅を予約すると、印を使わない大多数の
         // ホバーまで細くなる。重ねてよいのは、出ているのがマウスを乗せている間だけだから。

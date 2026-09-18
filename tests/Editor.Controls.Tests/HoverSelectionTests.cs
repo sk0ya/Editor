@@ -90,6 +90,23 @@ public class HoverSelectionTests
         });
     }
 
+    /// <summary>焦点を本文へ返すと、WPF は既定で<b>選択の強調だけ</b>を消す（中身は残るので
+    /// <c>Selection.Text</c> を見ていても気づけない）。実測では選択色の画素が 4032 → 0 になった。
+    /// マウスを離した瞬間に選んだ範囲が見えなくなるので、選べないのとほぼ同じになる。</summary>
+    [Fact]
+    public void Selection_StaysVisibleAfterFocusGoesBackToTheBuffer()
+    {
+        WithHover(editor =>
+        {
+            var viewer = editor.HoverPopupViewerForTest;
+
+            Assert.NotNull(viewer);
+            Assert.True(
+                viewer!.IsInactiveSelectionHighlightEnabled,
+                "false だとマウスを離した瞬間に選択の強調が消える");
+        });
+    }
+
     /// <summary>本命その 2：説明の文字が選べる（選んだ中身がちゃんと取れる）。</summary>
     [Fact]
     public void HoverText_CanBeSelected()

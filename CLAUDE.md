@@ -183,7 +183,12 @@ suspect). Keyboard focus still belongs to the buffer, so it is only *borrowed*: 
 back on `PreviewMouseLeftButtonUp` (posted at `Background` priority — returning it inline pre-empts the
 selection being finalized) and again in `HideHoverInfo`. That is safe because **the selection survives losing
 focus**, opening the popup steals nothing (the `Popup` itself is `Focusable=false`), and window activation is
-never taken. `Viewer_IsFocusable_OrDraggingSelectsNothing` guards the invariant; `HoverSelectionTests` also
+never taken — but only with **`IsInactiveSelectionHighlightEnabled = true`**: WPF's default drops the
+selection *highlight* the instant focus leaves, while keeping `Selection.Text`, so the range silently stops
+being visible on mouse-up (measured: selection-coloured pixels 4032 → 0, and → 4032 with the flag on).
+Watching `Selection.Text` cannot catch that; a selection you cannot see is barely a selection.
+`SelectionOpacity` is pinned to 1.0 too, since the theme's `SelectionBg` already carries its own alpha and
+the default 0.4 washes it out. `Viewer_IsFocusable_OrDraggingSelectsNothing` guards the invariant; `HoverSelectionTests` also
 covers a real `VisualTreeHelper.HitTest` on a fix row (a synthetic `RaiseEvent` would pass even if the viewer
 swallowed input). Because focus lives in the buffer, **plain `Ctrl+C` is taken only while the popup has a
 selection**, otherwise it falls through to yank. Closing rules had to
