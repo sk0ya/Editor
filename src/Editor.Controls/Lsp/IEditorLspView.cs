@@ -58,6 +58,10 @@ public interface IEditorLspView : IDisposable
     event Action<IReadOnlyList<LspDocumentLink>>? DocumentLinksChanged;
     event Action<IReadOnlyList<LspCodeLens>>? CodeLensesChanged;
 
+    /// <summary>いま出している CodeLens が古くなった（true）／新しくなった（false）。
+    /// 行が増減する編集のあと、取り直すまでのあいだに立つ。消さずに薄く出し、押せなくするための印。</summary>
+    event Action<bool>? CodeLensStaleChanged;
+
     void OnFileOpened(string? filePath, string text);
     void OnTextChanged(string text);
     /// <summary>

@@ -115,6 +115,39 @@ public class HoverMarkdownTests
         Assert.Equal("See the docs for details", Text(block));
     }
 
+    /// <summary>Roslyn は要約を 1 行に畳み、インラインコードの隣の空白を <c>&amp;nbsp;</c> と書いて返す
+    /// （実測: <c>LoomoSettings&amp;nbsp;を&amp;nbsp;`%APPDATA%/Loomo/settings.json`&amp;nbsp;に永続化する。</c>）。
+    /// 外さないと、綴りがそのまま本文に見える。</summary>
+    [Fact]
+    public void Parse_HtmlEntities_BecomeCharacters()
+    {
+        var block = Assert.Single(HoverMarkdown.Parse(
+            "LoomoSettings&nbsp;を&nbsp;`settings.json`&nbsp;に永続化する。"));
+
+        Assert.Equal("LoomoSettings を settings.json に永続化する。", Text(block));
+        // 戻した空白は普通の空白。NBSP のままだと折り返さず、写した文字にも紛れ込む。
+        Assert.DoesNotContain('\u00A0', Text(block));
+    }
+
+    /// <summary><c>&amp;lt;</c> のような記号も戻す（<c>List&lt;int&gt;</c> が綴りで見えていた）。</summary>
+    [Fact]
+    public void Parse_EscapedAngleBrackets_BecomeCharacters()
+    {
+        var block = Assert.Single(HoverMarkdown.Parse("returns List&lt;int&gt; &amp; null"));
+
+        Assert.Equal("returns List<int> & null", Text(block));
+    }
+
+    /// <summary>コードの中身は書かれたまま——写してそのまま貼れることを優先する。</summary>
+    [Fact]
+    public void Parse_EntitiesInsideCode_AreLeftAlone()
+    {
+        var blocks = HoverMarkdown.Parse("```csharp\nvar s = \"&amp;\";\n```\n\n`a&amp;b` の話");
+
+        Assert.Equal("var s = \"&amp;\";", blocks[0].Code);
+        Assert.Contains(blocks[1].Spans, s => s.Style == HoverSpanStyle.Code && s.Text == "a&amp;b");
+    }
+
     [Fact]
     public void Parse_BlankOrWhitespace_IsEmpty()
     {

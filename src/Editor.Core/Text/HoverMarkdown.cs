@@ -156,7 +156,7 @@ public static class HoverMarkdown
         void FlushPlain()
         {
             if (plain.Length == 0) return;
-            spans.Add(new HoverSpan(plain.ToString(), baseStyle));
+            spans.Add(new HoverSpan(DecodeEntities(plain.ToString()), baseStyle));
             plain.Clear();
         }
 
@@ -212,6 +212,22 @@ public static class HoverMarkdown
 
         FlushPlain();
     }
+
+    /// <summary>HTML の文字参照（<c>&amp;nbsp;</c> <c>&amp;lt;</c> など）を文字へ戻す。
+    /// Roslyn は要約を<b>1 行に畳んで</b>返すので、インラインコードの隣の空白が Markdown で
+    /// 潰れないよう <c>&amp;nbsp;</c> と書く——外さないと実測で
+    /// <c>LoomoSettings&amp;nbsp;を&amp;nbsp;…</c> という綴りがそのまま見えていた。
+    ///
+    /// <para>戻す空白は<b>普通の空白</b>にする。NBSP のまま出すと、そこで折り返せないうえ、
+    /// ポップアップから写した文字（<c>HoverCopyText</c>）にも紛れ込んでコードに貼られてしまう。
+    /// 置き換えるのは文字参照を外したときだけなので、本文にもとからある NBSP は残る。</para>
+    ///
+    /// <para>コード（フェンス・インライン）は通さない——CommonMark でもコード中の文字参照は
+    /// 文字として扱われるし、シグネチャは書かれたまま写せるべきだから。</para></summary>
+    private static string DecodeEntities(string text) =>
+        text.Contains('&')
+            ? System.Net.WebUtility.HtmlDecode(text).Replace('\u00A0', ' ')
+            : text;
 
     /// <summary>その <c>*</c> が斜体の開始になれるか。CommonMark では空白が続く <c>*</c> は開始にならない——
     /// これを見ないと <c>width * height * depth</c> が斜体と読まれ、<b>アスタリスクごと消える</b>

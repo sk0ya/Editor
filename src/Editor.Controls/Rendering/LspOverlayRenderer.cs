@@ -101,7 +101,7 @@ internal static class LspOverlayRenderer
         DrawingContext dc, EditorTheme theme, GlyphMetrics metrics,
         IReadOnlyList<LspCodeLens> lineLenses, double y, double textLeft,
         string declarationText, double scrollOffsetX, double viewportWidth,
-        IList<(Rect Bounds, LspCodeLens Lens)> hitRects)
+        IList<(Rect Bounds, LspCodeLens Lens)> hitRects, bool stale = false)
     {
         if (lineLenses.Count == 0) return;
 
@@ -114,7 +114,11 @@ internal static class LspOverlayRenderer
 
         foreach (var lens in lineLenses)
         {
-            if (string.IsNullOrWhiteSpace(lens.Title)) continue;
+            // 行はレンズが未解決のうちから確保してあるので、ここへは Title も Command も無い
+            // レンズが来る。ラベルと当たり判定は<b>押せるものだけ</b>——押しても何も起きない
+            // 文字を出さない、という元からの約束はそのまま。
+            if (string.IsNullOrWhiteSpace(lens.Title) ||
+                string.IsNullOrWhiteSpace(lens.Command?.Command)) continue;
 
             if (!first)
             {
@@ -124,12 +128,17 @@ internal static class LspOverlayRenderer
             }
             first = false;
 
-            var text = metrics.FormatScaledText(lens.Title, theme.LinkColor, LensScale);
+            // 古い（行が増減した直後）ラベルは薄く出す。消すと本文が跳ねるので残すが、
+            // いまの本文に対する答えではないことは見て分かるようにする。
+            var brush = stale ? theme.TokenComment : theme.LinkColor;
+            var text = metrics.FormatScaledText(lens.Title, brush, LensScale);
             if (x > viewportWidth) break;
 
             dc.DrawText(text, new Point(x, y + (metrics.LineHeight - text.Height) / 2));
             // 当たり判定は行の高さいっぱいに取る——文字が小さいので、字面ちょうどだと押しにくい。
-            hitRects.Add((new Rect(x, y, text.Width, metrics.LineHeight), lens));
+            // 古いあいだは取らない。旧行のラベルを押すと別の宣言に対して実行されうる。
+            if (!stale)
+                hitRects.Add((new Rect(x, y, text.Width, metrics.LineHeight), lens));
             x += text.Width;
         }
     }

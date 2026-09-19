@@ -60,8 +60,11 @@ public sealed class LspProtocolTests
         Assert.True(lenses[1].NeedsResolve);
     }
 
+    /// <summary>解決できなかったレンズも<b>落とさない</b>——行が消えると、いったん確保した
+    /// 注釈行が引っ込んで本文が跳ねる（実測で起動直後は 34 件中 18 件が解決に失敗していた）。
+    /// 押せないラベルを描かないのは描画側の役目。</summary>
     [Fact]
-    public async Task Code_lens_display_filter_drops_non_executable_results_after_resolve()
+    public async Task Code_lens_display_filter_keeps_rows_for_results_it_could_not_resolve()
     {
         static LspRange Range(int line) => new(
             new LspPosition(line, 0), new LspPosition(line, 1));
@@ -84,11 +87,12 @@ public sealed class LspProtocolTests
             });
 
         Assert.Equal(2, resolveCalls);
-        Assert.Equal([resolved, alreadyExecutable], visible);
+        Assert.Equal([resolved, unresolvedWithoutCommand, alreadyExecutable], visible);
     }
 
+    /// <summary>解決できないサーバーでも行は残す。ラベルが入らないだけ。</summary>
     [Fact]
-    public async Task Code_lens_display_filter_never_keeps_unresolved_results_without_resolve_support()
+    public async Task Code_lens_display_filter_keeps_rows_without_resolve_support()
     {
         var unresolved = new LspCodeLens(
             new LspRange(new LspPosition(1, 0), new LspPosition(1, 1)),
@@ -98,7 +102,7 @@ public sealed class LspProtocolTests
             [unresolved], supportsResolve: false,
             resolve: (_, _) => throw new InvalidOperationException("resolve must not be called"));
 
-        Assert.Empty(visible);
+        Assert.Equal([unresolved], visible);
     }
 
     [Fact]

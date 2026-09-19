@@ -1004,6 +1004,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _lspView.DocumentHighlightsChanged += OnLspDocumentHighlightsChanged;
         _lspView.DocumentLinksChanged += OnLspDocumentLinksChanged;
         _lspView.CodeLensesChanged += OnLspCodeLensesChanged;
+        _lspView.CodeLensStaleChanged += OnLspCodeLensStaleChanged;
 
         _completionDebounce = new System.Windows.Threading.DispatcherTimer
         {
@@ -1309,6 +1310,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private void OnLspCodeLensesChanged(IReadOnlyList<LspCodeLens> lenses)
     {
         Canvas.SetCodeLenses(lenses);
+    }
+
+    private void OnLspCodeLensStaleChanged(bool stale)
+    {
+        Canvas.SetCodeLensesStale(stale);
     }
 
     private void OnLspFoldingRangesChanged(IReadOnlyList<LspFoldingRange> ranges)

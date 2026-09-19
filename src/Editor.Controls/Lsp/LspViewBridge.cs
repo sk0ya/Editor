@@ -82,6 +82,10 @@ public sealed class LspViewBridge : IEditorLspView
     private System.Threading.Timer? _codeLensDebounce;
     private CancellationTokenSource? _codeLensCts;
     private const int CodeLensDebounceMs = 700;
+    /// <summary>いまのバッファの行数と、いま持っている CodeLens を取ったときの行数。
+    /// 行数が変わらない編集では注釈行の位置も変わらないので、レンズを捨てずに残せる。</summary>
+    private int _lineCount = 1;
+    private int _codeLensLineCount = 1;
     private const int CodeLensResolveConcurrency = 8;
 
     // Semantic tokens
@@ -195,6 +199,7 @@ public sealed class LspViewBridge : IEditorLspView
 
     /// <summary>Fired on the dispatcher thread when code lenses are refreshed.</summary>
     public event Action<IReadOnlyList<LspCodeLens>>? CodeLensesChanged;
+    public event Action<bool>? CodeLensStaleChanged;
 
     public string? CurrentUri => _currentUri;
 
@@ -208,6 +213,8 @@ public sealed class LspViewBridge : IEditorLspView
     public void OnFileOpened(string? filePath, string text)
     {
         Interlocked.Increment(ref _documentGeneration);
+        _lineCount = CountLines(text);
+        _codeLensLineCount = _lineCount;
         CancelCodeLensRequests();
         HideCompletion();
         HideSignatureHelp();
@@ -220,6 +227,7 @@ public sealed class LspViewBridge : IEditorLspView
         DocumentLinksChanged?.Invoke(_documentLinks);
         _codeLenses = [];
         CodeLensesChanged?.Invoke(_codeLenses);
+        SetCodeLensStale(false);
         _diagnostics = [];
         _inlayHints = [];
         _inlayHintsCts?.Cancel();
@@ -265,6 +273,8 @@ public sealed class LspViewBridge : IEditorLspView
 
         _document = document;
         _currentUri = document.Uri;
+        // 憶えるときと同じ綴り（文書が名乗るパス）で引く。
+        ReserveCachedCodeLensRows(document.FilePath);
         if (_semanticTokensEnabled)
             RequestSemanticTokens();
         document.DiagnosticsChanged += OnDocumentDiagnostics;
@@ -304,10 +314,14 @@ public sealed class LspViewBridge : IEditorLspView
             if (!_documentReady)
             {
                 CancelCodeLensRequests();
+                // サーバーが一時的に落ちた・つなぎ直しているだけ。注釈行は消さずに古い印を立てる
+                // ——消すと本文がまるごと跳ね、つながり直した数秒後にまた戻ってくる（実測で、
+                // 起動直後に一度これが起きて「x 個の参照」が消えて出直して見えていた）。
+                // ファイルを閉じた・切り替えたときは OnFileOpened がきちんと捨てる。
                 if (_codeLenses.Count > 0)
                 {
-                    _codeLenses = [];
-                    CodeLensesChanged?.Invoke(_codeLenses);
+                    Log("[lens] stale: document not ready");
+                    SetCodeLensStale(true);
                 }
             }
             if (_documentReady && !wasReady) OnDocumentReady(doc);
@@ -367,6 +381,7 @@ public sealed class LspViewBridge : IEditorLspView
     public void OnTextChanged(string text)
     {
         Interlocked.Increment(ref _documentGeneration);
+        _lineCount = CountLines(text);
         CancelCodeLensRequests();
         if (_codeActionsVisible)
         {
@@ -388,12 +403,15 @@ public sealed class LspViewBridge : IEditorLspView
         if (_semanticTokensEnabled)
             ScheduleSemanticTokenRefresh();
         ScheduleDocumentLinkRefresh();
-        // CodeLensの行位置は編集で直ちに古くなる。再取得のデバウンス中に旧行へ
-        // クリック可能なラベルを残すと、別の宣言を実行してしまう可能性があるため先に消す。
-        if (_codeLenses.Count > 0)
+        // CodeLensの行位置が古くなるのは<b>行が増減したとき</b>だけ。そのあいだ旧行に押せる
+        // ラベルを残すと別の宣言を実行しかねないので、押せなくする（＝古い印を立てる）。
+        // かつて<b>消して</b>いたときは、注釈行がいったん畳まれて本文が上へ跳ね、700ms後に
+        // 戻ってきて上下にガタついた——しかも「x 個の参照」が消えて出直して見えた。
+        // 行数が変わらない編集（＝打鍵のほとんど）では位置も正しいので、そのまま触らない。
+        if (_codeLenses.Count > 0 && _lineCount != _codeLensLineCount)
         {
-            _codeLenses = [];
-            CodeLensesChanged?.Invoke(_codeLenses);
+            Log($"[lens] stale: lines {_codeLensLineCount} -> {_lineCount}");
+            SetCodeLensStale(true);
         }
         ScheduleCodeLensRefresh();
     }
@@ -453,22 +471,150 @@ public sealed class LspViewBridge : IEditorLspView
         {
             var generation = Volatile.Read(ref _documentGeneration);
             var lenses = await doc.RequestCodeLensesAsync(ct);
+
+            // 一覧応答には<b>行</b>がもう入っている。ここで一度流して注釈行だけ先に確保する
+            // ——resolve の完了を待つと、実測で開いてから 3.2 秒後に全宣言の下が一斉にずれた
+            // （一覧は 0.5 秒で届いていた）。まだ分かっていないラベルは下の本発行で入る。
+            if (!await PublishCodeLensesAsync(doc, generation, KeepKnownLabels(_codeLenses, lenses), ct))
+                return;
+
             lenses = await ResolveExecutableCodeLensesAsync(
                 lenses, doc.ServerSupportsCodeLensResolve,
                 (lens, token) => doc.ResolveCodeLensAsync(lens, token), ct);
             ct.ThrowIfCancellationRequested();
-            if (!ReferenceEquals(_document, doc) || generation != Volatile.Read(ref _documentGeneration))
-                return;
-            await _dispatcher.InvokeAsync(() =>
-            {
-                if (ct.IsCancellationRequested) return;
-                if (!ReferenceEquals(_document, doc) || generation != Volatile.Read(ref _documentGeneration)) return;
-                _codeLenses = lenses;
-                CodeLensesChanged?.Invoke(_codeLenses);
-            });
+            await PublishCodeLensesAsync(doc, generation, lenses, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch { }
+    }
+
+    /// <summary>
+    /// ファイルごとに、前回サーバーが返した CodeLens の<b>行</b>を憶えておく置き場。
+    ///
+    /// <para>サーバーの一覧応答は速くても 0.5 秒、起動直後は実測で数秒かかる。そのあいだ注釈行が
+    /// 無いと、本文を読み始めた頃に行が挿さって下がずれる——開いた直後に文字が動く、あの気持ち悪さ。
+    /// 行はファイルを開き直しても滅多に変わらないので、<b>前回の答えをそのまま先に敷いて</b>
+    /// おけば、最初の描画からレイアウトが確定する。中身は推測ではなくサーバー自身の答え。</para>
+    ///
+    /// <para>プロセス内だけで憶える（別ペイン・別ウィンドウは同じ実体を見る）。<b>ディスクへは
+    /// 落とさない</b>——これは表示を数秒早めるだけの目印で、残す値打ちのあるデータではない。
+    /// 起動直後の一回ぶんは素直にサーバーを待つ。</para>
+    /// </summary>
+    private static readonly Dictionary<string, int[]> LensLineCache = new(StringComparer.OrdinalIgnoreCase);
+    private const int LensLineCacheCapacity = 512;
+
+    private static void RememberLensLines(string? filePath, IReadOnlyList<LspCodeLens> lenses)
+    {
+        if (string.IsNullOrEmpty(filePath)) return;
+        var lines = lenses
+            .Select(lens => lens.Range.Start.Line)
+            .Where(line => line >= 0)
+            .Distinct()
+            .ToArray();
+        lock (LensLineCache)
+        {
+            // 上限は器の大きさの話でしかない。溢れたら丸ごと捨てる——失われるのは
+            // 「開いた直後の数秒だけ効く目印」なので、手の込んだ追い出しに見合わない。
+            if (LensLineCache.Count >= LensLineCacheCapacity && !LensLineCache.ContainsKey(filePath))
+                LensLineCache.Clear();
+            LensLineCache[filePath] = lines;
+        }
+    }
+
+    /// <summary>前回の答えから注釈行だけを先に敷く。ラベルはまだ無いので空の行になる。</summary>
+    private void ReserveCachedCodeLensRows(string? filePath)
+    {
+        if (string.IsNullOrEmpty(filePath)) return;
+        int[]? lines;
+        lock (LensLineCache)
+            if (!LensLineCache.TryGetValue(filePath, out lines))
+            {
+                Log($"[lens] cache miss for {filePath}");
+                return;
+            }
+
+        // ファイルが縮んでいることもある。いまの行数に収まるものだけ。
+        var reserved = lines
+            .Where(line => line >= 0 && line < _lineCount)
+            .Select(line => new LspCodeLens(new LspRange(new LspPosition(line, 0), new LspPosition(line, 0))))
+            .ToArray();
+        Log($"[lens] cache hit for {filePath}: {lines.Length} lines, {reserved.Length} usable");
+        if (reserved.Length == 0) return;
+
+        _codeLenses = reserved;
+        CodeLensesChanged?.Invoke(_codeLenses);
+    }
+
+    private bool _codeLensStale;
+
+    private void SetCodeLensStale(bool stale)
+    {
+        if (_codeLensStale == stale) return;
+        _codeLensStale = stale;
+        CodeLensStaleChanged?.Invoke(stale);
+    }
+
+    /// <summary>行を先に確保する発行で、<b>すでに分かっているラベルを消さない</b>。
+    ///
+    /// <para>一覧応答のレンズは未解決＝ラベルが無いので、そのまま流すと「x 個の参照」が
+    /// いったん消えて、resolve が済んでから出直す——再取得のたびに文字が明滅して見える。
+    /// 同じ範囲のラベルを前回の答えから引き継いでおけば、変わるときだけ変わる。</para>
+    ///
+    /// <para>引き継ぐのは<b>ラベルだけ</b>。押したときに使う <c>DataJson</c>/<c>RawJson</c> は
+    /// 新しい応答のものを残すので、クリックは今の文書に対して解決される。</para></summary>
+    internal static IReadOnlyList<LspCodeLens> KeepKnownLabels(
+        IReadOnlyList<LspCodeLens> previous, IReadOnlyList<LspCodeLens> incoming)
+    {
+        if (previous.Count == 0 || incoming.Count == 0) return incoming;
+
+        // 引き当てるのは<b>開始行</b>。注釈行は行ごとに 1 本なので行で足りるし、宣言行に一文字
+        // 打つだけで桁がずれる——範囲まるごとで引くと、そのたびにラベルを落としてしまう。
+        var known = new Dictionary<int, LspCodeActionCommand>();
+        foreach (var lens in previous)
+            if (lens.Command is { } command) known.TryAdd(lens.Range.Start.Line, command);
+        if (known.Count == 0) return incoming;
+
+        var merged = new LspCodeLens[incoming.Count];
+        for (var i = 0; i < incoming.Count; i++)
+            merged[i] = incoming[i].Command is null &&
+                        known.TryGetValue(incoming[i].Range.Start.Line, out var previousCommand)
+                ? incoming[i] with { Command = previousCommand }
+                : incoming[i];
+        return merged;
+    }
+
+    /// <summary>ディスパッチャへ渡して CodeLens を差し替える。文書が切り替わった・編集されたなら
+    /// 何もせず false（呼び出し側はそこで降りる）。</summary>
+    private async Task<bool> PublishCodeLensesAsync(
+        ILspDocument doc, long generation, IReadOnlyList<LspCodeLens> lenses, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested) return false;
+        if (!ReferenceEquals(_document, doc) || generation != Volatile.Read(ref _documentGeneration))
+            return false;
+
+        var published = false;
+        await _dispatcher.InvokeAsync(() =>
+        {
+            if (ct.IsCancellationRequested) return;
+            if (!ReferenceEquals(_document, doc) || generation != Volatile.Read(ref _documentGeneration)) return;
+            Log($"[lens] publish {lenses.Count} ({lenses.Count(l => l.Command is not null)} labelled)");
+            _codeLenses = lenses;
+            _codeLensLineCount = _lineCount;
+            RememberLensLines(doc.FilePath, lenses);
+            CodeLensesChanged?.Invoke(_codeLenses);
+            SetCodeLensStale(false);
+            published = true;
+        });
+        return published;
+    }
+
+    private static int CountLines(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return 1;
+        var lines = 1;
+        foreach (var c in text)
+            if (c == '\n') lines++;
+        return lines;
     }
 
     private void CancelCodeLensRequests()
@@ -479,9 +625,16 @@ public sealed class LspViewBridge : IEditorLspView
     }
 
     /// <summary>
-    /// CodeLensは描画前に実行可能性を確定させる。
-    /// 未解決レンズをそのまま描画すると、Titleの既定値「CodeLens」だけが表示され、
-    /// クリックしてからコマンドなしと判明するため、ユーザーには壊れたリンクに見える。
+    /// CodeLens を解決して、押せるものにはラベルを入れる。
+    ///
+    /// <para><b>解決できなかったものも落とさない</b>。行の数を変えてしまうと、いったん確保した
+    /// 注釈行が消えて本文が跳ねる——実測で、起動直後は 34 件中 18 件が解決に失敗し
+    /// （サーバーがまだ解析中）、確保した行が 4 秒後に半分消えていた。次の取り直しで
+    /// ラベルが入るまで、行だけそのまま残す。</para>
+    ///
+    /// <para>押せないラベルを出さないのは描画側の役目
+    /// （<see cref="Rendering.LspOverlayRenderer.DrawCodeLensRow"/> が command の無いレンズを描かない）。
+    /// ここで捨てる必要はもう無い。</para>
     /// </summary>
     internal static async Task<IReadOnlyList<LspCodeLens>> ResolveExecutableCodeLensesAsync(
         IReadOnlyList<LspCodeLens> lenses,
@@ -501,8 +654,12 @@ public sealed class LspViewBridge : IEditorLspView
             }
 
             if (!supportsResolve || !lens.NeedsResolve)
+            {
+                resolved[index] = lens;
                 return;
+            }
 
+            resolved[index] = lens;   // 解決できなくても行は残す
             try
             {
                 await gate.WaitAsync(ct);

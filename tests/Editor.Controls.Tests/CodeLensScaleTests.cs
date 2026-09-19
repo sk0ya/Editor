@@ -27,8 +27,11 @@ public sealed class CodeLensScaleTests
         });
     }
 
+    /// <summary>未解決のレンズでも<b>行は確保する</b>。行の位置は一覧応答で確定していて、
+    /// resolve の完了を待ってから行を挿すと、本文を読み始めた頃に一斉にずれるため
+    /// （ラベルを出さないのは <see cref="Editor.Controls.Rendering.LspOverlayRenderer"/> 側の役目）。</summary>
     [Fact]
-    public void Canvas_does_not_index_unresolved_code_lenses()
+    public void Canvas_reserves_rows_for_unresolved_code_lenses()
     {
         WpfTestHost.Run(() =>
         {
@@ -45,8 +48,9 @@ public sealed class CodeLensScaleTests
             var indexed = (System.Collections.IDictionary)typeof(EditorCanvas)
                 .GetField("_codeLensesByLine", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(canvas)!;
-            Assert.Single(indexed);
+            Assert.Equal(2, indexed.Count);
             Assert.Contains(0, indexed.Keys.Cast<int>());
+            Assert.Contains(1, indexed.Keys.Cast<int>());
         });
     }
 }

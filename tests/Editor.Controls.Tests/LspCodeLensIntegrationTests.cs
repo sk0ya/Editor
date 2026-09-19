@@ -6,8 +6,11 @@ namespace Editor.Controls.Tests;
 
 public sealed class LspCodeLensIntegrationTests
 {
+    /// <summary>ブリッジは 2 回流す——1 回目は<b>行を確保するため</b>の未解決のまま（範囲は
+    /// 一覧応答の時点で確定している）、2 回目が解決済みで押せるレンズ。解決を待ってから 1 回だけ
+    /// 流していた頃は、実測で開いてから 3.2 秒後に全宣言の下が一斉にずれていた。</summary>
     [Fact]
-    public void View_bridge_publishes_only_resolved_executable_code_lenses()
+    public void View_bridge_reserves_rows_then_publishes_resolved_executable_code_lenses()
     {
         WpfTestHost.Run(() =>
         {
@@ -21,18 +24,17 @@ public sealed class LspCodeLensIntegrationTests
             var resolved = new LspCodeLens(
                 Range(1), new LspCodeActionCommand("test.run", "Run tests"));
             var document = new FakeDocument(
-                [unresolved, unresolvedWithoutCommand, executable], resolved, supportsResolve: true);
+                [unresolved, unresolvedWithoutCommand, executable], resolved, supportsResolve: true)
+            { Path = @"C:\work\publish-sample.cs" };
             var workspace = new FakeWorkspace(document);
             var bridge = new LspViewBridge(Dispatcher.CurrentDispatcher, workspace);
-            IReadOnlyList<LspCodeLens>? published = null;
+            var publishes = new List<IReadOnlyList<LspCodeLens>>();
             var frame = new DispatcherFrame();
             bridge.CodeLensesChanged += lenses =>
             {
-                if (lenses.Count > 0)
-                {
-                published = lenses;
-                    frame.Continue = false;
-                }
+                if (lenses.Count == 0) return;
+                publishes.Add(lenses);
+                if (publishes.Count == 2) frame.Continue = false;
             };
 
             try
@@ -43,35 +45,152 @@ public sealed class LspCodeLensIntegrationTests
                     new Action(() => frame.Continue = false));
                 Dispatcher.PushFrame(frame);
 
-                Assert.NotNull(published);
-                Assert.Equal([resolved, executable], published);
+                Assert.Equal(2, publishes.Count);
+                // 1回目＝行の確保。未解決のまま、範囲（＝行）だけがそろっている。
+                Assert.Equal([unresolved, unresolvedWithoutCommand, executable], publishes[0]);
+                // 2回目＝解決できたものにラベルが入る。resolve に失敗したものも<b>落とさない</b>
+                // （行が消えると本文が跳ねる）。押せるラベルを出さないのは描画側の役目。
+                Assert.Equal([resolved, unresolvedWithoutCommand, executable], publishes[1]);
 
                 document.Ready = false;
+                // サーバーが落ちた／つなぎ直し中。行は消さず、古い印を立てるだけ
+                // （消すと本文がまるごと跳ね、つながり直した数秒後にまた戻ってくる）。
                 document.Connected = false;
-                var cleared = false;
-                var clearFrame = new DispatcherFrame();
-                bridge.CodeLensesChanged += lenses =>
+                var stale = false;
+                var staleFrame = new DispatcherFrame();
+                bridge.CodeLensStaleChanged += value =>
                 {
-                    if (lenses.Count == 0)
-                    {
-                        cleared = true;
-                        clearFrame.Continue = false;
-                    }
+                    stale = value;
+                    staleFrame.Continue = false;
                 };
                 document.RaiseStateChanged();
                 Dispatcher.CurrentDispatcher.BeginInvoke(
                     DispatcherPriority.ApplicationIdle,
-                    new Action(() => clearFrame.Continue = false));
-                Dispatcher.PushFrame(clearFrame);
+                    new Action(() => staleFrame.Continue = false));
+                Dispatcher.PushFrame(staleFrame);
 
-                Assert.True(cleared);
-                Assert.Empty(bridge.CurrentCodeLenses);
+                Assert.True(stale);
+                Assert.NotEmpty(bridge.CurrentCodeLenses);
             }
             finally
             {
                 bridge.Dispose();
             }
         });
+    }
+
+    /// <summary>打鍵で CodeLens を捨てない。捨てていた頃は、注釈行が畳まれて本文が上へ跳ね、
+    /// 700ms のデバウンス後に戻ってきて上下にガタつき、「x 個の参照」も消えて出直して見えた。
+    /// 行が増減したときは位置が当てにならないので、消さずに<b>古い印</b>を立てる
+    /// （薄く出して押せなくする）。</summary>
+    [Fact]
+    public void Editing_never_drops_the_code_lenses_but_marks_them_stale()
+    {
+        WpfTestHost.Run(() =>
+        {
+            static LspRange Range(int line) => new(
+                new LspPosition(line, 0), new LspPosition(line, 1));
+
+            var executable = new LspCodeLens(
+                Range(0), new LspCodeActionCommand("test.run", "Run"));
+            var document = new FakeDocument([executable], executable, supportsResolve: false)
+            { Path = @"C:\work\editing-sample.cs" };
+            var bridge = new LspViewBridge(Dispatcher.CurrentDispatcher, new FakeWorkspace(document));
+            var frame = new DispatcherFrame();
+            var publishes = 0;
+            bool? stale = null;
+            bridge.CodeLensesChanged += lenses =>
+            {
+                if (lenses.Count == 0) return;
+                if (++publishes == 2) frame.Continue = false;
+            };
+            bridge.CodeLensStaleChanged += value => stale = value;
+
+            try
+            {
+                bridge.OnFileOpened(@"C:\work\sample.cs", "class C {}\n");
+                Dispatcher.CurrentDispatcher.BeginInvoke(
+                    DispatcherPriority.ApplicationIdle,
+                    new Action(() => frame.Continue = false));
+                Dispatcher.PushFrame(frame);
+                Assert.NotEmpty(bridge.CurrentCodeLenses);
+
+                // 行内の打鍵——行は動かないので、古い印も立てない。
+                bridge.OnTextChanged("class D {}\n");
+                Assert.NotEmpty(bridge.CurrentCodeLenses);
+                Assert.NotEqual(true, stale);
+
+                // 改行を足した——下の宣言の行がずれる。それでもラベルは消さず、押せなくするだけ。
+                bridge.OnTextChanged("class D {}\n\n");
+                Assert.NotEmpty(bridge.CurrentCodeLenses);
+                Assert.True(stale);
+            }
+            finally
+            {
+                bridge.Dispose();
+            }
+        });
+    }
+
+    /// <summary>2 度目に同じファイルを開いたら、サーバーの答えを待たずに<b>その場で</b>注釈行が立つ。
+    /// 一覧応答は実測で 0.5 秒かかり、そのあいだ行が無いと本文を読み始めた頃にずれるため。</summary>
+    [Fact]
+    public void Reopening_a_file_reserves_the_rows_before_the_server_answers()
+    {
+        WpfTestHost.Run(() =>
+        {
+            var path = @"C:\work\cached-lens-sample.cs";
+            var lens = new LspCodeLens(
+                new LspRange(new LspPosition(7, 0), new LspPosition(7, 1)),
+                new LspCodeActionCommand("test.run", "Run"));
+            var document = new FakeDocument([lens], lens, supportsResolve: false) { Path = path };
+            var bridge = new LspViewBridge(Dispatcher.CurrentDispatcher, new FakeWorkspace(document));
+            var text = string.Join("\n", Enumerable.Repeat("line", 20));
+            var frame = new DispatcherFrame();
+            bridge.CodeLensesChanged += lenses => { if (lenses.Count > 0) frame.Continue = false; };
+
+            try
+            {
+                bridge.OnFileOpened(path, text);
+                Dispatcher.CurrentDispatcher.BeginInvoke(
+                    DispatcherPriority.ApplicationIdle,
+                    new Action(() => frame.Continue = false));
+                Dispatcher.PushFrame(frame);
+                Assert.NotEmpty(bridge.CurrentCodeLenses);
+
+                // 開き直す——ディスパッチャを回す前に、もう行が立っている。
+                bridge.OnFileOpened(path, text);
+                Assert.Equal(7, Assert.Single(bridge.CurrentCodeLenses).Range.Start.Line);
+            }
+            finally
+            {
+                bridge.Dispose();
+            }
+        });
+    }
+
+    /// <summary>再取得のたびに「x 個の参照」が消えて出直さない。一覧応答のレンズは未解決＝
+    /// ラベルが無いので、そのまま流すと resolve が済むまで文字が消えて明滅して見える。</summary>
+    [Fact]
+    public void Reserving_rows_keeps_the_labels_already_known()
+    {
+        static LspRange Range(int line, int character) => new(
+            new LspPosition(line, character), new LspPosition(line, character + 1));
+
+        var shown = new LspCodeLens(
+            Range(3, 4), new LspCodeActionCommand("editor.action.showReferences", "2 個の参照"));
+        // 宣言行に一文字打つと桁がずれる。行が同じならラベルは引き継ぐ。
+        var refreshed = new LspCodeLens(Range(3, 5), RawJson: "{\"id\":9}");
+        var newLine = new LspCodeLens(Range(8, 4), RawJson: "{\"id\":10}");
+
+        var merged = LspViewBridge.KeepKnownLabels([shown], [refreshed, newLine]);
+
+        Assert.Equal("2 個の参照", merged[0].Title);
+        // 押したときに使うのは新しい応答のほう（古い data で解決しない）。
+        Assert.Equal("{\"id\":9}", merged[0].RawJson);
+        Assert.Equal(Range(3, 5), merged[0].Range);
+        // 知らない行はそのまま——ラベルは resolve が済んでから入る。
+        Assert.Null(merged[1].Command);
     }
 
     private sealed class FakeWorkspace(FakeDocument document) : ILspWorkspace
@@ -105,7 +224,9 @@ public sealed class LspCodeLensIntegrationTests
         bool supportsResolve) : ILspDocument
     {
         public string Uri => "file:///C:/work/sample.cs";
-        public string FilePath => @"C:\work\sample.cs";
+        /// <summary>CodeLens の行はファイルごとに憶えられるので、テストごとに別の綴りを使えるようにする。</summary>
+        public string Path { get; set; } = @"C:\work\sample.cs";
+        public string FilePath => Path;
         public string LanguageId => "csharp";
         public bool Connected { get; set; } = true;
         public bool Ready { get; set; } = true;

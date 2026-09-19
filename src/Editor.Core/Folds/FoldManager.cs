@@ -1,6 +1,8 @@
 namespace Editor.Core.Folds;
 
-public record struct FoldRegion(int StartLine, int EndLine, bool IsClosed);
+/// <summary><paramref name="IsManual"/> は「人が畳んだ」印（<c>zf</c>、ホストが読込直後に閉じる
+/// using 節など）。サーバーの foldingRange が届いても捨てない目印として使う。</summary>
+public record struct FoldRegion(int StartLine, int EndLine, bool IsClosed, bool IsManual = false);
 
 public class FoldManager
 {
@@ -16,7 +18,7 @@ public class FoldManager
     {
         if (endLine <= startLine) return;
         if (_folds.Any(f => f.StartLine <= endLine && f.EndLine >= startLine)) return;
-        _folds.Add(new FoldRegion(startLine, endLine, IsClosed: true));
+        _folds.Add(new FoldRegion(startLine, endLine, IsClosed: true, IsManual: true));
         _folds.Sort((a, b) => a.StartLine.CompareTo(b.StartLine));
         InvalidateCache();
     }
@@ -64,10 +66,16 @@ public class FoldManager
     public void SetLspRanges(IEnumerable<(int StartLine, int EndLine)> ranges)
     {
         var existing = _folds.ToDictionary(f => (f.StartLine, f.EndLine), f => f.IsClosed);
+        // 手で畳んだものは残す。サーバーが同じ範囲を報せるとは限らない——実測で、Roslyn は
+        // using 節を範囲として返さないことがあり、捨てていた頃は「開いた直後に閉じた using が
+        // 0.5秒後に勝手に開いて本文が動く」になっていた。畳んだのは人の意図なので上書きしない。
+        var manual = _folds.Where(f => f.IsManual).ToArray();
         _folds.Clear();
+        _folds.AddRange(manual);
         foreach (var (start, end) in ranges)
         {
             if (end <= start) continue;
+            if (manual.Any(m => m.StartLine == start && m.EndLine == end)) continue;
             bool isClosed = existing.TryGetValue((start, end), out bool c) && c;
             _folds.Add(new FoldRegion(start, end, IsClosed: isClosed));
         }

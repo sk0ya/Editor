@@ -193,6 +193,7 @@ public partial class EditorCanvas : FrameworkElement
     private IReadOnlyDictionary<int, IReadOnlyList<LspCodeLens>> _codeLensesByLine =
         new Dictionary<int, IReadOnlyList<LspCodeLens>>();
     private readonly List<(Rect Bounds, LspCodeLens Lens)> _codeLensHitRects = [];
+    private bool _codeLensesStale;
 
     // LSP
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
@@ -499,13 +500,15 @@ public partial class EditorCanvas : FrameworkElement
 
     public void SetCodeLenses(IReadOnlyList<LspCodeLens>? lenses)
     {
-        // ホストが未解決レンズを渡しても、描画境界で実行可能性を再確認する。
-        _codeLenses = (lenses ?? [])
-            .Where(lens => !string.IsNullOrWhiteSpace(lens.Command?.Command))
-            .ToArray();
+        // 未解決のレンズ（Title も Command もまだ無い）でも<b>行だけは確保する</b>。行の位置は
+        // サーバーの一覧応答の時点で確定していて、解決の完了はずっと後だから——実測で、開いてから
+        // 範囲が届くのが 0.5 秒、全件の codeLens/resolve が終わるのが 3.2 秒。解決を待ってから
+        // 行を挿すと、本文を読み始めた頃に全宣言の下が一斉にずれる。ラベルは解決後に入るだけで、
+        // 行レイアウトはもう動かない。
+        _codeLenses = lenses ?? [];
         var previousLines = _codeLensesByLine;
         _codeLensesByLine = _codeLenses
-            .Where(lens => lens.Range.Start.Line >= 0 && !string.IsNullOrWhiteSpace(lens.Title))
+            .Where(lens => lens.Range.Start.Line >= 0)
             .GroupBy(lens => lens.Range.Start.Line)
             .ToDictionary(group => group.Key, group => (IReadOnlyList<LspCodeLens>)group.ToArray());
         _codeLensHitRects.Clear();
@@ -513,7 +516,14 @@ public partial class EditorCanvas : FrameworkElement
         // レンズが載る行が増減したときだけ行レイアウトを組み直す。タイトルだけが変わった
         // 再解決では行数は変わらないので、スクロール指標の再計算まで走らせない。
         if (!SameLines(previousLines, _codeLensesByLine))
+        {
+            // 画面の一番上に見えている本文行を<b>同じ高さに留める</b>。スクロール位置は画素なので、
+            // 何もしないと画面より上に注釈行が入っただけで、読んでいる場所ごと下へ流れる
+            // （タブのスクロール位置を復元して開くホストでは、これが開いた直後の一番大きな動き）。
+            var anchor = CaptureTopLineAnchor();
             RebuildVisualLayout();
+            RestoreTopLineAnchor(anchor);
+        }
 
         InvalidateVisual();
 
@@ -526,6 +536,16 @@ public partial class EditorCanvas : FrameworkElement
                 if (!b.ContainsKey(line)) return false;
             return true;
         }
+    }
+
+    /// <summary>いま出している CodeLens が古い（行が増減した直後で、取り直しの最中）か。
+    /// 消すと本文が跳ねるので<b>薄く残す</b>。押せなくするのは、旧行のラベルを押すと
+    /// 別の宣言に対して実行されうるため。</summary>
+    public void SetCodeLensesStale(bool stale)
+    {
+        if (_codeLensesStale == stale) return;
+        _codeLensesStale = stale;
+        InvalidateVisual();
     }
 
     public void SetSemanticTokens(SemanticToken[] tokens)
@@ -1017,6 +1037,33 @@ public partial class EditorCanvas : FrameworkElement
 
     /// <summary>行番号の上限（本文行に加えてCodeLensの注釈行も含む、実際の表示行数）。</summary>
     public int VisualLineCount => TotalVisualLines;
+
+    /// <summary>いま画面の一番上に見えている本文の位置（バッファ行・折り返し開始列・行内のずれ）。
+    /// 行が増減するレイアウト変更を挟んでも同じ場所を見続けるための目印。</summary>
+    private readonly record struct TopLineAnchor(int BufferLine, int StartColumn, double Within);
+
+    private TopLineAnchor CaptureTopLineAnchor()
+    {
+        if (_lineHeight <= 0 || _visualLines.Length == 0) return new TopLineAnchor(-1, 0, 0);
+        int top = (int)(_scrollOffsetY / _lineHeight);
+        double within = _scrollOffsetY - top * _lineHeight;
+        var segment = GetVisualSegment(top);
+        return new TopLineAnchor(segment.BufferLine, segment.StartColumn, within);
+    }
+
+    private void RestoreTopLineAnchor(TopLineAnchor anchor)
+    {
+        if (anchor.BufferLine < 0 || _lineHeight <= 0) return;
+        for (int i = 0; i < _visualLines.Length; i++)
+        {
+            var segment = _visualLines[i];
+            if (segment.IsCodeLens || segment.BufferLine != anchor.BufferLine ||
+                segment.StartColumn != anchor.StartColumn) continue;
+            _scrollOffsetY = i * _lineHeight + anchor.Within;
+            ClampScrollOffsets(raiseScrollChanged: true);
+            return;
+        }
+    }
 
     private VisualLineSegment GetVisualSegment(int visualLine)
     {
@@ -1604,7 +1651,8 @@ public partial class EditorCanvas : FrameworkElement
                         SetActiveLine(l);
                         _scrollOffsetX = baseOffsetX;
                         LspOverlayRenderer.DrawCodeLensRow(dc, Theme, metrics, rowLenses, y, textLeft,
-                            declarationText, baseOffsetX, size.Width, _codeLensHitRects);
+                            declarationText, baseOffsetX, size.Width, _codeLensHitRects,
+                            stale: _codeLensesStale);
                     }
                     catch (System.Exception ex)
                     {

@@ -83,6 +83,7 @@ internal sealed class NullLspView : IEditorLspView
     public event Action<IReadOnlyList<DocumentHighlight>?>? DocumentHighlightsChanged;
     public event Action<IReadOnlyList<LspDocumentLink>>? DocumentLinksChanged { add { } remove { } }
     public event Action<IReadOnlyList<LspCodeLens>>? CodeLensesChanged { add { } remove { } }
+    public event Action<bool>? CodeLensStaleChanged { add { } remove { } }
 
     public void OnFileOpened(string? filePath, string text)
     {
