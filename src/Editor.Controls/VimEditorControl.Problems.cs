@@ -6,6 +6,7 @@ namespace Editor.Controls;
 public partial class VimEditorControl
 {
     private IReadOnlyList<EditorDiagnostic> _hostDiagnostics = [];
+    private IReadOnlyList<LspDiagnostic>? _lspDiagnosticPresentation;
     private IReadOnlyList<EditorQuickfixItem> _hostQuickfixItems = [];
     private string _hostQuickfixTitle = "Quickfix";
     private int _hostQuickfixIndex = -1;
@@ -19,7 +20,7 @@ public partial class VimEditorControl
         get
         {
             Dispatcher.VerifyAccess();
-            var result = _lspView.CurrentDiagnostics.Select(static d => new EditorDiagnostic(
+            var result = (_lspDiagnosticPresentation ?? _lspView.CurrentDiagnostics).Select(static d => new EditorDiagnostic(
                 new(new(d.Range.Start.Line, d.Range.Start.Character), new(d.Range.End.Line, d.Range.End.Character)),
                 d.Message,
                 d.Severity switch
@@ -56,6 +57,20 @@ public partial class VimEditorControl
         ArgumentNullException.ThrowIfNull(diagnostics);
         var validated = diagnostics.Select(ValidateDiagnostic).ToArray();
         _hostDiagnostics = Array.AsReadOnly(validated);
+        RefreshCombinedDiagnostics();
+    }
+
+    /// <summary>
+    /// Replaces only the LSP diagnostics used for rendering. The original diagnostics remain
+    /// available through <see cref="LspDiagnostics"/> for code actions and host logic.
+    /// Pass null to render the LSP snapshot unchanged.
+    /// </summary>
+    public void ReplaceLspDiagnosticPresentation(IEnumerable<LspDiagnostic>? diagnostics)
+    {
+        Dispatcher.VerifyAccess();
+        _lspDiagnosticPresentation = diagnostics is null
+            ? null
+            : Array.AsReadOnly(diagnostics.ToArray());
         RefreshCombinedDiagnostics();
     }
 
@@ -124,7 +139,8 @@ public partial class VimEditorControl
                 EditorDiagnosticTag.Deprecated => DiagnosticTag.Deprecated,
                 _ => DiagnosticTag.Unnecessary,
             }).ToArray()));
-        Canvas.SetDiagnostics(_lspView.CurrentDiagnostics.Concat(host).ToArray());
+        Canvas.SetDiagnostics((_lspDiagnosticPresentation ?? _lspView.CurrentDiagnostics)
+            .Concat(host).ToArray());
     }
 
     private static EditorDiagnostic ValidateDiagnostic(EditorDiagnostic diagnostic)
