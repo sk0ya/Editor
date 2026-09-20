@@ -1445,48 +1445,12 @@ public sealed class LspClient : ILspClient
             var diags = new List<LspDiagnostic>();
             foreach (var d in @params.GetProperty("diagnostics").EnumerateArray())
             {
-                if (TryParseDiagnostic(d, out var diagnostic))
+                if (LspDiagnosticParser.TryParse(d, out var diagnostic))
                     diags.Add(diagnostic);
             }
             DiagnosticsChanged?.Invoke(this, new DiagnosticsChangedEventArgs(uri, diags));
         }
         catch { }
-    }
-
-    private static bool TryParseDiagnostic(JsonElement el, out LspDiagnostic diagnostic)
-    {
-        diagnostic = new LspDiagnostic(
-            new LspRange(new LspPosition(0, 0), new LspPosition(0, 0)),
-            "",
-            DiagnosticSeverity.Error);
-
-        try
-        {
-            if (!el.TryGetProperty("range", out var rangeEl))
-                return false;
-
-            var range = ParseRange(rangeEl);
-            var message = el.TryGetProperty("message", out var m) ? m.GetString() ?? "" : "";
-            var severity = el.TryGetProperty("severity", out var s) &&
-                s.ValueKind == JsonValueKind.Number
-                    ? (DiagnosticSeverity)s.GetInt32()
-                    : DiagnosticSeverity.Error;
-            var source = el.TryGetProperty("source", out var src) ? src.GetString() : null;
-            string? code = null;
-            if (el.TryGetProperty("code", out var codeElement))
-                code = codeElement.ValueKind switch
-                {
-                    JsonValueKind.String => codeElement.GetString(),
-                    JsonValueKind.Number => codeElement.GetRawText(),
-                    _ => null,
-                };
-            diagnostic = new LspDiagnostic(range, message, severity, source, code);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     internal static LspWorkspaceEdit? ParseWorkspaceEdit(JsonElement el)

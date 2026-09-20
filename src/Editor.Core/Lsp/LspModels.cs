@@ -7,12 +7,29 @@ public record LspRange(LspPosition Start, LspPosition End);
 
 public enum DiagnosticSeverity { Error = 1, Warning = 2, Information = 3, Hint = 4 }
 
+/// <summary>LSP の <c>DiagnosticTag</c>。重大度とは別の「種類」で、見せ方がまるごと変わる
+/// ——<see cref="Unnecessary"/> は波線ではなく<b>薄字</b>、<see cref="Deprecated"/> は<b>取り消し線</b>。
+/// これを捨てると、消しても構わない印（未使用の using など）が赤い波線と同じ顔で出る。</summary>
+public enum DiagnosticTag { Unnecessary = 1, Deprecated = 2 }
+
+/// <param name="CodeDescriptionHref">規則の説明ページ（LSP の <c>codeDescription.href</c>）。
+/// 「なぜ不要と言われたのか」を調べる入口で、<see cref="Code"/> だけより一段速い。</param>
+/// <param name="Tags">LSP の <c>tags</c>。空なら普通の問題として扱う。</param>
 public record LspDiagnostic(
     LspRange Range,
     string Message,
     DiagnosticSeverity Severity,
     string? Source = null,
-    string? Code = null);
+    string? Code = null,
+    string? CodeDescriptionHref = null,
+    IReadOnlyList<DiagnosticTag>? Tags = null)
+{
+    /// <summary>消しても動きが変わらない印（未使用の using・到達しないコードなど）。</summary>
+    public bool IsUnnecessary => Tags is { Count: > 0 } && Tags.Contains(DiagnosticTag.Unnecessary);
+
+    /// <summary>非推奨の印。</summary>
+    public bool IsDeprecated => Tags is { Count: > 0 } && Tags.Contains(DiagnosticTag.Deprecated);
+}
 
 /// <summary>textDocument/diagnostic の応答1件。
 /// <paramref name="Unchanged"/> が true のときサーバーは「前回と同じ」とだけ答えているので、
@@ -117,6 +134,95 @@ public static class LspCapabilityParser
     }
 }
 
+/// <summary>
+/// 診断1件（LSP の <c>Diagnostic</c>）を読む<b>唯一の</b>実装。
+///
+/// <para>もとは push（<c>textDocument/publishDiagnostics</c>）と pull（<c>textDocument/diagnostic</c>）で
+/// 別々に書かれていて、<b>pull 側だけ <c>code</c> を捨てていた</b>——Roslyn は pull で診断を返すので、
+/// C# の診断はホバーに出どころ（<c>Roslyn(IDE0005)</c>）が一度も出ないまま「文面だけ」になっていた。
+/// 読み口が2つある限り同じずれが再発するので、ここに寄せる。</para>
+/// </summary>
+public static class LspDiagnosticParser
+{
+    public static bool TryParse(JsonElement el, out LspDiagnostic diagnostic)
+    {
+        diagnostic = new LspDiagnostic(
+            new LspRange(new LspPosition(0, 0), new LspPosition(0, 0)), "", DiagnosticSeverity.Error);
+
+        try
+        {
+            if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty("range", out var rangeEl))
+                return false;
+
+            var message = el.TryGetProperty("message", out var messageEl) ? messageEl.GetString() ?? "" : "";
+            var severity = el.TryGetProperty("severity", out var severityEl) &&
+                severityEl.ValueKind == JsonValueKind.Number
+                    ? (DiagnosticSeverity)severityEl.GetInt32()
+                    : DiagnosticSeverity.Error;
+            var source = el.TryGetProperty("source", out var sourceEl) ? sourceEl.GetString() : null;
+
+            diagnostic = new LspDiagnostic(
+                ParseRange(rangeEl), message, severity, source,
+                ParseCode(el), ParseCodeDescription(el), ParseTags(el));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>規則名。tsserver のように<b>数値</b>で返すサーバーがあるので、どちらも文字列に揃える。</summary>
+    private static string? ParseCode(JsonElement el)
+    {
+        if (!el.TryGetProperty("code", out var codeEl)) return null;
+        return codeEl.ValueKind switch
+        {
+            JsonValueKind.String => codeEl.GetString(),
+            JsonValueKind.Number => codeEl.GetRawText(),
+            _ => null,
+        };
+    }
+
+    private static string? ParseCodeDescription(JsonElement el)
+    {
+        if (!el.TryGetProperty("codeDescription", out var descriptionEl) ||
+            descriptionEl.ValueKind != JsonValueKind.Object ||
+            !descriptionEl.TryGetProperty("href", out var hrefEl) ||
+            hrefEl.ValueKind != JsonValueKind.String)
+            return null;
+        var href = hrefEl.GetString();
+        return string.IsNullOrWhiteSpace(href) ? null : href;
+    }
+
+    /// <summary>未知のタグ番号は落とす（仕様が増えても、知らない値を見せ方に使いようがない）。</summary>
+    private static IReadOnlyList<DiagnosticTag>? ParseTags(JsonElement el)
+    {
+        if (!el.TryGetProperty("tags", out var tagsEl) || tagsEl.ValueKind != JsonValueKind.Array)
+            return null;
+
+        List<DiagnosticTag>? tags = null;
+        foreach (var tagEl in tagsEl.EnumerateArray())
+        {
+            if (tagEl.ValueKind != JsonValueKind.Number) continue;
+            var tag = (DiagnosticTag)tagEl.GetInt32();
+            if (tag is not (DiagnosticTag.Unnecessary or DiagnosticTag.Deprecated)) continue;
+            tags ??= [];
+            if (!tags.Contains(tag)) tags.Add(tag);
+        }
+        return tags;
+    }
+
+    private static LspRange ParseRange(JsonElement el)
+    {
+        var start = el.GetProperty("start");
+        var end = el.GetProperty("end");
+        return new LspRange(
+            new LspPosition(start.GetProperty("line").GetInt32(), start.GetProperty("character").GetInt32()),
+            new LspPosition(end.GetProperty("line").GetInt32(), end.GetProperty("character").GetInt32()));
+    }
+}
+
 public static class LspDocumentDiagnosticParser
 {
     /// <summary>textDocument/diagnostic の result を解析する。
@@ -141,7 +247,7 @@ public static class LspDocumentDiagnosticParser
 
         var diagnostics = new List<LspDiagnostic>();
         foreach (var item in itemsEl.EnumerateArray())
-            if (LspWorkspaceDiagnosticParser.TryParseDiagnostic(item, out var diagnostic))
+            if (LspDiagnosticParser.TryParse(item, out var diagnostic))
                 diagnostics.Add(diagnostic);
         return new LspDocumentDiagnosticReport(diagnostics, resultId, Unchanged: false);
     }
@@ -184,7 +290,7 @@ public static class LspWorkspaceDiagnosticParser
             var diagnostics = new List<LspDiagnostic>();
             foreach (var diagnosticEl in diagnosticsEl.EnumerateArray())
             {
-                if (TryParseDiagnostic(diagnosticEl, out var diagnostic))
+                if (LspDiagnosticParser.TryParse(diagnosticEl, out var diagnostic))
                     diagnostics.Add(diagnostic);
             }
 
@@ -193,44 +299,8 @@ public static class LspWorkspaceDiagnosticParser
 
         return LspWorkspaceDiagnosticAggregator.CreateResult(documents);
     }
-
-    internal static bool TryParseDiagnostic(JsonElement el, out LspDiagnostic diagnostic)
-    {
-        diagnostic = new LspDiagnostic(
-            new LspRange(new LspPosition(0, 0), new LspPosition(0, 0)),
-            "",
-            DiagnosticSeverity.Error);
-
-        try
-        {
-            if (!el.TryGetProperty("range", out var rangeEl))
-                return false;
-
-            var range = ParseRange(rangeEl);
-            var message = el.TryGetProperty("message", out var messageEl) ? messageEl.GetString() ?? "" : "";
-            var severity = el.TryGetProperty("severity", out var severityEl) &&
-                severityEl.ValueKind == JsonValueKind.Number
-                    ? (DiagnosticSeverity)severityEl.GetInt32()
-                    : DiagnosticSeverity.Error;
-            var source = el.TryGetProperty("source", out var sourceEl) ? sourceEl.GetString() : null;
-            diagnostic = new LspDiagnostic(range, message, severity, source);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static LspRange ParseRange(JsonElement el)
-    {
-        var start = el.GetProperty("start");
-        var end = el.GetProperty("end");
-        return new LspRange(
-            new LspPosition(start.GetProperty("line").GetInt32(), start.GetProperty("character").GetInt32()),
-            new LspPosition(end.GetProperty("line").GetInt32(), end.GetProperty("character").GetInt32()));
-    }
 }
+
 
 public enum CompletionItemKind
 {
