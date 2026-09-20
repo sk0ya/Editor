@@ -159,6 +159,29 @@ into code / text / rule blocks and `Rendering/HoverContentBuilder.cs` renders th
 through the editor's own `SyntaxEngine` so a signature is coloured like code. Off switch:
 `VimEditorControlOptions.HoverInfoEnabled` / `HoverInfoDelayMs` (runtime: `VimEditorControl.HoverInfoEnabled`).
 
+**A diagnostic is more than a sentence, and the editor used to keep only the sentence.** One
+`LspDiagnosticParser` (`Editor.Core/Lsp/LspModels.cs`) reads every diagnostic — push
+(`publishDiagnostics`) and pull (`textDocument/diagnostic`) both go through it. They were two parsers and
+**the pull one dropped `code`**, so C# (Roslyn answers pull) showed a bare message with no `Roslyn(IDE0005)`
+to search for. It now also keeps `codeDescription.href` (the rule's page) and `tags`.
+
+**Tags are a kind, not a severity, and they change the drawing.** `DiagnosticTag.Unnecessary` means
+"removing this changes nothing" (an unused using, unreachable code) — drawn **faded, with no squiggle**,
+because a wavy underline next to real ones reads as an error (a user did read "using is unnecessary" as
+one). `Deprecated` is struck through. The split is a pure function, `Editor.Core/Lsp/DiagnosticDecorations.cs`
+(`DrawsSquiggle` / `ForLine`): Roslyn merges a run of unnecessary usings into **one wide range**, so the
+decoration has to be clipped per line. Not applied while IME composition is in the line, whose columns do not
+match the buffer's.
+
+**The message is the conclusion; the reason lives in the host.** "Using ディレクティブは必要ありません" is
+correct but never says *why* — that this file's using duplicates a `global using` in `GlobalUsings.cs`. Only
+the host holds the project, so `VimEditorControlOptions.HostDiagnosticExplanationProvider`
+`(path, text, diagnostic, ct) → string?` lets it add one muted line under the message. It is asked **after**
+the popup is up and re-renders when it answers — waiting on a host's Roslyn pass before showing anything would
+delay the explanation it is meant to add. `HoverCopyText` takes the same explanations, so what is shown and
+what is copied stay identical. Host-supplied diagnostics (`EditorDiagnostic`) carry `Code`, `HelpLink` and
+`Tags` too, so a fallback analyzer's diagnostic looks the same as a server's.
+
 **Latency is the dwell, not the server** (measured with `SK0YA_EDITOR_IDE_DIAG=1`, which logs
 `shown: dwell X + request Y + build Z` and the LSP/host split to `%TEMP%\editor-lsp-debug.log`). A warm
 Roslyn answers hover in **3–55ms** and the popup builds in **4–83ms**, so at the old 400ms dwell **77–98% of
