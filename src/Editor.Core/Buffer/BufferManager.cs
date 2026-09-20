@@ -309,7 +309,12 @@ public class BufferManager
         return buf;
     }
 
-    public VimBuffer OpenFile(string path, string? preferredEncoding = null)
+    /// <param name="prepared">
+    /// A buffer already read from disk (see <see cref="PreparedFileLoad"/>), so the read does not
+    /// have to happen on the caller's thread. Ignored when the file is already open — that case
+    /// reuses the open buffer, exactly as it does without a prepared one.
+    /// </param>
+    public VimBuffer OpenFile(string path, string? preferredEncoding = null, VimBuffer? prepared = null)
     {
         var existingIndex = _buffers.FindIndex(b => b.FilePath == path);
         if (existingIndex >= 0)
@@ -317,7 +322,7 @@ public class BufferManager
             SwitchTo(existingIndex);
             return _buffers[existingIndex];
         }
-        var buf = Track(new VimBuffer(path, preferredEncoding));
+        var buf = Track(prepared ?? new VimBuffer(path, preferredEncoding));
         _buffers.Add(buf);
         SwitchTo(_buffers.Count - 1);
         return buf;

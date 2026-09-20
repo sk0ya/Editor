@@ -1076,8 +1076,16 @@ internal sealed class VimEngineRuntime
         CurrentBuffer.Folds.SetLspRanges(ranges);
     }
 
-    public void LoadFile(string path)
+    /// <param name="prepared">
+    /// The disk side of the load, already done off this thread (<see cref="PreparedFileLoad.Prepare"/>).
+    /// Null means read it here, which is what the synchronous path does. A preparation made for a
+    /// different path is ignored rather than trusted.
+    /// </param>
+    public void LoadFile(string path, PreparedFileLoad? prepared = null)
     {
+        if (prepared is not null && !prepared.Matches(path))
+            prepared = null;
+
         if (_bufferManager.Current.FilePath is { } outgoingPath)
             _autocmdRunner.RunAutocmds("BufLeave", outgoingPath);
 
@@ -1086,9 +1094,11 @@ internal sealed class VimEngineRuntime
         bool isNewFile = !File.Exists(path);
         if (!isNewFile)
             _autocmdRunner.RunAutocmds("BufReadPre", path);
-        var editorConfig = EditorConfig.LoadForFile(path);
+        var editorConfig = prepared?.Config ?? EditorConfig.LoadForFile(path);
         editorConfig.TryGetFileEncoding(out var preferredEncoding);
-        _bufferManager.OpenFile(path, preferredEncoding);
+        // The prepared buffer is only good for a file that still exists; if it vanished between the
+        // preparation and here, fall through to the normal (empty new file) path.
+        _bufferManager.OpenFile(path, preferredEncoding, isNewFile ? null : prepared?.Buffer);
         _cursor = CursorPosition.Zero;
         _registerManager.SetCurrentFileName(_bufferManager.Current.FilePath); // "%" register — current buffer's path
         _syntaxEngine.DetectLanguage(path);

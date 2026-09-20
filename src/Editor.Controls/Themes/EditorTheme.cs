@@ -1,3 +1,4 @@
+﻿using System.Windows;
 using System.Windows.Media;
 using Editor.Core.Syntax;
 
@@ -96,7 +97,7 @@ public class EditorTheme
         _ => Foreground
     };
 
-    public static EditorTheme Dracula { get; } = new()
+    public static EditorTheme Dracula { get; } = new EditorTheme
     {
         Background = new SolidColorBrush(Color.FromRgb(0x28, 0x2A, 0x36)),
         Foreground = new SolidColorBrush(Color.FromRgb(0xF8, 0xF8, 0xF2)),
@@ -142,12 +143,12 @@ public class EditorTheme
         ConflictTheirsHeader = new SolidColorBrush(Color.FromArgb(0x55, 0x8B, 0xE9, 0xFD)),
         ConflictOurs         = new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0x55, 0x55)),
         ConflictTheirs       = new SolidColorBrush(Color.FromArgb(0x22, 0x8B, 0xE9, 0xFD)),
-    };
+    }.Shared();
 
-    public static EditorTheme Dark { get; } = new();
+    public static EditorTheme Dark { get; } = new EditorTheme().Shared();
 
     // Nord — https://www.nordtheme.com
-    public static EditorTheme Nord { get; } = new()
+    public static EditorTheme Nord { get; } = new EditorTheme
     {
         Background          = new SolidColorBrush(Color.FromRgb(0x2E, 0x34, 0x40)),
         Foreground          = new SolidColorBrush(Color.FromRgb(0xD8, 0xDE, 0xE9)),
@@ -193,10 +194,10 @@ public class EditorTheme
         ConflictTheirsHeader = new SolidColorBrush(Color.FromArgb(0x55, 0x5E, 0x81, 0xAC)),
         ConflictOurs         = new SolidColorBrush(Color.FromArgb(0x22, 0xBF, 0x61, 0x6A)),
         ConflictTheirs       = new SolidColorBrush(Color.FromArgb(0x22, 0x5E, 0x81, 0xAC)),
-    };
+    }.Shared();
 
     // Tokyo Night — dark variant
-    public static EditorTheme TokyoNight { get; } = new()
+    public static EditorTheme TokyoNight { get; } = new EditorTheme
     {
         Background          = new SolidColorBrush(Color.FromRgb(0x1A, 0x1B, 0x26)),
         Foreground          = new SolidColorBrush(Color.FromRgb(0xA9, 0xB1, 0xD6)),
@@ -242,10 +243,10 @@ public class EditorTheme
         ConflictTheirsHeader = new SolidColorBrush(Color.FromArgb(0x55, 0x7A, 0xA2, 0xF7)),
         ConflictOurs         = new SolidColorBrush(Color.FromArgb(0x22, 0xF7, 0x76, 0x8E)),
         ConflictTheirs       = new SolidColorBrush(Color.FromArgb(0x22, 0x7A, 0xA2, 0xF7)),
-    };
+    }.Shared();
 
     // One Dark — Atom One Dark inspired
-    public static EditorTheme OneDark { get; } = new()
+    public static EditorTheme OneDark { get; } = new EditorTheme
     {
         Background          = new SolidColorBrush(Color.FromRgb(0x28, 0x2C, 0x34)),
         Foreground          = new SolidColorBrush(Color.FromRgb(0xAB, 0xB2, 0xBF)),
@@ -291,7 +292,27 @@ public class EditorTheme
         ConflictTheirsHeader = new SolidColorBrush(Color.FromArgb(0x55, 0x61, 0xAF, 0xEF)),
         ConflictOurs         = new SolidColorBrush(Color.FromArgb(0x22, 0xE0, 0x6C, 0x75)),
         ConflictTheirs       = new SolidColorBrush(Color.FromArgb(0x22, 0x61, 0xAF, 0xEF)),
-    };
+    }.Shared();
+
+    /// <summary>
+    /// Freezes every brush in this theme and returns it, so the instance can be read from any
+    /// thread. Used by the built-in presets below, which are static and therefore shared.
+    /// </summary>
+    /// <remarks>
+    /// An unfrozen <see cref="Brush"/> belongs to the thread that created it, and a static
+    /// initializer runs on whichever thread happens to touch the class first. Without this, a
+    /// preset created on one thread throws "the calling thread cannot access this object" the
+    /// moment an editor on another thread paints with it — which is exactly what a host with more
+    /// than one UI thread (a detached window, a test host) does. Freezing also lets WPF render
+    /// them without taking a lock per use.
+    /// </remarks>
+    private EditorTheme Shared()
+    {
+        foreach (var property in typeof(EditorTheme).GetProperties())
+            if (property.GetValue(this) is Freezable { CanFreeze: true, IsFrozen: false } freezable)
+                freezable.Freeze();
+        return this;
+    }
 
     /// <summary>Names accepted by <see cref="GetByName"/> for the built-in themes.</summary>
     public static IReadOnlyList<string> BuiltInThemeNames { get; } =

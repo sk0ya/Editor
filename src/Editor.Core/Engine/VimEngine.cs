@@ -82,6 +82,9 @@ public class VimEngine
     public void LoadFoldRanges(IEnumerable<(int StartLine, int EndLine)> ranges) =>
         _runtime.LoadFoldRanges(ranges);
     public void LoadFile(string path) => _runtime.LoadFile(path);
+    /// <summary>Opens a file whose disk side was already read off the caller's thread
+    /// (<see cref="PreparedFileLoad.Prepare"/>).</summary>
+    public void LoadFile(string path, PreparedFileLoad? prepared) => _runtime.LoadFile(path, prepared);
     public void RebaseFilePath(string newPath) => _runtime.RebaseFilePath(newPath);
     public void SetText(string text) => _runtime.SetText(text);
     public IReadOnlyList<VimEvent> ApplyExternalText(string text) =>

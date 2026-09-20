@@ -2371,7 +2371,34 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
     }
 
-    public void LoadFile(string path)
+    public void LoadFile(string path) => LoadFileCore(path, null);
+
+    /// <summary>
+    /// Opens a file whose disk side the host already read on a background thread
+    /// (<see cref="PreparedFileLoad.Prepare"/>). This is the form to use when the host has to
+    /// re-check its own state — is this tab still open? — between reading and installing.
+    /// A preparation for a different path is ignored, and null falls back to reading here.
+    /// </summary>
+    public void LoadFile(string path, PreparedFileLoad? prepared) => LoadFileCore(path, prepared);
+
+    /// <summary>
+    /// Opens a file with the disk work — the <c>.editorconfig</c> walk, reading the bytes, encoding
+    /// and binary detection, decoding and splitting into lines — done on a background thread, so the
+    /// UI thread only pays for installing the result (<see cref="PreparedFileLoad"/>).
+    /// </summary>
+    /// <remarks>
+    /// Everything after the await runs on the UI thread and in the same order as
+    /// <see cref="LoadFile(string)"/>, so a caller can await this and then carry on exactly as it
+    /// would after the synchronous call. Hosts with no await to spare keep using
+    /// <see cref="LoadFile(string)"/>; the two paths share one body.
+    /// </remarks>
+    public async Task LoadFileAsync(string path)
+    {
+        var prepared = await Task.Run(() => PreparedFileLoad.Prepare(path));
+        LoadFileCore(path, prepared);
+    }
+
+    private void LoadFileCore(string path, PreparedFileLoad? prepared)
     {
         _multiCursorManager.Exit();
         ClearSelectionRangeState();
@@ -2380,7 +2407,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.SetTestGlyphs([]);
         // 電球も行にしか結び付いていない。前のファイルの判定を持ち越さない。
         ResetCodeActionBulb();
-        _engine.LoadFile(path);
+        _engine.LoadFile(path, prepared);
         UpdateAll();
         _lspView.OnFileOpened(path, _engine.CurrentBuffer.Text.GetText());
         _ = RefreshGitDiffAsync();

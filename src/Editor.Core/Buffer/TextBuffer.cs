@@ -11,6 +11,9 @@ public class TextBuffer : INormalBufferView
     private bool _touched;
     private long _modifiedComputedAt = -1;
     private bool _modifiedCache;
+    // The joined document, computed at most once per Version (see GetText).
+    private long _textComputedAt = -1;
+    private string? _textCache;
     // Snapshot of the line contents as of the last load/save. Used to compute the
     // "changed since last save" gutter (see Editor.Core.Editing.SaveDiff), which is
     // independent of git (it tracks the on-disk baseline, not HEAD).
@@ -71,7 +74,24 @@ public class TextBuffer : INormalBufferView
 
     public int GetLineLength(int index) => GetLine(index).Length;
 
-    public string GetText() => string.Join("\n", _lines);
+    /// <summary>The whole document as a single string (lines joined with "\n").</summary>
+    /// <remarks>
+    /// Cached per <see cref="Version"/>, the same way <see cref="IsModified"/> is. The join is
+    /// O(document) and allocates a copy of the entire file — 0.4ms and a Large Object Heap
+    /// allocation for a 456KB source file — and hosts ask for it several times for the *same*
+    /// buffer version (session capture, diagnostics, "does the file on disk still match",
+    /// LSP didChange). Computing it once per version turns all but the first of those into a
+    /// field read, and nothing is recomputed unless the buffer actually changed.
+    /// </remarks>
+    public string GetText()
+    {
+        if (_textComputedAt != Version || _textCache is null)
+        {
+            _textCache = string.Join("\n", _lines);
+            _textComputedAt = Version;
+        }
+        return _textCache;
+    }
 
     public void SetText(string text)
     {

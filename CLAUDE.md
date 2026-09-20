@@ -65,7 +65,12 @@ The Vim engine is driven by `VimEngine.ProcessKey(string key, bool ctrl, bool sh
 
 Key events are translated from `System.Windows.Input.Key` → vim key strings in `GetVimKey(Key, bool shift)`. In Normal/Visual mode all printable keys are captured here; in Insert mode `TextCompositionEventArgs.Text` is used instead.
 
-**Theme:** `EditorTheme` (in `Editor.Controls.Themes`) holds all colors. `EditorTheme.Dracula` is the default. Pass a theme instance to `VimEditorControl.SetTheme(EditorTheme)`.
+**Theme:** `EditorTheme` (in `Editor.Controls.Themes`) holds all colors. `EditorTheme.Dracula` is the default. Pass a theme instance to `VimEditorControl.SetTheme(EditorTheme)`. The built-in presets are **static, therefore shared**, so their brushes are frozen (`EditorTheme.Shared()`): an unfrozen `Brush` belongs to the thread whose touch ran the static initializer, and a host with a second UI thread (a detached window, a test host) then dies with "the calling thread cannot access this object" the moment it paints.
+
+**Keep the UI thread free.** The host's UI thread is the human's; anything the editor can do elsewhere, it should.
+- **`TextBuffer.GetText()` is cached per `Version`** (same idiom as `IsModified`). The join is O(document) and LOH-sized for a real source file, and hosts ask for the *same* version repeatedly (session capture, diagnostics, "does disk still match", `didChange`). Every mutation bumps `Version`, so nothing goes stale; add a mutation and it must go through `MarkModified`/`SetText` like the rest.
+- **Opening a file has an off-thread half.** `PreparedFileLoad.Prepare(path)` does the `.editorconfig` walk, the read, encoding/binary detection, decoding and line splitting, touching no engine state; `LoadFile(path, prepared)` / `LoadFileAsync(path)` install it. A preparation for another path is ignored, and an already-open buffer still wins over it. Hosts that must re-check their own state between the two halves (is this tab still open?) call `Prepare` themselves and use the two-argument `LoadFile`.
+- Anything added on the per-keystroke path belongs on a background thread or a debounce — see the Loomo design docs §31.12 / §31.14 / §31.15 for what that cost looked like when it was not.
 
 ### Editor.App (net9.0-windows, WPF)
 
