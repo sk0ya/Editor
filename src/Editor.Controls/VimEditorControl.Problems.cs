@@ -102,6 +102,8 @@ public partial class VimEditorControl
 
     private void RefreshCombinedDiagnostics()
     {
+        // ホストが持たせた素性（規則名・説明ページ・種類）はそのまま渡す。ここで落とすと、
+        // 同じ診断でも出どころが LSP かホストかで見え方が変わってしまう。
         var host = _hostDiagnostics.Select(static d => new LspDiagnostic(
             new LspRange(
                 new LspPosition(d.Range.Start.Line, d.Range.Start.Column),
@@ -114,7 +116,14 @@ public partial class VimEditorControl
                 EditorDiagnosticSeverity.Information => DiagnosticSeverity.Information,
                 _ => DiagnosticSeverity.Hint,
             },
-            d.Source));
+            d.Source,
+            d.Code,
+            d.HelpLink,
+            d.Tags?.Select(static tag => tag switch
+            {
+                EditorDiagnosticTag.Deprecated => DiagnosticTag.Deprecated,
+                _ => DiagnosticTag.Unnecessary,
+            }).ToArray()));
         Canvas.SetDiagnostics(_lspView.CurrentDiagnostics.Concat(host).ToArray());
     }
 

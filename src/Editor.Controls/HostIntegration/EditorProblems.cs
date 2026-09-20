@@ -3,6 +3,11 @@ namespace Editor.Controls.HostIntegration;
 /// <summary>Severity of a problem supplied by an editor host.</summary>
 public enum EditorDiagnosticSeverity { Error, Warning, Information, Hint }
 
+/// <summary>Kind of a problem, independent of its severity. Mirrors the LSP diagnostic tags:
+/// <see cref="Unnecessary"/> code is shown faded rather than underlined (it is not a mistake —
+/// removing it changes nothing), <see cref="Deprecated"/> code is struck through.</summary>
+public enum EditorDiagnosticTag { Unnecessary = 1, Deprecated = 2 }
+
 /// <summary>A zero-based immutable position; columns count UTF-16 code units.</summary>
 public readonly record struct EditorTextPosition(int Line, int Column);
 
@@ -27,13 +32,17 @@ public readonly record struct EditorTextRange(EditorTextPosition Start, EditorTe
 /// <param name="Source">Optional producer, such as a compiler or linter.</param>
 /// <param name="Code">Optional producer-specific diagnostic code.</param>
 /// <param name="Data">Optional opaque host data returned unchanged. Its object graph is not deep-copied; use an immutable value when snapshot semantics matter.</param>
+/// <param name="HelpLink">Optional page documenting the rule, shown as a link in the hover popup.</param>
+/// <param name="Tags">Optional kinds; see <see cref="EditorDiagnosticTag"/>.</param>
 public sealed record EditorDiagnostic(
     EditorTextRange Range,
     string Message,
     EditorDiagnosticSeverity Severity = EditorDiagnosticSeverity.Error,
     string? Source = null,
     string? Code = null,
-    object? Data = null);
+    object? Data = null,
+    string? HelpLink = null,
+    IReadOnlyList<EditorDiagnosticTag>? Tags = null);
 
 /// <summary>A host-owned entry shown and navigated through the editor quickfix commands.</summary>
 /// <param name="DocumentPath">Absolute/relative host-defined file path or absolute URI. The editor does not normalize or open it.</param>

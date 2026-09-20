@@ -197,6 +197,10 @@ public partial class EditorCanvas : FrameworkElement
 
     // LSP
     private IReadOnlyList<LspDiagnostic> _diagnostics = [];
+    /// <summary>薄字・取り消し線を出す診断が1件でもあるか。無いときは行ごとの照合そのものを省く。</summary>
+    private bool _decoratingDiagnostics;
+    private Brush? _fadedTextBrush;
+    private Brush? _fadedTextBrushSource;
     private IReadOnlyList<LspCompletionItem> _completionItems = [];
     private int _completionSelection = -1;
     private int _completionScrollOffset = 0;
@@ -692,6 +696,7 @@ public partial class EditorCanvas : FrameworkElement
     public void SetDiagnostics(IReadOnlyList<LspDiagnostic> diagnostics)
     {
         _diagnostics = diagnostics;
+        _decoratingDiagnostics = diagnostics.Any(d => !DiagnosticDecorations.DrawsSquiggle(d));
         InvalidateVisual();
     }
 
@@ -2041,6 +2046,8 @@ public partial class EditorCanvas : FrameworkElement
         foreach (var diag in _diagnostics)
         {
             if (diag.Range.Start.Line > line || diag.Range.End.Line < line) continue;
+            // タグ付き（不要・非推奨）は本文の見た目で示す。波線を重ねると「間違い」に見える。
+            if (!DiagnosticDecorations.DrawsSquiggle(diag)) continue;
 
             var brush = diag.Severity switch
             {
@@ -2368,11 +2375,12 @@ public partial class EditorCanvas : FrameworkElement
         if (segments == null)
         {
             // No syntax — draw entire line in default color
-            DrawTextRun(dc, lineText, 0, lineText.Length, textLeft, y, Theme.Foreground);
+            DrawTextRun(dc, lineText, 0, lineText.Length, textLeft, y, Theme.Foreground,
+                lineIndex: lineIndex);
             return;
         }
 
-        DrawLineTextWithSegments(dc, lineText, y, textLeft, segments);
+        DrawLineTextWithSegments(dc, lineIndex, lineText, y, textLeft, segments);
     }
 
     private void DrawLongLineText(DrawingContext dc, string lineText, double y, double textLeft)
@@ -2494,7 +2502,7 @@ public partial class EditorCanvas : FrameworkElement
     /// Each segment is (startCol, length, brush?); gaps between segments use the default foreground.
     /// Null brush means "use default foreground".
     /// </summary>
-    private void DrawLineTextWithSegments(DrawingContext dc, string lineText, double y, double textLeft,
+    private void DrawLineTextWithSegments(DrawingContext dc, int lineIndex, string lineText, double y, double textLeft,
         IEnumerable<(int StartCol, int Length, Brush? Brush, bool Italic, bool Deprecated)> segments)
     {
         // Keep shaping identical to the layout used by GetTextBoundaries. Drawing each syntax
@@ -2511,6 +2519,7 @@ public partial class EditorCanvas : FrameworkElement
                 if (brush != null) ft.SetForegroundBrush(brush, start, count);
                 ApplySemanticModifierStyle(ft, start, count, italic, deprecated);
             }
+            ApplyDiagnosticDecorations(ft, lineIndex, lineText, 0, lineText.Length);
             dc.DrawText(ft, new Point(textLeft - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
             return;
         }
@@ -2521,19 +2530,20 @@ public partial class EditorCanvas : FrameworkElement
             // Gap before segment in default color
             if (startCol > pos)
                 DrawTextRun(dc, lineText, pos, Math.Min(startCol, lineText.Length), textLeft, y,
-                    Theme.Foreground);
+                    Theme.Foreground, lineIndex: lineIndex);
 
             // Segment text
             int end = Math.Min(startCol + length, lineText.Length);
             if (startCol < end)
                 DrawTextRun(dc, lineText, startCol, end, textLeft, y, brush ?? Theme.Foreground,
-                    italic, deprecated);
+                    italic, deprecated, lineIndex);
 
             pos = Math.Max(pos, startCol + length);
         }
         // Remaining text
         if (pos < lineText.Length)
-            DrawTextRun(dc, lineText, pos, lineText.Length, textLeft, y, Theme.Foreground);
+            DrawTextRun(dc, lineText, pos, lineText.Length, textLeft, y, Theme.Foreground,
+                lineIndex: lineIndex);
     }
 
     /// <summary>
@@ -2547,7 +2557,8 @@ public partial class EditorCanvas : FrameworkElement
     /// GetVisualX position, producing the visible gap.
     /// </summary>
     private void DrawTextRun(DrawingContext dc, string lineText, int startCol, int endCol,
-        double textLeft, double y, Brush brush, bool italic = false, bool deprecated = false)
+        double textLeft, double y, Brush brush, bool italic = false, bool deprecated = false,
+        int lineIndex = -1)
     {
         if (startCol >= endCol) return;
 
@@ -2555,6 +2566,7 @@ public partial class EditorCanvas : FrameworkElement
         {
             var ft = FormatText(lineText[startCol..endCol], brush);
             ApplySemanticModifierStyle(ft, 0, endCol - startCol, italic, deprecated);
+            ApplyDiagnosticDecorations(ft, lineIndex, lineText, startCol, endCol);
             dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, startCol) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
             return;
         }
@@ -2568,6 +2580,7 @@ public partial class EditorCanvas : FrameworkElement
             {
                 var ft = FormatText(lineText[runStart..runEnd], brush);
                 ApplySemanticModifierStyle(ft, 0, runEnd - runStart, italic, deprecated);
+                ApplyDiagnosticDecorations(ft, lineIndex, lineText, runStart, runEnd);
                 dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, runStart) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
             }
             runStart = runEnd;
@@ -2576,8 +2589,48 @@ public partial class EditorCanvas : FrameworkElement
         {
             var ft = FormatText(lineText[runStart..endCol], brush);
             ApplySemanticModifierStyle(ft, 0, endCol - runStart, italic, deprecated);
+            ApplyDiagnosticDecorations(ft, lineIndex, lineText, runStart, endCol);
             dc.DrawText(ft, new Point(textLeft + GetVisualX(lineText, runStart) - _scrollOffsetX, y + (_lineHeight - ft.Height) / 2));
         }
+    }
+
+    /// <summary>
+    /// タグ付き診断（<see cref="DiagnosticTag.Unnecessary"/> / <see cref="DiagnosticTag.Deprecated"/>）を
+    /// 本文の見た目に落とす。<paramref name="ft"/> は <paramref name="startCol"/> から始まる断片なので、
+    /// 行単位で切り出した装飾をこの断片の中の位置へ写す。<paramref name="lineIndex"/> が負なら何もしない
+    /// （IME 合成中など、列が実バッファと噛み合わない描画）。
+    /// </summary>
+    private void ApplyDiagnosticDecorations(
+        FormattedText ft, int lineIndex, string lineText, int startCol, int endCol)
+    {
+        if (!_decoratingDiagnostics || lineIndex < 0) return;
+
+        foreach (var decoration in DiagnosticDecorations.ForLine(_diagnostics, lineIndex, lineText.Length))
+        {
+            int from = Math.Max(decoration.StartColumn, startCol);
+            int to = Math.Min(decoration.StartColumn + decoration.Length, endCol);
+            if (to <= from) continue;
+
+            if (decoration.Kind == DiagnosticDecorationKind.Faded)
+                ft.SetForegroundBrush(FadedTextBrush(), from - startCol, to - from);
+            else
+                ft.SetTextDecorations(TextDecorations.Strikethrough, from - startCol, to - from);
+        }
+    }
+
+    /// <summary>薄字の色。本文色をそのまま半透明にするので、テーマごとの設定を増やさずに
+    /// どの配色でも「引っ込んで見える」。テーマが差し替わったら作り直す。</summary>
+    private Brush FadedTextBrush()
+    {
+        if (_fadedTextBrush is not null && ReferenceEquals(_fadedTextBrushSource, Theme.Foreground))
+            return _fadedTextBrush;
+
+        var color = Theme.Foreground is SolidColorBrush solid ? solid.Color : Colors.Gray;
+        var faded = new SolidColorBrush(Color.FromArgb(0x70, color.R, color.G, color.B));
+        faded.Freeze();
+        _fadedTextBrushSource = Theme.Foreground;
+        _fadedTextBrush = faded;
+        return faded;
     }
 
     private void DrawListChars(DrawingContext dc, string lineText, double y, double textLeft)
@@ -2652,7 +2705,9 @@ public partial class EditorCanvas : FrameworkElement
         IEnumerable<(int StartCol, int Length, Brush? Brush, bool Italic, bool Deprecated)> segments =
             BuildColorSegments(lineIndex, lineText.Length) ?? [];
 
-        DrawLineTextWithSegments(dc, merged, y, textLeft,
+        // 合成中は merged が列をずらすので、診断の列（実バッファ基準）と噛み合わない。
+        // 薄字・取り消し線は確定してから戻る。
+        DrawLineTextWithSegments(dc, -1, merged, y, textLeft,
             ShiftSegmentsForImeComposition(segments, lineText.Length, cursorCol, _imeCompositionText.Length));
     }
 
