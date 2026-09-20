@@ -202,21 +202,28 @@ public class HoverQuickFixTests
         new(new LspRange(new LspPosition(line, start), new LspPosition(line, end)),
             message, DiagnosticSeverity.Warning);
 
-    /// <summary>その目印（<see cref="FrameworkElement.Tag"/>）を載せた行。修正行はアクション自身、
+    /// <summary>その目印（<c>Tag</c>）を載せた行。修正行はアクション自身、
     /// 電球は <see cref="HoverContentBuilder.FixToggleTag"/> を載せている。
     ///
-    /// <para>中身は <see cref="FlowDocument"/> になったので、押せる行は
-    /// <see cref="BlockUIContainer"/> の中にいる——文書側（Block）とビジュアル側の両方をたどる。</para></summary>
-    internal static FrameworkElement? FindByTag(DependencyObject root, object tag)
+    /// <para>中身は <see cref="FlowDocument"/> で、押せる行は <see cref="Hyperlink"/>
+    /// （＝<see cref="FrameworkContentElement"/>）。埋め込み要素では実機のマウスが届かないため、
+    /// 文書側（Block／Inline）とビジュアル側の両方をたどる。</para></summary>
+    internal static DependencyObject? FindByTag(DependencyObject root, object tag)
     {
         if (root is FrameworkElement element && Equals(element.Tag, tag)) return element;
+        if (root is FrameworkContentElement contentElement && Equals(contentElement.Tag, tag))
+            return contentElement;
 
-        // 文書側。Block は Visual ではないので、ビジュアルツリーの走査には渡せない。
+        // 文書側。Block／Inline は Visual ではないので、ビジュアルツリーの走査には渡せない。
         if (root is FlowDocument document) return FindInBlocks(document.Blocks, tag);
         if (root is Section section) return FindInBlocks(section.Blocks, tag);
         if (root is BlockUIContainer { Child: DependencyObject blockChild })
             return FindByTag(blockChild, tag);
-        if (root is Block) return null;
+        if (root is Paragraph paragraph) return FindInInlines(paragraph.Inlines, tag);
+        if (root is Span span) return FindInInlines(span.Inlines, tag);
+        if (root is InlineUIContainer { Child: DependencyObject inlineChild })
+            return FindByTag(inlineChild, tag);
+        if (root is Block or Inline) return null;
 
         if (root is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D)
         {
@@ -243,7 +250,7 @@ public class HoverQuickFixTests
         return null;
     }
 
-    private static FrameworkElement? FindInBlocks(BlockCollection blocks, object tag)
+    private static DependencyObject? FindInBlocks(BlockCollection blocks, object tag)
     {
         foreach (var block in blocks)
         {
@@ -252,9 +259,33 @@ public class HoverQuickFixTests
         return null;
     }
 
-    private static void Click(UIElement target) =>
-        target.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+    private static DependencyObject? FindInInlines(InlineCollection inlines, object tag)
+    {
+        foreach (var inline in inlines)
         {
-            RoutedEvent = UIElement.MouseLeftButtonUpEvent,
-        });
+            if (FindByTag(inline, tag) is { } found) return found;
+        }
+        return null;
+    }
+
+    /// <summary>押せる行は <see cref="Hyperlink"/>（文書の選択層が通す唯一の形）。
+    /// それ以外の要素が来たら、実機では押せない作りに戻ってしまっている。</summary>
+    internal static void Click(DependencyObject target)
+    {
+        switch (target)
+        {
+            case Hyperlink link:
+                link.RaiseEvent(new RoutedEventArgs(Hyperlink.ClickEvent));
+                return;
+            case UIElement element:
+                element.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.MouseLeftButtonUpEvent,
+                });
+                return;
+            default:
+                throw new Xunit.Sdk.XunitException(
+                    $"押せない形の行が来た: {target.GetType().Name}（Hyperlink でなければ実機のマウスは届かない）");
+        }
+    }
 }

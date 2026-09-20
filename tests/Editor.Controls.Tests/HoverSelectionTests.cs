@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using Editor.Controls.Rendering;
@@ -20,9 +21,16 @@ namespace Editor.Controls.Tests;
 /// </summary>
 public class HoverSelectionTests
 {
-    /// <summary>本命その 1：FlowDocument に移しても、修正行はマウスで届く場所に居る。</summary>
+    /// <summary>本命その 1：押せる行は <see cref="Hyperlink"/> であること。
+    ///
+    /// <para>ここは以前、<see cref="BlockUIContainer"/> に入れた <c>Border</c> の<b>当たり判定</b>を
+    /// 撃って「表示器が入力を吸っていない」と確かめていた。ヒットテストは通るのに、<b>実機のマウスでは
+    /// 一度も押せていなかった</b>——選択を有効にした表示器では文書の選択層がマウスを先に取り、
+    /// 埋め込み要素には <c>MouseEnter</c> すら届かない（強調も出なかった）。当たり判定は
+    /// 入力の経路の証明にならない。文書の中で押せるのは選択層が通す <see cref="Hyperlink"/> だけなので、
+    /// 形そのものを固定する。</para></summary>
     [Fact]
-    public void FixRow_StaysReachableByTheMouse_InsideTheDocumentViewer()
+    public void FixRowAndBulb_ArePressableLinks_NotEmbeddedElements()
     {
         WpfTestHost.Run(() =>
         {
@@ -32,43 +40,11 @@ public class HoverSelectionTests
                 EditorTheme.Dracula, new FontFamily("Consolas"), 12, null,
                 new HoverFixSection(
                     Show: true, Expanded: true, Loading: false, Loaded: true,
-                    Fixes: [fix], Hidden: 0, OnToggle: null, OnApply: _ => { }));
+                    Fixes: [fix], Hidden: 0, OnToggle: () => { }, OnApply: _ => { }));
 
-            // 本物と同じ設定の表示器。
-            var viewer = new FlowDocumentScrollViewer
-            {
-                Document = document,
-                IsSelectionEnabled = true,
-                Focusable = true,
-                IsTabStop = false,
-                Padding = new Thickness(0),
-                Background = Brushes.Transparent,
-                BorderThickness = new Thickness(0),
-            };
-
-            Window? window = null;
-            try
-            {
-                window = WpfTestHost.Load(viewer);
-                viewer.UpdateLayout();
-
-                var row = HoverQuickFixTests.FindByTag(document, fix);
-                Assert.NotNull(row);
-                Assert.True(row!.ActualWidth > 0 && row.ActualHeight > 0, "修正行が配置されていない");
-
-                var center = row.TranslatePoint(
-                    new Point(row.ActualWidth / 2, row.ActualHeight / 2), viewer);
-                var hit = VisualTreeHelper.HitTest(viewer, center)?.VisualHit;
-
-                Assert.NotNull(hit);
-                Assert.True(
-                    IsSelfOrDescendant(hit!, row),
-                    "表示器がマウス入力を吸っている——修正行を押せない");
-            }
-            finally
-            {
-                if (window is not null) { window.Close(); window.Content = null; }
-            }
+            Assert.IsType<Hyperlink>(HoverQuickFixTests.FindByTag(document, fix));
+            Assert.IsType<Hyperlink>(
+                HoverQuickFixTests.FindByTag(document, HoverContentBuilder.FixToggleTag));
         });
     }
 

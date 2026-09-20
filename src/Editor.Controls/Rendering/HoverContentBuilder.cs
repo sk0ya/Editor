@@ -28,9 +28,14 @@ namespace Editor.Controls.Rendering;
 /// <para><b>組み上がりは <see cref="FlowDocument"/>。</b>もとは <c>TextBlock</c> を
 /// <c>StackPanel</c> に積んでいたが、WPF の <c>TextBlock</c> は<b>選択できない</b>——読めるのに
 /// 一文字も持ち出せず、シグネチャは手で打ち直すしかなかった。<c>FlowDocument</c> なら同じ着色
-/// （<see cref="Run"/> 単位の前景色・太字・等幅）を保ったまま、文書全体をまたいでドラッグ選択できる。
-/// 押せる行（電球と修正）だけは見た目を変えずに済ませたいので <see cref="BlockUIContainer"/> に
-/// これまでの <see cref="Border"/> をそのまま入れてある——選択できる文字と押せる行が同居する形。</para>
+/// （<see cref="Run"/> 単位の前景色・太字・等幅）を保ったまま、文書全体をまたいでドラッグ選択できる。</para>
+///
+/// <para><b>押せる行（電球と修正）は <see cref="Hyperlink"/> で作る。</b>いちどは
+/// <see cref="BlockUIContainer"/> に <see cref="Border"/> を入れていたが、実機のマウスでは
+/// <b>一度も押せていなかった</b>——選択を有効にした <see cref="FlowDocumentScrollViewer"/> では
+/// 文書の選択層がマウスを先に取り、埋め込んだ要素には <c>MouseEnter</c> すら届かない
+/// （強調も出なかった）。単体テストは <c>RaiseEvent</c> で直接叩いていたので、ずっと緑のままだった。
+/// 文書の中で押せるのは、選択層が通す <see cref="Hyperlink"/> ——実機で確認済み。</para>
 /// </summary>
 internal static class HoverContentBuilder
 {
@@ -224,31 +229,45 @@ internal static class HoverContentBuilder
         int? count, bool expanded, EditorTheme theme, double fontSize, Action? onToggle)
     {
         // 押す前に何が起きるか分かる言葉にする。電球の絵だけだと、押して初めて
-        // 「候補を取りに行く」ものだと分かる（そして空かもしれない）。
-        var label = new TextBlock { FontSize = fontSize };
-        label.Inlines.Add(new Run("💡 修正候補") { Foreground = theme.Foreground });
-        if (count is { } n) label.Inlines.Add(new Run($" {n}") { Foreground = theme.LineNumberFg });
-
-        var row = new Border
+        // 「候補を取りに行く」ものだと分かる（そして空かもしれない）。開いているかは
+        // 三角で示す——枠の色を変えるだけだと、閉じられることに気づけない。
+        var paragraph = new Paragraph
         {
-            Child = label,
-            Tag = FixToggleTag,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Padding = new Thickness(5, 1, 7, 2),
-            Margin = new Thickness(0, 2, 0, 2),
-            CornerRadius = new CornerRadius(3),
-            Background = expanded ? theme.CurrentLineBg : Brushes.Transparent,
-            BorderBrush = theme.IndentGuideBrush,
-            BorderThickness = new Thickness(1),
-            Cursor = System.Windows.Input.Cursors.Hand,
+            FontSize = fontSize,
+            Margin = new Thickness(0, 3, 0, 2),
         };
-        if (onToggle is null) return Wrap(row);
+        var caption = new Run($"💡 修正候補 {(expanded ? "▾" : "▸")}");
 
-        row.MouseEnter += (_, _) => row.Background = theme.CurrentLineBg;
-        row.MouseLeave += (_, _) => row.Background = expanded ? theme.CurrentLineBg : Brushes.Transparent;
-        // Handled にして、ポップアップ全体の「クリックで閉じる」より先にここで受け取る。
-        row.MouseLeftButtonUp += (_, e) => { e.Handled = true; onToggle(); };
-        return Wrap(row);
+        if (onToggle is null)
+        {
+            caption.Foreground = theme.Foreground;
+            paragraph.Inlines.Add(caption);
+        }
+        else
+        {
+            var link = ActionLink(caption, theme.Foreground, theme);
+            link.Tag = FixToggleTag;
+            link.Click += (_, e) => { e.Handled = true; onToggle(); };
+            paragraph.Inlines.Add(link);
+        }
+
+        if (count is { } n) paragraph.Inlines.Add(new Run($" {n}") { Foreground = theme.LineNumberFg });
+        return paragraph;
+    }
+
+    /// <summary>文書の中で<b>実際に押せる</b>唯一の形。下線は乗せたときだけ出す
+    /// （常時下線だと、説明の中のリンクと区別が付かないうえ、行が騒がしくなる）。</summary>
+    private static Hyperlink ActionLink(Inline content, Brush foreground, EditorTheme theme)
+    {
+        var link = new Hyperlink(content)
+        {
+            Foreground = foreground,
+            Cursor = System.Windows.Input.Cursors.Hand,
+            TextDecorations = null,
+        };
+        link.MouseEnter += (_, _) => link.TextDecorations = System.Windows.TextDecorations.Underline;
+        link.MouseLeave += (_, _) => link.TextDecorations = null;
+        return link;
     }
 
     /// <summary>電球の目印（テストから引くための <see cref="FrameworkElement.Tag"/>）。</summary>
@@ -259,28 +278,19 @@ internal static class HoverContentBuilder
     private static Block BuildFix(
         LspCodeAction action, EditorTheme theme, double fontSize, Action<LspCodeAction> onApply)
     {
-        var label = new TextBlock
-        {
-            Text = "💡 " + action.Title,
-            FontSize = fontSize,
-            TextWrapping = TextWrapping.Wrap,
-            Foreground = action.DisabledReason is { Length: > 0 } ? theme.LineNumberFg : theme.LinkColor,
-        };
-        var row = new Border
-        {
-            Child = label,
-            Tag = action,
-            Padding = new Thickness(4, 2, 4, 3),
-            Margin = new Thickness(-4, 1, -4, 1),
-            CornerRadius = new CornerRadius(3),
-            Background = Brushes.Transparent,
-            Cursor = System.Windows.Input.Cursors.Hand,
-        };
-        row.MouseEnter += (_, _) => row.Background = theme.CurrentLineBg;
-        row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
+        var link = ActionLink(
+            new Run("💡 " + action.Title),
+            action.DisabledReason is { Length: > 0 } ? theme.LineNumberFg : theme.LinkColor,
+            theme);
+        link.Tag = action;
         // Handled にして、ポップアップ全体の「クリックで閉じる」より先にここで受け取る。
-        row.MouseLeftButtonUp += (_, e) => { e.Handled = true; onApply(action); };
-        return Wrap(row);
+        link.Click += (_, e) => { e.Handled = true; onApply(action); };
+
+        return new Paragraph(link)
+        {
+            FontSize = fontSize,
+            Margin = new Thickness(10, 1, 0, 1),
+        };
     }
 
     private static Block BuildSeparator(EditorTheme theme) => Wrap(new Border

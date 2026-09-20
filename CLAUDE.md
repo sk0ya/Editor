@@ -159,6 +159,14 @@ into code / text / rule blocks and `Rendering/HoverContentBuilder.cs` renders th
 through the editor's own `SyntaxEngine` so a signature is coloured like code. Off switch:
 `VimEditorControlOptions.HoverInfoEnabled` / `HoverInfoDelayMs` (runtime: `VimEditorControl.HoverInfoEnabled`).
 
+**What is pressable inside the popup must be a `Hyperlink`.** The bulb and the fix rows were a `Border`
+inside a `BlockUIContainer` — hit-testable, unit-tested, and **never once clickable with a real mouse**: a
+`FlowDocumentScrollViewer` with `IsSelectionEnabled` gives the document's selection layer the mouse first, so
+an embedded element never even sees `MouseEnter` (no hover highlight either — that was the tell). The tests
+clicked it with `RaiseEvent`, which bypasses input routing entirely, so they stayed green. The selection layer
+does route to `Hyperlink`, so that is what the rows are now (verified with a real mouse in Loomo). A hit test
+proves layout, not input.
+
 **A diagnostic is more than a sentence, and the editor used to keep only the sentence.** One
 `LspDiagnosticParser` (`Editor.Core/Lsp/LspModels.cs`) reads every diagnostic — push
 (`publishDiagnostics`) and pull (`textDocument/diagnostic`) both go through it. They were two parsers and
