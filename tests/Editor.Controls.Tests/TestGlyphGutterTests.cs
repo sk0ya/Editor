@@ -19,11 +19,12 @@ public class TestGlyphGutterTests
 
     private static GutterHitTester NewHitTester(int lineToReturn = 7) => new(_ => lineToReturn);
 
-    // 各列が幅を持つ状態： blame 30 | bp 16 | test 16 | 行番号 40 | フォールド 16 （合計 118）
-    private static GutterHitTester.Boundaries AllColumns() => new(30, 16, 16, 40, 118);
+    // 各列が幅を持つ状態： blame 30 | bp 16 | 電球 0 | test 16 | 行番号 40 | フォールド 16 （合計 118）
+    // （bp 列は行番号を消しているときだけ現れる。ここは「左に列があってもテスト列がずれない」ことの確認）
+    private static GutterHitTester.Boundaries AllColumns() => new(30, 16, 0, 16, 40, 118);
 
-    // テスト列が無効（幅 0）の状態： blame 0 | bp 16 | test 0 | 行番号 40 | フォールド 16 （合計 72）
-    private static GutterHitTester.Boundaries TestColumnDisabled() => new(0, 16, 0, 40, 72);
+    // テスト列が無効（幅 0）の状態： blame 0 | bp 16 | 電球 0 | test 0 | 行番号 40 | フォールド 16 （合計 72）
+    private static GutterHitTester.Boundaries TestColumnDisabled() => new(0, 16, 0, 0, 40, 72);
 
     [Fact]
     public void TestGlyphGutter_WhenDisabled_NeverHits()
@@ -103,11 +104,11 @@ public class TestGlyphGutterTests
 
     // ── EditorCanvas（列の幅・クリック・ホバー・ツールチップ）─────────────────────
 
-    private static (int Bp, int Test, int Num, double Fold, int Gutter) Metrics(EditorCanvas canvas)
+    private static (int Bp, int Bulb, int Test, int Num, double Fold, int Gutter) Metrics(EditorCanvas canvas)
     {
         var method = typeof(EditorCanvas).GetMethod("GetGutterMetrics", BindingFlags.NonPublic | BindingFlags.Instance)!;
         var tuple = (ITuple)method.Invoke(canvas, null)!;
-        return ((int)tuple[0]!, (int)tuple[1]!, (int)tuple[2]!, (double)tuple[3]!, (int)tuple[4]!);
+        return ((int)tuple[0]!, (int)tuple[1]!, (int)tuple[2]!, (int)tuple[3]!, (double)tuple[4]!, (int)tuple[5]!);
     }
 
     private static T Field<T>(EditorCanvas canvas, string name) =>
@@ -129,11 +130,11 @@ public class TestGlyphGutterTests
         return canvas;
     }
 
-    // テスト列の中央 x（blame・ブレークポイント列の幅を踏まえた実座標）。
+    // テスト列の中央 x（blame・ブレークポイント列・電球列の幅を踏まえた実座標）。
     private static double TestColumnCenterX(EditorCanvas canvas)
     {
         var m = Metrics(canvas);
-        return BlameColWidth(canvas) + m.Bp + m.Test / 2.0;
+        return BlameColWidth(canvas) + m.Bp + m.Bulb + m.Test / 2.0;
     }
 
     private static Point Row(EditorCanvas canvas, int line, double x) => new(x, LineHeight(canvas) * (line + 0.5));
@@ -314,7 +315,7 @@ public class TestGlyphGutterTests
     }
 
     [Fact]
-    public void BreakpointAndTestColumns_BothEnabled_DoNotCrossTalk()
+    public void BreakpointsAndTestColumn_BothEnabled_DoNotCrossTalk()
     {
         WpfTestHost.Run(() =>
         {
@@ -324,7 +325,7 @@ public class TestGlyphGutterTests
             canvas.SetTestGlyphs([new EditorTestGlyph(1, TestGlyphKind.Run)]);
 
             var m = Metrics(canvas);
-            Assert.True(m.Bp > 0);
+            Assert.Equal(0, m.Bp);        // 行番号の上に出すので専用列は持たない
             Assert.True(m.Test > 0);
 
             var toggled = new List<int>();
@@ -332,12 +333,12 @@ public class TestGlyphGutterTests
             canvas.BreakpointToggled += toggled.Add;
             canvas.TestGlyphClicked += testClicks.Add;
 
-            double bpX = m.Bp / 2.0;              // blame 非表示なのでブレークポイント列は 0..Bp
-            double testX = m.Bp + m.Test / 2.0;   // その右がテスト列
+            double testX = m.Test / 2.0;               // blame・bp 幅 0 なのでテスト列が左端
+            double numX = m.Test + m.Num / 2.0;        // その右が行番号＝ブレークポイントの帯
 
-            // ブレークポイント列のクリック — トグルだけが上がり、テスト列は反応しない。
-            Assert.False(canvas.TryClickTestGlyphColumn(Row(canvas, 1, bpX)));
-            Assert.True(canvas.TryClickBreakpointColumn(Row(canvas, 1, bpX)));
+            // 行番号のクリック — ブレークポイントのトグルだけが上がる。
+            Assert.False(canvas.TryClickTestGlyphColumn(Row(canvas, 1, numX)));
+            Assert.True(canvas.TryClickBreakpointColumn(Row(canvas, 1, numX)));
             Assert.Equal(new[] { 1 }, toggled);
             Assert.Empty(testClicks);
 
@@ -347,6 +348,43 @@ public class TestGlyphGutterTests
             Assert.True(canvas.TryClickTestGlyphColumn(Row(canvas, 1, testX)));
             Assert.Equal(new[] { 1 }, testClicks);
             Assert.Empty(toggled);
+        });
+    }
+
+    [Fact]
+    public void Breakpoints_WhenDisabled_LeaveLineNumberClicksAlone()
+    {
+        // 帯が行番号そのものになったので、無効時に素通りさせないと行番号のクリックを黙って奪う。
+        WpfTestHost.Run(() =>
+        {
+            var canvas = NewCanvas();
+            var m = Metrics(canvas);
+            int toggled = -1;
+            canvas.BreakpointToggled += line => toggled = line;
+
+            Assert.False(canvas.TryClickBreakpointColumn(Row(canvas, 1, m.Num / 2.0)));
+            Assert.Equal(-1, toggled);
+        });
+    }
+
+    [Fact]
+    public void Breakpoints_WithoutLineNumbers_FallBackToTheirOwnColumn()
+    {
+        // 行番号を消すと置き場が無くなるので、そのときだけ最左に列を確保する。
+        WpfTestHost.Run(() =>
+        {
+            var canvas = NewCanvas();
+            canvas.SetBreakpointsEnabled(true);
+            canvas.ShowLineNumbers(false);
+
+            var m = Metrics(canvas);
+            Assert.True(m.Bp > 0);
+            Assert.Equal(0, m.Num);
+
+            int toggled = -1;
+            canvas.BreakpointToggled += line => toggled = line;
+            Assert.True(canvas.TryClickBreakpointColumn(Row(canvas, 1, m.Bp / 2.0)));
+            Assert.Equal(1, toggled);
         });
     }
 
@@ -373,7 +411,7 @@ public class TestGlyphGutterTests
 
             // blame カラムの中はテスト列ではない。
             Assert.False(canvas.TryClickTestGlyphColumn(Row(canvas, 1, blameWidth / 2)));
-            // テスト列は blame の右（bp 幅 0）。
+            // テスト列は blame の右（bp・電球とも幅 0）。
             Assert.True(canvas.TryClickTestGlyphColumn(Row(canvas, 1, blameWidth + m.Test / 2.0)));
             Assert.Equal(new[] { 1 }, clicks);
         });

@@ -96,7 +96,7 @@ public partial class EditorCanvas
         line = start = end = -1;
         if (_lineHeight <= 0 || _charWidth <= 0 || _lines.Length == 0) return false;
 
-        var (_, _, _, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, _, _, gutterWidth) = GetGutterMetrics();
         if (point.X < gutterWidth) return false;
 
         // Y は行へ丸められるので、最終行より下は自分で弾く。

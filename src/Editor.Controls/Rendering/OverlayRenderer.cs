@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Media;
 using Editor.Controls.Themes;
 using Editor.Core.Editing;
+using Editor.Core.Lsp;
 
 namespace Editor.Controls.Rendering;
 
@@ -145,6 +146,47 @@ internal static class OverlayRenderer
             dc.DrawRectangle(theme.ScrollbarThumb, null, new Rect(l.HorizThumbX + 1, trackY + 1, Math.Max(0, l.HorizThumbW - 2), ScrollbarSize - 2));
         }
     }
+
+    /// <summary>印は細くても<b>必ず見える</b>ことが要件なので、下限を 3px 取る（1行だけの
+    /// エラーが 0.4px になって消えるのを防ぐ）。当たり判定の許容もこの半分を基準にする。</summary>
+    public const double DiagnosticMarkMinHeight = 3.0;
+
+    /// <summary>
+    /// 垂直スクロールバーのトラックへ、行ごとに畳んだ診断の印を引く（overview ruler）。
+    /// <b>サムの後に</b>描く——印がサムの下に隠れると「いまいる場所の問題だけ見えない」ことになる。
+    /// </summary>
+    public static void DrawScrollbarDiagnosticMarks(
+        DrawingContext dc, EditorTheme theme, Size size, ScrollbarLayout l,
+        IReadOnlyList<DiagnosticOverviewMark> marks, int lineCount)
+    {
+        if (!l.NeedVert || l.VertTrackH <= 0 || marks.Count == 0 || lineCount <= 0) return;
+
+        double trackX = size.Width - ScrollbarSize;
+        double height = Math.Max(DiagnosticMarkMinHeight, l.VertTrackH / lineCount);
+
+        // 重い順に後から描いて上に載せる（同じ高さに落ちた警告とエラーでは、エラーを見せる）。
+        foreach (var severity in s_markDrawOrder)
+        {
+            var brush = severity switch
+            {
+                DiagnosticSeverity.Error => theme.DiagnosticError,
+                DiagnosticSeverity.Warning => theme.DiagnosticWarning,
+                DiagnosticSeverity.Information => theme.DiagnosticInfo,
+                _ => theme.DiagnosticHint,
+            };
+            foreach (var mark in marks)
+            {
+                if (mark.Severity != severity) continue;
+                double centerY = DiagnosticOverviewMarks.TrackY(mark.Line, lineCount, l.VertTrackH);
+                double y = Math.Clamp(centerY - height / 2, 0, Math.Max(0, l.VertTrackH - height));
+                dc.DrawRectangle(brush, null, new Rect(trackX, y, ScrollbarSize, height));
+            }
+        }
+    }
+
+    // 軽い順に描いて、重いものを上に載せる（同じ高さに落ちたら重い方を見せる）。
+    private static readonly DiagnosticSeverity[] s_markDrawOrder =
+        [DiagnosticSeverity.Hint, DiagnosticSeverity.Information, DiagnosticSeverity.Warning, DiagnosticSeverity.Error];
 
     public static void DrawColorColumn(
         DrawingContext dc, EditorTheme theme, int colorColumn, double charWidth,

@@ -895,7 +895,7 @@ public partial class EditorCanvas : FrameworkElement
         if (_batchingLayout) { _layoutDirtyDuringBatch = true; return; }
 
         MeasureChar();
-        var (_, _, _, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, _, _, gutterWidth) = GetGutterMetrics();
         double minimapReserve = _showMinimap ? MinimapWidth : 0;
         double availableTextWidth = Math.Max(1, RenderSize.Width - gutterWidth - minimapReserve);
 
@@ -982,28 +982,43 @@ public partial class EditorCanvas : FrameworkElement
         return Math.Max(1, length);
     }
 
-    private (int bpColWidth, int testColWidth, int lineNumWidth, double foldColWidth, int gutterWidth) GetGutterMetrics()
+    private (int bpColWidth, int bulbColWidth, int testColWidth, int lineNumWidth, double foldColWidth, int gutterWidth) GetGutterMetrics()
     {
-        // ブレークポイント列はガター最左に確保する。デバッグ無効時(_breakpointsEnabled=false)は幅0で
-        // 従来のガター（行番号＋フォールド列）と完全に一致する＝既存利用に影響しない。
-        int bpColWidth = _breakpointsEnabled ? (int)Math.Max(14.0, _charWidth + 2) : 0;
-        // テスト実行列も同じ流儀。ホストが SetTestGlyphsEnabled(true) を呼ぶまでは幅 0 ＝列そのものが無い。
-        int testColWidth = (_testGlyphsEnabled || _coverageMarkersEnabled) ? (int)Math.Max(14.0, _charWidth + 2) : 0;
+        int glyphColWidth = (int)Math.Max(14.0, _charWidth + 2);
+        // ブレークポイントは専用列を持たず**行番号の上**に出す（列を1本減らして本文を左に寄せる）。
+        // 行番号を消しているときだけ置き場が無くなるので、そのときに限りガター最左へ逃がす。
+        int bpColWidth = _breakpointsEnabled && !_showLineNumbers ? glyphColWidth : 0;
+        // 電球（クイックフィックス）列はガター最左（blame の右）。ホストが
+        // SetCodeActionBulbEnabled(true) を呼ぶまでは幅 0 ＝列そのものが無い。有効な間は電球が
+        // 無い行でも幅を保つ——出た瞬間に本文が右へずれるくらいなら、空の 14px を常に空けておく方がよい。
+        int bulbColWidth = _codeActionBulbEnabled ? glyphColWidth : 0;
+        // テスト実行列も同じ流儀。ホストが SetTestGlyphsEnabled(true) を呼ぶまでは幅 0。
+        int testColWidth = (_testGlyphsEnabled || _coverageMarkersEnabled) ? glyphColWidth : 0;
         int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
         double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
-        // blame 左カラム（:Gblame 有効時のみ幅 > 0）はガターの最左＝ブレークポイント列よりさらに左に確保する。
-        // 各列の並びは blame | ブレークポイント | テスト | 行番号 | フォールド | 本文（x 位置は _blameColWidth 起点）。
-        int gutterWidth = (int)(_blameColWidth + bpColWidth + testColWidth + lineNumWidth + foldColWidth);
-        return (bpColWidth, testColWidth, lineNumWidth, foldColWidth, gutterWidth);
+        // blame 左カラム（:Gblame 有効時のみ幅 > 0）はガターの最左に確保する。
+        // 各列の並びは blame | (ブレークポイント) | 電球 | テスト | 行番号 | フォールド | 本文
+        // （x 位置は _blameColWidth 起点）。
+        int gutterWidth = (int)(_blameColWidth + bpColWidth + bulbColWidth + testColWidth + lineNumWidth + foldColWidth);
+        return (bpColWidth, bulbColWidth, testColWidth, lineNumWidth, foldColWidth, gutterWidth);
     }
 
     // 現在のガター幅から作ったヒットテスト境界。列の並びと同じ順で詰めるので、
     // 新しい列を足すときはここと GetGutterMetrics の2箇所だけを見ればよい。
     private GutterHitTester.Boundaries CurrentGutterBoundaries()
     {
-        var (bpColWidth, testColWidth, lineNumWidth, _, gutterWidth) = GetGutterMetrics();
-        return new GutterHitTester.Boundaries(_blameColWidth, bpColWidth, testColWidth, lineNumWidth, gutterWidth);
+        var (bpColWidth, bulbColWidth, testColWidth, lineNumWidth, _, gutterWidth) = GetGutterMetrics();
+        return new GutterHitTester.Boundaries(
+            _blameColWidth, bpColWidth, bulbColWidth, testColWidth, lineNumWidth, gutterWidth);
     }
+
+    /// <summary>ブレークポイントのグリフを描く帯（左端と幅）。ふつうは行番号列そのもの、
+    /// 行番号を消しているときだけ最左の専用列。<see cref="GutterHitTester.TryHitBreakpointGutter"/>
+    /// と同じ場所を指していること。</summary>
+    private (double Left, double Width) BreakpointBand(int bpColWidth, int bulbColWidth, int testColWidth, int lineNumWidth)
+        => bpColWidth > 0
+            ? (_blameColWidth, bpColWidth)
+            : (_blameColWidth + bpColWidth + bulbColWidth + testColWidth, (double)lineNumWidth);
 
     private void ClampScrollOffsets(bool raiseScrollChanged)
     {
@@ -1186,6 +1201,13 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
+        // 電球列のクリック — 電球のある行ならホストにクイックフィックスを出させる。
+        if (TryClickCodeActionBulbColumn(point))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (_showLineNumbers && point.X < gutterWidth)
         {
             // Fold column click — check for fold indicator
@@ -1295,13 +1317,16 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
-        // Arrow cursor over the overlay scrollbars
+        // Arrow cursor over the overlay scrollbars — ただし診断の印の上だけは「押せる」ことを
+        // 手のひらで示す（印が押せると判るのは見た目だけなので）。
         if (_showScrollbar && IsOverScrollbar(point))
         {
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
             ClearDataTipHover();
             ClearTextHover();
-            Cursor = System.Windows.Input.Cursors.Arrow;
+            Cursor = DiagnosticMarkAt(point) is not null
+                ? System.Windows.Input.Cursors.Hand
+                : System.Windows.Input.Cursors.Arrow;
             return;
         }
 
@@ -1346,9 +1371,15 @@ public partial class EditorCanvas : FrameworkElement
         bool inTestGlyphGutter = _gutterHitTester.TryHitTestGlyphGutter(point, boundaries2, out int testHoverLine);
         SetHoveredTestGlyphLine(inTestGlyphGutter ? testHoverLine : -1);
 
-        if (_gutterHitTester.TryHitBreakpointGutter(point, boundaries2, out int bpHoverLine))
+        // 電球列のホバー（電球の出ている行だけ）。
+        bool inBulbGutter = _gutterHitTester.TryHitCodeActionBulbGutter(point, boundaries2, out int bulbHoverLine);
+        SetCodeActionBulbHovered(inBulbGutter && bulbHoverLine >= 0 && bulbHoverLine == CodeActionBulbLine);
+
+        // ブレークポイントの帯は行番号列そのものなので、**有効なときだけ**問う。
+        // 無効なまま問うと、行番号の上でカーソルが手の形になり、押せない場所が押せるように見える。
+        if (_breakpointsEnabled && _gutterHitTester.TryHitBreakpointGutter(point, boundaries2, out int bpHoverLine))
         {
-            // Hovering in breakpoint column — show a faint placeholder dot and a hand cursor.
+            // Hovering over the breakpoint band — show a faint placeholder dot and a hand cursor.
             Cursor = bpHoverLine >= 0 ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
             SetHoveredBreakpointLine(bpHoverLine);
             ClearDataTipHover();
@@ -1359,6 +1390,17 @@ public partial class EditorCanvas : FrameworkElement
         {
             // テスト列上 — グリフのある行だけ手カーソル（押せる行だけを示す）。
             Cursor = _hoveredTestGlyphLine >= 0
+                ? System.Windows.Input.Cursors.Hand
+                : System.Windows.Input.Cursors.Arrow;
+            SetHoveredBreakpointLine(-1);
+            ClearDataTipHover();
+            ClearTextHover();
+            if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+        }
+        else if (inBulbGutter)
+        {
+            // 電球列上 — 電球のある行だけ手カーソル（押せる行だけを示す）。
+            Cursor = _codeActionBulbHovered
                 ? System.Windows.Input.Cursors.Hand
                 : System.Windows.Input.Cursors.Arrow;
             SetHoveredBreakpointLine(-1);
@@ -1446,6 +1488,7 @@ public partial class EditorCanvas : FrameworkElement
         if (_hoveredBlameLine >= 0) { _hoveredBlameLine = -1; InvalidateVisual(); }
         TrackMousePoint(null);
         SetHoveredTestGlyphLine(-1);
+        SetCodeActionBulbHovered(false);
         CloseBlameToolTip();
         ClearDataTipHover();
         ClearTextHover();
@@ -1531,7 +1574,7 @@ public partial class EditorCanvas : FrameworkElement
     {
         if (_lineHeight <= 0 || _charWidth <= 0) return (0, 0);
 
-        var (_, _, _, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, _, _, gutterWidth) = GetGutterMetrics();
 
         int visualLine = GetVisualLineIndexFromY(point.Y);
         var segment = GetVisualSegment(visualLine);
@@ -1582,7 +1625,7 @@ public partial class EditorCanvas : FrameworkElement
         }
         if (_charWidth > 0)
         {
-            var (_, _, _, _, gutterWidth) = GetGutterMetrics();
+            var (_, _, _, _, _, gutterWidth) = GetGutterMetrics();
             double minimapReserve = _showMinimap ? MinimapWidth : 0;
             double textAreaWidth = Math.Max(1, finalSize.Width - gutterWidth - minimapReserve);
             _visibleColumns = (int)(textAreaWidth / _charWidth) + 2;
@@ -1608,7 +1651,7 @@ public partial class EditorCanvas : FrameworkElement
         double contentBottom = needHorizBar ? Math.Max(0, size.Height - OverlayRenderer.ScrollbarSize) : size.Height;
         dc.PushClip(new RectangleGeometry(new Rect(0, 0, size.Width, contentBottom)));
 
-        var (bpColWidth, testColWidth, lineNumWidth, foldColWidth, gutterWidth) = GetGutterMetrics();
+        var (bpColWidth, bulbColWidth, testColWidth, lineNumWidth, foldColWidth, gutterWidth) = GetGutterMetrics();
         double textLeft = gutterWidth;
         var metrics = BuildGlyphMetrics();
 
@@ -1718,9 +1761,11 @@ public partial class EditorCanvas : FrameworkElement
                 if (drawNumberAndFold)
                 {
                     GutterRenderer.DrawLineNumberAndFold(dc, Theme, metrics, l, y,
-                        _blameColWidth, bpColWidth, testColWidth, lineNumWidth, foldColWidth,
+                        _blameColWidth, bpColWidth, bulbColWidth, testColWidth, lineNumWidth, foldColWidth,
                         _cursor.Line, _relativeNumber, _lineNumberWidth,
-                        _closedFoldStarts, _openFoldStarts, _hoveredFoldLine, _gitDiff);
+                        _closedFoldStarts, _openFoldStarts, _hoveredFoldLine, _gitDiff,
+                        // ブレークポイント（と停止中の矢印）はこの列の上に重なるので、数字は譲る。
+                        hideLineNumber: HidesLineNumberForBreakpoint(l));
                 }
             }
 
@@ -1730,15 +1775,22 @@ public partial class EditorCanvas : FrameworkElement
             if (drawNumberAndFold)
                 GutterRenderer.DrawSaveDiffBar(dc, Theme, _lineHeight, l, y, gutterWidth, _saveDiff);
 
-            // Breakpoint glyph / execution-line arrow in the dedicated breakpoint column
-            // (right of the blame margin when blame is active).
-            if (_breakpointsEnabled && drawNumberAndFold && bpColWidth > 0)
-                DrawBreakpointGlyph(dc, l, y, _blameColWidth, bpColWidth);
+            // クイックフィックスの電球（blame の右＝ガターの最左）。
+            if (_codeActionBulbEnabled && drawNumberAndFold && bulbColWidth > 0)
+                DrawCodeActionBulb(dc, l, y, _blameColWidth + bpColWidth, bulbColWidth);
 
-            // テスト実行グリフ（ブレークポイント列の右）。折り返しの継続行には描かない＝
-            // ブレークポイント列と同じ「バッファ行の先頭ビジュアル行だけ」の扱い。
+            // テスト実行グリフ（電球列の右）。折り返しの継続行には描かない＝
+            // ブレークポイントと同じ「バッファ行の先頭ビジュアル行だけ」の扱い。
             if ((_testGlyphsEnabled || _coverageMarkersEnabled) && drawNumberAndFold && testColWidth > 0)
-                DrawTestGlyph(dc, l, y, _blameColWidth + bpColWidth, testColWidth);
+                DrawTestGlyph(dc, l, y, _blameColWidth + bpColWidth + bulbColWidth, testColWidth);
+
+            // ブレークポイント／停止中の矢印。行番号の上に重ねる（行番号を消しているときだけ専用列）。
+            if (_breakpointsEnabled && drawNumberAndFold)
+            {
+                var band = BreakpointBand(bpColWidth, bulbColWidth, testColWidth, lineNumWidth);
+                if (band.Width > 0)
+                    DrawBreakpointGlyph(dc, l, y, band.Left, band.Width);
+            }
 
             // Git blame margin (far-left column of the gutter)
             if (_blameColWidth > 0)
@@ -1887,7 +1939,12 @@ public partial class EditorCanvas : FrameworkElement
         try
         {
             if (_showScrollbar)
-                OverlayRenderer.DrawScrollbars(dc, Theme, size, ComputeScrollbarLayout(size));
+            {
+                var scrollbars = ComputeScrollbarLayout(size);
+                OverlayRenderer.DrawScrollbars(dc, Theme, size, scrollbars);
+                // 診断の印はサムの上に載せる（いまいる場所の問題だけ隠れる、を防ぐ）。
+                DrawDiagnosticMarks(dc, size, scrollbars);
+            }
         }
         catch (System.Exception ex)
         {
@@ -1920,6 +1977,10 @@ public partial class EditorCanvas : FrameworkElement
     {
         var size = RenderSize;
         var l = ComputeScrollbarLayout(size);
+
+        // 診断の印はトラックより先に見る。印の上でトラックジャンプを起こしてしまうと、
+        // 「押した場所の問題へ飛ぶ」導線がスクロール操作に食われて一度も成立しない。
+        if (TryClickDiagnosticMark(point)) return true;
 
         // Vertical scrollbar — rightmost strip
         if (l.NeedVert && l.VertTrackH > 0 &&
@@ -2932,7 +2993,7 @@ public partial class EditorCanvas : FrameworkElement
     public Point GetCursorPixelPosition()
     {
         MeasureChar();
-        var (_, _, _, _, gutterWidth) = GetGutterMetrics();
+        var (_, _, _, _, _, gutterWidth) = GetGutterMetrics();
         string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : string.Empty;
         int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);
         int cursorVisualLine = GetCursorVisualLine();
@@ -3260,7 +3321,7 @@ public partial class EditorCanvas : FrameworkElement
         }
         else
         {
-            var (_, _, _, _, gutterWidth) = GetGutterMetrics();
+            var (_, _, _, _, _, gutterWidth) = GetGutterMetrics();
             double viewportWidth = Math.Max(0, UsableViewportWidth - gutterWidth);
             string line = _cursor.Line < _lines.Length ? _lines[_cursor.Line] : string.Empty;
             int cursorCol = Math.Clamp(_cursor.Column, 0, line.Length);

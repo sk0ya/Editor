@@ -141,6 +141,8 @@ public partial class VimEditorControl
             }).ToArray()));
         Canvas.SetDiagnostics((_lspDiagnosticPresentation ?? _lspView.CurrentDiagnostics)
             .Concat(host).ToArray());
+        // 診断が変われば「この行に直せる手があるか」も変わる。電球を問い直す。
+        InvalidateCodeActionBulb();
     }
 
     private static EditorDiagnostic ValidateDiagnostic(EditorDiagnostic diagnostic)

@@ -1044,6 +1044,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             BlameCommitClicked?.Invoke(this, new Git.BlameCommitClickedEventArgs(line, blame));
         Canvas.BreakpointToggled += OnCanvasBreakpointToggled;
         Canvas.TestGlyphClicked += OnCanvasTestGlyphClicked;
+        Canvas.CodeActionBulbClicked += OnCanvasCodeActionBulbClicked;
+        Canvas.DiagnosticMarkClicked += OnCanvasDiagnosticMarkClicked;
         Canvas.DataTipHoverChanged += OnCanvasDataTipHoverChanged;
         Canvas.DataTipHoverEnded += OnCanvasDataTipHoverEnded;
         Canvas.TextHoverChanged += OnCanvasTextHoverChanged;
@@ -2376,6 +2378,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // テストグリフは行番号でしか結び付いていないので、別のファイルを載せた時点で無意味になる。
         // ホストが新しい一覧を送るまでの間、前のファイルの ▶ や結果が残らないようここで捨てる。
         Canvas.SetTestGlyphs([]);
+        // 電球も行にしか結び付いていない。前のファイルの判定を持ち越さない。
+        ResetCodeActionBulb();
         _engine.LoadFile(path);
         UpdateAll();
         _lspView.OnFileOpened(path, _engine.CurrentBuffer.Text.GetText());
@@ -6006,6 +6010,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         ClearSelectionRangeState();
         _engine.SetCursorPosition(new Editor.Core.Models.CursorPosition(line, col));
         Canvas.SetCursor(_engine.Cursor);
+        // ここは ProcessVimEvents を通らない（CursorMoved が出ない）ので、電球は自分で問い直す。
+        ScheduleCodeActionBulbProbe();
         AlignViewport(Editor.Core.Models.ViewportAlign.Center);
         Canvas.InvalidateVisual();
     }
@@ -6582,10 +6588,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             {
                 case VimEventType.TextChanged:
                     needFullUpdate = true;
+                    // 編集で行がずれる＝点いていた電球の根拠も動く。世代を進めて問い直す。
+                    InvalidateCodeActionBulb();
                     BufferChanged?.Invoke(this, EventArgs.Empty);
                     break;
                 case VimEventType.CursorMoved when evt is CursorMovedEvent ce:
                     needCursorUpdate = true;
+                    ScheduleCodeActionBulbProbe();
                     CaretMoved?.Invoke(this, new CaretInfo(ce.Position.Line, ce.Position.Column));
                     if (!needFullUpdate)
                     {

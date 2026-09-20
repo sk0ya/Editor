@@ -295,16 +295,21 @@ Resolution order in `HandleFormatDocumentAsync`: (1) a configured CLI formatter 
 
 ## Gutter columns (host-driven)
 
-The gutter is laid out left→right as **blame | breakpoint | test | line number | fold | text**. The two
-host-driven columns (breakpoint, test) are **off by default and 0 px wide** until the host enables them, so a
-standalone editor's layout is untouched. Widths come from `EditorCanvas.GetGutterMetrics()` and hit-testing from
+The gutter is laid out left→right as **blame | bulb | test | line number | fold | text**. The two host-driven
+columns (quick-fix bulb, test) are **off by default and 0 px wide** until the host enables them, so a standalone
+editor's layout is untouched. **Breakpoints have no column of their own** — they are drawn on top of the line
+numbers (the number is suppressed on those lines), and only when line numbers are hidden do they fall back to a
+dedicated leftmost column (`BpColWidth > 0` *only* in that case). Widths come from `EditorCanvas.GetGutterMetrics()` and hit-testing from
 `Rendering/GutterHitTester.cs`, whose `Boundaries` record lists the columns in left→right order. Adding a column
-means touching **four** places: `GetGutterMetrics`, `Boundaries` + the neighbouring `TryHit*` ranges, the `Draw*`
-call in `OnRender`, and `GutterRenderer.DrawLineNumberAndFold` (its signature plus the two x calculations inside
-it, which offset the line number text and the fold chevron).
+means touching **four** places: `GetGutterMetrics`, `Boundaries` + the neighbouring `TryHit*` ranges (use
+`GutterHitTester.LineNumberLeft`), the `Draw*` call in `OnRender`, and `GutterRenderer.DrawLineNumberAndFold`
+(its signature plus the two x calculations inside it, which offset the line number text and the fold chevron).
 
 - **Breakpoints** (`Rendering/EditorCanvas.Breakpoints.cs`, `VimEditorControl.Debug.cs`) — `SetBreakpointsEnabled`,
-  `SetBreakpoints`, `SetExecutionLine`, `BreakpointToggled`, plus the DataTip hover bridge.
+  `SetBreakpoints`, `SetExecutionLine`, `BreakpointToggled`, plus the DataTip hover bridge. The clickable band is
+  the **line-number column**, so `TryClickBreakpointColumn`/the hover branch must bail out when breakpoints are
+  disabled — otherwise they silently swallow every line-number click. Enabling breakpoints costs **0 px** of
+  gutter width.
 - **Test glyphs** (`Rendering/EditorCanvas.TestGlyphs.cs`, `VimEditorControl.TestGlyphs.cs`) — the gutter side of
   "run this test ▶ / here's its result". **Discovery, execution and pass/fail judgement are entirely the host's
   job**; the editor only draws a glyph on a line and reports clicks. `SetTestGlyphsEnabled(bool)`,
@@ -318,7 +323,30 @@ it, which offset the line number text and the fold chevron).
   ring is a fixed translucent brush, because the gutter background and the current-line background are nearly the
   same in some themes.
 
+- **Quick-fix bulb** (`Rendering/EditorCanvas.CodeActionBulb.cs`, `VimEditorControl.CodeActionBulb.cs`) — sits in
+  the leftmost glyph margin (right of blame, where breakpoints used to be). The amber bulb says "there is a fix for this line" before anyone presses `Alt+Enter`. The canvas only draws
+  the one line it is told about (`SetCodeActionBulbLine`) and reports clicks (`CodeActionBulbClicked`);
+  **which** line lights up is decided in `VimEditorControl.CodeActionBulb.cs`, which probes
+  `CollectQuickFixesAsync` — the same path as `Alt+Enter` and the hover bulb, so a bulb that yields nothing is
+  impossible. The probe is debounced 250 ms, runs **only for lines that carry a diagnostic**, and is skipped when
+  the (line, diagnostics generation) pair was already answered; a stale answer is dropped by token. Unlike the
+  other two columns, the width is held while the bulb itself comes and goes with the caret — folding it away
+  would shift the text sideways on every caret move.
+
 Both columns skip wrapped continuation rows, so a glyph is drawn once per buffer line.
+
+## Scrollbar diagnostic marks (overview ruler)
+
+Diagnostics — LSP and host merged, whatever `SetDiagnostics` was given — are also projected onto the vertical
+overlay scrollbar: one mark per line, worst severity wins, **no severity is dropped** (a `Hint`-level unused
+`using` is invisible off-screen — faded text only helps where the text is), drawn **after** the thumb so the
+problems where you currently are aren't the ones hidden. Colors come from the theme's
+`DiagnosticError`/`Warning`/`Info`/`Hint`, so weight reads as color rather than as presence. Clicking a mark raises `DiagnosticMarkClicked`
+(`VimEditorControl` turns it into a `JumpToLine`), and the mark is tested **before** the thumb/track drag in
+`TryBeginScrollbarDrag`, otherwise the scroll gesture eats every mark click. The fold and the line↔track mapping
+are pure functions in `Editor.Core/Lsp/DiagnosticOverviewMarks.cs` (`Build` / `TrackY` / `HitTest`), drawing is
+`OverlayRenderer.DrawScrollbarDiagnosticMarks`, and the glue is `Rendering/EditorCanvas.DiagnosticMarks.cs`.
+Nothing to enable; no vertical scrollbar (document fits on screen) means no marks.
 
 **Host contract for test glyphs**, none of which the editor does for you:
 

@@ -6,9 +6,13 @@ using System.Windows.Media;
 namespace Editor.Controls.Rendering;
 
 /// <summary>
-/// EditorCanvas のデバッグ用ガター（ブレークポイント列・実行中行ハイライト）と DataTip ホバー連携。
-/// <see cref="_breakpointsEnabled"/> が false の間は <c>GetGutterMetrics</c> がブレークポイント列の幅を 0 にし、
-/// 描画・ヒットテストとも一切作動しないため、デバッグを使わない通常のエディタ利用には影響しない。
+/// EditorCanvas のデバッグ用ガター（ブレークポイント・実行中行ハイライト）と DataTip ホバー連携。
+/// <see cref="_breakpointsEnabled"/> が false の間は描画・ヒットテストとも一切作動しないため、
+/// デバッグを使わない通常のエディタ利用には影響しない。
+/// <para><b>置き場は行番号の上</b>。専用列を持たないので、有効にしてもガターは 1px も広がらず、
+/// 本文の左端も動かない（列を増やすほど本文が右へ逃げていくのを止めるための判断）。丸を描く行では
+/// 数字を譲る——重ねると赤い丸の上に灰色の数字が乗って、どちらも読めなくなる。行番号を消している
+/// （<c>set nonumber</c>）ときだけ置き場が無くなるので、そのときに限りガター最左の専用列を確保する。</para>
 /// ホストは <see cref="SetBreakpointsEnabled"/> で列を有効化し、<see cref="BreakpointToggled"/> を購読して
 /// ブレークポイントの追加/削除を受け取り、<see cref="SetBreakpoints(IReadOnlyList{EditorBreakpoint})"/>/
 /// <see cref="SetExecutionLine"/> で表示を更新する。条件付き・ログポイント・無効状態はガターのグリフで描き分ける。
@@ -36,7 +40,7 @@ public partial class EditorCanvas
     /// <summary>ブレークポイント列がクリックされ、その行のブレークポイントがトグルされたとき。引数はバッファ行（0始まり）。</summary>
     public event Action<int>? BreakpointToggled;
 
-    /// <summary>ブレークポイント列の有効/無効を切り替える（デバッグ機能を使うホストが有効化する）。</summary>
+    /// <summary>ブレークポイントの表示・操作の有効/無効を切り替える（デバッグ機能を使うホストが有効化する）。</summary>
     public void SetBreakpointsEnabled(bool enabled)
     {
         if (_breakpointsEnabled == enabled) return;
@@ -75,14 +79,20 @@ public partial class EditorCanvas
         InvalidateVisual();
     }
 
-    /// <summary>ブレークポイント列のクリック処理本体。テスト列の <c>TryClickTestGlyphColumn</c> と同じく、
-    /// マウスイベントから切り離して座標だけで叩けるようにしてある。列の外なら false。</summary>
+    /// <summary>ブレークポイントの帯（＝行番号列）のクリック処理本体。テスト列の
+    /// <c>TryClickTestGlyphColumn</c> と同じく、マウスイベントから切り離して座標だけで叩けるようにしてある。
+    /// 帯の外なら false。<b>無効時は必ず false</b>——さもないと行番号のクリックを黙って奪う。</summary>
     internal bool TryClickBreakpointColumn(Point point)
     {
+        if (!_breakpointsEnabled) return false;
         if (!_gutterHitTester.TryHitBreakpointGutter(point, CurrentGutterBoundaries(), out int line)) return false;
         if (line >= 0) BreakpointToggled?.Invoke(line);
         return true;
     }
+
+    /// <summary>その行の行番号を、ブレークポイント（または停止中の矢印）に譲るか。</summary>
+    private bool HidesLineNumberForBreakpoint(int line) =>
+        _breakpointsEnabled && (_breakpoints.ContainsKey(line) || line == _executionLine);
 
     private void SetHoveredBreakpointLine(int line)
     {
@@ -91,13 +101,14 @@ public partial class EditorCanvas
         if (_breakpointsEnabled) InvalidateVisual();
     }
 
-    /// <summary>ブレークポイント列（blame 非表示時は左端、表示時はその右）に、その行のブレークポイント／
-    /// ホバー候補の薄赤丸／実行中行の琥珀矢印を描く。<paramref name="x"/> は列の左端。</summary>
-    private void DrawBreakpointGlyph(DrawingContext dc, int line, double y, double x, int bpColWidth)
+    /// <summary>ブレークポイントの帯（ふつうは行番号列、行番号非表示時は最左の専用列）に、その行の
+    /// ブレークポイント／ホバー候補の薄赤丸／実行中行の琥珀矢印を描く。<paramref name="x"/> は帯の左端。</summary>
+    private void DrawBreakpointGlyph(DrawingContext dc, int line, double y, double x, double bandWidth)
     {
-        double cx = x + bpColWidth / 2.0;
+        double cx = x + bandWidth / 2.0;
         double cy = y + _lineHeight / 2.0;
-        double r = Math.Max(3.0, Math.Min(bpColWidth, _lineHeight) / 2.0 - 3.0);
+        // 行番号列は横に広いので、丸の大きさは行の高さで決める（幅いっぱいの楕円にしない）。
+        double r = Math.Max(3.0, Math.Min(Math.Min(bandWidth, _lineHeight) / 2.0 - 3.0, _lineHeight / 2.0 - 3.0));
 
         if (_breakpoints.TryGetValue(line, out var bp))
             DrawBreakpointShape(dc, cx, cy, r, bp.Kind, bp.Enabled);

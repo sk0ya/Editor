@@ -25,18 +25,22 @@ internal static class GutterRenderer
     public static void DrawLineNumberAndFold(
         DrawingContext dc, EditorTheme theme, GlyphMetrics metrics,
         int line, double y,
-        double blameColWidth, int bpColWidth, int testColWidth, int lineNumWidth, double foldColWidth,
+        double blameColWidth, int bpColWidth, int bulbColWidth, int testColWidth, int lineNumWidth, double foldColWidth,
         int cursorLine, bool relativeNumber, int lineNumberWidth,
         IReadOnlySet<int> closedFoldStarts, IReadOnlySet<int> openFoldStarts, int hoveredFoldLine,
-        IReadOnlyDictionary<int, GitLineState> gitDiff)
+        IReadOnlyDictionary<int, GitLineState> gitDiff, bool hideLineNumber = false)
     {
         bool isCursorLine = line == cursorLine;
-        var lineNumberBrush = isCursorLine ? theme.CurrentLineNumberFg : theme.LineNumberFg;
-        string lineNumStr = relativeNumber && !isCursorLine
-            ? Math.Abs(line - cursorLine).ToString().PadLeft(lineNumberWidth)
-            : (line + 1).ToString().PadLeft(lineNumberWidth);
-        var numText = metrics.FormatText(lineNumStr, lineNumberBrush);
-        dc.DrawText(numText, new Point(blameColWidth + bpColWidth + testColWidth + 2, y + (metrics.LineHeight - numText.Height) / 2));
+        // 数字はブレークポイントに譲る（この行の行番号列にはグリフが重なる）。
+        if (!hideLineNumber)
+        {
+            var lineNumberBrush = isCursorLine ? theme.CurrentLineNumberFg : theme.LineNumberFg;
+            string lineNumStr = relativeNumber && !isCursorLine
+                ? Math.Abs(line - cursorLine).ToString().PadLeft(lineNumberWidth)
+                : (line + 1).ToString().PadLeft(lineNumberWidth);
+            var numText = metrics.FormatText(lineNumStr, lineNumberBrush);
+            dc.DrawText(numText, new Point(blameColWidth + bpColWidth + bulbColWidth + testColWidth + 2, y + (metrics.LineHeight - numText.Height) / 2));
+        }
 
         bool isClosed = closedFoldStarts.Contains(line);
         bool isOpen = openFoldStarts.Contains(line);
@@ -44,7 +48,7 @@ internal static class GutterRenderer
         {
             bool hovered = hoveredFoldLine == line;
             var indicatorColor = hovered ? theme.Foreground : theme.LineNumberFg;
-            double foldX = blameColWidth + bpColWidth + testColWidth + lineNumWidth;
+            double foldX = blameColWidth + bpColWidth + bulbColWidth + testColWidth + lineNumWidth;
             if (hovered)
                 dc.DrawRectangle(s_foldHoverBg, null,
                     new Rect(foldX, y, foldColWidth, metrics.LineHeight));
