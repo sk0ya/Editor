@@ -114,6 +114,18 @@ public sealed class VimEditorControlOptions
     public Func<string, string, int, int, CancellationToken, Task<IReadOnlyList<InlayHint>>>? HostInlayHintProvider { get; init; }
 
     /// <summary>
+    /// ホバーに出ている診断へ、ホストが<b>補記</b>を添える口（「なぜそう言われたのか」）。
+    /// 引数はファイルパス・本文・その診断で、返す1行がメッセージの下に薄く並ぶ。何も言えなければ null。
+    ///
+    /// <para>言語サーバーの文面は結論だけのことがある——「Using ディレクティブは必要ありません」は
+    /// 正しいが、<c>GlobalUsings.cs</c> の <c>global using</c> と重複しているからだ、とはどのサーバーも
+    /// 言わない。理由を知っているのは、その言語のプロジェクトを抱えているホストの側なので、
+    /// エディタは場所だけ用意して中身は持たない。</para>
+    /// </summary>
+    public Func<string, string, LspDiagnostic, CancellationToken, Task<string?>>?
+        HostDiagnosticExplanationProvider { get; init; }
+
+    /// <summary>
     /// マウスを本文の識別子に乗せたまま止めたとき、型と説明のポップアップを出すか（既定は true）。
     /// 中身は <see cref="HostHoverProvider"/> を含む通常の hover 経路から取るので、LSP もホスト提供も
     /// 無いエディタでは何も出ない（＝出せるときだけ出る）。実行時は

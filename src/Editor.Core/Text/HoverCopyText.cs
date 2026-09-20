@@ -21,15 +21,23 @@ namespace Editor.Core.Text;
 public static class HoverCopyText
 {
     /// <summary>いま出ているポップアップの中身を素のテキストに。空なら空文字。</summary>
+    /// <param name="explanations">診断への補記。<paramref name="diagnostics"/> と同じ並びで、
+    /// 画面に出ているものだけを写す（出ていない補記を足さない）。</param>
     public static string Build(
-        IReadOnlyList<LspDiagnostic> diagnostics, IReadOnlyList<HoverBlock> blocks)
+        IReadOnlyList<LspDiagnostic> diagnostics, IReadOnlyList<HoverBlock> blocks,
+        IReadOnlyList<string?>? explanations = null)
     {
         var parts = new List<string>();
 
-        foreach (var diagnostic in diagnostics)
+        for (int i = 0; i < diagnostics.Count; i++)
         {
+            var diagnostic = diagnostics[i];
             var origin = Origin(diagnostic);
-            parts.Add(origin.Length == 0 ? diagnostic.Message : $"{diagnostic.Message}  {origin}");
+            var line = origin.Length == 0 ? diagnostic.Message : $"{diagnostic.Message}  {origin}";
+            var explanation = explanations is not null && i < explanations.Count ? explanations[i] : null;
+            parts.Add(string.IsNullOrWhiteSpace(explanation)
+                ? line
+                : line + "\n" + explanation);
         }
 
         foreach (var block in blocks)

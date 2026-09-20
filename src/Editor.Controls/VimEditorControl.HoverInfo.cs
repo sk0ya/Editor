@@ -84,8 +84,14 @@ public partial class VimEditorControl
     private bool _hoverRequestInFlight;
     private Window? _hoverInfoWindow;
 
+    /// <summary>診断への補記（「なぜそう言われたのか」）をホストへ聞く口。無ければ聞かない。</summary>
+    private Func<string, string, LspDiagnostic, CancellationToken, Task<string?>>?
+        _hostDiagnosticExplanationProvider;
+
     // いま出ているポップアップの中身。電球の開閉で組み直すために持っておく。
     private IReadOnlyList<LspDiagnostic> _hoverDiagnostics = [];
+    /// <summary><see cref="_hoverDiagnostics"/> と同じ並びの補記。まだ来ていない／無いものは null。</summary>
+    private IReadOnlyList<string?> _hoverExplanations = [];
     private IReadOnlyList<HoverBlock> _hoverBlocks = [];
     private IReadOnlyList<LspCodeAction>? _hoverFixes;
     private int _hoverHiddenFixes;
@@ -248,6 +254,9 @@ public partial class VimEditorControl
 
         _shownHoverSpan = (hover.Line, hover.StartColumn, hover.EndColumn);
         ShowHoverInfo(hover.Anchor, diagnostics, blocks);
+        // 補記は<b>出してから</b>埋める。ホスト側の解析（Roslyn など）を待って
+        // ポップアップ自体を遅らせると、説明が読めるまでの時間がそのぶん延びる。
+        if (diagnostics.Count > 0) _ = LoadHoverExplanationsAsync(diagnostics, cts);
         HoverLog(
             $"shown: dwell {_hoverInfoDwellMs}ms + request {requestMs}ms + " +
             $"build {watch.ElapsedMilliseconds - requestMs}ms = " +
@@ -313,6 +322,7 @@ public partial class VimEditorControl
         _hoverFixes = null;
         _hoverHiddenFixes = 0;
         _hoverHasDiagnostics = diagnostics.Count > 0;
+        _hoverExplanations = [];
         SetHoverInfoContent(diagnostics, blocks);
 
         _hoverPopup!.PlacementTarget = Canvas;
@@ -340,9 +350,43 @@ public partial class VimEditorControl
             _syntaxLanguages,
             new HoverFixSection(
                 _hoverHasDiagnostics, _hoverFixesExpanded, _hoverFixesLoading, _hoverFixesLoaded,
-                _hoverFixes, _hoverHiddenFixes, ToggleHoverFixes, OnHoverFixInvoked));
+                _hoverFixes, _hoverHiddenFixes, ToggleHoverFixes, OnHoverFixInvoked),
+            _hoverExplanations,
+            OpenLink);
         // 先頭へ戻す明示の呼び出しは要らない：組み直すたびに<b>別の</b> FlowDocument を渡しているので、
         // 表示器は新しい文書の先頭から測り直す（FlowDocumentScrollViewer に ScrollToTop は無い）。
+    }
+
+    /// <summary>診断への補記をホストへ聞き、届いた順ではなく<b>揃ってから</b>一度だけ差し込む
+    /// （1件ずつ組み直すと、読んでいる最中にポップアップの高さが何度も動く）。</summary>
+    private async Task LoadHoverExplanationsAsync(
+        IReadOnlyList<LspDiagnostic> diagnostics, CancellationTokenSource cts)
+    {
+        if (_hostDiagnosticExplanationProvider is not { } provider) return;
+
+        var path = FilePath ?? string.Empty;
+        var source = Text;
+        var explanations = new string?[diagnostics.Count];
+        bool any = false;
+        for (int i = 0; i < diagnostics.Count; i++)
+        {
+            try
+            {
+                explanations[i] = await provider(path, source, diagnostics[i], cts.Token);
+            }
+            catch (OperationCanceledException) { return; }
+            catch { /* 補記が無いだけ。診断そのものの表示は妨げない。 */ }
+            any |= !string.IsNullOrWhiteSpace(explanations[i]);
+        }
+
+        if (!any) return;
+        // 待っている間に別の語へ移った／閉じたなら、その表示を上書きしない。
+        if (cts.IsCancellationRequested || cts != _hoverCts) return;
+        if (_hoverPopup is not { IsOpen: true }) return;
+        if (!ReferenceEquals(_hoverDiagnostics, diagnostics)) return;
+
+        _hoverExplanations = explanations;
+        RenderHoverInfoContent();
     }
 
     /// <summary>電球が押された。開くときに<b>初めて</b>候補を問い合わせる。</summary>
@@ -556,7 +600,7 @@ public partial class VimEditorControl
         var selected = HoverSelectionText();
         var text = selected.Length > 0
             ? selected
-            : HoverCopyText.Build(_hoverDiagnostics, _hoverBlocks);
+            : HoverCopyText.Build(_hoverDiagnostics, _hoverBlocks, _hoverExplanations);
         if (text.Length == 0)
         {
             ActiveStatusBar.UpdateStatus("Hover: コピーできる文字がありません");

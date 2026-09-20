@@ -57,6 +57,11 @@ internal static class HoverContentBuilder
         ["markdown"] = ".md", ["md"] = ".md",
     };
 
+    /// <param name="explanations">診断への<b>補記</b>（ホストが添える「なぜそう言われたのか」）。
+    /// <paramref name="diagnostics"/> と同じ並びで、補記が無いものは null。規則名だけでは
+    /// 「使っているのに不要と言われた」に見える診断があり、その差を埋めるのはホストにしかできない。</param>
+    /// <param name="onOpenUrl">規則の説明ページ（<c>codeDescription</c>）を開く。渡されなければ
+    /// 出どころはただの文字として出る。</param>
     public static FlowDocument Build(
         IReadOnlyList<LspDiagnostic> diagnostics,
         IReadOnlyList<HoverBlock> blocks,
@@ -64,7 +69,9 @@ internal static class HoverContentBuilder
         FontFamily monoFont,
         double fontSize,
         SyntaxLanguageRegistry? languages,
-        HoverFixSection fixes = default)
+        HoverFixSection fixes = default,
+        IReadOnlyList<string?>? explanations = null,
+        Action<string>? onOpenUrl = null)
     {
         var document = new FlowDocument
         {
@@ -77,8 +84,12 @@ internal static class HoverContentBuilder
             TextAlignment = TextAlignment.Left,
         };
 
-        foreach (var diagnostic in diagnostics)
-            document.Blocks.Add(BuildDiagnostic(diagnostic, theme, fontSize));
+        for (int i = 0; i < diagnostics.Count; i++)
+        {
+            var explanation = explanations is not null && i < explanations.Count ? explanations[i] : null;
+            foreach (var block in BuildDiagnostic(diagnostics[i], explanation, theme, fontSize, onOpenUrl))
+                document.Blocks.Add(block);
+        }
 
         if (fixes.Show && fixes.OnApply is not null)
             foreach (var block in BuildFixes(fixes, theme, fontSize))
@@ -111,7 +122,9 @@ internal static class HoverContentBuilder
     private static BlockUIContainer Wrap(UIElement element) =>
         new(element) { Margin = new Thickness(0) };
 
-    private static Block BuildDiagnostic(LspDiagnostic diagnostic, EditorTheme theme, double fontSize)
+    private static IEnumerable<Block> BuildDiagnostic(
+        LspDiagnostic diagnostic, string? explanation, EditorTheme theme, double fontSize,
+        Action<string>? onOpenUrl)
     {
         var brush = diagnostic.Severity switch
         {
@@ -132,9 +145,40 @@ internal static class HoverContentBuilder
 
         var origin = Origin(diagnostic);
         if (origin.Length > 0)
-            text.Inlines.Add(new Run("  " + origin) { Foreground = theme.LineNumberFg });
+        {
+            text.Inlines.Add(new Run("  "));
+            // 説明ページがあるなら出どころ自体を入口にする。「IDE0005 とは何か」へ
+            // 一手で行けることが、文面だけでは分からない診断の逃げ道になる。
+            if (diagnostic.CodeDescriptionHref is { Length: > 0 } href && onOpenUrl is not null)
+                text.Inlines.Add(BuildOriginLink(origin, href, theme, onOpenUrl));
+            else
+                text.Inlines.Add(new Run(origin) { Foreground = theme.LineNumberFg });
+        }
 
-        return text;
+        yield return text;
+
+        if (string.IsNullOrWhiteSpace(explanation)) yield break;
+
+        var note = new Paragraph(new Run(explanation))
+        {
+            FontSize = fontSize,
+            Foreground = theme.LineNumberFg,
+            Margin = new Thickness(14, 0, 0, 3),
+        };
+        yield return note;
+    }
+
+    private static Inline BuildOriginLink(
+        string origin, string href, EditorTheme theme, Action<string> onOpenUrl)
+    {
+        var link = new Hyperlink(new Run(origin))
+        {
+            Foreground = theme.LinkColor,
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = href,
+        };
+        link.Click += (_, _) => onOpenUrl(href);
+        return link;
     }
 
     /// <summary>出どころの綴りは<b>写し</b>（<see cref="HoverCopyText"/>）と同じものを使う——
@@ -179,8 +223,10 @@ internal static class HoverContentBuilder
     private static Block BuildFixToggle(
         int? count, bool expanded, EditorTheme theme, double fontSize, Action? onToggle)
     {
+        // 押す前に何が起きるか分かる言葉にする。電球の絵だけだと、押して初めて
+        // 「候補を取りに行く」ものだと分かる（そして空かもしれない）。
         var label = new TextBlock { FontSize = fontSize };
-        label.Inlines.Add(new Run("💡") { Foreground = theme.Foreground });
+        label.Inlines.Add(new Run("💡 修正候補") { Foreground = theme.Foreground });
         if (count is { } n) label.Inlines.Add(new Run($" {n}") { Foreground = theme.LineNumberFg });
 
         var row = new Border

@@ -770,6 +770,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _syntaxLanguages = options.SyntaxLanguages;
         _hoverInfoEnabled = options.HoverInfoEnabled;
         _hoverInfoDwellMs = Math.Max(0, options.HoverInfoDelayMs);
+        _hostDiagnosticExplanationProvider = options.HostDiagnosticExplanationProvider;
         Canvas.WrapLines = _engine.Options.Wrap;
         _multiCursorManager = new MultiCursorManager(_engine, Canvas, msg => ActiveStatusBar.UpdateStatus(msg), UpdateAll);
         _snippetTabStopManager = new SnippetTabStopManager(_engine, ProcessKey, ClearSelectionRangeState, ProcessVimEvents, UpdateAll);

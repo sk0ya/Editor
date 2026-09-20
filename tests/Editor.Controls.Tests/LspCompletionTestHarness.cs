@@ -11,12 +11,16 @@ namespace Editor.Controls.Tests;
 /// </summary>
 internal static class LspCompletionTestHarness
 {
-    public static void WithEditor(bool vimEnabled, Action<VimEditorControl, FakeEditorLspView> action)
+    /// <param name="options">既定以外の設定で立てたいとき（ホスト提供の口を差すなど）。
+    /// <c>LspViewFactory</c> は呼び手が渡された fake を指すように組むこと。</param>
+    public static void WithEditor(bool vimEnabled, Action<VimEditorControl, FakeEditorLspView> action,
+        Func<FakeEditorLspView, VimEditorControlOptions>? options = null)
     {
         WpfTestHost.Run(() =>
         {
             var lsp = new FakeEditorLspView();
-            var editor = new VimEditorControl(new VimEditorControlOptions { LspViewFactory = () => lsp });
+            var editor = new VimEditorControl(
+                options?.Invoke(lsp) ?? new VimEditorControlOptions { LspViewFactory = () => lsp });
             Window? window = null;
             try
             {

@@ -38,6 +38,34 @@ public class HoverCopyTextTests
         Assert.Equal("上\n\n下", text);
     }
 
+    /// <summary>ホストが添えた「なぜ」も写しに入る（見えているものと写しをずらさない）。</summary>
+    [Fact]
+    public void Build_KeepsTheHostExplanationUnderItsDiagnostic()
+    {
+        var diagnostic = new LspDiagnostic(
+            new LspRange(new LspPosition(0, 0), new LspPosition(0, 21)),
+            "Using ディレクティブは必要ありません。", DiagnosticSeverity.Hint, "Roslyn", "IDE0005");
+
+        var text = HoverCopyText.Build(
+            [diagnostic], [], ["GlobalUsings.cs:14 の global using と重複しています。"]);
+
+        Assert.Equal(
+            "Using ディレクティブは必要ありません。  Roslyn(IDE0005)\n" +
+            "GlobalUsings.cs:14 の global using と重複しています。", text);
+    }
+
+    [Fact]
+    public void Build_WithoutExplanations_IsUnchanged()
+    {
+        var diagnostic = new LspDiagnostic(
+            new LspRange(new LspPosition(0, 0), new LspPosition(0, 1)),
+            "メッセージ", DiagnosticSeverity.Hint, "Roslyn", "IDE0005");
+
+        Assert.Equal(
+            HoverCopyText.Build([diagnostic], []),
+            HoverCopyText.Build([diagnostic], [], [null]));
+    }
+
     [Fact]
     public void Build_WithNothingToShow_IsEmpty() => Assert.Equal("", HoverCopyText.Build([], []));
 
