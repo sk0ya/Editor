@@ -70,6 +70,12 @@ public class EditorTheme
     // Hyperlink underline drawn under detected URLs (Ctrl+Click/hover to open)
     public Brush LinkColor { get; init; } = new SolidColorBrush(Color.FromRgb(0x4D, 0xA8, 0xFF));
 
+    // CodeLens（「N 個の参照」など宣言行の直上に出す注釈）の文字色。押せるものではあるが
+    // 本文の脇に常時出ているので、LinkColor の明るい青だと本文より目立ってしまう。本文より
+    // 一段沈んだ灰にして、視界の端に置く。Stale は取り直し中の古いラベルで、さらに沈める。
+    public Brush CodeLensForeground { get; init; } = new SolidColorBrush(Color.FromRgb(0x5E, 0x67, 0x73));
+    public Brush CodeLensStaleForeground { get; init; } = new SolidColorBrush(Color.FromArgb(0x99, 0x5E, 0x67, 0x73));
+
     // Diagnostic colors
     public Brush DiagnosticError   { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0x00));
     public Brush DiagnosticWarning { get; init; } = new SolidColorBrush(Color.FromRgb(0xFF, 0xA5, 0x00));

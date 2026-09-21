@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Media;
 using Editor.Controls.Themes;
 using Editor.Core.Lsp;
@@ -122,7 +122,7 @@ internal static class LspOverlayRenderer
 
             if (!first)
             {
-                var separator = metrics.FormatScaledText("|", theme.TokenComment, LensScale);
+                var separator = metrics.FormatScaledText("|", theme.CodeLensStaleForeground, LensScale);
                 dc.DrawText(separator, new Point(x + LensGap, y + (metrics.LineHeight - separator.Height) / 2));
                 x += LensGap * 2 + separator.Width;
             }
@@ -130,7 +130,7 @@ internal static class LspOverlayRenderer
 
             // 古い（行が増減した直後）ラベルは薄く出す。消すと本文が跳ねるので残すが、
             // いまの本文に対する答えではないことは見て分かるようにする。
-            var brush = stale ? theme.TokenComment : theme.LinkColor;
+            var brush = stale ? theme.CodeLensStaleForeground : theme.CodeLensForeground;
             var text = metrics.FormatScaledText(lens.Title, brush, LensScale);
             if (x > viewportWidth) break;
 
