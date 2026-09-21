@@ -48,6 +48,10 @@ public class EditorTheme
     // Indent guide lines
     public Brush IndentGuideBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x4A));
 
+    // 括弧ペアを結ぶ縦線。Active はカーソルがいるブロックのぶんで、他より一段はっきり見せる。
+    public Brush BracketGuideBrush { get; init; } = new SolidColorBrush(Color.FromArgb(0x60, 0x80, 0x80, 0x9A));
+    public Brush BracketGuideActiveBrush { get; init; } = new SolidColorBrush(Color.FromArgb(0xD0, 0xA0, 0xA8, 0xC8));
+
     // Git merge conflict marker colors
     public SolidColorBrush ConflictOursHeader   { get; init; } = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0x6B, 0x6B));
     public SolidColorBrush ConflictSeparator    { get; init; } = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xD7, 0x00));
@@ -135,6 +139,8 @@ public class EditorTheme
         ColorColumnBrush = new SolidColorBrush(Color.FromRgb(0x3D, 0x3D, 0x50)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x4F, 0x7A)),
         IndentGuideBrush = new SolidColorBrush(Color.FromRgb(0x3A, 0x3C, 0x4E)),
+        BracketGuideBrush = new SolidColorBrush(Color.FromArgb(0x60, 0x6A, 0x6E, 0x8C)),
+        BracketGuideActiveBrush = new SolidColorBrush(Color.FromArgb(0xD0, 0xBD, 0x93, 0xF9)),
         MinimapBackground = new SolidColorBrush(Color.FromArgb(0xD0, 0x1E, 0x1F, 0x29)),
         MinimapViewport   = new SolidColorBrush(Color.FromArgb(0x55, 0xBB, 0xBB, 0xCC)),
         DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0xBD, 0x93, 0xF9)),
@@ -186,6 +192,8 @@ public class EditorTheme
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x3B, 0x42, 0x52)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x4C, 0x60, 0x80)),
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x38, 0x3F, 0x4D)),
+        BracketGuideBrush   = new SolidColorBrush(Color.FromArgb(0x60, 0x61, 0x6E, 0x88)),
+        BracketGuideActiveBrush = new SolidColorBrush(Color.FromArgb(0xD0, 0x88, 0xC0, 0xD0)),
         MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x22, 0x27, 0x30)),
         MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x88, 0xC0, 0xD0)),
         DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0x88, 0xC0, 0xD0)),
@@ -235,6 +243,8 @@ public class EditorTheme
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x1F, 0x20, 0x35)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x36, 0x4A, 0x82)),
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x25, 0x27, 0x38)),
+        BracketGuideBrush   = new SolidColorBrush(Color.FromArgb(0x60, 0x56, 0x5F, 0x89)),
+        BracketGuideActiveBrush = new SolidColorBrush(Color.FromArgb(0xD0, 0x7A, 0xA2, 0xF7)),
         MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x13, 0x14, 0x1E)),
         MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x7A, 0xA2, 0xF7)),
         DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0x7A, 0xA2, 0xF7)),
@@ -284,6 +294,8 @@ public class EditorTheme
         ColorColumnBrush    = new SolidColorBrush(Color.FromRgb(0x2C, 0x31, 0x3A)),
         MatchingBracketBackground = new SolidColorBrush(Color.FromArgb(0xB0, 0x3E, 0x52, 0x7A)),
         IndentGuideBrush    = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x42)),
+        BracketGuideBrush   = new SolidColorBrush(Color.FromArgb(0x60, 0x5C, 0x63, 0x70)),
+        BracketGuideActiveBrush = new SolidColorBrush(Color.FromArgb(0xD0, 0x61, 0xAF, 0xEF)),
         MinimapBackground   = new SolidColorBrush(Color.FromArgb(0xD0, 0x1C, 0x1F, 0x26)),
         MinimapViewport     = new SolidColorBrush(Color.FromArgb(0x55, 0x61, 0xAF, 0xEF)),
         DocumentHighlightBackground = new SolidColorBrush(Color.FromArgb(0x44, 0x61, 0xAF, 0xEF)),
@@ -371,6 +383,9 @@ public class EditorTheme
             TokenIdentifier = TokenIdentifier,
             TokenFunction = TokenFunction,
             MatchingBracketBackground = MatchingBracketBackground,
+            IndentGuideBrush = IndentGuideBrush,
+            BracketGuideBrush = BracketGuideBrush,
+            BracketGuideActiveBrush = BracketGuideActiveBrush,
         };
     }
 
@@ -408,6 +423,9 @@ public class EditorTheme
             TokenIdentifier = TokenIdentifier,
             TokenFunction = TokenFunction,
             MatchingBracketBackground = MatchingBracketBackground,
+            IndentGuideBrush = IndentGuideBrush,
+            BracketGuideBrush = BracketGuideBrush,
+            BracketGuideActiveBrush = BracketGuideActiveBrush,
         };
     }
 }

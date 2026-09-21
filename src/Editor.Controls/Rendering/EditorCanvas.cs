@@ -145,6 +145,10 @@ public partial class EditorCanvas : FrameworkElement
     private bool _showIndentGuides = false;
     private int _indentGuideTabStop = 4;
 
+    // 括弧ペアを結ぶ縦線（走査結果は行配列ごとにキャッシュされる）
+    private readonly BracketGuideLayout _bracketGuides = new();
+    private readonly List<BracketGuideLayout.Row> _bracketGuideRows = [];
+
     // Color preview swatches
     private bool _showColorPreview = true;
 
@@ -659,6 +663,13 @@ public partial class EditorCanvas : FrameworkElement
         if (_showIndentGuides == show && _indentGuideTabStop == tabStop) return;
         _showIndentGuides = show;
         _indentGuideTabStop = Math.Max(1, tabStop);
+        InvalidateVisual();
+    }
+
+    /// <summary>括弧ペアを結ぶ縦線の表示と、括弧を数えるときの言語の目印（コメント/文字列）。</summary>
+    public void SetBracketGuides(bool show, BracketGuideSyntax? syntax)
+    {
+        if (!_bracketGuides.Configure(show, syntax)) return;
         InvalidateVisual();
     }
 
@@ -1879,6 +1890,8 @@ public partial class EditorCanvas : FrameworkElement
         // the app); the content clip is popped in the finally either way so it stays balanced.
         try
         {
+            DrawBracketGuides(dc, textLeft, gutterWidth, firstLine, lastLine, contentBottom, size);
+
             DrawImeCandidatePopup(dc, textLeft, size);
             LspOverlayRenderer.DrawSignatureHelp(dc, Theme, metrics, _signatureHelp, textLeft, size, GetCursorPixelPosition());
             LspOverlayRenderer.DrawCompletionPopup(dc, Theme, metrics, _completionItems, _completionSelection, _completionScrollOffset, textLeft, size, GetCursorPixelPosition());
@@ -2285,6 +2298,65 @@ public partial class EditorCanvas : FrameworkElement
             dc.DrawLine(pen, new Point(x + step / 2, yBase - amp),
                              new Point(x + step,     yBase + amp));
         }
+    }
+
+    /// <summary>
+    /// 開き括弧の行と閉じ括弧の行を縦線で結ぶ。見えている表示行を <see cref="BracketGuideLayout"/>
+    /// に渡すだけで、どの桁に引くかはそちらが決める。
+    /// </summary>
+    private void DrawBracketGuides(DrawingContext dc, double textLeft, double gutterWidth,
+        int firstLine, int lastLine, double contentBottom, Size size)
+    {
+        if (!_bracketGuides.Enabled || _lineHeight <= 0 || _lines.Length == 0) return;
+
+        _bracketGuideRows.Clear();
+        for (int vi = firstLine; vi <= lastLine && vi < _visualLines.Length; vi++)
+        {
+            if (vi < 0) continue;
+            var segment = _visualLines[vi];
+            if (segment.BufferLine >= _lines.Length) continue;
+
+            double y = vi * _lineHeight - _scrollOffsetY;
+            if (y + _lineHeight < 0 || y > contentBottom) continue;
+
+            _bracketGuideRows.Add(new BracketGuideLayout.Row(
+                segment.BufferLine, y, segment.IsCodeLens,
+                IsFirstTextRowOfLine(vi), IsLastTextRowOfLine(vi)));
+        }
+
+        var segments = _bracketGuides.Build(_lines, _bracketGuideRows, _cursor, MeasureGuideX, _lineHeight);
+        OverlayRenderer.DrawBracketGuides(dc, Theme, segments, gutterWidth, size);
+
+        double MeasureGuideX(int line, int column)
+        {
+            SetActiveLine(line);
+            return textLeft + GetVisualX(_lines[line], column) - _scrollOffsetX;
+        }
+    }
+
+    /// <summary>CodeLens の注釈行は本文ではないので、折り返しの先頭/末尾判定から外す。</summary>
+    private bool IsFirstTextRowOfLine(int visualLine)
+    {
+        var segment = _visualLines[visualLine];
+        if (segment.IsCodeLens) return false;
+        for (int i = visualLine - 1; i >= 0; i--)
+        {
+            if (_visualLines[i].BufferLine != segment.BufferLine) return true;
+            if (!_visualLines[i].IsCodeLens) return false;
+        }
+        return true;
+    }
+
+    private bool IsLastTextRowOfLine(int visualLine)
+    {
+        var segment = _visualLines[visualLine];
+        if (segment.IsCodeLens) return false;
+        for (int i = visualLine + 1; i < _visualLines.Length; i++)
+        {
+            if (_visualLines[i].BufferLine != segment.BufferLine) return true;
+            if (!_visualLines[i].IsCodeLens) return false;
+        }
+        return true;
     }
 
     // Returns the (line, col) of the bracket that matches the one at (cursorLine, cursorCol),

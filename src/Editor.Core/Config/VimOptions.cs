@@ -47,6 +47,9 @@ public class VimOptions
     // Indent guides
     public bool IndentGuides { get; set; } = false;
 
+    // 括弧のペアを結ぶ縦線（開き括弧の行から閉じ括弧の行まで）。カーソルのいるブロックは強調。
+    public bool BracketGuides { get; set; } = true;
+
     // Color preview
     public bool ColorPreview { get; set; } = true;
 
@@ -170,6 +173,7 @@ public class VimOptions
             "paste"                            => Set(() => Paste = value),
             "scrollbar"                        => Set(() => Scrollbar = value),
             "indentguides" or "ig"             => Set(() => IndentGuides = value),
+            "bracketguides" or "bg"            => Set(() => BracketGuides = value),
             "colorpreview" or "cpv"            => Set(() => ColorPreview = value),
             "minimap" or "mm"                  => Set(() => Minimap = value),
             "inlayhints" or "ih"               => Set(() => InlayHints = value),

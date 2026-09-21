@@ -214,6 +214,35 @@ internal static class OverlayRenderer
         }
     }
 
+    /// <summary>括弧ペアを結ぶ縦線 1 本ぶんの区間（画面座標）。</summary>
+    internal readonly record struct BracketGuideSegment(double X, double Top, double Bottom, bool Active);
+
+    /// <summary>
+    /// 開き括弧の行から閉じ括弧の行までを結ぶ縦線。区間の切り出し（折り返し・折りたたみ・
+    /// 桁の実測）は呼び出し側 (<c>EditorCanvas</c>) の仕事で、ここは描くだけ。
+    /// </summary>
+    public static void DrawBracketGuides(
+        DrawingContext dc, EditorTheme theme, IReadOnlyList<BracketGuideSegment> segments,
+        double gutterWidth, Size size)
+    {
+        if (segments.Count == 0) return;
+
+        Pen? pen = null, activePen = null;
+        foreach (var seg in segments)
+        {
+            // 1px の線はピクセル境界に乗せないと 2px の霞んだ帯になる
+            double x = Math.Floor(seg.X) + 0.5;
+            if (x < gutterWidth || x >= size.Width) continue;
+            if (seg.Bottom <= seg.Top) continue;
+
+            Pen p;
+            if (seg.Active) p = activePen ??= FreezePen(new Pen(theme.BracketGuideActiveBrush, 1));
+            else            p = pen       ??= FreezePen(new Pen(theme.BracketGuideBrush, 1));
+
+            dc.DrawLine(p, new Point(x, seg.Top), new Point(x, seg.Bottom));
+        }
+    }
+
     public static void DrawWhitespaceIssues(
         DrawingContext dc, EditorTheme theme, GlyphMetrics metrics,
         int line, double y, double textLeft, string lineText, double scrollOffsetX,

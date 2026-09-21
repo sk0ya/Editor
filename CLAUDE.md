@@ -363,6 +363,38 @@ Nothing to enable; no vertical scrollbar (document fits on screen) means no mark
   a screen reader sees nothing. That is a host responsibility: a host that offers "run the test at the caret"
   must expose it as its own command, and should treat the ▶ as a convenience on top, not the only route.
 
+## Bracket pair guides (the line that connects `{` to `}`)
+
+A faint vertical line runs from an opening bracket's line down to its closing bracket's line, and the
+innermost pair the caret is inside is drawn brighter — the "which block am I in" cue, and distinct from
+`MatchingBracketBackground`, which only highlights the two characters under/opposite the caret. On by
+default; `set bracketguides` / `set bg` (`VimOptions.BracketGuides`) turns it off.
+
+- **`Editor.Core/Editing/BracketGuides.cs`** (pure, tested) — `BracketGuideScanner.Build(lines, syntax)`
+  walks the whole buffer once and returns every **multi-line** pair of `{}`/`()`/`[]`; single-line pairs
+  get no guide. `ActiveIndex(guides, line, column)` picks the innermost pair containing the caret
+  (the brackets themselves count as inside).
+- **The column is measured, not counted.** A guide carries `AnchorLine`/`AnchorColumn` — *which character
+  of which line* to measure — because tabs and full-width characters make a column number meaningless as
+  an x. The anchor is the **closing** bracket when it is the first non-whitespace on its line (Allman and
+  K&R both then line the guide up under the block's indent, which is what makes it read as connecting the
+  two braces), otherwise the opening bracket's own column.
+- **`BracketGuideSyntax`** says what is not code: line/block comment delimiters and whether `"`/`'` start
+  a string. A `}` inside a string or comment must not be counted — one miscount shifts every guide below
+  it. `VimEditorControl.BracketGuideSyntaxForCurrentLanguage()` builds it from the `SyntaxEngine`'s
+  language, and turns **single quotes off for prose** (Markdown/HTML/XML/plain text), where an apostrophe
+  is not a string.
+- **`Editor.Controls/Rendering/BracketGuideLayout.cs`** — caches the scan **by the line array's
+  reference** (a `TextBuffer` snapshot is a new array per edit, so reference equality is the version
+  check) and turns the visible rows into screen-space segments. The open line gets the bottom half of its
+  row and the close line the top half, so the line starts and stops at the brackets; wrapped rows use the
+  line's last/first text row so a guide isn't dashed across the wrap, and CodeLens rows are skipped.
+  `OverlayRenderer.DrawBracketGuides` only draws (active segments last, so they win an overlap).
+- **Cost is paid once per edit, not per render** — but it is still on the keystroke path, so the scan
+  bails out above `BracketGuideScanner.MaxCharacters` (400KB). Measured Release: 390KB / 15,900 lines =
+  1.7ms, a 1,000-line file ≈ 0.1ms. Comparing the comment delimiters with a string compare **per
+  character** cost 17ms on that same file; it now compares the first character first.
+
 ## Adding Syntax Highlighting for a New Language
 
 Implement `ISyntaxLanguage` (in `Editor.Core.Syntax`) and register the instance in the array inside `SyntaxEngine`. The interface requires `Name`, `Extensions`, and `Tokenize(string[] lines) → LineTokens[]`. Available `TokenKind` values: `Text`, `Keyword`, `Type`, `String`, `Comment`, `Number`, `Operator`, `Preprocessor`, `Identifier`, `Attribute`.

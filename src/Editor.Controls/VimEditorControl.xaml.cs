@@ -14,6 +14,7 @@ using Editor.Controls.Lsp;
 using Editor.Controls.Themes;
 using Editor.Core.Buffer;
 using Editor.Core.Config;
+using Editor.Core.Editing;
 using Editor.Core.Engine;
 using Editor.Core.Folds;
 using Editor.Core.Formatting;
@@ -6937,6 +6938,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Canvas.SetList(_engine.Options.List, _engine.Options.ListChars);
             Canvas.SetColorColumn(_engine.Options.ColorColumn);
             Canvas.SetIndentGuides(_engine.Options.IndentGuides, _engine.Options.TabStop);
+            Canvas.SetBracketGuides(_engine.Options.BracketGuides, BracketGuideSyntaxForCurrentLanguage());
             Canvas.SetScrollbar(!_minimalChrome && _engine.Options.Scrollbar);
             Canvas.SetMinimap(!_minimalChrome && _engine.Options.Minimap);
             Canvas.SetColorPreview(_engine.Options.ColorPreview);
@@ -6978,6 +6980,23 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _cachedLinesVersion = version;
         _cachedLines = buffer.Text.Snapshot();
         return _cachedLines;
+    }
+
+    /// <summary>
+    /// 括弧を数えるときにコメント/文字列を飛ばすための目印を、いまの言語から組み立てる。
+    /// 散文（Markdown/HTML/テキスト）ではアポストロフィが文字列の開始に見えてしまうので、
+    /// シングルクォートは数えない。
+    /// </summary>
+    private BracketGuideSyntax BracketGuideSyntaxForCurrentLanguage()
+    {
+        var block = _engine.Syntax.GetBlockComment();
+        bool prose = _engine.Syntax.LanguageName is null or "Markdown" or "HTML" or "XML" or "Text";
+        return new BracketGuideSyntax(
+            LineComment: _engine.Syntax.GetCommentPrefix(),
+            BlockCommentStart: block?.Prefix,
+            BlockCommentEnd: block?.Suffix,
+            DoubleQuote: true,
+            SingleQuote: !prose);
     }
 
     private void UpdateViewportDecorations()
