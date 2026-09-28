@@ -48,6 +48,17 @@ public class VimEngine
 
     public VimMode Mode => _runtime.Mode;
     public bool VimEnabled => _runtime.VimEnabled;
+
+    /// <summary>
+    /// ホストが指定する読み取り専用。移動・選択・ヤンク・検索はそのままで、本文を変える操作だけを
+    /// 断る（バイナリファイルと同じ E21）。差分表示の旧側のように「読んでコピーはするが書き換えない」
+    /// 面に使う。<see cref="SetText"/> などホストからの差し替えは対象外。
+    /// </summary>
+    public bool IsReadOnly
+    {
+        get => _runtime.IsReadOnly;
+        set => _runtime.IsReadOnly = value;
+    }
     public CursorPosition Cursor => _runtime.Cursor;
     public Selection? Selection => _runtime.Selection;
     public string CommandLine => _runtime.CommandLine;

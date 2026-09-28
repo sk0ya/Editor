@@ -108,6 +108,12 @@ internal sealed class VimEngineRuntime
     /// </summary>
     public bool VimEnabled => _vimEnabled;
 
+    /// <summary>ホストが指定する読み取り専用（<see cref="VimEngine.IsReadOnly"/>）。</summary>
+    public bool IsReadOnly { get; set; }
+
+    /// <summary>本文を変えてはいけない状態か：バイナリファイル、またはホストが読み取り専用にした。</summary>
+    private bool RejectsEdits => IsReadOnly || _bufferManager.Current.IsBinary;
+
     public CursorPosition Cursor => _cursor;
     public Selection? Selection => _selection;
     public string CommandLine => _cmdLine;
@@ -203,7 +209,8 @@ internal sealed class VimEngineRuntime
         _editTransactions = new EditTransactionService(
             _bufferManager, _markManager, _syntaxEngine,
             () => _cursor, cursor => _cursor = cursor,
-            () => _suppressSnapshot, EmitStatus);
+            () => _suppressSnapshot, EmitStatus,
+            () => IsReadOnly);
         _motionService = new MotionService(_bufferManager);
         _commandGrammar = commandGrammar ?? engineServices.CommandGrammar;
         _commandParser = new CommandParser(_pendingInput, _commandGrammar);
@@ -1556,6 +1563,8 @@ internal sealed class VimEngineRuntime
             {
                 int cnt = int.TryParse(_commandParser.Buffer, out var n) ? n : 1;
                 _commandParser.Reset();
+                // 数値の増減はトランザクションを通らずに書くので、ここで断る（読み取り専用・バイナリ）。
+                if (BlockedReadOnly(events)) break;
                 _cursor = _textTransform.ExecuteIncrementNumber(_cursor, cnt, true, events);
                 break;
             }
@@ -1563,6 +1572,7 @@ internal sealed class VimEngineRuntime
             {
                 int cnt = int.TryParse(_commandParser.Buffer, out var n) ? n : 1;
                 _commandParser.Reset();
+                if (BlockedReadOnly(events)) break;
                 _cursor = _textTransform.ExecuteIncrementNumber(_cursor, cnt, false, events);
                 break;
             }
@@ -1623,8 +1633,10 @@ internal sealed class VimEngineRuntime
     /// </summary>
     private bool BlockedReadOnly(List<VimEvent> events)
     {
-        if (!_bufferManager.Current.IsBinary) return false;
-        EmitStatus(events, "E21: Cannot make changes (binary file is read-only)");
+        if (!RejectsEdits) return false;
+        EmitStatus(events, _bufferManager.Current.IsBinary
+            ? "E21: Cannot make changes (binary file is read-only)"
+            : "E21: Cannot make changes (read-only)");
         return true;
     }
 
@@ -1635,6 +1647,9 @@ internal sealed class VimEngineRuntime
         if (cmd.Operator != null) return cmd.Operator != "y";
         // Surround rewrites: cs{from}{to} and ds{char}.
         if (cmd.Motion is not null && (cmd.Motion.StartsWith("cs") || cmd.Motion.StartsWith("ds")))
+            return true;
+        // r{char}：置換する文字まで揃った形で届く（"r" 単体は保留入力を始めるだけ）。
+        if (cmd.Motion is { Length: 2 } replace && replace[0] == 'r')
             return true;
         return cmd.Motion switch
         {
@@ -2012,7 +2027,7 @@ internal sealed class VimEngineRuntime
 
         // Read-only buffer (e.g. a binary file): never reachable via normal-mode entry (that is
         // already blocked), but guard here too so any direct/IME insert path cannot edit the buffer.
-        if (_bufferManager.Current.IsBinary)
+        if (RejectsEdits)
         {
             if (key == "Escape") { ExitInsertMode(events); return; }
             BlockedReadOnly(events);
@@ -2405,6 +2420,12 @@ internal sealed class VimEngineRuntime
                 EnforceReadOnly: false));
     }
 
+    /// <summary>Vim 無効時の入力のうち、本文を変えるもの（文字入力・削除・改行・Tab・切り取り・貼り付け・取り消し）。</summary>
+    private static bool PlainInputEdits(string key, bool ctrl, bool alt)
+        => ctrl && !alt
+            ? key.ToLowerInvariant() is "x" or "v" or "z" or "y"
+            : !alt && (key.Length == 1 || key is "Back" or "Delete" or "Return" or "Tab" or "Space");
+
     private void ProcessPlainEditInputCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
@@ -2412,12 +2433,9 @@ internal sealed class VimEngineRuntime
 
         // Read-only buffer (e.g. a binary file): permit caret movement, selection and copy, but
         // reject anything that would edit the text.
-        if (_bufferManager.Current.IsBinary)
-        {
-            bool isCopy = ctrl && !alt && string.Equals(key, "c", StringComparison.OrdinalIgnoreCase);
-            bool isNav = key is "Left" or "Right" or "Up" or "Down" or "Home" or "End" or "Escape";
-            if (!isCopy && !isNav) { BlockedReadOnly(events); return; }
-        }
+        // 本文を変えるキーだけを断る。許すキーを列挙すると、列挙に無い無害なキー（PageDown 等）まで
+        // E21 を出すことになる。
+        if (RejectsEdits && PlainInputEdits(key, ctrl, alt)) { BlockedReadOnly(events); return; }
 
         if (ctrl && !alt)
         {
@@ -3674,6 +3692,8 @@ internal sealed class VimEngineRuntime
 
     private void ExecuteUndo(List<VimEvent> events)
     {
+        // 読み取り専用の面では履歴も動かさない（ホストが読み取り専用にする前の編集が残っていても）。
+        if (BlockedReadOnly(events)) return;
         var vbuf = _bufferManager.Current;
         var state = vbuf.Undo.Undo(vbuf.Text, _cursor);
         if (state != null)
@@ -3689,6 +3709,8 @@ internal sealed class VimEngineRuntime
 
     private void ExecuteRedo(List<VimEvent> events)
     {
+        // 読み取り専用の面では履歴も動かさない（ホストが読み取り専用にする前の編集が残っていても）。
+        if (BlockedReadOnly(events)) return;
         var vbuf = _bufferManager.Current;
         var state = vbuf.Undo.Redo(vbuf.Text, _cursor);
         if (state != null)

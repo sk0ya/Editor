@@ -49,7 +49,7 @@ public class RegisterManager
 
         if (name == '+' || name == '*')
         {
-            try { _clipboard?.SetText(register.Text); } catch { }
+            try { _clipboard?.SetText(ToClipboardText(register)); } catch { }
             _unnamed = register;
             return;
         }
@@ -72,7 +72,7 @@ public class RegisterManager
         {
             var cb = _options?.Clipboard ?? "";
             if (cb.Contains("unnamed", StringComparison.OrdinalIgnoreCase))
-                try { _clipboard?.SetText(register.Text); } catch { }
+                try { _clipboard?.SetText(ToClipboardText(register)); } catch { }
         }
     }
 
@@ -113,7 +113,29 @@ public class RegisterManager
 
         var cb = _options?.Clipboard ?? "";
         if (cb.Contains("unnamed", StringComparison.OrdinalIgnoreCase))
-            try { _clipboard?.SetText(register.Text); } catch { }
+            try { _clipboard?.SetText(ToClipboardText(register)); } catch { }
+    }
+
+    /// <summary>
+    /// クリップボードへ出す文字列。行単位のレジスタは末尾に改行を付ける（Vim と同じ）——付けないと
+    /// 「行をヤンクした」という事実がクリップボードを通った瞬間に消え、別のエディタ（別タブ・差分の反対側）
+    /// で <c>p</c> すると行の途中へ文字として貼られる。他のアプリへ貼ったときも行として届く。
+    /// </summary>
+    private static string ToClipboardText(Register register)
+        => register.Type == RegisterType.Line ? register.Text + "\n" : register.Text;
+
+    /// <summary>
+    /// クリップボードの文字列をレジスタへ戻す。自分が置いたものならそのレジスタ（種別ごと）、他所から
+    /// 来たものは末尾が改行なら行単位（Vim と同じ判定）、そうでなければ文字単位。
+    /// </summary>
+    private Register FromClipboardText(string text)
+    {
+        if (text == _unnamed.Text || text == ToClipboardText(_unnamed))
+            return _unnamed;
+        var normalized = text.Replace("\r\n", "\n");
+        return normalized.EndsWith('\n')
+            ? new Register(normalized[..^1], RegisterType.Line)
+            : new Register(text, RegisterType.Character);
     }
 
     /// <summary>
@@ -148,10 +170,8 @@ public class RegisterManager
                 try
                 {
                     var text = _clipboard.GetText();
-                    if (text == _unnamed.Text)
-                        return _unnamed;
                     if (!string.IsNullOrEmpty(text))
-                        return new Register(text, RegisterType.Character);
+                        return FromClipboardText(text);
                 }
                 catch { }
             }
@@ -163,7 +183,7 @@ public class RegisterManager
             try
             {
                 var text = _clipboard?.GetText() ?? "";
-                return new Register(text, RegisterType.Character);
+                return string.IsNullOrEmpty(text) ? Register.Empty : FromClipboardText(text);
             }
             catch { return Register.Empty; }
         }

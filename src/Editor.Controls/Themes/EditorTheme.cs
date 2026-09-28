@@ -59,6 +59,12 @@ public class EditorTheme
     public SolidColorBrush ConflictOurs         { get; init; } = new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0x6B, 0x6B));
     public SolidColorBrush ConflictTheirs       { get; init; } = new SolidColorBrush(Color.FromArgb(0x22, 0x6B, 0x9D, 0xFF));
 
+    // 左右並びの差分表示（SetDiffDecorations）。半透明にして、明色・暗色どちらの背景にも載るようにする。
+    public Brush DiffAddedLineBg   { get; init; } = new SolidColorBrush(Color.FromArgb(0x2E, 0x4C, 0xAF, 0x50));
+    public Brush DiffRemovedLineBg { get; init; } = new SolidColorBrush(Color.FromArgb(0x2E, 0xE5, 0x73, 0x73));
+    // 反対側にしか無い行のぶん挿し込む空き行。本文の無い場所だと分かる程度に沈める。
+    public Brush DiffSpacerBg      { get; init; } = new SolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
+
     // Scrollbar
     public Brush ScrollbarTrack { get; init; } = new SolidColorBrush(Color.FromArgb(0x40, 0x00, 0x00, 0x00));
     public Brush ScrollbarThumb { get; init; } = new SolidColorBrush(Color.FromArgb(0x80, 0xAA, 0xAA, 0xAA));

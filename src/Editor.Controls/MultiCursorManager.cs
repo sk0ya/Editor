@@ -156,6 +156,8 @@ public sealed class MultiCursorManager(VimEngine engine, EditorCanvas canvas, Ac
     /// </summary>
     public void ApplyKeyToExtraCursors(string key)
     {
+        // 主カーソル側はエンジンが断る。追加カーソルはバッファを直接書くので、ここでも止める。
+        if (engine.IsReadOnly || engine.CurrentBuffer.IsBinary) return;
         var buf = engine.CurrentBuffer;
 
         // Work on a sorted copy (reverse order) to keep positions stable

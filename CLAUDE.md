@@ -395,6 +395,28 @@ default; `set bracketguides` / `set bg` (`VimOptions.BracketGuides`) turns it of
   1.7ms, a 1,000-line file ≈ 0.1ms. Comparing the comment delimiters with a string compare **per
   character** cost 17ms on that same file; it now compares the first character first.
 
+## Side-by-side diff hosting (read-only, diff decorations)
+
+A host can put two `VimEditorControl`s side by side as a diff editor (Loomo's Diff pane does). The editor
+does not compute diffs or pair lines — it only offers what a host needs to draw one
+(`VimEditorControl.DiffView.cs`):
+
+- **`IsReadOnly`** (`VimEngine.IsReadOnly`): movement, selection, yank and search work; anything that changes
+  text answers E21. It is enforced at the entry checks (`BlockedReadOnly`, shared with binary buffers) **and**
+  as a catch-all in `EditTransactionService`: a transaction that changed the text while read-only is rolled
+  back. Paths that deliberately skip the entry check (Ex commands, insert input) would otherwise slip through —
+  `:%d` / `:s` / `:normal` are not individually guarded. Host replacement (`SetText`, `OpenVirtualDocument`)
+  is not blocked.
+- **`SetDiffDecorations(DiffDecorations)`**: per-line Added/Removed background plus **spacer rows**
+  (`SpacersBefore[bufferLine] = count`; a key ≥ line count goes after the last line). Spacers are virtual rows
+  exactly like CodeLens rows (`VisualLineSegment.IsSpacer`; `IsVirtualRow` covers both) — no text, no caret,
+  uniform row height, so "row i" stays `i * LineHeight` and two editors with matching spacers scroll in
+  lockstep by copying pixel offsets (`VerticalOffset` / `ScrollToOffset`). When adding code that walks
+  `_visualLines`, skip `IsVirtualRow`, not just `IsCodeLens`.
+- Linewise registers go to the clipboard **with a trailing newline**, and clipboard text ending in a newline
+  reads back as linewise (Vim's rule). Separate editors have separate registers, so cross-editor `yy`/`p`
+  only works through the clipboard — without this it pasted mid-line.
+
 ## Adding Syntax Highlighting for a New Language
 
 Implement `ISyntaxLanguage` (in `Editor.Core.Syntax`) and register the instance in the array inside `SyntaxEngine`. The interface requires `Name`, `Extensions`, and `Tokenize(string[] lines) → LineTokens[]`. Available `TokenKind` values: `Text`, `Keyword`, `Type`, `String`, `Comment`, `Number`, `Operator`, `Preprocessor`, `Identifier`, `Attribute`.

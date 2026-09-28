@@ -18,7 +18,14 @@ public partial class EditorCanvas : FrameworkElement
     // IsCodeLens = 本文を持たない注釈行。宣言行の直上に1行分だけ挿し込み、CodeLensのラベルを
     // 行間に置く（VS Code と同じ見え方）。行高は本文行と同じ＝ y = index * _lineHeight の
     // 一様グリッドを崩さないので、スクロール・ヒットテストの計算は従来のまま使える。
-    private readonly record struct VisualLineSegment(int BufferLine, int StartColumn, bool IsContinuation, bool IsCodeLens = false);
+    // IsSpacer = 左右並びの差分表示で、反対側にしか無い行のぶん挿し込む空き行（SetDiffDecorations）。
+    // 注釈行と同じく本文を持たず、キャレットも選択も乗らない。BufferLine は「この行の直前」の行で、
+    // 末尾の空き行だけは行数（＝どの行でもない）を指す。
+    private readonly record struct VisualLineSegment(int BufferLine, int StartColumn, bool IsContinuation, bool IsCodeLens = false, bool IsSpacer = false)
+    {
+        /// <summary>本文を持たない表示だけの行（CodeLens の注釈行・差分の空き行）。</summary>
+        public bool IsVirtualRow => IsCodeLens || IsSpacer;
+    }
 
     private Typeface _typeface = new("Consolas");
     private Typeface _italicTypeface = new(new FontFamily("Consolas"), FontStyles.Italic, FontWeights.Normal, FontStretches.Normal);
@@ -197,6 +204,7 @@ public partial class EditorCanvas : FrameworkElement
     private IReadOnlyDictionary<int, IReadOnlyList<LspCodeLens>> _codeLensesByLine =
         new Dictionary<int, IReadOnlyList<LspCodeLens>>();
     private readonly List<(Rect Bounds, LspCodeLens Lens)> _codeLensHitRects = [];
+    private DiffDecorations _diffDecorations = DiffDecorations.Empty;
     private bool _codeLensesStale;
 
     // LSP
@@ -444,6 +452,26 @@ public partial class EditorCanvas : FrameworkElement
     }
 
     public Dictionary<int, GitLineState>? GetGitDiff() => _gitDiff;
+
+    /// <summary>
+    /// 左右並びの差分表示の装飾（行の背景と空き行）。空き行の配置が変わったときだけ行レイアウトを
+    /// 組み直し、画面の一番上に見えている本文行はその場に留める（注釈行と同じ）。
+    /// </summary>
+    public void SetDiffDecorations(DiffDecorations? decorations)
+    {
+        decorations ??= DiffDecorations.Empty;
+        var previous = _diffDecorations;
+        _diffDecorations = decorations;
+        if (!previous.HasSameSpacers(decorations))
+        {
+            var anchor = CaptureTopLineAnchor();
+            RebuildVisualLayout();
+            RestoreTopLineAnchor(anchor);
+        }
+        InvalidateVisual();
+    }
+
+    public DiffDecorations DiffDecorations => _diffDecorations;
 
     /// <summary>Sets the per-line changed-since-save state for the change bar drawn at the
     /// right edge of the gutter (flush against the text).</summary>
@@ -879,6 +907,7 @@ public partial class EditorCanvas : FrameworkElement
         for (int i = firstVisualLine; i <= lastVisualLine; i++)
         {
             var segment = GetVisualSegment(i);
+            if (segment.IsSpacer) continue;   // 末尾の空き行は「どの行でもない」番号を持つ
             firstBufferLine = Math.Min(firstBufferLine, segment.BufferLine);
             lastBufferLine = Math.Max(lastBufferLine, segment.BufferLine);
         }
@@ -929,6 +958,11 @@ public partial class EditorCanvas : FrameworkElement
             string lineText = safeLine < _lines.Length ? _lines[safeLine] : string.Empty;
             SetActiveLine(safeLine);
 
+            // 差分の空き行はこの行の「直前」（注釈行よりさらに上）。反対側の行と高さを揃えるためのもの。
+            if (_diffDecorations.SpacersBefore.TryGetValue(safeLine, out int spacers))
+                for (int i = 0; i < spacers; i++)
+                    visualLines.Add(new VisualLineSegment(safeLine, 0, false, IsSpacer: true));
+
             // CodeLensの注釈行は宣言行の「直上」に入れる。折り返しがあっても入るのは先頭の
             // ビジュアル行の前だけ＝継続行の間に割り込むことはない。
             if (_codeLensesByLine.ContainsKey(safeLine))
@@ -955,6 +989,16 @@ public partial class EditorCanvas : FrameworkElement
 
         if (visualLines.Count == 0)
             visualLines.Add(new VisualLineSegment(0, 0, false));
+
+        // 最終行より後ろの空き行（反対側の末尾にだけ行がある）。編集で行が減って、装飾が古い
+        // 行番号を指しているあいだも取りこぼさないよう、行数以上の番号はまとめて末尾へ置く。
+        int lineCount = Math.Max(1, _lines.Length);
+        foreach (var (line, count) in _diffDecorations.SpacersBefore)
+        {
+            if (line < lineCount) continue;
+            for (int i = 0; i < count; i++)
+                visualLines.Add(new VisualLineSegment(lineCount, 0, false, IsSpacer: true));
+        }
 
         if (needMaxWidth && !widthCached)
         {
@@ -1060,7 +1104,7 @@ public partial class EditorCanvas : FrameworkElement
         for (int i = 0; i < _visualLines.Length; i++)
         {
             var segment = _visualLines[i];
-            if (!segment.IsCodeLens && segment.BufferLine == bufferLine)
+            if (!segment.IsVirtualRow && segment.BufferLine == bufferLine)
                 return i;
         }
         return -1;
@@ -1088,7 +1132,7 @@ public partial class EditorCanvas : FrameworkElement
         for (int i = 0; i < _visualLines.Length; i++)
         {
             var segment = _visualLines[i];
-            if (segment.IsCodeLens || segment.BufferLine != anchor.BufferLine ||
+            if (segment.IsVirtualRow || segment.BufferLine != anchor.BufferLine ||
                 segment.StartColumn != anchor.StartColumn) continue;
             _scrollOffsetY = i * _lineHeight + anchor.Within;
             ClampScrollOffsets(raiseScrollChanged: true);
@@ -1536,8 +1580,8 @@ public partial class EditorCanvas : FrameworkElement
         if (_lineHeight <= 0) return -1;
         int visualLine = GetVisualLineIndexFromY(point.Y);
         var segment = GetVisualSegment(visualLine);
-        // 注釈行にはブレークポイントも折りたたみも無い＝ガターは無反応にする。
-        if (segment.IsCodeLens) return -1;
+        // 注釈行・空き行にはブレークポイントも折りたたみも無い＝ガターは無反応にする。
+        if (segment.IsVirtualRow) return -1;
         if (EffectiveWrapLines && segment.IsContinuation)
             return -1;
         return segment.BufferLine;
@@ -1556,7 +1600,7 @@ public partial class EditorCanvas : FrameworkElement
         {
             var segment = _visualLines[i];
             // 注釈行はキャレットの居場所ではない（同じバッファ行を指すので、外すと1行上にずれる）。
-            if (segment.IsCodeLens || segment.BufferLine != _cursor.Line)
+            if (segment.IsVirtualRow || segment.BufferLine != _cursor.Line)
                 continue;
 
             if (firstForLine < 0)
@@ -1577,7 +1621,7 @@ public partial class EditorCanvas : FrameworkElement
         if (firstForLine >= 0)
             return firstForLine;
 
-        int fallback = Array.FindIndex(_visualLines, s => !s.IsCodeLens && s.BufferLine >= _cursor.Line);
+        int fallback = Array.FindIndex(_visualLines, s => !s.IsVirtualRow && s.BufferLine >= _cursor.Line);
         return fallback >= 0 ? fallback : _visualLines.Length - 1;
     }
 
@@ -1695,6 +1739,16 @@ public partial class EditorCanvas : FrameworkElement
             double y = vi * _lineHeight - _scrollOffsetY;
             if (y + _lineHeight < 0 || y > contentBottom) continue;
 
+            // 差分の空き行——本文も行番号も持たない。沈んだ帯だけを描いて次の行へ。
+            if (segment.IsSpacer)
+            {
+                if (_showLineNumbers)
+                    dc.DrawRectangle(Theme.LineNumberBg, null, new Rect(0, y, gutterWidth, _lineHeight));
+                if (size.Width > textLeft)
+                    dc.DrawRectangle(Theme.DiffSpacerBg, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
+                continue;
+            }
+
             // CodeLensの注釈行——本文は持たないので、ガター背景とラベルだけを描いて次の行へ。
             if (segment.IsCodeLens)
             {
@@ -1732,6 +1786,12 @@ public partial class EditorCanvas : FrameworkElement
             SetActiveLine(isPreviewLine ? -1 : l);
             _scrollOffsetX = EffectiveWrapLines ? GetVisualX(lineText, segment.StartColumn) : baseOffsetX;
             bool drawNumberAndFold = !EffectiveWrapLines || !segment.IsContinuation;
+
+            // 差分の行背景（追加／削除）。現在行の強調はこの上に重ねる。
+            if (_diffDecorations.Lines.TryGetValue(l, out var diffKind) && size.Width > textLeft)
+                dc.DrawRectangle(
+                    diffKind == DiffDecorationKind.Added ? Theme.DiffAddedLineBg : Theme.DiffRemovedLineBg,
+                    null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
 
             // Current line highlight
             if (l == _cursor.Line && Theme.CurrentLineBg != null && size.Width > textLeft)
@@ -2320,7 +2380,7 @@ public partial class EditorCanvas : FrameworkElement
             if (y + _lineHeight < 0 || y > contentBottom) continue;
 
             _bracketGuideRows.Add(new BracketGuideLayout.Row(
-                segment.BufferLine, y, segment.IsCodeLens,
+                segment.BufferLine, y, segment.IsVirtualRow,
                 IsFirstTextRowOfLine(vi), IsLastTextRowOfLine(vi)));
         }
 
@@ -2338,11 +2398,11 @@ public partial class EditorCanvas : FrameworkElement
     private bool IsFirstTextRowOfLine(int visualLine)
     {
         var segment = _visualLines[visualLine];
-        if (segment.IsCodeLens) return false;
+        if (segment.IsVirtualRow) return false;
         for (int i = visualLine - 1; i >= 0; i--)
         {
             if (_visualLines[i].BufferLine != segment.BufferLine) return true;
-            if (!_visualLines[i].IsCodeLens) return false;
+            if (!_visualLines[i].IsVirtualRow) return false;
         }
         return true;
     }
@@ -2350,11 +2410,11 @@ public partial class EditorCanvas : FrameworkElement
     private bool IsLastTextRowOfLine(int visualLine)
     {
         var segment = _visualLines[visualLine];
-        if (segment.IsCodeLens) return false;
+        if (segment.IsVirtualRow) return false;
         for (int i = visualLine + 1; i < _visualLines.Length; i++)
         {
             if (_visualLines[i].BufferLine != segment.BufferLine) return true;
-            if (!_visualLines[i].IsCodeLens) return false;
+            if (!_visualLines[i].IsVirtualRow) return false;
         }
         return true;
     }

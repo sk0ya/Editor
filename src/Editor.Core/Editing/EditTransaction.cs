@@ -46,7 +46,8 @@ public sealed class EditTransactionService(
     Func<CursorPosition> getCursor,
     Action<CursorPosition> setCursor,
     Func<bool> suppressSnapshot,
-    Action<List<VimEvent>, string> emitStatus) : IEditTransactionService
+    Action<List<VimEvent>, string> emitStatus,
+    Func<bool>? hostReadOnly = null) : IEditTransactionService
 {
     public EditTransactionResult Execute(
         List<VimEvent> events,
@@ -58,9 +59,12 @@ public sealed class EditTransactionService(
 
         var current = buffers.Current;
         var originalCursor = getCursor();
-        if ((options?.EnforceReadOnly ?? true) && current.IsBinary)
+        bool readOnly = hostReadOnly?.Invoke() == true;
+        if ((options?.EnforceReadOnly ?? true) && (current.IsBinary || readOnly))
         {
-            emitStatus(events, "E21: Cannot make changes (binary file is read-only)");
+            emitStatus(events, current.IsBinary
+                ? "E21: Cannot make changes (binary file is read-only)"
+                : "E21: Cannot make changes (read-only)");
             return new EditTransactionResult(false, false, originalCursor);
         }
 
@@ -96,6 +100,19 @@ public sealed class EditTransactionService(
             return new EditTransactionResult(true, false, getCursor(), repeatMetadata);
 
         var changed = !originalLines.SequenceEqual(current.Text.Snapshot());
+
+        // ホストの読み取り専用は、入口で断らない経路（Ex コマンド・挿入の入力）も最後にここで止める。
+        // 個々の :s / :d / :normal を洗い出すより、「変わっていたら戻す」一か所の方が漏れない。
+        if (changed && readOnly)
+        {
+            current.Text.RestoreSnapshot(originalLines);
+            setCursor(originalCursor);
+            for (var i = events.Count - 1; i >= eventStart; i--)
+                if (events[i].Type is VimEventType.TextChanged or VimEventType.CursorMoved)
+                    events.RemoveAt(i);
+            emitStatus(events, "E21: Cannot make changes (read-only)");
+            return new EditTransactionResult(false, false, originalCursor, repeatMetadata);
+        }
         var finalCursor = current.Text.ClampCursor(
             transaction.Cursor,
             options?.AllowCursorAtEndOfLine ?? false);
