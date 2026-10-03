@@ -2406,6 +2406,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // テストグリフは行番号でしか結び付いていないので、別のファイルを載せた時点で無意味になる。
         // ホストが新しい一覧を送るまでの間、前のファイルの ▶ や結果が残らないようここで捨てる。
         Canvas.SetTestGlyphs([]);
+        // 行末の値（デバッグの Inline Values）も同じ。前のファイルの行番号に値を残さない。
+        Canvas.SetInlineValues([]);
         // 電球も行にしか結び付いていない。前のファイルの判定を持ち越さない。
         ResetCodeActionBulb();
         _engine.LoadFile(path, prepared);

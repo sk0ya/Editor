@@ -328,6 +328,14 @@ means touching **four** places: `GetGutterMetrics`, `Boundaries` + the neighbour
   ring is a fixed translucent brush, because the gutter background and the current-line background are nearly the
   same in some themes.
 
+- **Inline values** (`Rendering/EditorCanvas.InlineValues.cs`, `VimEditorControl.InlineValues.cs`) — faint italic
+  text after the end of a line (a debugger's "x = 3, name = \"abc\"" while stopped, VS Code's Inline Values). Same
+  ownership as test glyphs: **which values, on which lines, and when they go stale is the host's job**; the editor
+  only paints. `SetInlineValues(IReadOnlyList<EditorInlineValue>)` is a **full replace** (empty clears; entries on
+  the same line are joined with ", "; negative lines and empty text are ignored). `LoadFile` clears them (they are
+  bound to line numbers only). Wrapped lines paint on the **last** visual row; a line that currently shows an inline
+  suggestion skips its value so two kinds of ghost text never sit side by side.
+
 - **Quick-fix bulb** (`Rendering/EditorCanvas.CodeActionBulb.cs`, `VimEditorControl.CodeActionBulb.cs`) — sits in
   the leftmost glyph margin (right of blame, where breakpoints used to be). The amber bulb says "there is a fix for this line" before anyone presses `Alt+Enter`. The canvas only draws
   the one line it is told about (`SetCodeActionBulbLine`) and reports clicks (`CodeActionBulbClicked`);

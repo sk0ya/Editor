@@ -1929,6 +1929,11 @@ public partial class EditorCanvas : FrameworkElement
                 // 入力の先読み（キャレットの先に薄く出す提案）
                 DrawInlineSuggestion(dc, metrics, l, lineText, y, textLeft);
 
+                // デバッグ停止中の行末の値（ホストが SetInlineValues で渡す）。折り返しは最後の表示行だけ。
+                if (!isPreviewLine)
+                    DrawInlineValue(dc, metrics, l, lineText, y, textLeft,
+                        isLastSegment: !EffectiveWrapLines || GetSegmentEndColumn(vi) >= lineText.Length);
+
                 // LSP diagnostics (wavy underlines)
                 DrawDiagnostics(dc, l, y, textLeft, lineText);
 
