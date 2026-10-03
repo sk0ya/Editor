@@ -33,3 +33,6 @@ Thumbs.db
 
 # Publish
 publish/
+
+# WPF のビルド中だけ現れる一時プロジェクト
+*_wpftmp.csproj
