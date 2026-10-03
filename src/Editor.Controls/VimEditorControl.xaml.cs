@@ -6941,6 +6941,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Canvas.SetBracketGuides(_engine.Options.BracketGuides, BracketGuideSyntaxForCurrentLanguage());
             Canvas.SetScrollbar(!_minimalChrome && _engine.Options.Scrollbar);
             Canvas.SetMinimap(!_minimalChrome && _engine.Options.Minimap);
+            Canvas.SetFoldColumn(_engine.Options.FoldColumn);
             Canvas.SetColorPreview(_engine.Options.ColorPreview);
             Canvas.SetSaveDiff(Editor.Core.Editing.SaveDiff.Compute(buf.Text.SavedLines, lines));
 

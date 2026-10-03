@@ -69,6 +69,10 @@ public class VimOptions
     // Minimap
     public bool Minimap { get; set; } = false;
 
+    // 行番号の右の折りたたみ印（▶/▼）の列。行番号を出している間は既定で幅を取る。
+    // 差分の左右表示のように折りたたまない画面では切って本文に回す（`set nofoldcolumn` / `set foldcolumn=0`）。
+    public bool FoldColumn { get; set; } = true;
+
     // LSP Inlay Hints
     public bool InlayHints { get; set; } = false;
 
@@ -176,6 +180,7 @@ public class VimOptions
             "bracketguides" or "bg"            => Set(() => BracketGuides = value),
             "colorpreview" or "cpv"            => Set(() => ColorPreview = value),
             "minimap" or "mm"                  => Set(() => Minimap = value),
+            "foldcolumn" or "fdc"              => Set(() => FoldColumn = value),
             "inlayhints" or "ih"               => Set(() => InlayHints = value),
             "semantictokens" or "st"           => Set(() => SemanticTokens = value),
             "breadcrumb" or "bc"               => Set(() => Breadcrumb = value),
@@ -220,6 +225,7 @@ public class VimOptions
             "colorcolumn" or "cc"           when int.TryParse(value, out var n) => Set(() => ColorColumn = n),
             "colorcolumn" or "cc"           => null, // non-integer values (e.g. comma list) silently ignored
             "foldmethod" or "fdm"           => Set(() => FoldMethod = value.ToLowerInvariant()),
+            "foldcolumn" or "fdc"           when int.TryParse(value, out var n) => Set(() => FoldColumn = n > 0),
             "completeopt" or "cot"          => null,
             "updatetime" or "ut"            => null,
             "timeoutlen" or "tm"            when int.TryParse(value, out var n) => Set(() => TimeoutLen = n),

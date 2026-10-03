@@ -143,6 +143,7 @@ public partial class EditorCanvas : FrameworkElement
 
     // Minimap
     private bool _showMinimap = false;
+    private bool _showFoldColumn = true;
     private const double MinimapWidth = 80.0;
 
     // Color column
@@ -671,6 +672,15 @@ public partial class EditorCanvas : FrameworkElement
         InvalidateVisual();
     }
 
+    /// <summary>行番号の右の折りたたみ印の列を出すか。切ると列の幅ごと無くなり、本文が左へ寄る。</summary>
+    public void SetFoldColumn(bool show)
+    {
+        if (_showFoldColumn == show) return;
+        _showFoldColumn = show;
+        RebuildVisualLayout();
+        InvalidateVisual();
+    }
+
     public void SetMinimap(bool show)
     {
         if (_showMinimap == show) return;
@@ -1050,7 +1060,7 @@ public partial class EditorCanvas : FrameworkElement
         // テスト実行列も同じ流儀。ホストが SetTestGlyphsEnabled(true) を呼ぶまでは幅 0。
         int testColWidth = (_testGlyphsEnabled || _coverageMarkersEnabled) ? glyphColWidth : 0;
         int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
-        double foldColWidth = _showLineNumbers ? Math.Max(16.0, _charWidth + 4) : 0;
+        double foldColWidth = _showLineNumbers && _showFoldColumn ? Math.Max(16.0, _charWidth + 4) : 0;
         // blame 左カラム（:Gblame 有効時のみ幅 > 0）はガターの最左に確保する。
         // 各列の並びは blame | (ブレークポイント) | 電球 | テスト | 行番号 | フォールド | 本文
         // （x 位置は _blameColWidth 起点）。

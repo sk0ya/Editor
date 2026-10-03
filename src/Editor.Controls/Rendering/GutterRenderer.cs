@@ -44,7 +44,7 @@ internal static class GutterRenderer
 
         bool isClosed = closedFoldStarts.Contains(line);
         bool isOpen = openFoldStarts.Contains(line);
-        if (isClosed || isOpen)
+        if ((isClosed || isOpen) && foldColWidth > 0)
         {
             bool hovered = hoveredFoldLine == line;
             var indicatorColor = hovered ? theme.Foreground : theme.LineNumberFg;

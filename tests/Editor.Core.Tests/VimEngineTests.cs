@@ -2625,6 +2625,22 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void VimOptions_FoldColumn_BoolAndNumericForms()
+    {
+        var cfg = new VimConfig();
+        Assert.True(cfg.Options.FoldColumn);
+
+        cfg.ParseLines(["set nofoldcolumn"]);
+        Assert.False(cfg.Options.FoldColumn);
+        cfg.ParseLines(["set fdc"]);
+        Assert.True(cfg.Options.FoldColumn);
+        cfg.ParseLines(["set foldcolumn=0"]);
+        Assert.False(cfg.Options.FoldColumn);
+        cfg.ParseLines(["set fdc=2"]);
+        Assert.True(cfg.Options.FoldColumn);
+    }
+
+    [Fact]
     public void VimOptions_Modeline_ParsedFromVimrc()
     {
         var cfg = new VimConfig();
