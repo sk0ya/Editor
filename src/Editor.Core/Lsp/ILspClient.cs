@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Editor.Core.Lsp;
 
 public class DiagnosticsChangedEventArgs(string uri, IReadOnlyList<LspDiagnostic> diagnostics) : EventArgs
@@ -65,6 +67,22 @@ public interface ILspClient : IDisposable
     /// <summary>サーバーが <c>workspace/executeCommand</c> で受け付けるコマンド名。
     /// 空は未申告＝コマンド型 code action は実行できないものとして扱う。</summary>
     IReadOnlyList<string> ExecuteCommandNames => [];
+
+    /// <summary><c>initialize</c> 応答の <c>capabilities</c>（生 JSON の複製）。InitializeAsync 後に確定する。
+    /// 個別の Supports* に落としていない宣言（<c>workspace.fileOperations</c> 等）をホストが自分で読むための口。
+    /// 未初期化・未対応クライアントは null。</summary>
+    JsonElement? ServerCapabilities => null;
+
+    /// <summary><c>workspace/willRenameFiles</c>。ファイル／フォルダーを実際に動かす<b>前</b>に送り、
+    /// サーバーが返した編集（import の書き換え等）を返す。編集が無い・未対応・失敗は null。
+    /// 送ってよいかの判定（<c>workspace.fileOperations.willRename</c> の filters）はホストの責務。</summary>
+    Task<LspWorkspaceEdit?> WillRenameFilesAsync(
+        IReadOnlyList<(string OldUri, string NewUri)> files, CancellationToken ct = default)
+        => Task.FromResult<LspWorkspaceEdit?>(null);
+
+    /// <summary><c>workspace/didRenameFiles</c> 通知。実際に動かした<b>後</b>に送る。</summary>
+    Task DidRenameFilesAsync(IReadOnlyList<(string OldUri, string NewUri)> files)
+        => Task.CompletedTask;
 
     event EventHandler<DiagnosticsChangedEventArgs>? DiagnosticsChanged;
 

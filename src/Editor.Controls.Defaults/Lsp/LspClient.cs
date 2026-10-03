@@ -58,6 +58,7 @@ public sealed class LspClient : ILspClient
     public IReadOnlyList<string> CodeActionKinds { get; private set; } = [];
     public bool SupportsCodeActionResolve { get; private set; }
     public IReadOnlyList<string> ExecuteCommandNames { get; private set; } = [];
+    public JsonElement? ServerCapabilities { get; private set; }
 
     public event EventHandler<LspApplyEditEventArgs>? ApplyEditRequested;
 
@@ -204,6 +205,14 @@ public sealed class LspClient : ILspClient
                     // 宣言しないと、そもそもコマンドを出さないサーバーがある。
                     applyEdit = true,
                     executeCommand = new { dynamicRegistration = false },
+                    // ファイルの移動・改名に合わせて import 等を書き換える（willRenameFiles）。
+                    // 送るかどうかはホストがサーバー側の filters を見て決める。
+                    fileOperations = new
+                    {
+                        dynamicRegistration = false,
+                        willRename = true,
+                        didRename = true
+                    },
                     workspaceEdit = new
                     {
                         documentChanges = true,
@@ -225,6 +234,7 @@ public sealed class LspClient : ILspClient
             result.Value.TryGetProperty("capabilities", out var caps))
         {
             _textDocumentSyncKind = ParseTextDocumentSyncKind(caps);
+            ServerCapabilities = caps.Clone();
             if (caps.TryGetProperty("foldingRangeProvider", out var frp))
                 SupportsFoldingRange = frp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("workspaceSymbolProvider", out var wsp))
@@ -1024,6 +1034,31 @@ public sealed class LspClient : ILspClient
         }
         catch { return null; }
     }
+
+    public async Task<LspWorkspaceEdit?> WillRenameFilesAsync(
+        IReadOnlyList<(string OldUri, string NewUri)> files, CancellationToken ct = default)
+    {
+        if (files.Count == 0) return null;
+        try
+        {
+            var result = await _process.SendRequestAsync("workspace/willRenameFiles",
+                CreateFileRenameParams(files), ct);
+            return result is { ValueKind: JsonValueKind.Object } edit ? ParseWorkspaceEdit(edit) : null;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return null; }
+    }
+
+    public Task DidRenameFilesAsync(IReadOnlyList<(string OldUri, string NewUri)> files)
+    {
+        if (files.Count > 0)
+            _process.SendNotification("workspace/didRenameFiles", CreateFileRenameParams(files));
+        return Task.CompletedTask;
+    }
+
+    /// <summary><c>RenameFilesParams</c>（<c>{ files: [{ oldUri, newUri }] }</c>）。</summary>
+    internal static object CreateFileRenameParams(IReadOnlyList<(string OldUri, string NewUri)> files)
+        => new { files = files.Select(f => new { oldUri = f.OldUri, newUri = f.NewUri }).ToArray() };
 
     public async Task<bool> ExecuteCommandAsync(
         LspCodeActionCommand command, CancellationToken ct = default)
