@@ -612,3 +612,43 @@ public record LspSymbolInformation(
 // One clickable element of the breadcrumb bar: a symbol along the path from the
 // document root to the cursor, plus the position to jump to when clicked.
 public record BreadcrumbSegment(string Name, SymbolKind Kind, int Line, int Column);
+
+/// <summary>
+/// <c>textDocument/linkedEditingRange</c> の応答 <c>{ ranges: Range[], wordPattern?: string }</c> を読む。
+/// null 応答は「範囲が無い」（<see cref="Editing.LinkedEditingRanges.None"/>）。複数行にまたがる範囲は
+/// 連動の対象にしない（タグ名は1行に収まる）。
+/// </summary>
+public static class LspLinkedEditingRangesParser
+{
+    public static Editing.LinkedEditingRanges Parse(JsonElement result)
+    {
+        if (result.ValueKind != JsonValueKind.Object ||
+            !result.TryGetProperty("ranges", out var rangesEl) ||
+            rangesEl.ValueKind != JsonValueKind.Array)
+            return Editing.LinkedEditingRanges.None;
+
+        var ranges = new List<Editing.LinkedRange>();
+        foreach (var item in rangesEl.EnumerateArray())
+        {
+            try
+            {
+                var start = item.GetProperty("start");
+                var end = item.GetProperty("end");
+                int line = start.GetProperty("line").GetInt32();
+                if (end.GetProperty("line").GetInt32() != line) return Editing.LinkedEditingRanges.None;
+                ranges.Add(new Editing.LinkedRange(
+                    line, start.GetProperty("character").GetInt32(), end.GetProperty("character").GetInt32()));
+            }
+            catch
+            {
+                return Editing.LinkedEditingRanges.None;
+            }
+        }
+        if (ranges.Count < 2) return Editing.LinkedEditingRanges.None;
+
+        string? wordPattern = result.TryGetProperty("wordPattern", out var wp) && wp.ValueKind == JsonValueKind.String
+            ? wp.GetString()
+            : null;
+        return new Editing.LinkedEditingRanges(ranges, wordPattern);
+    }
+}

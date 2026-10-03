@@ -1907,6 +1907,9 @@ public partial class EditorCanvas : FrameworkElement
                 // Matching bracket highlight
                 DrawMatchingBrackets(dc, l, y, textLeft, lineText, bracketMatch);
 
+                // 連動編集の範囲（開き/閉じタグ名）
+                DrawLinkedEditingRanges(dc, l, y, textLeft, lineText);
+
                 // Text with syntax coloring
                 DrawLineText(dc, l, lineText, y, textLeft);
 

@@ -51,6 +51,7 @@ internal sealed class VimEngineRuntime
     private readonly IEditTransactionService _editTransactions;
     private readonly IMotionService _motionService;
     private readonly CommandGrammar _commandGrammar;
+    private readonly LinkedEditingController _linkedEditing;
 
     private VimMode _mode = VimMode.Normal;
     private bool _vimEnabled = true;
@@ -211,6 +212,14 @@ internal sealed class VimEngineRuntime
             () => _cursor, cursor => _cursor = cursor,
             () => _suppressSnapshot, EmitStatus,
             () => IsReadOnly);
+        _linkedEditing = new LinkedEditingController(
+            () => _bufferManager.Current,
+            () => _cursor,
+            cursor => { _cursor = cursor; SetPreferredColumn(cursor.Column); },
+            () => _mode,
+            () => _config.Options.LinkedEditing,
+            () => RejectsEdits,
+            _syntaxEngine.Invalidate);
         _motionService = new MotionService(_bufferManager);
         _commandGrammar = commandGrammar ?? engineServices.CommandGrammar;
         _commandParser = new CommandParser(_pendingInput, _commandGrammar);
@@ -1262,9 +1271,32 @@ internal sealed class VimEngineRuntime
     public IReadOnlyList<VimEvent> ProcessKey(string key, bool ctrl = false, bool shift = false, bool alt = false)
     {
         var events = new List<VimEvent>();
+        var linked = _linkedEditing.Capture();
         ProcessStroke(new VimKeyStroke(key, ctrl, shift, alt), events, allowMapping: true);
+        _linkedEditing.After(linked, events);
         return events;
     }
+
+    /// <summary>連動編集の範囲の供給元（ホストの言語サーバー）。<see cref="VimEngine.LinkedEditingRangeProvider"/>。</summary>
+    public Func<int, int, long, LinkedEditingRanges?>? LinkedEditingRangeProvider
+    {
+        get => _linkedEditing.Provider;
+        set => _linkedEditing.Provider = value;
+    }
+
+    public bool LinkedEditingSuspended
+    {
+        get => _linkedEditing.Suspended;
+        set
+        {
+            _linkedEditing.Suspended = value;
+            if (value) _linkedEditing.End();
+        }
+    }
+
+    public IReadOnlyList<LinkedRange> LinkedEditingRanges => _linkedEditing.ActiveRanges;
+
+    public void EndLinkedEditing() => _linkedEditing.End();
 
     /// <summary>
     /// Invokes the active filetype's explicit statement-completion hook. The host maps this
@@ -1381,7 +1413,9 @@ internal sealed class VimEngineRuntime
     public IReadOnlyList<VimEvent> ProcessKeyLiteral(string key)
     {
         var events = new List<VimEvent>();
+        var linked = _linkedEditing.Capture();
         ProcessStroke(new VimKeyStroke(key, false, false, false), events, allowMapping: false);
+        _linkedEditing.After(linked, events);
         return events;
     }
 
@@ -1397,7 +1431,9 @@ internal sealed class VimEngineRuntime
     public IReadOnlyList<VimEvent> FlushPendingMappings()
     {
         var events = new List<VimEvent>();
+        var linked = _linkedEditing.Capture();
         _keyInput.Flush(events);
+        _linkedEditing.After(linked, events);
         return events;
     }
 

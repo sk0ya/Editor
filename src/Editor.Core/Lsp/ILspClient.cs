@@ -54,6 +54,8 @@ public interface ILspClient : IDisposable
     bool SupportsDocumentLink => false;
     bool SupportsCodeLens => false;
     bool SupportsCodeLensResolve => false;
+    /// <summary>サーバーが <c>linkedEditingRangeProvider</c> を広告しているか（HTML / TS 系）。</summary>
+    bool SupportsLinkedEditingRange => false;
     /// <summary>セマンティックトークンの凡例（トークン種別・修飾子）。InitializeAsync 後に確定する。</summary>
     SemanticTokensLegend? SemanticTokensLegend { get; }
     /// <summary>サーバーが申告した code action kind の一覧。空は「申告なし」で、
@@ -184,5 +186,9 @@ public interface ILspClient : IDisposable
         => Task.FromResult<LspCodeLens?>(null);
 
     // Selection range
+    /// <summary><c>textDocument/linkedEditingRange</c>: カーソル位置と同時に書き換わる範囲（開き/閉じタグ名）。
+    /// 範囲が無ければ <see cref="Editing.LinkedEditingRanges.None"/>、要求できなければ null。</summary>
+    Task<Editing.LinkedEditingRanges?> GetLinkedEditingRangesAsync(string uri, LspPosition position, CancellationToken ct = default)
+        => Task.FromResult<Editing.LinkedEditingRanges?>(null);
     Task<IReadOnlyList<LspSelectionRange>?> RequestSelectionRangesAsync(string uri, IReadOnlyList<LspPosition> positions, CancellationToken ct = default);
 }

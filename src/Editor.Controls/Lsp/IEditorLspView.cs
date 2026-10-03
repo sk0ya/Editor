@@ -43,6 +43,7 @@ public interface IEditorLspView : IDisposable
     bool ServerSupportsDeclaration => Document?.ServerSupportsDeclaration == true;
     bool ServerSupportsPrepareRename => Document?.ServerSupportsPrepareRename == true;
     bool ServerSupportsDocumentHighlight => Document?.ServerSupportsDocumentHighlight == true;
+    bool ServerSupportsLinkedEditingRange => Document?.ServerSupportsLinkedEditingRange == true;
     IReadOnlyList<string> ServerCodeActionKinds => Document?.ServerCodeActionKinds ?? [];
     IReadOnlyList<string> CompletionTriggerCharacters => ["."];
     string? CurrentUri { get; }
@@ -142,6 +143,13 @@ public interface IEditorLspView : IDisposable
     Task RequestDocumentHighlightAsync(string uri, int line, int character);
     void ClearDocumentHighlights();
     Task<LspSelectionRange?> RequestSelectionRangeAsync(int line, int character);
+
+    /// <summary>連動編集の範囲（<see cref="ILspDocument.RequestLinkedEditingRangesAsync"/>）。
+    /// 文書が同期済みでサーバーが対応しているときだけ問い合わせ、そうでなければ null。</summary>
+    Task<Core.Editing.LinkedEditingRanges?> RequestLinkedEditingRangesAsync(int line, int character, CancellationToken ct = default)
+        => Document is { } doc && IsDocumentReady && doc.IsConnected && doc.ServerSupportsLinkedEditingRange
+            ? doc.RequestLinkedEditingRangesAsync(line, character, ct)
+            : Task.FromResult<Core.Editing.LinkedEditingRanges?>(null);
     void RequestFoldingRanges();
     void SetInlayHintsEnabled(bool enabled);
     void RequestInlayHints(int startLine, int endLine);

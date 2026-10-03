@@ -58,6 +58,8 @@ public interface ILspDocument : IDisposable
     bool ServerSupportsDocumentLink => false;
     bool ServerSupportsCodeLens => false;
     bool ServerSupportsCodeLensResolve => false;
+    /// <summary>サーバーが <c>textDocument/linkedEditingRange</c> に答えるか。</summary>
+    bool ServerSupportsLinkedEditingRange => false;
 
     /// <summary>サーバーが申告した code action kind。空は未申告。</summary>
     IReadOnlyList<string> ServerCodeActionKinds => [];
@@ -120,6 +122,15 @@ public interface ILspDocument : IDisposable
     Task<LspCodeLens?> ResolveCodeLensAsync(LspCodeLens lens, CancellationToken ct = default)
         => Task.FromResult<LspCodeLens?>(null);
     Task<LspSelectionRange?> RequestSelectionRangeAsync(int line, int character);
+
+    /// <summary>
+    /// <c>textDocument/linkedEditingRange</c>（連動編集）。開きタグ名と閉じタグ名のように、同時に
+    /// 書き換わる範囲を返す。範囲が無ければ <see cref="Editing.LinkedEditingRanges.None"/>、
+    /// 問い合わせられない（未対応・未接続）なら null — エディタはそのときマークアップ用の自前判定へ回る。
+    /// 既定実装は null なので、未対応のホストはそのまま動く。
+    /// </summary>
+    Task<Editing.LinkedEditingRanges?> RequestLinkedEditingRangesAsync(int line, int character, CancellationToken ct = default)
+        => Task.FromResult<Editing.LinkedEditingRanges?>(null);
 
     /// <summary>New diagnostics for this URI. <b>Fires on a background thread.</b></summary>
     event Action<IReadOnlyList<LspDiagnostic>>? DiagnosticsChanged;
