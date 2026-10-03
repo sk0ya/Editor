@@ -32,6 +32,17 @@ internal sealed class FakeEditorLspView : IEditorLspView
     public bool CompletionVisible { get; set; }
 
     public ILspDocument? Document => null;
+
+    /// <summary>連動編集の応答。null の間はサーバーが linkedEditingRange に対応していない扱い。</summary>
+    public Editor.Core.Editing.LinkedEditingRanges? LinkedEditingAnswer { get; set; }
+    public List<(int Line, int Character)> LinkedEditingRequests { get; } = [];
+    public bool ServerSupportsLinkedEditingRange => LinkedEditingAnswer is not null;
+    public Task<Editor.Core.Editing.LinkedEditingRanges?> RequestLinkedEditingRangesAsync(
+        int line, int character, CancellationToken ct = default)
+    {
+        LinkedEditingRequests.Add((line, character));
+        return Task.FromResult(LinkedEditingAnswer);
+    }
     public IReadOnlyList<LspDiagnostic> CurrentDiagnostics => [];
     public IReadOnlyList<LspCompletionItem> CompletionItems =>
         SelectedItem is null ? [] : [SelectedItem];

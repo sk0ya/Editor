@@ -48,6 +48,7 @@ public sealed class LspClient : ILspClient
     public bool SupportsDeclaration { get; private set; }
     public bool SupportsPrepareRename { get; private set; }
     public bool SupportsDocumentHighlight { get; private set; }
+    public bool SupportsLinkedEditingRange { get; private set; }
     public bool SupportsDocumentLink { get; private set; }
     public bool SupportsCodeLens { get; private set; }
     public bool SupportsCodeLensResolve { get; private set; }
@@ -171,6 +172,7 @@ public sealed class LspClient : ILspClient
                     selectionRange = new { },
                     diagnostic = new { dynamicRegistration = false, relatedDocumentSupport = false },
                     documentHighlight = new { },
+                    linkedEditingRange = new { dynamicRegistration = false },
                     documentLink = new { dynamicRegistration = false, tooltipSupport = true },
                     codeLens = new { dynamicRegistration = false },
                     documentSymbol = new { hierarchicalDocumentSymbolSupport = true },
@@ -249,6 +251,8 @@ public sealed class LspClient : ILspClient
                     renameProvider.TryGetProperty("prepareProvider", out var pp) && pp.ValueKind == JsonValueKind.True;
             if (caps.TryGetProperty("documentHighlightProvider", out var dhp))
                 SupportsDocumentHighlight = dhp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            if (caps.TryGetProperty("linkedEditingRangeProvider", out var lerp))
+                SupportsLinkedEditingRange = lerp.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("documentLinkProvider", out var documentLinkProvider))
                 SupportsDocumentLink = documentLinkProvider.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             if (caps.TryGetProperty("codeLensProvider", out var codeLensProvider))
@@ -1739,6 +1743,24 @@ public sealed class LspClient : ILspClient
                 list.Add(new DocumentHighlight(range, kind));
             }
             return list;
+        }
+        catch { return null; }
+    }
+
+    public async Task<Editor.Core.Editing.LinkedEditingRanges?> GetLinkedEditingRangesAsync(
+        string uri, LspPosition position, CancellationToken ct = default)
+    {
+        if (!SupportsLinkedEditingRange) return null;
+        try
+        {
+            var result = await _process.SendRequestAsync("textDocument/linkedEditingRange", new
+            {
+                textDocument = new { uri },
+                position = new { line = position.Line, character = position.Character }
+            }, ct);
+            return result is { } value
+                ? LspLinkedEditingRangesParser.Parse(value)
+                : Editor.Core.Editing.LinkedEditingRanges.None;
         }
         catch { return null; }
     }

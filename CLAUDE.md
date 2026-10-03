@@ -395,6 +395,36 @@ default; `set bracketguides` / `set bg` (`VimOptions.BracketGuides`) turns it of
   1.7ms, a 1,000-line file ≈ 0.1ms. Comparing the comment delimiters with a string compare **per
   character** cost 17ms on that same file; it now compares the first character first.
 
+## Linked editing (rename the closing tag with the opening one)
+
+VS Code's Linked Editing: in Insert/Replace mode, editing an HTML/XML/XAML/JSX tag name rewrites its pair
+too. On by default; `set linkedediting` / `set lke` (`VimOptions.LinkedEditing`).
+
+- **The engine owns it, after the keystroke.** `Engine/LinkedEditingController.cs` wraps `ProcessKey`,
+  `ProcessKeyLiteral` and `FlushPendingMappings`: before the stroke it keeps only cheap things (buffer, `Version`,
+  caret, caret line *reference*, line count); after it, it diffs the caret line. Because the pre-edit document is
+  "today's buffer with the caret line put back", a session can start **post hoc** — which is what makes `ciw` /
+  `cw` on a tag name link too, not just Insert typing. Any change of line count, caret line, non-Insert mode, or a
+  `Version` that moved outside the session ends it.
+- **Mirrors are written straight into the buffer with no undo snapshot.** The Insert session's entry snapshot
+  (plain mode: the edit run's) is the undo unit, so one `u` restores both tags.
+- **`Editing/LinkedEditing.cs`** (pure, tested) — `LinkedRange`, `LinkedEditingRanges` (+ `None` = "asked, there
+  are none"), `LinkedEditingSession.Apply(line, old, new, caretHint)`: the diff is pulled toward the pre-edit caret
+  so `dd`→`ddd` is unambiguous; an edit outside the primary range or a name that fails the server's `wordPattern`
+  (default: tag-name chars, empty allowed mid-`ciw`) ends linking.
+- **Ranges come from the host first, then a fallback.** `VimEngine.LinkedEditingRangeProvider(line, col, version)`
+  is synchronous: `VimEditorControl.LinkedEditing.cs` **prefetches** `textDocument/linkedEditingRange` when the caret
+  rests on a tag name (120ms debounce) and keys the answer to the buffer `Version`, so the keystroke path never waits
+  on a server. With no answer, `Editing/MarkupTagPairFinder.cs` scans the document once (comments, CDATA, `<?…?>`,
+  quoted attribute values, HTML raw-text `script`/`style`, void elements, self-closing tags) — markup extensions only
+  (`DialectFor`); JSX/TSX are server-only because `a < b` and generics are not tags. It runs at session *start*
+  only, bails above 400KB, and an unpaired tag being typed is negatively cached until the caret leaves it.
+- LSP plumbing: `ILspClient.SupportsLinkedEditingRange` / `GetLinkedEditingRangesAsync`,
+  `ILspDocument.ServerSupportsLinkedEditingRange` / `RequestLinkedEditingRangesAsync` (default members — a host
+  that does not implement them just gets the fallback), `LspLinkedEditingRangesParser`.
+- Suspended while multi-cursor is active (`LinkedEditingSuspended`); the live ranges are outlined by
+  `EditorCanvas.LinkedEditing.cs`.
+
 ## Side-by-side diff hosting (read-only, diff decorations)
 
 A host can put two `VimEditorControl`s side by side as a diff editor (Loomo's Diff pane does). The editor

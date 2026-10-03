@@ -114,6 +114,33 @@ public class VimEngine
         bool alt = false) =>
         _runtime.ProcessKey(key, ctrl, shift, alt);
     public IReadOnlyList<VimEvent> CompleteStatement() => _runtime.CompleteStatement();
+
+    /// <summary>
+    /// 連動編集（タグ名の開き/閉じを同時に書き換える）の範囲をホストが供給する口。引数は編集前の
+    /// (行, 列, <see cref="Buffer.TextBuffer.Version"/>) で、ホストはその版に対して言語サーバーへ
+    /// <c>textDocument/linkedEditingRange</c> を先回りで問い合わせておいた答えを同期的に返す。
+    /// null は「答えを持っていない」（エンジンはマークアップ用の自前フォールバックを試す）、
+    /// <see cref="Editing.LinkedEditingRanges.None"/> は「範囲は無い」。
+    /// 有効/無効は <c>set linkedediting</c>（<see cref="Config.VimOptions.LinkedEditing"/>）。
+    /// </summary>
+    public Func<int, int, long, Editing.LinkedEditingRanges?>? LinkedEditingRangeProvider
+    {
+        get => _runtime.LinkedEditingRangeProvider;
+        set => _runtime.LinkedEditingRangeProvider = value;
+    }
+
+    /// <summary>true の間は連動編集を始めない（進行中のものも解く）。マルチカーソル中など。</summary>
+    public bool LinkedEditingSuspended
+    {
+        get => _runtime.LinkedEditingSuspended;
+        set => _runtime.LinkedEditingSuspended = value;
+    }
+
+    /// <summary>いま連動している範囲（描画用）。連動していなければ空。</summary>
+    public IReadOnlyList<Editing.LinkedRange> LinkedEditingRanges => _runtime.LinkedEditingRanges;
+
+    /// <summary>進行中の連動編集を解く。</summary>
+    public void EndLinkedEditing() => _runtime.EndLinkedEditing();
     public IReadOnlyList<VimEvent> ExecuteExCommand(string commandLine) =>
         _runtime.ExecuteExCommand(commandLine);
     public IReadOnlyList<VimEvent> SetVimEnabled(bool enabled) =>

@@ -774,6 +774,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _hostDiagnosticExplanationProvider = options.HostDiagnosticExplanationProvider;
         Canvas.WrapLines = _engine.Options.Wrap;
         _multiCursorManager = new MultiCursorManager(_engine, Canvas, msg => ActiveStatusBar.UpdateStatus(msg), UpdateAll);
+        InitializeLinkedEditing();
         _snippetTabStopManager = new SnippetTabStopManager(_engine, ProcessKey, ClearSelectionRangeState, ProcessVimEvents, UpdateAll);
 
         _gitProvider = options.GitServiceFactory?.Invoke() ?? NullEditorGitService.Instance;
@@ -4867,6 +4868,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         bool hadCompletion = _lspView.CompletionVisible;
 
+        // 追加カーソルも同じ行を書くので、マルチカーソル中は連動編集を止める。
+        _engine.LinkedEditingSuspended = _multiCursorManager.IsActive;
         var events = _engine.ProcessKey(key, ctrl, shift, alt);
         ProcessVimEvents(events);
 
@@ -6623,6 +6626,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 case VimEventType.CursorMoved when evt is CursorMovedEvent ce:
                     needCursorUpdate = true;
                     ScheduleCodeActionBulbProbe();
+                    ScheduleLinkedEditingPrefetch(ce.Position);
+                    RefreshLinkedEditingRanges();
                     CaretMoved?.Invoke(this, new CaretInfo(ce.Position.Line, ce.Position.Column));
                     if (!needFullUpdate)
                     {
@@ -6932,6 +6937,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
             Canvas.SetCursor(_engine.Cursor);
             Canvas.SetMode(_engine.Mode);
+            RefreshLinkedEditingRanges();
             Canvas.ShowLineNumbers(!_minimalChrome && (_engine.Options.Number || _engine.Options.RelativeNumber));
             Canvas.ShowRelativeLineNumbers(_engine.Options.RelativeNumber);
             Canvas.SetScrollOff(_engine.Options.ScrollOff);

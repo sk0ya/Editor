@@ -50,6 +50,9 @@ public class VimOptions
     // 括弧のペアを結ぶ縦線（開き括弧の行から閉じ括弧の行まで）。カーソルのいるブロックは強調。
     public bool BracketGuides { get; set; } = true;
 
+    // 連動編集: HTML/XML/XAML/JSX のタグ名を挿入モードで書き換えると、対になるタグ名も追従する。
+    public bool LinkedEditing { get; set; } = true;
+
     // Color preview
     public bool ColorPreview { get; set; } = true;
 
@@ -178,6 +181,7 @@ public class VimOptions
             "scrollbar"                        => Set(() => Scrollbar = value),
             "indentguides" or "ig"             => Set(() => IndentGuides = value),
             "bracketguides" or "bg"            => Set(() => BracketGuides = value),
+            "linkedediting" or "lke"           => Set(() => LinkedEditing = value),
             "colorpreview" or "cpv"            => Set(() => ColorPreview = value),
             "minimap" or "mm"                  => Set(() => Minimap = value),
             "foldcolumn" or "fdc"              => Set(() => FoldColumn = value),
