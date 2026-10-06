@@ -64,6 +64,12 @@ public class EditorTheme
     public Brush DiffRemovedLineBg { get; init; } = new SolidColorBrush(Color.FromArgb(0x2E, 0xE5, 0x73, 0x73));
     // 反対側にしか無い行のぶん挿し込む空き行。本文の無い場所だと分かる程度に沈める。
     public Brush DiffSpacerBg      { get; init; } = new SolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
+    // 行内差分（DiffDecorations.InlineChanges）。行の背景の上に重ねるので、同じ色相をずっと濃くする。
+    public Brush DiffAddedChangeBg   { get; init; } = new SolidColorBrush(Color.FromArgb(0x60, 0x4C, 0xAF, 0x50));
+    public Brush DiffRemovedChangeBg { get; init; } = new SolidColorBrush(Color.FromArgb(0x60, 0xE5, 0x73, 0x73));
+    // スクロールバーへ写す変更位置の印（DiffOverviewMarks）。細い帯でも見えるよう不透明寄り。
+    public Brush DiffAddedMark   { get; init; } = new SolidColorBrush(Color.FromArgb(0xC0, 0x4C, 0xAF, 0x50));
+    public Brush DiffRemovedMark { get; init; } = new SolidColorBrush(Color.FromArgb(0xC0, 0xE5, 0x73, 0x73));
 
     // Scrollbar
     public Brush ScrollbarTrack { get; init; } = new SolidColorBrush(Color.FromArgb(0x40, 0x00, 0x00, 0x00));

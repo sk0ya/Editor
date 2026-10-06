@@ -1799,9 +1799,14 @@ public partial class EditorCanvas : FrameworkElement
 
             // 差分の行背景（追加／削除）。現在行の強調はこの上に重ねる。
             if (_diffDecorations.Lines.TryGetValue(l, out var diffKind) && size.Width > textLeft)
+            {
                 dc.DrawRectangle(
                     diffKind == DiffDecorationKind.Added ? Theme.DiffAddedLineBg : Theme.DiffRemovedLineBg,
                     null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
+                // 行内差分（変わった文字だけ濃く）。本文の下に敷くので、ここで描く。
+                if (!isPreviewLine)
+                    DrawDiffInlineChanges(dc, vi, segment, l, diffKind, lineText, y, textLeft, size);
+            }
 
             // Current line highlight
             if (l == _cursor.Line && Theme.CurrentLineBg != null && size.Width > textLeft)
@@ -2033,6 +2038,8 @@ public partial class EditorCanvas : FrameworkElement
             {
                 var scrollbars = ComputeScrollbarLayout(size);
                 OverlayRenderer.DrawScrollbars(dc, Theme, size, scrollbars);
+                // 差分の変更位置の印（左右並びの差分表示）。診断の印はさらにその上。
+                DrawDiffMarks(dc, size, scrollbars);
                 // 診断の印はサムの上に載せる（いまいる場所の問題だけ隠れる、を防ぐ）。
                 DrawDiagnosticMarks(dc, size, scrollbars);
             }
