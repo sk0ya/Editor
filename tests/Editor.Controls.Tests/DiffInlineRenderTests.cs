@@ -95,6 +95,47 @@ public sealed class DiffInlineRenderTests
         });
     }
 
+    /// <summary>
+    /// キャレットのある変更行でも差分の色が消えない。現在行の強調はどのテーマでも不透明なので、差分の色を
+    /// その下に敷くと消える——差分の次/前へ飛ぶとキャレットはまさにその変更行に乗るので、いちばん見たい行で
+    /// 行の背景も行内差分も見えなくなっていた。
+    /// </summary>
+    [Fact]
+    public void Diff_colors_stay_visible_on_the_caret_line()
+    {
+        WpfTestHost.Run(() =>
+        {
+            const string text = "          ";
+            var canvas = Canvas("x", text, "y");
+            canvas.IsActive = true;
+            canvas.SetCursor(new Editor.Core.Models.CursorPosition(1, 0));
+            var window = WpfTestHost.Load(canvas, Width, Height);
+            try
+            {
+                canvas.SetDiffDecorations(DiffDecorations.Empty);
+                var plain = Render(canvas);
+
+                var lines = new Dictionary<int, DiffDecorationKind> { [1] = DiffDecorationKind.Added };
+                canvas.SetDiffDecorations(Decorations(lines));
+                var lineOnly = Render(canvas);
+                // 行の背景：行の右のほう（キャレットの描画が届かない所）でも色が変わる。
+                Assert.Contains(ChangedColumns(plain, lineOnly, canvas, row: 1), x => x > Width / 2);
+
+                canvas.SetDiffDecorations(Decorations(lines,
+                    new Dictionary<int, IReadOnlyList<DiffInlineRange>> { [1] = [new DiffInlineRange(4, 3)] }));
+                var withInline = Render(canvas);
+                var changed = ChangedColumns(lineOnly, withInline, canvas, row: 1);
+                var expectedWidth = VisualX(canvas, 1, text, 7) - VisualX(canvas, 1, text, 4);
+                Assert.NotEmpty(changed);
+                Assert.InRange(changed[^1] - changed[0] + 1, expectedWidth - 2, expectedWidth + 2);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     [Fact]
     public void Inline_range_on_a_line_without_a_diff_kind_is_not_drawn()
     {
@@ -160,6 +201,29 @@ public sealed class DiffInlineRenderTests
 
             var mark = Assert.Single(canvas.CurrentDiffMarks());
             Assert.Equal(new DiffOverviewMark(3, 2, DiffDecorationKind.Added), mark);
+        });
+    }
+
+    [Fact]
+    public void Spacer_rows_are_marked_with_the_spacer_kind()
+    {
+        WpfTestHost.Run(() =>
+        {
+            // 右（新側）のエディタ：左で消えた3行ぶんの空き行が行 1 の前にある。削除だけの変更でも印が出る。
+            var canvas = Canvas("a", "b", "c");
+            canvas.SetDiffDecorations(new DiffDecorations(
+                new Dictionary<int, DiffDecorationKind> { [2] = DiffDecorationKind.Added },
+                new Dictionary<int, int> { [1] = 3 })
+            { SpacerKind = DiffDecorationKind.Removed });
+
+            Assert.Equal(
+                [new DiffOverviewMark(1, 3, DiffDecorationKind.Removed), new DiffOverviewMark(5, 1, DiffDecorationKind.Added)],
+                canvas.CurrentDiffMarks());
+
+            // 指定が無ければ空き行に印は付かない（従来どおり）。
+            canvas.SetDiffDecorations(new DiffDecorations(
+                new Dictionary<int, DiffDecorationKind>(), new Dictionary<int, int> { [1] = 3 }));
+            Assert.Empty(canvas.CurrentDiffMarks());
         });
     }
 

@@ -67,7 +67,8 @@ public partial class EditorCanvas
             return _diffMarks;
         _diffMarksLayout = _visualLines;
         _diffMarksSource = _diffDecorations;
-        if (_diffDecorations.Lines.Count == 0)
+        var spacerKind = _diffDecorations.SpacerKind;
+        if (_diffDecorations.Lines.Count == 0 && (spacerKind is null || _diffDecorations.SpacersBefore.Count == 0))
         {
             _diffMarks = [];
             return _diffMarks;
@@ -77,7 +78,9 @@ public partial class EditorCanvas
         for (int i = 0; i < _visualLines.Length; i++)
         {
             var segment = _visualLines[i];
-            if (!segment.IsVirtualRow && _diffDecorations.Lines.TryGetValue(segment.BufferLine, out var kind))
+            if (segment.IsSpacer)
+                kinds[i] = spacerKind;   // 反対側にだけある行（指定が無ければ印なし）
+            else if (!segment.IsVirtualRow && _diffDecorations.Lines.TryGetValue(segment.BufferLine, out var kind))
                 kinds[i] = kind;
         }
         _diffMarks = DiffOverviewMarks.Build(kinds);

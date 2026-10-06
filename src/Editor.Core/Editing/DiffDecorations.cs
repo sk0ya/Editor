@@ -62,6 +62,13 @@ public sealed class DiffDecorations
     /// <summary>バッファ行 → 行内差分の範囲（昇順・重なり無し）。無ければ空。</summary>
     public IReadOnlyDictionary<int, IReadOnlyList<DiffInlineRange>> InlineChanges { get; }
 
+    /// <summary>
+    /// 空き行が反対側の何を表すか（スクロールバーの変更位置の印で、空き行をどの色で示すか）。null なら印を付けない。
+    /// 右（新側）のエディタの空き行は左で消えた行、左（旧側）の空き行は右で足された行にあたる——片側だけに
+    /// スクロールバーを出すホストでも、削除だけの変更の位置が見えるようにするためのもの。
+    /// </summary>
+    public DiffDecorationKind? SpacerKind { get; init; }
+
     public bool IsEmpty => Lines.Count == 0 && SpacersBefore.Count == 0 && InlineChanges.Count == 0;
 
     /// <summary>空き行の配置が同じか（行の背景だけが変わったなら、行レイアウトは組み直さなくてよい）。</summary>

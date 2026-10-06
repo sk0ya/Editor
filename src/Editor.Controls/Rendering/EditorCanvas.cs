@@ -1797,7 +1797,13 @@ public partial class EditorCanvas : FrameworkElement
             _scrollOffsetX = EffectiveWrapLines ? GetVisualX(lineText, segment.StartColumn) : baseOffsetX;
             bool drawNumberAndFold = !EffectiveWrapLines || !segment.IsContinuation;
 
-            // 差分の行背景（追加／削除）。現在行の強調はこの上に重ねる。
+            // Current line highlight
+            if (l == _cursor.Line && Theme.CurrentLineBg != null && size.Width > textLeft)
+                dc.DrawRectangle(Theme.CurrentLineBg, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
+
+            // 差分の行背景（追加／削除）と行内差分。現在行の強調の<b>上に</b>重ねる——現在行の色はどのテーマでも
+            // 不透明なので、下に敷くと消える。差分の次/前へ飛ぶとキャレットはまさにその変更行に乗るので、
+            // いちばん見たい行で色が消えていた。差分の色は半透明なので、現在行も色味を帯びて見分けられる。
             if (_diffDecorations.Lines.TryGetValue(l, out var diffKind) && size.Width > textLeft)
             {
                 dc.DrawRectangle(
@@ -1807,10 +1813,6 @@ public partial class EditorCanvas : FrameworkElement
                 if (!isPreviewLine)
                     DrawDiffInlineChanges(dc, vi, segment, l, diffKind, lineText, y, textLeft, size);
             }
-
-            // Current line highlight
-            if (l == _cursor.Line && Theme.CurrentLineBg != null && size.Width > textLeft)
-                dc.DrawRectangle(Theme.CurrentLineBg, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
 
             // Debug execution line highlight (the line the debugger is currently stopped at)
             if (_breakpointsEnabled && l == _executionLine && size.Width > textLeft)
