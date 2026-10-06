@@ -89,4 +89,25 @@ public class DiffOverviewMarksTests
         Assert.Equal(7, range.End);
         Assert.False(decorations.IsEmpty);
     }
+
+    [Fact]
+    public void Inline_range_end_does_not_overflow_for_to_end_of_line()
+    {
+        // 「行末まで」を大きな長さで渡しても End が負に溢れない（溢れると範囲が黙って描かれなくなる）。
+        Assert.Equal(int.MaxValue, new DiffInlineRange(3, int.MaxValue).End);
+        Assert.Equal(int.MaxValue, new DiffInlineRange(int.MaxValue, 1).End);
+        Assert.Equal(5, new DiffInlineRange(2, 3).End);
+    }
+
+    [Fact]
+    public void Inline_changes_alone_are_empty_because_nothing_is_drawn()
+    {
+        // 行内差分は種別のある行にしか描かれない。それだけでは何も出ないので、IsEmpty も空と答える。
+        var decorations = new DiffDecorations(
+            new Dictionary<int, DiffDecorationKind>(),
+            new Dictionary<int, int>(),
+            new Dictionary<int, IReadOnlyList<DiffInlineRange>> { [2] = [new DiffInlineRange(4, 3)] });
+
+        Assert.True(decorations.IsEmpty);
+    }
 }

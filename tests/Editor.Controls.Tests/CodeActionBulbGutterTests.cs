@@ -305,4 +305,28 @@ public class CodeActionBulbGutterTests
                 Assert.False(canvas.TryClickDiagnosticMark(new Point(canvas.RenderSize.Width - 3, y)));
         });
     }
+
+    [Fact]
+    public void DiagnosticMarks_AreMeasuredOnVisualRows_LikeTheThumbAndTheDiffMarks()
+    {
+        // 差分の空き行で表示行が倍になった側。バッファ行で測ると、行 0 の診断はトラックの一番上に出て、
+        // 同じ行の差分の印（表示行 300 ＝ 中ほど）やサムと別の高さになる。表示行で測れば中ほど。
+        WpfTestHost.Run(() =>
+        {
+            var canvas = ArrangedCanvas(lineCount: 300);
+            canvas.SetDiffDecorations(new Editor.Core.Editing.DiffDecorations(
+                new Dictionary<int, Editor.Core.Editing.DiffDecorationKind>(),
+                new Dictionary<int, int> { [0] = 300 }));
+            canvas.SetDiagnostics([Diag(0, DiagnosticSeverity.Error)]);
+
+            int clicked = -1;
+            canvas.DiagnosticMarkClicked += mark => clicked = mark.Line;
+
+            double h = canvas.RenderSize.Height;
+            double x = canvas.RenderSize.Width - 3;
+            Assert.False(canvas.TryClickDiagnosticMark(new Point(x, DiagnosticOverviewMarks.TrackY(0, 300, h))));
+            Assert.True(canvas.TryClickDiagnosticMark(new Point(x, DiagnosticOverviewMarks.TrackY(300, 600, h))));
+            Assert.Equal(0, clicked);
+        });
+    }
 }

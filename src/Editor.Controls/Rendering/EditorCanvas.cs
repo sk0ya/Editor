@@ -21,7 +21,7 @@ public partial class EditorCanvas : FrameworkElement
     // IsSpacer = 左右並びの差分表示で、反対側にしか無い行のぶん挿し込む空き行（SetDiffDecorations）。
     // 注釈行と同じく本文を持たず、キャレットも選択も乗らない。BufferLine は「この行の直前」の行で、
     // 末尾の空き行だけは行数（＝どの行でもない）を指す。
-    private readonly record struct VisualLineSegment(int BufferLine, int StartColumn, bool IsContinuation, bool IsCodeLens = false, bool IsSpacer = false)
+    internal readonly record struct VisualLineSegment(int BufferLine, int StartColumn, bool IsContinuation, bool IsCodeLens = false, bool IsSpacer = false)
     {
         /// <summary>本文を持たない表示だけの行（CodeLens の注釈行・差分の空き行）。</summary>
         public bool IsVirtualRow => IsCodeLens || IsSpacer;
@@ -206,6 +206,9 @@ public partial class EditorCanvas : FrameworkElement
         new Dictionary<int, IReadOnlyList<LspCodeLens>>();
     private readonly List<(Rect Bounds, LspCodeLens Lens)> _codeLensHitRects = [];
     private DiffDecorations _diffDecorations = DiffDecorations.Empty;
+    // 差分の行内差分とスクロールバーの印（DiffOverlayRenderer）、印を表示行へ写す対応（OverviewRowMap）。
+    private readonly DiffOverlayRenderer _diffOverlay = new();
+    private readonly OverviewRowMap _overviewRows = new();
     private bool _codeLensesStale;
 
     // LSP
@@ -473,6 +476,43 @@ public partial class EditorCanvas : FrameworkElement
     }
 
     public DiffDecorations DiffDecorations => _diffDecorations;
+
+    /// <summary>スクロールバーの印（差分・診断）用の、バッファ行 → 表示行の対応（行レイアウトが変われば作り直す）。</summary>
+    private OverviewRowMap OverviewRows => _overviewRows.Update(_visualLines, Math.Max(1, _lines.Length));
+
+    /// <summary>表示行ごとの差分の種別から作った、スクロールバーの印（キャッシュ付き）。</summary>
+    internal IReadOnlyList<DiffOverviewMark> CurrentDiffMarks()
+        => _diffOverlay.Marks(_visualLines, _diffDecorations, OverviewRows);
+
+    /// <summary>
+    /// 表示行 <paramref name="visualLine"/>（バッファ行 <paramref name="line"/> の1区間）へ、行内差分の範囲を塗る。
+    /// 行の背景を描いた直後・本文を描く前に呼ぶ（文字の下に敷く）。右端は本文の領域（ミニマップの手前）まで。
+    /// </summary>
+    private void DrawDiffInlineChanges(
+        DrawingContext dc, int visualLine, VisualLineSegment segment, int line, DiffDecorationKind kind,
+        string lineText, double y, double textLeft, Size size)
+    {
+        if (!_diffDecorations.InlineChanges.TryGetValue(line, out var ranges) || ranges.Count == 0) return;
+        // 巨大な1行では桁の実測をしない（本文の描画と同じ打ち切り）。
+        if (lineText.Length > LongLineCharacterThreshold) return;
+
+        // 折り返しているときは、この表示行が受け持つ桁の区間だけを塗る。
+        int segmentEnd = lineText.Length;
+        if (EffectiveWrapLines && visualLine + 1 < TotalVisualLines)
+        {
+            var next = GetVisualSegment(visualLine + 1);
+            if (next.BufferLine == line && next.IsContinuation && !next.IsVirtualRow)
+                segmentEnd = next.StartColumn;
+        }
+
+        double textRight = size.Width - (_showMinimap ? MinimapWidth : 0);
+        DiffOverlayRenderer.DrawInlineChanges(
+            dc, ranges,
+            kind == DiffDecorationKind.Added ? Theme.DiffAddedChangeBg : Theme.DiffRemovedChangeBg,
+            segment.StartColumn, segmentEnd,
+            column => textLeft + GetVisualX(lineText, column) - _scrollOffsetX,
+            y, _lineHeight, textLeft, textRight);
+    }
 
     /// <summary>Sets the per-line changed-since-save state for the change bar drawn at the
     /// right edge of the gutter (flush against the text).</summary>
@@ -2039,9 +2079,13 @@ public partial class EditorCanvas : FrameworkElement
             if (_showScrollbar)
             {
                 var scrollbars = ComputeScrollbarLayout(size);
-                OverlayRenderer.DrawScrollbars(dc, Theme, size, scrollbars);
-                // 差分の変更位置の印（左右並びの差分表示）。診断の印はさらにその上。
-                DrawDiffMarks(dc, size, scrollbars);
+                // 差分の変更位置の印（左右並びの差分表示）は<b>サムの下</b>。変更が続く範囲は太い帯になるので、
+                // 上に載せると全行が追加のファイルではトラックが一色に潰れて、いまの位置が見えなくなる。
+                var diffMarks = CurrentDiffMarks();
+                OverlayRenderer.DrawScrollbars(dc, Theme, size, scrollbars,
+                    diffMarks.Count == 0 ? null : under => DiffOverlayRenderer.DrawMarks(
+                        under, Theme, diffMarks, OverviewRows.RowCount,
+                        size.Width - OverlayRenderer.ScrollbarSize, scrollbars.VertTrackH));
                 // 診断の印はサムの上に載せる（いまいる場所の問題だけ隠れる、を防ぐ）。
                 DrawDiagnosticMarks(dc, size, scrollbars);
             }

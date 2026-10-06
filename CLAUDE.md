@@ -361,6 +361,15 @@ are pure functions in `Editor.Core/Lsp/DiagnosticOverviewMarks.cs` (`Build` / `T
 `OverlayRenderer.DrawScrollbarDiagnosticMarks`, and the glue is `Rendering/EditorCanvas.DiagnosticMarks.cs`.
 Nothing to enable; no vertical scrollbar (document fits on screen) means no marks.
 
+Marks are placed on **visual rows**, not buffer lines — the thumb moves in visual rows (wraps, CodeLens rows,
+diff spacers; folded lines excluded), so a buffer-line scale drifts from the thumb and from the diff marks in the
+same bar. `Rendering/OverviewRowMap.cs` is the one buffer-line→row map both diagnostics and diff marks go through;
+a line hidden in a fold maps to its fold header, so a folded change/problem moves to the header instead of
+vanishing. **Diff marks** (`Rendering/DiffOverlayRenderer.cs`, side-by-side diff) are drawn **under** the thumb via
+`OverlayRenderer.DrawScrollbars`' `drawUnderVerticalThumb` callback: a run of changed rows merges into one band, and
+on top of the thumb an all-added file turns the track solid and hides the scroll position. Diagnostic marks stay
+on top (they are thin).
+
 **Host contract for test glyphs**, none of which the editor does for you:
 
 - Glyphs are keyed by line number only, so they **do not follow inserted/deleted lines**. After any edit that

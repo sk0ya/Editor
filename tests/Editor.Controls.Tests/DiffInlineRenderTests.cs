@@ -281,4 +281,87 @@ public sealed class DiffInlineRenderTests
             }
         });
     }
+
+    [Fact]
+    public void Changes_inside_a_closed_fold_are_marked_on_the_fold_header()
+    {
+        WpfTestHost.Run(() =>
+        {
+            // b〜d を畳む（見えるのは a, b, e, f）。畳んだ中の c, d の変更と d の前の空き行は、
+            // 消えずに見出し b の表示行（1）に出る。
+            var canvas = Canvas("a", "b", "c", "d", "e", "f");
+            canvas.SetFolds([0, 1, 4, 5], [1], []);
+            canvas.SetDiffDecorations(new DiffDecorations(
+                new Dictionary<int, DiffDecorationKind> { [2] = DiffDecorationKind.Added, [5] = DiffDecorationKind.Added },
+                new Dictionary<int, int> { [3] = 2 })
+            { SpacerKind = DiffDecorationKind.Removed });
+
+            Assert.Equal(
+                [new DiffOverviewMark(1, 1, DiffDecorationKind.Added), new DiffOverviewMark(3, 1, DiffDecorationKind.Added)],
+                canvas.CurrentDiffMarks());
+        });
+    }
+
+    /// <summary>
+    /// 変更が続く範囲は太い帯になる。印をサムの上に描くと、全行が追加のファイルではトラックが一色に
+    /// 潰れて、いまの位置が見えなくなる——印はサムの下。
+    /// </summary>
+    [Fact]
+    public void Overview_marks_are_drawn_under_the_scrollbar_thumb()
+    {
+        WpfTestHost.Run(() =>
+        {
+            var lines = Enumerable.Range(0, 200).Select(i => $"line {i}").ToArray();
+            var canvas = Canvas(lines);
+            canvas.Theme = new Editor.Controls.Themes.EditorTheme { ScrollbarThumb = new SolidColorBrush(Colors.Blue) };
+            var window = WpfTestHost.Load(canvas, Width, Height);
+            try
+            {
+                canvas.SetDiffDecorations(Decorations(
+                    Enumerable.Range(0, lines.Length).ToDictionary(i => i, _ => DiffDecorationKind.Added)));
+                var pixels = Render(canvas);
+
+                // サムは先頭（スクロール 0）。内側 1px 控えて描かれるので、右端から 4px の点はサムの中。
+                var x = (int)canvas.ActualWidth - 4;
+                var i = (3 * Width + x) * 4;   // Pbgra32: B, G, R, A
+                Assert.Equal((byte)255, pixels[i]);
+                Assert.Equal((byte)0, pixels[i + 1]);
+                Assert.Equal((byte)0, pixels[i + 2]);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [Fact]
+    public void Inline_changes_stop_at_the_minimap()
+    {
+        WpfTestHost.Run(() =>
+        {
+            // 行末までの範囲（int.MaxValue）を、画面より長い行に。塗りはミニマップの手前で止まる。
+            var text = new string(' ', 200);
+            var canvas = Canvas(text);
+            canvas.SetMinimap(true);
+            var window = WpfTestHost.Load(canvas, Width, Height);
+            try
+            {
+                var lines = new Dictionary<int, DiffDecorationKind> { [0] = DiffDecorationKind.Added };
+                canvas.SetDiffDecorations(Decorations(lines));
+                var plain = Render(canvas);
+                canvas.SetDiffDecorations(Decorations(lines,
+                    new Dictionary<int, IReadOnlyList<DiffInlineRange>> { [0] = [new DiffInlineRange(0, int.MaxValue)] }));
+                var marked = Render(canvas);
+
+                var changed = ChangedColumns(plain, marked, canvas, row: 0);
+                Assert.NotEmpty(changed);
+                Assert.All(changed, x => Assert.True(x < canvas.ActualWidth - 80, $"x={x}"));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
 }

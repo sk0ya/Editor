@@ -49,7 +49,8 @@ public static class DiagnosticOverviewMarks
         return marks;
     }
 
-    /// <summary>行 <paramref name="line"/> の印を置くトラック上の中心 Y。
+    /// <summary>行 <paramref name="line"/> の印を置くトラック上の中心 Y。表示側では行を<b>表示行</b>
+    /// （折り返し・注釈行・差分の空き行込み）へ写してから渡す——サムがそれで動いているので。
     /// サム（つまみ）のスクロール量換算ではなく<b>文書全体を等分</b>する射影にする——
     /// 印は「文書のどのあたりか」を示すもので、いまのスクロール位置に依らず動いてはいけない。</summary>
     public static double TrackY(int line, int lineCount, double trackHeight)
@@ -60,16 +61,19 @@ public static class DiagnosticOverviewMarks
 
     /// <summary><paramref name="y"/> に最も近い印を返す（<paramref name="tolerance"/> px 以内）。
     /// 印が密集していると 1px の差で別の問題へ飛ぶので、<b>最も近いもの</b>を選ぶ。
-    /// 同じ距離なら重い方（エラー）を優先する。該当が無ければ null。</summary>
+    /// 同じ距離なら重い方（エラー）を優先する。該当が無ければ null。
+    /// <paramref name="rowOfLine"/> を渡すと印の行をそれで写してから測る（<paramref name="lineCount"/> はその写し先の
+    /// 総数）——描画と同じ写像を使わないと、見えている印と押せる位置がずれる。</summary>
     public static DiagnosticOverviewMark? HitTest(
         IReadOnlyList<DiagnosticOverviewMark> marks, double y, int lineCount, double trackHeight,
-        double tolerance)
+        double tolerance, Func<int, int>? rowOfLine = null)
     {
         DiagnosticOverviewMark? best = null;
         double bestDistance = double.MaxValue;
         foreach (var mark in marks)
         {
-            double distance = Math.Abs(TrackY(mark.Line, lineCount, trackHeight) - y);
+            int row = rowOfLine?.Invoke(mark.Line) ?? mark.Line;
+            double distance = Math.Abs(TrackY(row, lineCount, trackHeight) - y);
             if (distance > tolerance) continue;
             if (distance > bestDistance) continue;
             if (distance == bestDistance && best is { } current && current.Severity <= mark.Severity) continue;

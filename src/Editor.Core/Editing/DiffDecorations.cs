@@ -9,10 +9,13 @@ public enum DiffDecorationKind
     Removed,
 }
 
-/// <summary>1行の中の文字範囲（UTF-16 の桁と長さ）。行内差分で「実際に変わった文字」を示す。</summary>
+/// <summary>1行の中の文字範囲（UTF-16 の桁と長さ）。行内差分で「実際に変わった文字」を示す。
+/// 「行末まで」は大きな <see cref="Length"/>（<see cref="int.MaxValue"/> でよい）で表せる。</summary>
 public readonly record struct DiffInlineRange(int Start, int Length)
 {
-    public int End => Start + Length;
+    /// <summary>終わりの桁（排他）。<c>Start + Length</c> が int を溢れるときは <see cref="int.MaxValue"/> に留める
+    /// （溢れて負になると、範囲が黙って描かれなくなる）。</summary>
+    public int End => (int)Math.Clamp((long)Start + Length, int.MinValue, int.MaxValue);
 }
 
 /// <summary>
@@ -69,7 +72,9 @@ public sealed class DiffDecorations
     /// </summary>
     public DiffDecorationKind? SpacerKind { get; init; }
 
-    public bool IsEmpty => Lines.Count == 0 && SpacersBefore.Count == 0 && InlineChanges.Count == 0;
+    /// <summary>描くものが何も無いか。<see cref="InlineChanges"/> は種別のある行にしか描かれないので数えない
+    /// （行内差分だけを渡しても何も出ない——それを「空でない」と答えると、描画と食い違う）。</summary>
+    public bool IsEmpty => Lines.Count == 0 && SpacersBefore.Count == 0;
 
     /// <summary>空き行の配置が同じか（行の背景だけが変わったなら、行レイアウトは組み直さなくてよい）。</summary>
     public bool HasSameSpacers(DiffDecorations other)
