@@ -128,7 +128,11 @@ internal static class OverlayRenderer
         return l;
     }
 
-    public static void DrawScrollbars(DrawingContext dc, EditorTheme theme, Size size, ScrollbarLayout l)
+    /// <param name="drawUnderVerticalThumb">垂直トラックを描いた後・サムを描く前に呼ぶ（太い帯になりうる印——
+    /// 差分の変更範囲——をサムの下に敷くため。上に描くとサムが見えなくなる）。</param>
+    public static void DrawScrollbars(
+        DrawingContext dc, EditorTheme theme, Size size, ScrollbarLayout l,
+        Action<DrawingContext>? drawUnderVerticalThumb = null)
     {
         if (!l.NeedVert && !l.NeedHoriz) return;
 
@@ -136,6 +140,7 @@ internal static class OverlayRenderer
         {
             double trackX = size.Width - ScrollbarSize;
             dc.DrawRectangle(theme.ScrollbarTrack, null, new Rect(trackX, 0, ScrollbarSize, l.VertTrackH));
+            drawUnderVerticalThumb?.Invoke(dc);
             dc.DrawRectangle(theme.ScrollbarThumb, null, new Rect(trackX + 1, l.VertThumbY + 1, ScrollbarSize - 2, Math.Max(0, l.VertThumbH - 2)));
         }
 
@@ -154,15 +159,17 @@ internal static class OverlayRenderer
     /// <summary>
     /// 垂直スクロールバーのトラックへ、行ごとに畳んだ診断の印を引く（overview ruler）。
     /// <b>サムの後に</b>描く——印がサムの下に隠れると「いまいる場所の問題だけ見えない」ことになる。
+    /// 位置は表示行で測る（<paramref name="rowOfLine"/> がバッファ行 → 表示行、<paramref name="rowCount"/> が
+    /// 表示行の総数）。サムも差分の印も表示行で動いているので、バッファ行で測るとそれらとずれる。
     /// </summary>
     public static void DrawScrollbarDiagnosticMarks(
         DrawingContext dc, EditorTheme theme, Size size, ScrollbarLayout l,
-        IReadOnlyList<DiagnosticOverviewMark> marks, int lineCount)
+        IReadOnlyList<DiagnosticOverviewMark> marks, int rowCount, Func<int, int> rowOfLine)
     {
-        if (!l.NeedVert || l.VertTrackH <= 0 || marks.Count == 0 || lineCount <= 0) return;
+        if (!l.NeedVert || l.VertTrackH <= 0 || marks.Count == 0 || rowCount <= 0) return;
 
         double trackX = size.Width - ScrollbarSize;
-        double height = Math.Max(DiagnosticMarkMinHeight, l.VertTrackH / lineCount);
+        double height = Math.Max(DiagnosticMarkMinHeight, l.VertTrackH / rowCount);
 
         // 重い順に後から描いて上に載せる（同じ高さに落ちた警告とエラーでは、エラーを見せる）。
         foreach (var severity in s_markDrawOrder)
@@ -177,7 +184,7 @@ internal static class OverlayRenderer
             foreach (var mark in marks)
             {
                 if (mark.Severity != severity) continue;
-                double centerY = DiagnosticOverviewMarks.TrackY(mark.Line, lineCount, l.VertTrackH);
+                double centerY = DiagnosticOverviewMarks.TrackY(rowOfLine(mark.Line), rowCount, l.VertTrackH);
                 double y = Math.Clamp(centerY - height / 2, 0, Math.Max(0, l.VertTrackH - height));
                 dc.DrawRectangle(brush, null, new Rect(trackX, y, ScrollbarSize, height));
             }

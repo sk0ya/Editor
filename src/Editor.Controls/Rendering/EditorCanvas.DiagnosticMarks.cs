@@ -47,7 +47,7 @@ public partial class EditorCanvas
     /// <summary>スクロールバーのトラックへ印を引く（サムの後に呼ぶこと）。</summary>
     private void DrawDiagnosticMarks(DrawingContext dc, Size size, OverlayRenderer.ScrollbarLayout layout)
         => OverlayRenderer.DrawScrollbarDiagnosticMarks(
-            dc, Theme, size, layout, CurrentDiagnosticMarks(), Math.Max(1, _lines.Length));
+            dc, Theme, size, layout, CurrentDiagnosticMarks(), OverviewRows.RowCount, OverviewRows.RowOf);
 
     /// <summary>点 <paramref name="point"/> が垂直スクロールバーの印の上にあればそれを返す。
     /// 掴む幅は <c>ScrollbarHitSize</c>（サムのドラッグと同じ帯）で、その中では
@@ -60,8 +60,8 @@ public partial class EditorCanvas
         if (point.X < size.Width - ScrollbarHitSize || point.Y > layout.VertTrackH) return null;
 
         return DiagnosticOverviewMarks.HitTest(
-            CurrentDiagnosticMarks(), point.Y, Math.Max(1, _lines.Length), layout.VertTrackH,
-            DiagnosticMarkHitTolerance);
+            CurrentDiagnosticMarks(), point.Y, OverviewRows.RowCount, layout.VertTrackH,
+            DiagnosticMarkHitTolerance, OverviewRows.RowOf);
     }
 
     /// <summary>印の上のクリックならホストへ通知して true（スクロールバーのドラッグは始めない）。</summary>
