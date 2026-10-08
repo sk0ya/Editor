@@ -28,14 +28,18 @@ internal static class GutterRenderer
         double blameColWidth, int bpColWidth, int bulbColWidth, int testColWidth, int lineNumWidth, double foldColWidth,
         int cursorLine, bool relativeNumber, int lineNumberWidth,
         IReadOnlySet<int> closedFoldStarts, IReadOnlySet<int> openFoldStarts, int hoveredFoldLine,
-        IReadOnlyDictionary<int, GitLineState> gitDiff, bool hideLineNumber = false)
+        IReadOnlyDictionary<int, GitLineState> gitDiff, bool hideLineNumber = false,
+        Func<int, string?>? labelFor = null)
     {
         bool isCursorLine = line == cursorLine;
         // 数字はブレークポイントに譲る（この行の行番号列にはグリフが重なる）。
         if (!hideLineNumber)
         {
             var lineNumberBrush = isCursorLine ? theme.CurrentLineNumberFg : theme.LineNumberFg;
-            string lineNumStr = relativeNumber && !isCursorLine
+            // ホストが差し替えた表示（抜粋ビューの元ファイルの行番号など）は相対行番号より優先する。
+            string lineNumStr = labelFor is not null
+                ? (labelFor(line) ?? "").PadLeft(lineNumberWidth)
+                : relativeNumber && !isCursorLine
                 ? Math.Abs(line - cursorLine).ToString().PadLeft(lineNumberWidth)
                 : (line + 1).ToString().PadLeft(lineNumberWidth);
             var numText = metrics.FormatText(lineNumStr, lineNumberBrush);

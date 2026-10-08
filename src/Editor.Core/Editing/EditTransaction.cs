@@ -27,6 +27,12 @@ public sealed record EditTransactionOptions(
     bool AllowCursorAtEndOfLine = false,
     bool EnforceReadOnly = true);
 
+/// <summary>
+/// ホストが文書の一部を守るための判定。編集前と編集後の全行を受け取り、断るなら理由（状態行に出す）、
+/// 通すなら null を返す。呼ばれるのは本文が実際に変わった編集トランザクションの終わりだけ。
+/// </summary>
+public delegate string? HostEditGuard(IReadOnlyList<string> before, IReadOnlyList<string> after);
+
 public interface IEditTransactionService
 {
     EditTransactionResult Execute(
@@ -47,7 +53,8 @@ public sealed class EditTransactionService(
     Action<CursorPosition> setCursor,
     Func<bool> suppressSnapshot,
     Action<List<VimEvent>, string> emitStatus,
-    Func<bool>? hostReadOnly = null) : IEditTransactionService
+    Func<bool>? hostReadOnly = null,
+    Func<HostEditGuard?>? hostEditGuard = null) : IEditTransactionService
 {
     public EditTransactionResult Execute(
         List<VimEvent> events,
@@ -73,16 +80,42 @@ public sealed class EditTransactionService(
         var transaction = new EditTransaction(current.Text, originalCursor);
         transaction.CreateUndoSnapshot = options?.CreateUndoSnapshot ?? true;
         object? repeatMetadata;
+        var committed = false;
+        current.Text.BeginChangeBatch();
         try
         {
-            repeatMetadata = mutation(transaction);
+            try
+            {
+                repeatMetadata = mutation(transaction);
+            }
+            catch
+            {
+                current.Text.RestoreSnapshot(originalLines);
+                setCursor(originalCursor);
+                throw;
+            }
+            var result = Complete(events, current, originalCursor, originalLines, transaction,
+                repeatMetadata, readOnly, options, eventStart);
+            committed = result.Applied;
+            return result;
         }
-        catch
+        finally
         {
-            current.Text.RestoreSnapshot(originalLines);
-            setCursor(originalCursor);
-            throw;
+            current.Text.EndChangeBatch(committed);
         }
+    }
+
+    private EditTransactionResult Complete(
+        List<VimEvent> events,
+        VimBuffer current,
+        CursorPosition originalCursor,
+        string[] originalLines,
+        EditTransaction transaction,
+        object? repeatMetadata,
+        bool readOnly,
+        EditTransactionOptions? options,
+        int eventStart)
+    {
 
         if (transaction.RollbackRequested)
         {
@@ -100,6 +133,21 @@ public sealed class EditTransactionService(
             return new EditTransactionResult(true, false, getCursor(), repeatMetadata);
 
         var changed = !originalLines.SequenceEqual(current.Text.Snapshot());
+
+        // ホストの編集ガード（抜粋ビューの見出し行など、文書の一部だけを守りたいとき）。読み取り専用と
+        // 同じく「変わっていたら最後に判定して戻す」。差分の通知は確定まで溜めてあるので、断った編集は
+        // ホストへ一度も流れない。
+        if (changed && hostEditGuard?.Invoke() is { } guard &&
+            guard(originalLines, current.Text.Snapshot()) is { } reason)
+        {
+            current.Text.RestoreSnapshot(originalLines);
+            setCursor(originalCursor);
+            for (var i = events.Count - 1; i >= eventStart; i--)
+                if (events[i].Type is VimEventType.TextChanged or VimEventType.CursorMoved)
+                    events.RemoveAt(i);
+            emitStatus(events, reason);
+            return new EditTransactionResult(false, false, originalCursor, repeatMetadata);
+        }
 
         // ホストの読み取り専用は、入口で断らない経路（Ex コマンド・挿入の入力）も最後にここで止める。
         // 個々の :s / :d / :normal を洗い出すより、「変わっていたら戻す」一か所の方が漏れない。

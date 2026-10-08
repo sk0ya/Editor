@@ -112,6 +112,9 @@ internal sealed class VimEngineRuntime
     /// <summary>ホストが指定する読み取り専用（<see cref="VimEngine.IsReadOnly"/>）。</summary>
     public bool IsReadOnly { get; set; }
 
+    /// <summary>ホストの編集ガード（<see cref="VimEngine.EditGuard"/>）。</summary>
+    public HostEditGuard? EditGuard { get; set; }
+
     /// <summary>本文を変えてはいけない状態か：バイナリファイル、またはホストが読み取り専用にした。</summary>
     private bool RejectsEdits => IsReadOnly || _bufferManager.Current.IsBinary;
 
@@ -211,7 +214,8 @@ internal sealed class VimEngineRuntime
             _bufferManager, _markManager, _syntaxEngine,
             () => _cursor, cursor => _cursor = cursor,
             () => _suppressSnapshot, EmitStatus,
-            () => IsReadOnly);
+            () => IsReadOnly,
+            () => EditGuard);
         _linkedEditing = new LinkedEditingController(
             () => _bufferManager.Current,
             () => _cursor,

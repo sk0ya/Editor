@@ -1,5 +1,6 @@
 using System;
 using Editor.Core.Buffer;
+using Editor.Core.Engine;
 
 namespace Editor.Controls;
 
@@ -49,6 +50,22 @@ public partial class VimEditorControl
                 _engine.BufferManager.BufferTextChanged -= OnBufferTextChanged;
         }
     }
+
+    /// <summary>
+    /// 文書の一部を守る判定（<see cref="VimEngine.EditGuard"/>）。抜粋ビューの見出し行のように、
+    /// ホストが組み立てた文書のうち書き換えさせたくない行を守る。断った編集は巻き戻され、
+    /// <see cref="TextEdited"/> にも流れない。
+    /// </summary>
+    public Editor.Core.Editing.HostEditGuard? EditGuard
+    {
+        get => _engine.EditGuard;
+        set => _engine.EditGuard = value;
+    }
+
+    /// <summary>行番号列の表示をホストが決める（<see cref="Rendering.EditorCanvas.SetLineNumberLabels"/>）。
+    /// null を渡すと既定の行番号へ戻る。</summary>
+    public void SetLineNumberLabels(Func<int, string?>? label, int width)
+        => Canvas.SetLineNumberLabels(label, width);
 
     private void OnBufferTextChanged(VimBuffer buffer, TextBufferChange change)
         => _textEdited?.Invoke(this, new EditorTextEditedEventArgs(

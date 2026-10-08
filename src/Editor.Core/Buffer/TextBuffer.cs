@@ -69,6 +69,40 @@ public class TextBuffer : INormalBufferView
     /// </summary>
     public event Action<TextBufferChange>? Changed;
 
+    // An edit transaction (EditTransactionService) holds the changes back until it commits, so a
+    // transaction that is rolled back (read-only, a host edit guard, an exception) reports nothing
+    // instead of "the edit, then its undo" — a host forwarding changes elsewhere would otherwise
+    // replay both there.
+    private int _batchDepth;
+    private List<TextBufferChange>? _batched;
+
+    internal void BeginChangeBatch() => _batchDepth++;
+
+    internal void EndChangeBatch(bool commit)
+    {
+        if (_batchDepth == 0) return;
+        if (--_batchDepth > 0)
+        {
+            if (!commit) _batched?.Clear();
+            return;
+        }
+        var pending = _batched;
+        _batched = null;
+        if (!commit || pending is null) return;
+        foreach (var change in pending)
+            Changed?.Invoke(change);
+    }
+
+    private void Deliver(TextBufferChange change)
+    {
+        if (_batchDepth > 0)
+        {
+            (_batched ??= []).Add(change);
+            return;
+        }
+        Changed?.Invoke(change);
+    }
+
     /// <summary>
     /// The line contents as of the last load (<see cref="SetText"/>) or save
     /// (<see cref="MarkSaved"/>). Compared against the current lines to render the
@@ -461,11 +495,11 @@ public class TextBuffer : INormalBufferView
 
     private void Raise(int startLine, int startColumn, int endLine, int endColumn, string newText,
         TextBufferChangeKind kind = TextBufferChangeKind.Edit)
-        => Changed?.Invoke(new TextBufferChange(startLine, startColumn, endLine, endColumn, newText, Version, kind));
+        => Deliver(new TextBufferChange(startLine, startColumn, endLine, endColumn, newText, Version, kind));
 
     // Changes are built before the mutation (their range is in the old coordinates) but carry the
     // version the buffer has once the mutation is done.
-    private void Raise(TextBufferChange change) => Changed?.Invoke(change with { Version = Version });
+    private void Raise(TextBufferChange change) => Deliver(change with { Version = Version });
 
     // Kept O(1): a bulk edit calls this once per line (and block insert once per typed
     // character per line). Whether the buffer really differs from the save point is
