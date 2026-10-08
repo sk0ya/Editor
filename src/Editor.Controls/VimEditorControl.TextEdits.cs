@@ -1,0 +1,56 @@
+using System;
+using Editor.Core.Buffer;
+
+namespace Editor.Controls;
+
+/// <summary><see cref="VimEditorControl.TextEdited"/> の引数。どのバッファの、どの範囲が、何に変わったか。</summary>
+public sealed class EditorTextEditedEventArgs(TextBufferChange change, VimBuffer buffer, bool isCurrentBuffer) : EventArgs
+{
+    /// <summary>変更そのもの（変更前の座標の範囲＋新しい文字列。LSP の contentChanges と同じ形）。</summary>
+    public TextBufferChange Change { get; } = change;
+
+    /// <summary>変更されたバッファのファイルパス（仮想文書なら null）。</summary>
+    public string? FilePath { get; } = buffer.FilePath;
+
+    /// <summary>仮想文書のホスト側 ID（ファイル由来なら null）。</summary>
+    public string? DocumentId { get; } = buffer.DocumentId;
+
+    /// <summary>いま表示しているバッファの変更か。<c>:bufdo</c> や別バッファへの workspace edit では false。</summary>
+    public bool IsCurrentBuffer { get; } = isCurrentBuffer;
+}
+
+/// <summary>
+/// 本文の変更を差分として外へ出す口。<see cref="BufferChanged"/> は「何か変わった」しか言わないので、
+/// 同じ文書を別の場所に映すホスト（複製ビュー・抜粋・アンカー）は本文全体を比べ直すしかなかった——
+/// キー入力のたびに文書まるごとの比較と複製になる。<see cref="TextEdited"/> は変わった範囲だけを渡す。
+/// <para>購読者がいる間だけバッファに購読をつなぐ（<see cref="BufferManager.BufferTextChanged"/>）ので、
+/// 使わないホストのキー入力のコストは変わらない。発火は変更を行ったスレッド（UI スレッド）で同期的に、
+/// 複数手の操作の途中でも起きる。ハンドラーからこのエディタの本文を書き換えてはいけない。</para>
+/// </summary>
+public partial class VimEditorControl
+{
+    private EventHandler<EditorTextEditedEventArgs>? _textEdited;
+
+    /// <summary>本文が変更されるたびに、その変更を差分として通知する（読み込み＝<see cref="TextBufferChangeKind.Reload"/> も含む）。
+    /// 変更を順に本文の写しへ適用すれば、このエディタの本文と一致する。</summary>
+    public event EventHandler<EditorTextEditedEventArgs>? TextEdited
+    {
+        add
+        {
+            var wasEmpty = _textEdited is null;
+            _textEdited += value;
+            if (wasEmpty && _textEdited is not null)
+                _engine.BufferManager.BufferTextChanged += OnBufferTextChanged;
+        }
+        remove
+        {
+            _textEdited -= value;
+            if (_textEdited is null)
+                _engine.BufferManager.BufferTextChanged -= OnBufferTextChanged;
+        }
+    }
+
+    private void OnBufferTextChanged(VimBuffer buffer, TextBufferChange change)
+        => _textEdited?.Invoke(this, new EditorTextEditedEventArgs(
+            change, buffer, ReferenceEquals(buffer, _engine.CurrentBuffer)));
+}
