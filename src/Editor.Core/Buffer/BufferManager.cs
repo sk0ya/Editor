@@ -38,6 +38,10 @@ public class VimBuffer
 
     private static int _nextId = 1;
     public VimBuffer() => Id = _nextId++;
+
+    /// <summary>The handler <see cref="BufferManager"/> attaches to <see cref="TextBuffer.Changed"/>
+    /// while someone listens to <see cref="BufferManager.BufferTextChanged"/>; kept so it can be detached.</summary>
+    internal Action<TextBufferChange> ForwardTextChange { get; set; } = static _ => { };
     public VimBuffer(string filePath, string? preferredEncoding = null) : this()
     {
         FilePath = filePath;
@@ -296,6 +300,30 @@ public class BufferManager
     /// <summary>Fired synchronously just after any buffer's content has been written to disk (drives the <c>BufWritePost</c> autocmd).</summary>
     public event Action<VimBuffer, string>? BufferDidWrite;
 
+    private Action<VimBuffer, TextBufferChange>? _bufferTextChanged;
+
+    /// <summary>
+    /// Every <see cref="TextBuffer.Changed"/> of every buffer, with the buffer it came from. The
+    /// buffers are only subscribed while this event has a handler, so a manager nobody listens to
+    /// computes no changes at all (see <see cref="TextBuffer.Changed"/>).
+    /// </summary>
+    public event Action<VimBuffer, TextBufferChange>? BufferTextChanged
+    {
+        add
+        {
+            var wasEmpty = _bufferTextChanged is null;
+            _bufferTextChanged += value;
+            if (wasEmpty && _bufferTextChanged is not null)
+                foreach (var buffer in _buffers) buffer.Text.Changed += buffer.ForwardTextChange;
+        }
+        remove
+        {
+            _bufferTextChanged -= value;
+            if (_bufferTextChanged is null)
+                foreach (var buffer in _buffers) buffer.Text.Changed -= buffer.ForwardTextChange;
+        }
+    }
+
     public BufferManager()
     {
         _buffers.Add(Track(new VimBuffer()));
@@ -306,6 +334,7 @@ public class BufferManager
         var buf = Track(new VimBuffer());
         _buffers.Add(buf);
         SwitchTo(_buffers.Count - 1);
+        AnnounceOpened(buf);
         return buf;
     }
 
@@ -325,6 +354,7 @@ public class BufferManager
         var buf = Track(prepared ?? new VimBuffer(path, preferredEncoding));
         _buffers.Add(buf);
         SwitchTo(_buffers.Count - 1);
+        AnnounceOpened(buf);
         return buf;
     }
 
@@ -332,7 +362,34 @@ public class BufferManager
     {
         buf.BeforeWrite += path => BufferWillWrite?.Invoke(buf, path);
         buf.AfterWrite += path => BufferDidWrite?.Invoke(buf, path);
+        buf.ForwardTextChange = change => RaiseBufferTextChanged(buf, change);
+        if (_bufferTextChanged is not null) buf.Text.Changed += buf.ForwardTextChange;
         return buf;
+    }
+
+    /// <summary>
+    /// A new buffer's text was loaded before anyone was subscribed to it (the file is read in the
+    /// <see cref="VimBuffer"/> constructor, or off-thread by <see cref="PreparedFileLoad"/>), so
+    /// <see cref="TextBuffer.Changed"/> never saw it. Report it as a load from an empty document —
+    /// otherwise the first thing a listener hears about the buffer is an edit relative to text it
+    /// was never given.
+    /// </summary>
+    private void AnnounceOpened(VimBuffer buf)
+    {
+        if (_bufferTextChanged is null) return;
+        RaiseBufferTextChanged(buf, new TextBufferChange(
+            0, 0, 0, 0, buf.Text.GetText(), buf.Text.Version, TextBufferChangeKind.Reload));
+    }
+
+    // One handler that throws must not keep the change from the others (see TextBuffer.Notify).
+    private void RaiseBufferTextChanged(VimBuffer buf, TextBufferChange change)
+    {
+        if (_bufferTextChanged is not { } handlers) return;
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try { ((Action<VimBuffer, TextBufferChange>)handler)(buf, change); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"BufferManager.BufferTextChanged handler failed: {ex}"); }
+        }
     }
 
     public bool GoToNext()
@@ -367,6 +424,7 @@ public class BufferManager
     {
         if (index < 0) index = _currentIndex;
         if (_buffers.Count <= 1) return false;
+        _buffers[index].Text.Changed -= _buffers[index].ForwardTextChange;
         _buffers.RemoveAt(index);
         if (_alternateIndex > index) _alternateIndex--;
         else if (_alternateIndex >= _buffers.Count) _alternateIndex = _buffers.Count - 1;

@@ -50,6 +50,17 @@ public class VimEngine
     public bool VimEnabled => _runtime.VimEnabled;
 
     /// <summary>
+    /// 文書の一部だけを守るホストの判定（例：抜粋ビューの見出し行）。編集トランザクションの終わりに
+    /// 編集前後の全行で呼ばれ、理由を返せばその編集は巻き戻されて理由が状態行に出る。差分の通知
+    /// （<see cref="Buffer.TextBuffer.Changed"/>）は確定まで溜めるので、断った編集は外へ流れない。
+    /// </summary>
+    public Editing.HostEditGuard? EditGuard
+    {
+        get => _runtime.EditGuard;
+        set => _runtime.EditGuard = value;
+    }
+
+    /// <summary>
     /// ホストが指定する読み取り専用。移動・選択・ヤンク・検索はそのままで、本文を変える操作だけを
     /// 断る（バイナリファイルと同じ E21）。差分表示の旧側のように「読んでコピーはするが書き換えない」
     /// 面に使う。<see cref="SetText"/> などホストからの差し替えは対象外。

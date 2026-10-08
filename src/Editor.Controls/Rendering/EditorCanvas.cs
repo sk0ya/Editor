@@ -404,7 +404,7 @@ public partial class EditorCanvas : FrameworkElement
                 if (!currentLines.Contains(cachedLine))
                     _textBoundaryCache.Remove(cachedLine);
         }
-        _lineNumberWidth = Math.Max(3, _lines.Length.ToString().Length);
+        RecomputeLineNumberWidth();
         RecomputeTableOverrides();
         RebuildVisualLayout();
         InvalidateVisual();
@@ -1893,7 +1893,8 @@ public partial class EditorCanvas : FrameworkElement
                         _cursor.Line, _relativeNumber, _lineNumberWidth,
                         _closedFoldStarts, _openFoldStarts, _hoveredFoldLine, _gitDiff,
                         // ブレークポイント（と停止中の矢印）はこの列の上に重なるので、数字は譲る。
-                        hideLineNumber: HidesLineNumberForBreakpoint(l));
+                        hideLineNumber: HidesLineNumberForBreakpoint(l),
+                        labelFor: _lineNumberLabel);
                 }
             }
 

@@ -721,6 +721,89 @@ public class VimEngineTests
         Assert.Contains("line2", text);
     }
 
+    private static void Keys(VimEngine engine, params string[] keys)
+    {
+        foreach (var key in keys) engine.ProcessKey(key);
+    }
+
+    [Theory]
+    [InlineData("c", "c")]
+    [InlineData("S")]
+    public void CC_EmptiesLineButKeepsIt(params string[] keys)
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+        engine.ProcessKey("j");
+        Keys(engine, keys);
+
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Equal("line1\n\nline3", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal(new CursorPosition(1, 0), engine.Cursor);
+
+        Keys(engine, "n", "e", "w", "Escape");
+        Assert.Equal("line1\nnew\nline3", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CC_KeepsIndent_WithAutoindent()
+    {
+        var engine = CreateEngine("{\n    body;\n}");
+        Keys(engine, "j", "c", "c", "x");
+
+        Assert.Equal("{\n    x\n}", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CC_DropsIndent_WithNoAutoindent()
+    {
+        var config = new VimConfig();
+        config.Options.AutoIndent = false;
+        var engine = CreateEngine("{\n    body;\n}", config);
+        Keys(engine, "j", "c", "c", "x");
+
+        Assert.Equal("{\nx\n}", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Theory]
+    [InlineData("2", "c", "c")]
+    [InlineData("c", "j")]
+    [InlineData("V", "j", "c")]
+    public void LinewiseChange_OverSeveralLines_LeavesOneEmptyLine(params string[] keys)
+    {
+        var engine = CreateEngine("a\nb\nc\nd");
+        engine.ProcessKey("j");
+        Keys(engine, keys);
+
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Equal("a\n\nd", engine.CurrentBuffer.Text.GetText());
+
+        // The changed lines are in the register, linewise: pasting puts them back as lines.
+        Keys(engine, "Escape", "p");
+        Assert.Equal("a\n\nb\nc\nd", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Theory]
+    [InlineData("only")]
+    [InlineData("first\nlast")]
+    public void CC_OnLastLine_DoesNotAddOrLoseLines(string text)
+    {
+        var engine = CreateEngine(text);
+        engine.ProcessKey("G");
+        Keys(engine, "c", "c");
+
+        var lines = text.Split('\n');
+        lines[^1] = "";
+        Assert.Equal(string.Join("\n", lines), engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void CC_UndoRestoresLine()
+    {
+        var engine = CreateEngine("line1\nline2\nline3");
+        Keys(engine, "j", "c", "c", "x", "Escape", "u");
+
+        Assert.Equal("line1\nline2\nline3", engine.CurrentBuffer.Text.GetText());
+    }
+
     [Fact]
     public void YY_YanksLine_ThenP_Pastes()
     {

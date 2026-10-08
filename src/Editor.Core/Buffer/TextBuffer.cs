@@ -60,6 +60,72 @@ public class TextBuffer : INormalBufferView
     public long Version { get; private set; }
 
     /// <summary>
+    /// Raised after every mutation with exactly what changed (see <see cref="TextBufferChange"/>):
+    /// applying the changes in order to a copy of the previous text reproduces the buffer. Hosts use
+    /// it to keep other views, anchors and excerpts of the same document in step without comparing
+    /// the whole text on every keystroke. Raised synchronously on the mutating thread, mid-operation
+    /// for multi-step commands — a handler must not mutate this buffer. Nothing is computed while
+    /// there is no subscriber, so the per-keystroke cost of an unobserved buffer is unchanged.
+    /// </summary>
+    public event Action<TextBufferChange>? Changed;
+
+    // An edit transaction (EditTransactionService) holds the changes back until it commits, so a
+    // transaction that is rolled back (read-only, a host edit guard, an exception) reports nothing
+    // instead of "the edit, then its undo" — a host forwarding changes elsewhere would otherwise
+    // replay both there.
+    private int _batchDepth;
+    private List<TextBufferChange>? _batched;
+
+    /// <summary>Opens a (possibly nested) batch. Returns where this batch's changes start in the
+    /// pending list; pass it back to <see cref="EndChangeBatch"/>.</summary>
+    internal int BeginChangeBatch()
+    {
+        _batchDepth++;
+        return _batched?.Count ?? 0;
+    }
+
+    internal void EndChangeBatch(int start, bool commit)
+    {
+        if (_batchDepth == 0) return;
+        if (--_batchDepth > 0)
+        {
+            // A nested transaction rolled back: drop its own changes (and the restore that undid
+            // them) only. What the enclosing transaction did before it began is still pending.
+            if (!commit && _batched is not null && start < _batched.Count)
+                _batched.RemoveRange(start, _batched.Count - start);
+            return;
+        }
+        var pending = _batched;
+        _batched = null;
+        if (!commit || pending is null) return;
+        foreach (var change in pending)
+            Notify(change);
+    }
+
+    private void Deliver(TextBufferChange change)
+    {
+        if (_batchDepth > 0)
+        {
+            (_batched ??= []).Add(change);
+            return;
+        }
+        Notify(change);
+    }
+
+    // Each handler is isolated: one that throws must neither keep the change (or the rest of a
+    // batch) from the others — their copies would silently drift — nor unwind into the edit that
+    // has already been applied.
+    private void Notify(TextBufferChange change)
+    {
+        if (Changed is not { } handlers) return;
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try { ((Action<TextBufferChange>)handler)(change); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"TextBuffer.Changed handler failed: {ex}"); }
+        }
+    }
+
+    /// <summary>
     /// The line contents as of the last load (<see cref="SetText"/>) or save
     /// (<see cref="MarkSaved"/>). Compared against the current lines to render the
     /// changed-since-save gutter.
@@ -95,10 +161,16 @@ public class TextBuffer : INormalBufferView
 
     public void SetText(string text)
     {
+        var notify = Changed is not null;
+        var oldEnd = notify ? EndPosition() : default;
         _lines = SplitLines(text);
         _touched = false;
         _savedSnapshot = [.. _lines];
         Version++;
+        if (notify)
+            // GetText, not a join of our own: the host asks for the same version next, and gets the
+            // cached string instead of joining the whole file a second time.
+            Raise(0, 0, oldEnd.Line, oldEnd.Column, GetText(), TextBufferChangeKind.Reload);
     }
 
     /// <summary>
@@ -111,25 +183,26 @@ public class TextBuffer : INormalBufferView
         var replacement = SplitLines(text);
         if (_lines.SequenceEqual(replacement))
             return;
-        _lines = replacement;
-        MarkModified();
+        ReplaceLinesWithDiff(replacement);
     }
 
     // Insert a character at position
     public void InsertChar(int line, int col, char ch)
     {
-        EnsureLine(line);
+        var (_, growth) = EnsureLine(line);
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
         _lines[line] = s[..col] + ch + s[col..];
         MarkModified();
+        RaiseGrowth(growth);
+        if (Changed is not null) Raise(line, col, line, col, ch.ToString());
     }
 
     // Insert text at position
     public void InsertText(int line, int col, string text)
     {
         if (string.IsNullOrEmpty(text)) return;
-        EnsureLine(line);
+        var (_, growth) = EnsureLine(line);
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
         text = text.Replace("\r\n", "\n").Replace("\r", "\n");
@@ -148,12 +221,14 @@ public class TextBuffer : INormalBufferView
             _lines[line + parts.Length - 1] += after;
         }
         MarkModified();
+        RaiseGrowth(growth);
+        if (Changed is not null) Raise(line, col, line, col, text);
     }
 
     // Break line at position (Enter key)
     public void BreakLine(int line, int col)
     {
-        EnsureLine(line);
+        var (_, growth) = EnsureLine(line);
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
         var before = s[..col];
@@ -163,6 +238,8 @@ public class TextBuffer : INormalBufferView
         _lines[line] = before;
         _lines.Insert(line + 1, after);
         MarkModified();
+        RaiseGrowth(growth);
+        if (Changed is not null) Raise(line, col, line, col, "\n");
     }
 
     // Delete character at position
@@ -173,6 +250,7 @@ public class TextBuffer : INormalBufferView
         if (col < 0 || col >= s.Length) return;
         _lines[line] = s.Remove(col, 1);
         MarkModified();
+        if (Changed is not null) Raise(line, col, line, col + 1, "");
     }
 
     // Delete from col to end of line range [col, endCol)
@@ -185,15 +263,18 @@ public class TextBuffer : INormalBufferView
         if (startCol == endCol) return;
         _lines[line] = s[..startCol] + s[endCol..];
         MarkModified();
+        if (Changed is not null) Raise(line, startCol, line, endCol, "");
     }
 
     // Join line with next line
     public void JoinLines(int line)
     {
         if (line < 0 || line >= _lines.Count - 1) return;
+        var joinColumn = _lines[line].Length;
         _lines[line] = _lines[line] + _lines[line + 1];
         _lines.RemoveAt(line + 1);
         MarkModified();
+        if (Changed is not null) Raise(line, joinColumn, line + 1, 0, "");
     }
 
     // Delete entire line(s)
@@ -201,9 +282,22 @@ public class TextBuffer : INormalBufferView
     {
         startLine = Math.Clamp(startLine, 0, _lines.Count - 1);
         endLine = Math.Clamp(endLine, startLine, _lines.Count - 1);
+        TextBufferChange? change = null;
+        if (Changed is not null)
+        {
+            // The removed lines take one line break with them: the one after them, or — when they
+            // run to the end of the document — the one before them.
+            if (endLine < _lines.Count - 1)
+                change = Change(startLine, 0, endLine + 1, 0, "");
+            else if (startLine > 0)
+                change = Change(startLine - 1, _lines[startLine - 1].Length, endLine, _lines[endLine].Length, "");
+            else
+                change = Change(0, 0, endLine, _lines[endLine].Length, "");
+        }
         _lines.RemoveRange(startLine, endLine - startLine + 1);
         if (_lines.Count == 0) _lines.Add("");
         MarkModified();
+        if (change is not null) Raise(change);
     }
 
     // Insert lines at position
@@ -212,24 +306,31 @@ public class TextBuffer : INormalBufferView
         var newLines = lines.ToArray();
         if (newLines.Length == 0) return;
         afterLine = Math.Clamp(afterLine + 1, 0, _lines.Count);
+        var change = Changed is not null ? LineInsertion(afterLine, newLines) : null;
         _lines.InsertRange(afterLine, newLines);
         MarkModified();
+        if (change is not null) Raise(change);
     }
 
     public void InsertLineAbove(int line, string text = "")
     {
         line = Math.Clamp(line, 0, _lines.Count);
+        var change = Changed is not null ? LineInsertion(line, [text]) : null;
         _lines.Insert(line, text);
         MarkModified();
+        if (change is not null) Raise(change);
     }
 
     // Replace line content
     public void ReplaceLine(int line, string text)
     {
-        var expanded = EnsureLine(line);
-        if (!expanded && _lines[line] == text) return;
+        var (grew, growth) = EnsureLine(line);
+        if (!grew && _lines[line] == text) return;
+        var oldLength = _lines[line].Length;
         _lines[line] = text;
         MarkModified();
+        RaiseGrowth(growth);
+        if (Changed is not null) Raise(line, 0, line, oldLength, text);
     }
 
     // Get lines as array (for yank/delete)
@@ -325,8 +426,13 @@ public class TextBuffer : INormalBufferView
 
     public void RestoreSnapshot(string[] snapshot)
     {
-        _lines = [.. snapshot];
-        MarkModified();
+        if (Changed is null)
+        {
+            _lines = [.. snapshot];
+            MarkModified();
+            return;
+        }
+        ReplaceLinesWithDiff([.. snapshot]);
     }
 
     public void MarkSaved()
@@ -335,13 +441,84 @@ public class TextBuffer : INormalBufferView
         _savedSnapshot = [.. _lines];
     }
 
-    private bool EnsureLine(int line)
+    /// <summary>Pads the document with empty lines up to <paramref name="line"/>. Returns whether
+    /// it did, and the insertion that padding amounts to (null when nothing was added or nobody
+    /// listens), to be raised before the change of the mutation that needed it.</summary>
+    private (bool Grew, TextBufferChange? Change) EnsureLine(int line)
     {
         var originalCount = _lines.Count;
+        if (originalCount > line) return (false, null);
+        var lastLength = _lines[originalCount - 1].Length;
         while (_lines.Count <= line)
             _lines.Add("");
-        return _lines.Count != originalCount;
+        return (true, Changed is null
+            ? null
+            : Change(originalCount - 1, lastLength, originalCount - 1, lastLength,
+                new string('\n', _lines.Count - originalCount)));
     }
+
+    private void RaiseGrowth(TextBufferChange? growth)
+    {
+        if (growth is not null) Raise(growth);
+    }
+
+    /// <summary>Inserting whole lines before <paramref name="index"/> (or after the last line).</summary>
+    private TextBufferChange LineInsertion(int index, string[] lines)
+    {
+        var joined = string.Join("\n", lines);
+        if (index < _lines.Count)
+            return Change(index, 0, index, 0, joined + "\n");
+        var last = _lines.Count - 1;
+        return Change(last, _lines[last].Length, last, _lines[last].Length, "\n" + joined);
+    }
+
+    /// <summary>
+    /// Replaces the whole document (an edit, not a load) and reports only the lines that differ:
+    /// the unchanged head and tail are kept out of the range, so positions there survive an undo or a
+    /// host-side whole-text replacement instead of all collapsing to the document start.
+    /// </summary>
+    private void ReplaceLinesWithDiff(List<string> replacement)
+    {
+        var old = _lines;
+        TextBufferChange? change = null;
+        if (Changed is not null)
+        {
+            var min = Math.Min(old.Count, replacement.Count);
+            var prefix = 0;
+            while (prefix < min && old[prefix] == replacement[prefix]) prefix++;
+            var suffix = 0;
+            while (suffix < min - prefix && old[old.Count - 1 - suffix] == replacement[replacement.Count - 1 - suffix])
+                suffix++;
+            var insertedCount = replacement.Count - prefix - suffix;
+            var inserted = string.Join("\n", replacement.Skip(prefix).Take(insertedCount));
+            if (insertedCount == 0 && prefix + suffix == old.Count)
+                change = null;   // identical (an undo back to the same lines): nothing to report
+            else if (suffix > 0)
+                change = Change(prefix, 0, old.Count - suffix, 0, insertedCount > 0 ? inserted + "\n" : "");
+            else if (prefix < old.Count && insertedCount > 0)
+                change = Change(prefix, 0, old.Count - 1, old[^1].Length, inserted);
+            else if (prefix < old.Count)
+                change = Change(prefix - 1, old[prefix - 1].Length, old.Count - 1, old[^1].Length, "");
+            else
+                change = Change(old.Count - 1, old[^1].Length, old.Count - 1, old[^1].Length, "\n" + inserted);
+        }
+        _lines = replacement;
+        MarkModified();
+        if (change is not null) Raise(change);
+    }
+
+    private (int Line, int Column) EndPosition() => (_lines.Count - 1, _lines[^1].Length);
+
+    private TextBufferChange Change(int startLine, int startColumn, int endLine, int endColumn, string newText)
+        => new(startLine, startColumn, endLine, endColumn, newText, Version);
+
+    private void Raise(int startLine, int startColumn, int endLine, int endColumn, string newText,
+        TextBufferChangeKind kind = TextBufferChangeKind.Edit)
+        => Deliver(new TextBufferChange(startLine, startColumn, endLine, endColumn, newText, Version, kind));
+
+    // Changes are built before the mutation (their range is in the old coordinates) but carry the
+    // version the buffer has once the mutation is done.
+    private void Raise(TextBufferChange change) => Deliver(change with { Version = Version });
 
     // Kept O(1): a bulk edit calls this once per line (and block insert once per typed
     // character per line). Whether the buffer really differs from the save point is
