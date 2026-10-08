@@ -1021,7 +1021,7 @@ public partial class EditorCanvas : FrameworkElement
             if (!EffectiveWrapLines || lineText.Length == 0 || availableTextWidth <= 1)
             {
                 if (needMaxWidth && !widthCached)
-                    maxLineWidth = Math.Max(maxLineWidth, GetVisualX(lineText, lineText.Length));
+                    maxLineWidth = Math.Max(maxLineWidth, EstimateLineExtent(lineText));
                 visualLines.Add(new VisualLineSegment(safeLine, 0, false));
                 continue;
             }
@@ -3305,6 +3305,33 @@ public partial class EditorCanvas : FrameworkElement
             }
         }
     }
+
+    /// <summary>
+    /// 折り返さないときの横の広がりに使う、行の幅の見積もり（<see cref="SetActiveLine"/> 済みであること）。
+    ///
+    /// <para>全行を <see cref="GetVisualX"/> で測ってはいけない。あれは行を WPF で整形して全文字の境界を
+    /// 取るので、日本語の多い文書ではフォールバックの解決が文字ごとに走り、2900 行・16 万字の Markdown を
+    /// 差分の左右に出すだけで UI スレッドが 3.5 秒止まった。広がりはスクロールの上限にしか使わないので、
+    /// 文字ごとの幅の覚え書き（<see cref="CharW(char, int)"/>）の和で足りる。整形済みの行はその値をそのまま使う。</para>
+    ///
+    /// <para>見積もりは小さく出ないようにしてある（小さいと行末へスクロールできない）。タブは行頭に置いた
+    /// ときの幅（＝タブ1つぶんの最大）で数え、表の列揃えの上書きは <see cref="CharW(char, int)"/> が反映する。</para>
+    /// </summary>
+    private double EstimateLineExtent(string lineText)
+    {
+        if (lineText.Length == 0) return 0;
+        // 長大な行は GetVisualX 自体が文字数×幅の近似で安い。整形済みの行は正確な値が手元にある。
+        if (lineText.Length > LongLineCharacterThreshold || _textBoundaryCache.ContainsKey(lineText))
+            return GetVisualX(lineText, lineText.Length);
+
+        double width = 0;
+        for (int i = 0; i < lineText.Length; i++)
+            width += lineText[i] == '\t' ? TabExtentWidth() : CharW(lineText[i], i);
+        return width;
+    }
+
+    /// <summary>タブ1つが取りうる最大の幅（行頭に置いたときの幅）。</summary>
+    private double TabExtentWidth() => Math.Max(_charWidth, GetTextBoundaries("\t")[1]);
 
     /// <summary>Visual X offset (in pixels) for character index <paramref name="col"/> in <paramref name="line"/>.</summary>
     private double GetVisualX(string line, int col)
