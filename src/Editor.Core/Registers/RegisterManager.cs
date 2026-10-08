@@ -197,6 +197,22 @@ public class RegisterManager
     public Register GetUnnamed() => _unnamed;
 
     /// <summary>
+    /// The register contents as of now, for <see cref="RestoreState"/> — used to take back what an
+    /// edit the host refused wrote (a refused <c>dd</c> must not leave its line to paste). The
+    /// system clipboard is outside it: what was already handed to the OS cannot be taken back.
+    /// </summary>
+    internal object CaptureState() => (new Dictionary<char, Register>(_registers), _unnamed);
+
+    internal void RestoreState(object state)
+    {
+        var (registers, unnamed) = ((Dictionary<char, Register>, Register))state;
+        _registers.Clear();
+        foreach (var (name, register) in registers)
+            _registers[name] = register;
+        _unnamed = unnamed;
+    }
+
+    /// <summary>
     /// Returns all non-empty registers as (name, register) pairs for display by :registers.
     /// Includes the unnamed register (""), named registers (a-z), and yank register (0).
     /// The clipboard register (+) is included when accessible (requires STA thread); silently

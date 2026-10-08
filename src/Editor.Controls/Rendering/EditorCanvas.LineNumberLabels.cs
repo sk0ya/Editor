@@ -20,8 +20,14 @@ public partial class EditorCanvas
     {
         _lineNumberLabel = label;
         _lineNumberLabelWidth = label is null ? 0 : Math.Max(0, width);
-        _lineNumberWidth = Math.Max(Math.Max(3, _lines.Length.ToString().Length), _lineNumberLabelWidth);
+        RecomputeLineNumberWidth();
+        // 列の幅が変わると本文の幅も変わる。折り返しの位置を引き直さないと、次の編集まで古い幅のまま。
+        RebuildVisualLayout();
         InvalidateArrange();
         InvalidateVisual();
     }
+
+    /// <summary>行番号列の桁数：文書の行数の桁（最低 3）と、ホストの表示の幅の大きい方。</summary>
+    private void RecomputeLineNumberWidth()
+        => _lineNumberWidth = Math.Max(Math.Max(3, _lines.Length.ToString().Length), _lineNumberLabelWidth);
 }

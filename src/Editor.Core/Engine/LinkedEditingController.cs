@@ -23,6 +23,7 @@ internal sealed class LinkedEditingController(
     Func<VimMode> mode,
     Func<bool> enabled,
     Func<bool> rejectsEdits,
+    Func<HostEditGuard?> editGuard,
     Action textChangedExternally)
 {
     private LinkedEditingSession? _session;
@@ -115,6 +116,12 @@ internal sealed class LinkedEditingController(
             return;
         }
 
+        if (update.Lines.Count > 0 && RefusedByGuard(text, update))
+        {
+            End();
+            return;
+        }
+
         if (update.Lines.Count > 0)
         {
             foreach (var (l, s) in update.Lines)
@@ -163,6 +170,21 @@ internal sealed class LinkedEditingController(
         if (!ranges.Ranges.Any(r => r.Touches(line, column))) return null;
         _noPair = null;
         return LinkedEditingSession.TryStart(ranges, lineOf);
+    }
+
+    /// <summary>
+    /// 写し先の書き込みは編集トランザクションの外で起きるので、ホストの編集ガードはここで自分で聞く。
+    /// 主範囲の編集はトランザクションで通っているので、問うのは写しの分だけ（断られたら連動を解き、
+    /// 主範囲の編集は残す）。
+    /// </summary>
+    private bool RefusedByGuard(TextBuffer text, LinkedEditingUpdate update)
+    {
+        if (editGuard() is not { } guard) return false;
+        var before = text.Snapshot();
+        var after = (string[])before.Clone();
+        foreach (var (l, s) in update.Lines)
+            if (l >= 0 && l < after.Length) after[l] = s;
+        return guard(before, after) is not null;
     }
 
     private bool IsSessionCurrent(VimBuffer buffer) =>

@@ -115,6 +115,24 @@ internal sealed class VimEngineRuntime
     /// <summary>ホストの編集ガード（<see cref="VimEngine.EditGuard"/>）。</summary>
     public HostEditGuard? EditGuard { get; set; }
 
+    /// <summary>
+    /// ホストの編集ガードに断られた編集が、本文のほかに残したものを戻す準備（<see cref="EditTransactionService"/>）。
+    /// レジスタは丸ごと、モードは「この編集で Insert/Replace に入った」ときだけ Normal へ戻す——
+    /// Visual から入った操作は、断られなくても Normal で終わるのが Vim の流儀なので戻し先も Normal。
+    /// </summary>
+    private Action<List<VimEvent>> CaptureGuardRollback()
+    {
+        var registers = _registerManager.CaptureState();
+        var wasInsertLike = _mode is VimMode.Insert or VimMode.Replace;
+        return events =>
+        {
+            if (!wasInsertLike && _mode is VimMode.Insert or VimMode.Replace)
+                ChangeMode(VimMode.Normal, events, suppressInsertAutocmd: true);
+            // モードを戻したあとに: Insert を抜ける処理が "." レジスタを書くことがある。
+            _registerManager.RestoreState(registers);
+        };
+    }
+
     /// <summary>本文を変えてはいけない状態か：バイナリファイル、またはホストが読み取り専用にした。</summary>
     private bool RejectsEdits => IsReadOnly || _bufferManager.Current.IsBinary;
 
@@ -215,7 +233,8 @@ internal sealed class VimEngineRuntime
             () => _cursor, cursor => _cursor = cursor,
             () => _suppressSnapshot, EmitStatus,
             () => IsReadOnly,
-            () => EditGuard);
+            () => EditGuard,
+            CaptureGuardRollback);
         _linkedEditing = new LinkedEditingController(
             () => _bufferManager.Current,
             () => _cursor,
@@ -223,6 +242,7 @@ internal sealed class VimEngineRuntime
             () => _mode,
             () => _config.Options.LinkedEditing,
             () => RejectsEdits,
+            () => EditGuard,
             _syntaxEngine.Invalidate);
         _motionService = new MotionService(_bufferManager);
         _commandGrammar = commandGrammar ?? engineServices.CommandGrammar;

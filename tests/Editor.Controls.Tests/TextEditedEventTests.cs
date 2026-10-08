@@ -74,4 +74,44 @@ public sealed class TextEditedEventTests
             Assert.Equal(1, calls);
         });
     }
+
+    [Fact]
+    public void A_throwing_handler_does_not_starve_the_others_or_break_the_keystroke()
+    {
+        WpfTestHost.Run(() =>
+        {
+            var editor = new VimEditorControl();
+            editor.SetText("abc");
+            var mirror = editor.Text;
+            editor.TextEdited += (_, _) => throw new InvalidOperationException("host bug");
+            editor.TextEdited += (_, e) => mirror = Apply(mirror, e.Change);
+
+            foreach (var key in new[] { "i", "x", "y", "Escape" })
+                editor.Engine.ProcessKey(key, ctrl: false, shift: false, alt: false);
+
+            Assert.Equal("xyabc", editor.Text);
+            Assert.Equal(editor.Text, mirror);
+        });
+    }
+
+    [Fact]
+    public void Widening_the_line_number_labels_rewraps_the_text()
+    {
+        WpfTestHost.Run(() => WpfTestHost.WithLoadedControl<VimEditorControl>((editor, _) =>
+        {
+            var canvas = (Rendering.EditorCanvas)typeof(VimEditorControl)
+                .GetField("Canvas", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(editor)!;
+            editor.SetText(string.Join(" ", Enumerable.Repeat("word", 120)));
+            canvas.WrapLines = true;
+            editor.UpdateLayout();
+            var rows = canvas.VisualLineCount;
+
+            // A much wider gutter leaves less room for text: the line has to wrap into more rows
+            // right away, not at the next unrelated edit.
+            editor.SetLineNumberLabels(_ => "x", 40);
+
+            Assert.True(canvas.VisualLineCount > rows, $"rows before={rows} after={canvas.VisualLineCount}");
+        }));
+    }
 }

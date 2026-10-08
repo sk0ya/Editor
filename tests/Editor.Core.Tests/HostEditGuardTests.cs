@@ -1,6 +1,7 @@
 using Editor.Core.Buffer;
 using Editor.Core.Config;
 using Editor.Core.Engine;
+using Editor.Core.Models;
 
 namespace Editor.Core.Tests;
 
@@ -52,6 +53,64 @@ public class HostEditGuardTests
         Assert.Equal("== header ==\nody one\nbody two", engine.CurrentBuffer.Text.GetText());
         Assert.Single(changes);
         Assert.Equal(new TextBufferChange(1, 0, 1, 1, "", changes[0].Version), changes[0]);
+    }
+
+    [Fact]
+    public void 断られたddの行はレジスタに残らない()
+    {
+        var (engine, _) = Guarded();
+        engine.ProcessKey("d");
+        engine.ProcessKey("d");
+        // 本文の行（守られていない）で貼り付けても、断られた見出し行は出てこない。
+        engine.ProcessKey("j");
+        engine.ProcessKey("p");
+
+        Assert.Equal(Text, engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void 断られたccはInsertモードに残らない()
+    {
+        var (engine, _) = Guarded();
+        engine.ProcessKey("c");
+        engine.ProcessKey("c");
+
+        Assert.Equal(VimMode.Normal, engine.Mode);
+        Assert.Equal(Text, engine.CurrentBuffer.Text.GetText());
+        Assert.Contains("見出し行は編集できません", engine.StatusMessage);
+    }
+
+    [Fact]
+    public void 守られていない行のccはInsertモードに入る()
+    {
+        var (engine, _) = Guarded();
+        engine.ProcessKey("j");
+        engine.ProcessKey("c");
+        engine.ProcessKey("c");
+
+        Assert.Equal(VimMode.Insert, engine.Mode);
+        Assert.Equal("== header ==", engine.CurrentBuffer.Text.GetLine(0));
+        Assert.DoesNotContain("body one", engine.CurrentBuffer.Text.GetText());
+    }
+
+    [Fact]
+    public void リンク編集の写し先が守られた行なら写さない()
+    {
+        var engine = new VimEngine(new VimConfig());
+        engine.SetText("<a>\nx\n</a>");
+        engine.CurrentBuffer.FilePath = "C:\\t\\View.xaml";
+        // 最終行（閉じタグ）だけを守る。
+        engine.EditGuard = (before, after) => after[^1] != before[^1] ? "閉じタグは編集できません" : null;
+        var changes = new List<TextBufferChange>();
+        engine.CurrentBuffer.Text.Changed += changes.Add;
+
+        engine.SetCursorPosition(new CursorPosition(0, 2));
+        engine.ProcessKey("i");
+        engine.ProcessKey("b");
+
+        Assert.Equal("<ab>\nx\n</a>", engine.CurrentBuffer.Text.GetText());
+        Assert.Empty(engine.LinkedEditingRanges);
+        Assert.All(changes, c => Assert.Equal(0, c.StartLine));
     }
 
     [Fact]

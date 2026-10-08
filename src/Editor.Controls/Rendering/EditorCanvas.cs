@@ -404,7 +404,7 @@ public partial class EditorCanvas : FrameworkElement
                 if (!currentLines.Contains(cachedLine))
                     _textBoundaryCache.Remove(cachedLine);
         }
-        _lineNumberWidth = Math.Max(Math.Max(3, _lines.Length.ToString().Length), _lineNumberLabelWidth);
+        RecomputeLineNumberWidth();
         RecomputeTableOverrides();
         RebuildVisualLayout();
         InvalidateVisual();

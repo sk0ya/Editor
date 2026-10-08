@@ -67,7 +67,16 @@ public partial class VimEditorControl
     public void SetLineNumberLabels(Func<int, string?>? label, int width)
         => Canvas.SetLineNumberLabels(label, width);
 
+    // ハンドラーごとに切り離す: 1つが投げても、ほかの購読者の写しに変更が届かなくなってはいけないし、
+    // 例外が編集済みのキー処理へ巻き戻ってもいけない。
     private void OnBufferTextChanged(VimBuffer buffer, TextBufferChange change)
-        => _textEdited?.Invoke(this, new EditorTextEditedEventArgs(
-            change, buffer, ReferenceEquals(buffer, _engine.CurrentBuffer)));
+    {
+        if (_textEdited is not { } handlers) return;
+        var args = new EditorTextEditedEventArgs(change, buffer, ReferenceEquals(buffer, _engine.CurrentBuffer));
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try { ((EventHandler<EditorTextEditedEventArgs>)handler)(this, args); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"VimEditorControl.TextEdited handler failed: {ex}"); }
+        }
+    }
 }

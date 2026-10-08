@@ -45,6 +45,12 @@ public interface IEditTransactionService
 /// Provides the invariant boundary around a single buffer mutation.
 /// Low-level mutation code receives a buffer and cursor but cannot snapshot or emit events.
 /// </summary>
+/// <param name="captureGuardRollback">
+/// Taken at the start of a transaction only while a host edit guard is set. It records the engine
+/// state a refused edit must not leave behind besides the text — registers the command wrote, the
+/// Insert mode <c>cc</c> entered — and returns how to put it back (given the events list to report
+/// on). The text and the cursor are restored here.
+/// </param>
 public sealed class EditTransactionService(
     BufferManager buffers,
     MarkManager marks,
@@ -54,7 +60,8 @@ public sealed class EditTransactionService(
     Func<bool> suppressSnapshot,
     Action<List<VimEvent>, string> emitStatus,
     Func<bool>? hostReadOnly = null,
-    Func<HostEditGuard?>? hostEditGuard = null) : IEditTransactionService
+    Func<HostEditGuard?>? hostEditGuard = null,
+    Func<Action<List<VimEvent>>>? captureGuardRollback = null) : IEditTransactionService
 {
     public EditTransactionResult Execute(
         List<VimEvent> events,
@@ -76,12 +83,13 @@ public sealed class EditTransactionService(
         }
 
         var originalLines = current.Text.Snapshot();
-        const int eventStart = 0;
+        var guard = hostEditGuard?.Invoke();
+        var restoreGuarded = guard is not null ? captureGuardRollback?.Invoke() : null;
         var transaction = new EditTransaction(current.Text, originalCursor);
         transaction.CreateUndoSnapshot = options?.CreateUndoSnapshot ?? true;
         object? repeatMetadata;
         var committed = false;
-        current.Text.BeginChangeBatch();
+        var batchStart = current.Text.BeginChangeBatch();
         try
         {
             try
@@ -95,13 +103,13 @@ public sealed class EditTransactionService(
                 throw;
             }
             var result = Complete(events, current, originalCursor, originalLines, transaction,
-                repeatMetadata, readOnly, options, eventStart);
+                repeatMetadata, readOnly, guard, restoreGuarded, options);
             committed = result.Applied;
             return result;
         }
         finally
         {
-            current.Text.EndChangeBatch(committed);
+            current.Text.EndChangeBatch(batchStart, committed);
         }
     }
 
@@ -113,54 +121,37 @@ public sealed class EditTransactionService(
         EditTransaction transaction,
         object? repeatMetadata,
         bool readOnly,
-        EditTransactionOptions? options,
-        int eventStart)
+        HostEditGuard? guard,
+        Action<List<VimEvent>>? restoreGuarded,
+        EditTransactionOptions? options)
     {
-
         if (transaction.RollbackRequested)
-        {
-            current.Text.RestoreSnapshot(originalLines);
-            setCursor(originalCursor);
-            for (var i = events.Count - 1; i >= eventStart; i--)
-                if (events[i].Type is VimEventType.TextChanged or VimEventType.CursorMoved)
-                    events.RemoveAt(i);
-            return new EditTransactionResult(false, false, originalCursor, repeatMetadata);
-        }
+            return Reject(events, current, originalCursor, originalLines, repeatMetadata, status: null);
 
         // Buffer-navigation Ex commands may switch BufferManager.Current without editing the
         // buffer that opened this transaction. Cursor ownership then belongs to the new buffer.
         if (!ReferenceEquals(buffers.Current, current))
             return new EditTransactionResult(true, false, getCursor(), repeatMetadata);
 
-        var changed = !originalLines.SequenceEqual(current.Text.Snapshot());
+        var after = current.Text.Snapshot();
+        var changed = !originalLines.SequenceEqual(after);
 
         // ホストの編集ガード（抜粋ビューの見出し行など、文書の一部だけを守りたいとき）。読み取り専用と
         // 同じく「変わっていたら最後に判定して戻す」。差分の通知は確定まで溜めてあるので、断った編集は
-        // ホストへ一度も流れない。
-        if (changed && hostEditGuard?.Invoke() is { } guard &&
-            guard(originalLines, current.Text.Snapshot()) is { } reason)
+        // ホストへ一度も流れない。入口で断れない分、コマンドが本文以外に残したもの（レジスタ・Insert
+        // モード）も戻す——戻さないと、断られた dd の行が p で貼れ、cc は守られた行で Insert のまま残る。
+        if (changed && guard?.Invoke(originalLines, after) is { } reason)
         {
-            current.Text.RestoreSnapshot(originalLines);
-            setCursor(originalCursor);
-            for (var i = events.Count - 1; i >= eventStart; i--)
-                if (events[i].Type is VimEventType.TextChanged or VimEventType.CursorMoved)
-                    events.RemoveAt(i);
-            emitStatus(events, reason);
-            return new EditTransactionResult(false, false, originalCursor, repeatMetadata);
+            restoreGuarded?.Invoke(events);
+            return Reject(events, current, originalCursor, originalLines, repeatMetadata, reason);
         }
 
         // ホストの読み取り専用は、入口で断らない経路（Ex コマンド・挿入の入力）も最後にここで止める。
         // 個々の :s / :d / :normal を洗い出すより、「変わっていたら戻す」一か所の方が漏れない。
         if (changed && readOnly)
-        {
-            current.Text.RestoreSnapshot(originalLines);
-            setCursor(originalCursor);
-            for (var i = events.Count - 1; i >= eventStart; i--)
-                if (events[i].Type is VimEventType.TextChanged or VimEventType.CursorMoved)
-                    events.RemoveAt(i);
-            emitStatus(events, "E21: Cannot make changes (read-only)");
-            return new EditTransactionResult(false, false, originalCursor, repeatMetadata);
-        }
+            return Reject(events, current, originalCursor, originalLines, repeatMetadata,
+                "E21: Cannot make changes (read-only)");
+
         var finalCursor = current.Text.ClampCursor(
             transaction.Cursor,
             options?.AllowCursorAtEndOfLine ?? false);
@@ -177,15 +168,37 @@ public sealed class EditTransactionService(
 
         syntax.Invalidate();
         var insertionIndex = events.FindIndex(
-            eventStart,
             e => e.Type is VimEventType.TextChanged or VimEventType.CursorMoved);
         if (insertionIndex < 0)
             insertionIndex = events.Count;
-        for (var i = events.Count - 1; i >= eventStart; i--)
-            if (events[i].Type is VimEventType.TextChanged or VimEventType.CursorMoved)
-                events.RemoveAt(i);
+        RemoveTextAndCursorEvents(events);
         events.Insert(insertionIndex, VimEvent.TextChanged());
         events.Insert(insertionIndex + 1, VimEvent.CursorMoved(finalCursor));
         return new EditTransactionResult(true, true, finalCursor, repeatMetadata);
+    }
+
+    /// <summary>Undoes the transaction: text and cursor back, its text/cursor events dropped, and
+    /// <paramref name="status"/> (when given) shown as the reason.</summary>
+    private EditTransactionResult Reject(
+        List<VimEvent> events,
+        VimBuffer current,
+        CursorPosition originalCursor,
+        string[] originalLines,
+        object? repeatMetadata,
+        string? status)
+    {
+        current.Text.RestoreSnapshot(originalLines);
+        setCursor(originalCursor);
+        RemoveTextAndCursorEvents(events);
+        if (status is not null)
+            emitStatus(events, status);
+        return new EditTransactionResult(false, false, originalCursor, repeatMetadata);
+    }
+
+    private static void RemoveTextAndCursorEvents(List<VimEvent> events)
+    {
+        for (var i = events.Count - 1; i >= 0; i--)
+            if (events[i].Type is VimEventType.TextChanged or VimEventType.CursorMoved)
+                events.RemoveAt(i);
     }
 }

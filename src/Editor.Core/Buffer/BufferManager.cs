@@ -334,6 +334,7 @@ public class BufferManager
         var buf = Track(new VimBuffer());
         _buffers.Add(buf);
         SwitchTo(_buffers.Count - 1);
+        AnnounceOpened(buf);
         return buf;
     }
 
@@ -353,6 +354,7 @@ public class BufferManager
         var buf = Track(prepared ?? new VimBuffer(path, preferredEncoding));
         _buffers.Add(buf);
         SwitchTo(_buffers.Count - 1);
+        AnnounceOpened(buf);
         return buf;
     }
 
@@ -360,9 +362,34 @@ public class BufferManager
     {
         buf.BeforeWrite += path => BufferWillWrite?.Invoke(buf, path);
         buf.AfterWrite += path => BufferDidWrite?.Invoke(buf, path);
-        buf.ForwardTextChange = change => _bufferTextChanged?.Invoke(buf, change);
+        buf.ForwardTextChange = change => RaiseBufferTextChanged(buf, change);
         if (_bufferTextChanged is not null) buf.Text.Changed += buf.ForwardTextChange;
         return buf;
+    }
+
+    /// <summary>
+    /// A new buffer's text was loaded before anyone was subscribed to it (the file is read in the
+    /// <see cref="VimBuffer"/> constructor, or off-thread by <see cref="PreparedFileLoad"/>), so
+    /// <see cref="TextBuffer.Changed"/> never saw it. Report it as a load from an empty document —
+    /// otherwise the first thing a listener hears about the buffer is an edit relative to text it
+    /// was never given.
+    /// </summary>
+    private void AnnounceOpened(VimBuffer buf)
+    {
+        if (_bufferTextChanged is null) return;
+        RaiseBufferTextChanged(buf, new TextBufferChange(
+            0, 0, 0, 0, buf.Text.GetText(), buf.Text.Version, TextBufferChangeKind.Reload));
+    }
+
+    // One handler that throws must not keep the change from the others (see TextBuffer.Notify).
+    private void RaiseBufferTextChanged(VimBuffer buf, TextBufferChange change)
+    {
+        if (_bufferTextChanged is not { } handlers) return;
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try { ((Action<VimBuffer, TextBufferChange>)handler)(buf, change); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"BufferManager.BufferTextChanged handler failed: {ex}"); }
+        }
     }
 
     public bool GoToNext()

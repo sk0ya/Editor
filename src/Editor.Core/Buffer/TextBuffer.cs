@@ -76,21 +76,30 @@ public class TextBuffer : INormalBufferView
     private int _batchDepth;
     private List<TextBufferChange>? _batched;
 
-    internal void BeginChangeBatch() => _batchDepth++;
+    /// <summary>Opens a (possibly nested) batch. Returns where this batch's changes start in the
+    /// pending list; pass it back to <see cref="EndChangeBatch"/>.</summary>
+    internal int BeginChangeBatch()
+    {
+        _batchDepth++;
+        return _batched?.Count ?? 0;
+    }
 
-    internal void EndChangeBatch(bool commit)
+    internal void EndChangeBatch(int start, bool commit)
     {
         if (_batchDepth == 0) return;
         if (--_batchDepth > 0)
         {
-            if (!commit) _batched?.Clear();
+            // A nested transaction rolled back: drop its own changes (and the restore that undid
+            // them) only. What the enclosing transaction did before it began is still pending.
+            if (!commit && _batched is not null && start < _batched.Count)
+                _batched.RemoveRange(start, _batched.Count - start);
             return;
         }
         var pending = _batched;
         _batched = null;
         if (!commit || pending is null) return;
         foreach (var change in pending)
-            Changed?.Invoke(change);
+            Notify(change);
     }
 
     private void Deliver(TextBufferChange change)
@@ -100,7 +109,20 @@ public class TextBuffer : INormalBufferView
             (_batched ??= []).Add(change);
             return;
         }
-        Changed?.Invoke(change);
+        Notify(change);
+    }
+
+    // Each handler is isolated: one that throws must neither keep the change (or the rest of a
+    // batch) from the others — their copies would silently drift — nor unwind into the edit that
+    // has already been applied.
+    private void Notify(TextBufferChange change)
+    {
+        if (Changed is not { } handlers) return;
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try { ((Action<TextBufferChange>)handler)(change); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"TextBuffer.Changed handler failed: {ex}"); }
+        }
     }
 
     /// <summary>
@@ -146,7 +168,9 @@ public class TextBuffer : INormalBufferView
         _savedSnapshot = [.. _lines];
         Version++;
         if (notify)
-            Raise(0, 0, oldEnd.Line, oldEnd.Column, string.Join("\n", _lines), TextBufferChangeKind.Reload);
+            // GetText, not a join of our own: the host asks for the same version next, and gets the
+            // cached string instead of joining the whole file a second time.
+            Raise(0, 0, oldEnd.Line, oldEnd.Column, GetText(), TextBufferChangeKind.Reload);
     }
 
     /// <summary>
@@ -165,7 +189,7 @@ public class TextBuffer : INormalBufferView
     // Insert a character at position
     public void InsertChar(int line, int col, char ch)
     {
-        var growth = EnsureLine(line);
+        var (_, growth) = EnsureLine(line);
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
         _lines[line] = s[..col] + ch + s[col..];
@@ -178,7 +202,7 @@ public class TextBuffer : INormalBufferView
     public void InsertText(int line, int col, string text)
     {
         if (string.IsNullOrEmpty(text)) return;
-        var growth = EnsureLine(line);
+        var (_, growth) = EnsureLine(line);
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
         text = text.Replace("\r\n", "\n").Replace("\r", "\n");
@@ -204,7 +228,7 @@ public class TextBuffer : INormalBufferView
     // Break line at position (Enter key)
     public void BreakLine(int line, int col)
     {
-        var growth = EnsureLine(line);
+        var (_, growth) = EnsureLine(line);
         var s = _lines[line];
         col = Math.Clamp(col, 0, s.Length);
         var before = s[..col];
@@ -300,8 +324,8 @@ public class TextBuffer : INormalBufferView
     // Replace line content
     public void ReplaceLine(int line, string text)
     {
-        var growth = EnsureLine(line);
-        if (!_grewLastCall && _lines[line] == text) return;
+        var (grew, growth) = EnsureLine(line);
+        if (!grew && _lines[line] == text) return;
         var oldLength = _lines[line].Length;
         _lines[line] = text;
         MarkModified();
@@ -417,25 +441,20 @@ public class TextBuffer : INormalBufferView
         _savedSnapshot = [.. _lines];
     }
 
-    // Whether the last EnsureLine call padded the document (kept separately from its returned
-    // change, which is null whenever nobody is subscribed).
-    private bool _grewLastCall;
-
-    /// <summary>Pads the document with empty lines up to <paramref name="line"/>. Returns the
-    /// insertion that padding amounts to (null when nothing was added or nobody listens), to be
-    /// raised before the change of the mutation that needed it.</summary>
-    private TextBufferChange? EnsureLine(int line)
+    /// <summary>Pads the document with empty lines up to <paramref name="line"/>. Returns whether
+    /// it did, and the insertion that padding amounts to (null when nothing was added or nobody
+    /// listens), to be raised before the change of the mutation that needed it.</summary>
+    private (bool Grew, TextBufferChange? Change) EnsureLine(int line)
     {
         var originalCount = _lines.Count;
-        _grewLastCall = originalCount <= line;
-        if (!_grewLastCall) return null;
+        if (originalCount > line) return (false, null);
         var lastLength = _lines[originalCount - 1].Length;
         while (_lines.Count <= line)
             _lines.Add("");
-        return Changed is null
+        return (true, Changed is null
             ? null
             : Change(originalCount - 1, lastLength, originalCount - 1, lastLength,
-                new string('\n', _lines.Count - originalCount));
+                new string('\n', _lines.Count - originalCount)));
     }
 
     private void RaiseGrowth(TextBufferChange? growth)
