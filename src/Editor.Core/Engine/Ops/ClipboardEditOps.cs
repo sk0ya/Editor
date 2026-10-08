@@ -65,6 +65,30 @@ public sealed class ClipboardEditOps(
         return cursor;
     }
 
+    /// <summary>
+    /// Linewise change (<c>cc</c>, <c>S</c>, <c>cj</c>, <c>Vc</c>): the lines go to the register like
+    /// <see cref="DeleteLines"/>, but one empty line stays in their place for the Insert session —
+    /// with the first line's indent when <paramref name="keepIndent"/> (Vim's <c>autoindent</c>).
+    /// Returns the caret for Insert mode: the end of that indent.
+    /// </summary>
+    public CursorPosition ChangeLines(int start, int end, List<VimEvent> events, char register, bool keepIndent)
+    {
+        var buf = bufferManager.Current.Text;
+        if (register != '_')
+            YankLines(start, end, register, events, isDelete: true);
+        var first = buf.GetLine(start);
+        var indent = keepIndent ? first[..(first.Length - first.TrimStart(' ', '\t').Length)] : "";
+        if (end > start)
+        {
+            bufferManager.Current.Folds.OnLinesDeleted(start + 1, end);
+            buf.DeleteLines(start + 1, end);
+        }
+        buf.ReplaceLine(start, indent);
+        var cursor = new CursorPosition(start, indent.Length);
+        emitTextAt(events, cursor);
+        return cursor;
+    }
+
     public void YankRange(char register, CursorPosition from, CursorPosition to, bool linewise, bool isDelete = false)
     {
         var buf = bufferManager.Current.Text;

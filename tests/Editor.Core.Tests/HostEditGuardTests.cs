@@ -89,8 +89,7 @@ public class HostEditGuardTests
         engine.ProcessKey("c");
 
         Assert.Equal(VimMode.Insert, engine.Mode);
-        Assert.Equal("== header ==", engine.CurrentBuffer.Text.GetLine(0));
-        Assert.DoesNotContain("body one", engine.CurrentBuffer.Text.GetText());
+        Assert.Equal("== header ==\n\nbody two", engine.CurrentBuffer.Text.GetText());
     }
 
     [Fact]

@@ -898,8 +898,9 @@ internal sealed class VimEngineRuntime
         commands.Register("S", (cmd, events) =>
         {
             _repeatTracker.BeginInsertRepeat(cmd);
-            _cursor = _clipboardOps.DeleteLines(
-                _cursor.Line, _cursor.Line, events, cmd.Register ?? '"');
+            _cursor = ChangeLines(
+                _cursor.Line, Math.Min(CurrentBuffer.Text.LineCount - 1, _cursor.Line + cmd.Count - 1),
+                events, cmd.Register ?? '"');
             EnterInsertMode(false, events);
         });
         commands.Register("D", (cmd, events) => DeleteToLineEnd(cmd, enterInsert: false, events));
@@ -1794,7 +1795,7 @@ internal sealed class VimEngineRuntime
                 case "c":
                     _repeatTracker.BeginInsertRepeat(cmd);
                     Snapshot();
-                    _cursor = _clipboardOps.DeleteLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
+                    _cursor = ChangeLines(_cursor.Line, endLine, events, cmd.Register ?? '"');
                     EnterInsertMode(false, events);
                     return;
                 case "y": _clipboardOps.YankLines(_cursor.Line, endLine, cmd.Register ?? '"', events); return;
@@ -2034,7 +2035,7 @@ internal sealed class VimEngineRuntime
                 else _cursor = _clipboardOps.ExecuteDelete(start, end, false, events, register);
                 break;
             case "c":
-                if (linewise) { _cursor = _clipboardOps.DeleteLines(start.Line, end.Line, events, register); EnterInsertMode(false, events); }
+                if (linewise) { _cursor = ChangeLines(start.Line, end.Line, events, register); EnterInsertMode(false, events); }
                 else
                 {
                     _cursor = _clipboardOps.ExecuteDelete(start, end, false, events, register);
@@ -3050,6 +3051,14 @@ internal sealed class VimEngineRuntime
                 var changeRegister = ConsumeVisualRegister();
                 if (_mode == VimMode.VisualBlock)
                     BeginVisualBlockChange(changeRegister, events);
+                else if (_mode == VimMode.VisualLine && _selection is { } lineSelection)
+                {
+                    Snapshot();
+                    ExitVisualMode(events);
+                    _cursor = ChangeLines(
+                        lineSelection.NormalizedStart.Line, lineSelection.NormalizedEnd.Line, events, changeRegister);
+                    EnterInsertMode(false, events);
+                }
                 else
                 {
                     _visualEditOps.ExecuteVisualDelete(changeRegister, events);
@@ -3339,6 +3348,10 @@ internal sealed class VimEngineRuntime
     }
 
     // ─────────────── HELPERS ───────────────
+
+    /// <summary>行単位の変更（cc / S / cj / Vc）。行は消さずに空行（autoindent なら字下げつき）を1行残す。</summary>
+    private CursorPosition ChangeLines(int start, int end, List<VimEvent> events, char register) =>
+        _clipboardOps.ChangeLines(start, end, events, register, _config.Options.AutoIndent);
 
     private void EnterInsertMode(bool append, List<VimEvent> events)
     {
