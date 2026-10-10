@@ -185,4 +185,49 @@ public class CodeActionBulbProbeTests
             Assert.Equal(-1, editor.CodeActionBulbLine);
         });
     }
+
+    [Fact]
+    public void Bulb_DoesNotAskLspAgain_WhenTheHostAlreadyQueriedIt()
+    {
+        // ホストが LSP を先に訊いてから自前の修正へ落ちる場合、0件のたびに同じ要求が2回飛んでいた。
+        LspCompletionTestHarness.WithEditor(vimEnabled: false, (editor, lsp) =>
+        {
+            var hostCalls = 0;
+            editor.HostCodeActionProvider = (_, _) =>
+            {
+                hostCalls++;
+                return Task.FromResult<IReadOnlyList<LspCodeAction>>([]);
+            };
+            editor.HostCodeActionProviderQueriesLsp = true;
+            editor.SetText("var a = 1;");
+            editor.SetCodeActionBulbEnabled(true);
+            editor.ReplaceDiagnostics([HostDiag(0)]);
+
+            PumpThroughDebounce();
+
+            Assert.Equal(1, hostCalls);
+            Assert.Empty(lsp.CodeActionRequests);
+            Assert.Equal(-1, editor.CodeActionBulbLine);
+        });
+    }
+
+    [Fact]
+    public void Bulb_StillAsksLsp_WhenTheHostDoesNotQueryIt()
+    {
+        // 既定（宣言なし）は従来どおり、ホストが0件なら LSP へ落ちる。
+        LspCompletionTestHarness.WithEditor(vimEnabled: false, (editor, lsp) =>
+        {
+            lsp.CodeActions.Add(Fix);
+            editor.HostCodeActionProvider = (_, _) =>
+                Task.FromResult<IReadOnlyList<LspCodeAction>>([]);
+            editor.SetText("var a = 1;");
+            editor.SetCodeActionBulbEnabled(true);
+            editor.ReplaceDiagnostics([HostDiag(0)]);
+
+            PumpUntil(() => editor.CodeActionBulbLine == 0);
+
+            Assert.Equal(0, editor.CodeActionBulbLine);
+            Assert.Single(lsp.CodeActionRequests);
+        });
+    }
 }

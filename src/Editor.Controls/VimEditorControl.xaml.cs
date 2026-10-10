@@ -534,6 +534,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     /// <summary>ホスト固有のCode ActionをLSP候補へ加えるための拡張点。nullまたは空結果なら
     /// 通常のLSP要求へフォールバックする。C#のStyleCop等、LSPが返さない公式Analyzer修正に使う。</summary>
     public Func<LspRange, IReadOnlyList<string>?, Task<IReadOnlyList<LspCodeAction>>>? HostCodeActionProvider { get; set; }
+
+    /// <summary>
+    /// <see cref="HostCodeActionProvider"/> が quickfix について<b>言語サーバーへの問い合わせを自分で済ませる</b>か。
+    /// true のとき、ホストが0件を返したら Editor は LSP へ同じ要求を投げ直さない（未接続・解析中・非対応の
+    /// 説明だけ出す）。LSP を先に訊いてからホスト独自の修正へ落ちる、という順序をホストが持つ場合に使う——
+    /// 既定（false）のままだと候補が無いときに同じ codeAction 要求が2回飛び、Alt+Enter と電球の判定が
+    /// その分だけ遅れる。Alt+Enter・電球（<see cref="CollectQuickFixesAsync"/>）だけに効き、
+    /// Code Action 全般と Fix all（LSP を先に訊く経路）は変わらない。
+    /// </summary>
+    public bool HostCodeActionProviderQueriesLsp { get; set; }
     public event EventHandler<FindReferencesResultEventArgs>? FindReferencesResult;
     public event EventHandler<DocumentSymbolsResultEventArgs>? DocumentSymbolsResult;
     public event EventHandler? QuickfixOpenRequested;
@@ -6154,6 +6164,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             !declaredKinds.Any(kind => LspCodeActionKinds.Matches(kind, LspCodeActionKinds.QuickFix) ||
                                        LspCodeActionKinds.Matches(LspCodeActionKinds.QuickFix, kind)))
             return ([], "このLSPサーバーはquickfixに非対応です");
+
+        // ホストが LSP を訊き済みなら、同じ要求を投げ直さない（上の説明は残す）。
+        if (HostCodeActionProvider is not null && HostCodeActionProviderQueriesLsp) return ([], null);
 
         if (announce) ActiveStatusBar.UpdateStatus("Quick Fix: searching…");
         actions = await _lspView.RequestCodeActionsAsync(range, [LspCodeActionKinds.QuickFix]);
