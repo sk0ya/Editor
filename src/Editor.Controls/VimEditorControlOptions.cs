@@ -51,6 +51,13 @@ public sealed class VimEditorControlOptions
     public Func<string, string, int, int, CancellationToken,
         Task<IReadOnlyList<LspCompletionItem>>>? HostSupplementalCompletionProvider { get; init; }
 
+    /// <summary>
+    /// <see cref="HostSupplementalCompletionProvider"/> を呼ぶファイルか（引数はファイルパス）。false なら本文を
+    /// 写さずに空を返す——補完要求は打鍵の debounce ごとに走るので、対象外のファイルで本文全体の写し
+    /// （<c>Text</c>）を払わないため。null なら全ファイル。
+    /// </summary>
+    public Func<string, bool>? HostSupplementalCompletionAppliesTo { get; init; }
+
     /// <summary>Optional host-side semantic-token provider used when LSP has no usable result.</summary>
     public Func<string, string, CancellationToken,
         Task<IReadOnlyList<SemanticToken>>>? HostSemanticTokensProvider { get; init; }

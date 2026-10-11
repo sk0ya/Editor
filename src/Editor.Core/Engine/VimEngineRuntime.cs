@@ -2484,9 +2484,11 @@ internal sealed partial class VimEngineRuntime
     /// <summary>Vim 無効時の入力のうち、本文を変えるもの（文字入力・削除・改行・Tab・切り取り・貼り付け・取り消し）。</summary>
     private static bool PlainInputEdits(string key, bool ctrl, bool alt)
         => ctrl && !alt
-            ? key.ToLowerInvariant() is "x" or "v" or "z" or "y" or "d" or "/" or "back" or "delete"
+            ? key.ToLowerInvariant() is "x" or "v" or "z" or "y" or "d" or "/" or "back" or "delete" or "return"
+            // Alt 付きでも Backspace／Delete／Enter は本文を変える（コントロールは Vim 無効時に修飾キーを
+            // そのまま渡すので、Alt+Backspace が下の "Back" へ落ちて読み取り専用を素通りしないように）。
             : alt
-                ? !ctrl && key is "Up" or "Down" || ctrl && key == "Return"
+                ? key is "Back" or "Delete" or "Return" || !ctrl && key is "Up" or "Down"
                 : key.Length == 1 || key is "Back" or "Delete" or "Return" or "Tab" or "Space";
 
     private void ProcessPlainEditInputCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)

@@ -77,6 +77,13 @@ internal sealed partial class VimEngineRuntime
                 case "/":
                     TogglePlainComment(events);
                     return true;
+                case "return":
+                    // Ctrl+Enter（と、言語の文補完が断った Ctrl+Shift+Enter）は従来どおりの改行。
+                    // ここで拾わないと下の「その他の Ctrl は無反応」に落ちて何も起きなくなる。
+                    BeginPlainEdit();
+                    if (hasSelection) DeletePlainSelection(events);
+                    InsertNewline(events);
+                    return true;
             }
             return false;
         }
@@ -152,9 +159,9 @@ internal sealed partial class VimEngineRuntime
     private void DeletePlainWord(bool forward, bool hasSelection, List<VimEvent> events)
     {
         var buf = _bufferManager.Current.Text;
-        BeginPlainCommand();
         if (hasSelection)
         {
+            BeginPlainCommand();
             DeletePlainSelection(events);
             EmitText(events);
             return;
@@ -162,7 +169,8 @@ internal sealed partial class VimEngineRuntime
 
         var target = forward ? PlainWordNavigation.Next(buf, _cursor) : PlainWordNavigation.Previous(buf, _cursor);
         if (target == _cursor)
-            return;
+            return;   // 文書の端：何も消えないので Undo の段も作らない
+        BeginPlainCommand();
         var (origin, to) = forward ? (_cursor, target) : (target, _cursor);
         if (origin.Line == to.Line)
         {

@@ -210,6 +210,36 @@ public class PlainIdeKeyTests
     }
 
     [Fact]
+    public void ReadOnly_RejectsAltBackspaceAndAltDelete()
+    {
+        var engine = Plain("abc", 0, 2);
+        engine.IsReadOnly = true;
+        engine.ProcessKey("Back", alt: true);
+        engine.ProcessKey("Delete", alt: true);
+        engine.ProcessKey("Back", ctrl: true, alt: true);
+        Assert.Equal("abc", Text(engine));
+    }
+
+    [Fact]
+    public void CtrlEnter_StillInsertsANewline()
+    {
+        var engine = Plain("ab", 0, 1);
+        engine.ProcessKey("Return", ctrl: true);
+        Assert.Equal("a\nb", Text(engine));
+    }
+
+    [Fact]
+    public void CtrlBackspace_AtDocumentStart_LeavesNoEmptyUndoStep()
+    {
+        var engine = Plain("", 0, 0);
+        engine.ProcessKey("x");
+        engine.ProcessKey("Home", ctrl: true);
+        engine.ProcessKey("Back", ctrl: true);
+        engine.ProcessKey("z", ctrl: true);
+        Assert.Equal("", Text(engine));
+    }
+
+    [Fact]
     public void VimEnabled_CtrlD_IsNotDuplicate()
     {
         var engine = new VimEngine(new VimConfig());

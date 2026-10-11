@@ -813,8 +813,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Func<int, int, CancellationToken, Task<IReadOnlyList<LspCompletionItem>>> provider =
                 (line, character, ct) =>
                 {
-                    // 本文は UI スレッドでここで取る（ホストは背景で組み立ててよい）。
+                    // 本文は UI スレッドでここで取る（ホストは背景で組み立ててよい）。対象外のファイルでは
+                    // 本文を写さない（打鍵の経路に全文の写しを足さない）。
                     var path = FilePath ?? string.Empty;
+                    if (options.HostSupplementalCompletionAppliesTo is { } appliesTo && !appliesTo(path))
+                        return Task.FromResult<IReadOnlyList<LspCompletionItem>>([]);
                     var source = Text;
                     return supplementalHost(path, source, line, character, ct);
                 };
