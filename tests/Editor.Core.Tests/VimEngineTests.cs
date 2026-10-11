@@ -383,15 +383,17 @@ public class VimEngineTests
     }
 
     [Fact]
-    public void WhenVimDisabled_CtrlA_DoesNotEnterVisualMode()
+    public void WhenVimDisabled_CtrlA_SelectsAllWithoutEnteringVisualMode()
     {
         // Regression: Ctrl+A used to run SelectAllVisualLine and re-expose modal
-        // editing. With the central plain-text gate it is inert.
+        // editing. It now selects everything as a plain (text-box) selection — the
+        // mode must stay Insert so no modal editing leaks back in (Loomo §36).
         var engine = CreateEngine("hello");
         engine.SetVimEnabled(false);
         engine.ProcessKey("a", ctrl: true);
         Assert.Equal(VimMode.Insert, engine.Mode);
-        Assert.Null(engine.Selection);
+        Assert.NotNull(engine.Selection);
+        Assert.Equal(SelectionType.Character, engine.Selection!.Value.Type);
     }
 
     [Fact]

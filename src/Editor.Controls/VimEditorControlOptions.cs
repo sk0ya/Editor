@@ -42,6 +42,15 @@ public sealed class VimEditorControlOptions
     public Func<string, string, int, int, CancellationToken,
         Task<IReadOnlyList<LspCompletionItem>>>? HostCompletionProvider { get; init; }
 
+    /// <summary>
+    /// LSP の結果と<b>常に</b>合流させるホストの補完候補（Live Template／Postfix Template 等）。
+    /// 引数は (path, source, line, character, ct)。<see cref="HostCompletionProvider"/> は「LSP が 0 件のときの代替」で、
+    /// こちらは「LSP の結果に足す」。候補の TextEdit は要求時点の位置で作ってよい——受け入れ時に、要求後に
+    /// 打ち足した分まで置換範囲を伸ばす。
+    /// </summary>
+    public Func<string, string, int, int, CancellationToken,
+        Task<IReadOnlyList<LspCompletionItem>>>? HostSupplementalCompletionProvider { get; init; }
+
     /// <summary>Optional host-side semantic-token provider used when LSP has no usable result.</summary>
     public Func<string, string, CancellationToken,
         Task<IReadOnlyList<SemanticToken>>>? HostSemanticTokensProvider { get; init; }

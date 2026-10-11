@@ -16,7 +16,7 @@ using Editor.Core.Text;
 
 namespace Editor.Core.Engine;
 
-internal sealed class VimEngineRuntime
+internal sealed partial class VimEngineRuntime
 {
     private readonly VimEngineServices _services;
     private readonly BufferManager _bufferManager;
@@ -2484,8 +2484,10 @@ internal sealed class VimEngineRuntime
     /// <summary>Vim 無効時の入力のうち、本文を変えるもの（文字入力・削除・改行・Tab・切り取り・貼り付け・取り消し）。</summary>
     private static bool PlainInputEdits(string key, bool ctrl, bool alt)
         => ctrl && !alt
-            ? key.ToLowerInvariant() is "x" or "v" or "z" or "y"
-            : !alt && (key.Length == 1 || key is "Back" or "Delete" or "Return" or "Tab" or "Space");
+            ? key.ToLowerInvariant() is "x" or "v" or "z" or "y" or "d" or "/" or "back" or "delete"
+            : alt
+                ? !ctrl && key is "Up" or "Down" || ctrl && key == "Return"
+                : key.Length == 1 || key is "Back" or "Delete" or "Return" or "Tab" or "Space";
 
     private void ProcessPlainEditInputCore(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
@@ -2498,18 +2500,25 @@ internal sealed class VimEngineRuntime
         // E21 を出すことになる。
         if (RejectsEdits && PlainInputEdits(key, ctrl, alt)) { BlockedReadOnly(events); return; }
 
+        // IDE の標準キー（Ctrl+A／単語移動／行の複製・移動／コメント…）。Vim を切った人が
+        // Rider／VS と同じ手癖で書けるように（設計書 §36）。扱ったら true。
+        if (TryProcessPlainIdeKey(key, ctrl, shift, alt, hasSelection, events))
+            return;
+
         if (ctrl && !alt)
         {
             switch (key.ToLowerInvariant())
             {
+                case "z" when shift: _plainEditRunActive = false; ClearPlainSelection(events); ExecuteRedo(events); return;
                 case "z": _plainEditRunActive = false; ClearPlainSelection(events); ExecuteUndo(events); return;
                 case "y": _plainEditRunActive = false; ClearPlainSelection(events); ExecuteRedo(events); return;
                 case "c": // Copy selection (or, with no selection, the whole current line) to the clipboard.
                     if (hasSelection) CopyPlainSelectionToClipboard();
                     else CopyCurrentLineToClipboard();
                     return;
-                case "x": // Cut selection to the clipboard.
+                case "x": // Cut selection (or, with no selection, the whole current line) to the clipboard.
                     if (hasSelection) { CopyPlainSelectionToClipboard(); BeginPlainEdit(); DeletePlainSelection(events); }
+                    else CutCurrentPlainLine(events);
                     return;
                 case "v": // Paste, replacing any selection.
                     BeginPlainEdit();
@@ -2540,7 +2549,7 @@ internal sealed class VimEngineRuntime
                 return;
             case "Up":    PlainMoveVertical(-1, shift, events); return;
             case "Down":  PlainMoveVertical(1, shift, events); return;
-            case "Home":  PlainMoveCaret(_cursor with { Column = 0 }, shift, events); return;
+            case "Home":  PlainMoveCaret(_cursor with { Column = SmartHomeColumn(buf.GetLine(_cursor.Line), _cursor.Column) }, shift, events); return;
             case "End":   PlainMoveCaret(_cursor with { Column = buf.GetLineLength(_cursor.Line) }, shift, events); return;
             case "Escape": ClearPlainSelection(events); return; // no mode to leave — just drop the selection
             case "Back":

@@ -111,6 +111,9 @@ public sealed class LspViewBridge : IEditorLspView
     public LspSignatureHelp? CurrentSignatureHelp => _signatureHelp;
     /// <summary>Fallback for host-provided, language-specific completion.</summary>
     public Func<int, int, CancellationToken, Task<IReadOnlyList<LspCompletionItem>>>? HostCompletionProvider { get; set; }
+    /// <summary>LSP の結果があっても<b>常に</b>合流させるホストの候補（Live Template／Postfix 等）。
+    /// <see cref="HostCompletionProvider"/>（LSP が 0 件のときの代替）とは意味が違う。</summary>
+    public Func<int, int, CancellationToken, Task<IReadOnlyList<LspCompletionItem>>>? HostSupplementalCompletionProvider { get; set; }
     /// <summary>Fallback for host-provided, language-specific semantic tokens.</summary>
     public Func<CancellationToken, Task<IReadOnlyList<SemanticToken>>>? HostSemanticTokensProvider { get; set; }
     /// <summary>Fallback for host-provided, language-specific signature help.</summary>
@@ -758,10 +761,11 @@ public sealed class LspViewBridge : IEditorLspView
     public async Task<string?> RequestCompletionAsync(int line, int character)
     {
         var doc = _document;
-        if (doc?.IsConnected != true && HostCompletionProvider is null)
+        var supplemental = HostSupplementalCompletionProvider;
+        if (doc?.IsConnected != true && HostCompletionProvider is null && supplemental is null)
             return "LSP: no language server for this file type";
 
-        if (doc?.IsConnected == true && !_documentReady && HostCompletionProvider is null)
+        if (doc?.IsConnected == true && !_documentReady && HostCompletionProvider is null && supplemental is null)
             return "LSP: indexing… try again in a moment";
 
         Log($"[LSP] completion request line={line} col={character}");
@@ -780,11 +784,14 @@ public sealed class LspViewBridge : IEditorLspView
         IReadOnlyList<LspCompletionItem> items;
         try
         {
+            // ホストの追加候補は LSP と並行に作る（待つのは遅い方だけ）。
+            var supplementalTask = CompletionMerge.Start(supplemental, line, character, ct);
             items = doc?.IsConnected == true && _documentReady
                 ? await doc.RequestCompletionAsync(line, character, ct)
                 : [];
             if (items.Count == 0 && HostCompletionProvider is { } provider)
                 items = await provider(line, character, ct);
+            items = CompletionMerge.Merge(await supplementalTask, items);
         }
         catch (OperationCanceledException)
         {

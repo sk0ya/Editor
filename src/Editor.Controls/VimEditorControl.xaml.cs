@@ -808,6 +808,21 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             else if (_lspView is NullLspView nullView)
                 nullView.HostCompletionProvider = provider;
         }
+        if (options.HostSupplementalCompletionProvider is { } supplementalHost)
+        {
+            Func<int, int, CancellationToken, Task<IReadOnlyList<LspCompletionItem>>> provider =
+                (line, character, ct) =>
+                {
+                    // 本文は UI スレッドでここで取る（ホストは背景で組み立ててよい）。
+                    var path = FilePath ?? string.Empty;
+                    var source = Text;
+                    return supplementalHost(path, source, line, character, ct);
+                };
+            if (_lspView is LspViewBridge bridge)
+                bridge.HostSupplementalCompletionProvider = provider;
+            else if (_lspView is NullLspView nullView)
+                nullView.HostSupplementalCompletionProvider = provider;
+        }
         if (options.HostSemanticTokensProvider is { } semanticHost)
         {
             Func<CancellationToken, Task<IReadOnlyList<SemanticToken>>> provider = ct =>
@@ -1066,6 +1081,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.LinkClicked += OnCanvasLinkClicked;
         Canvas.FileLinkClicked += OnCanvasFileLinkClicked;
         Canvas.DocumentLinkClicked += OnCanvasDocumentLinkClicked;
+        // Ctrl+クリックで定義へ（Rider／VS と同じ・§36）。キャレットは MouseClicked で先に移っている。
+        Canvas.SymbolCtrlClicked += (_, _) => _ = HandleGoToDefinitionAsync();
         Canvas.CodeLensClicked += OnCanvasCodeLensClicked;
 
         // Keep VimEngine informed of viewport state for H/M/L motions
@@ -4189,7 +4206,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // standard editing modes and uses the same Code Action popup/resolve/apply
         // transaction as `ga`, Problems, and the context menu.
         bool altDown = (e.KeyboardDevice.Modifiers & ModifierKeys.Alt) != 0;
-        if (altDown && actualKey == Key.Enter && e.Key != Key.ImeProcessed)
+        if (altDown && !ctrlDown && actualKey == Key.Enter && e.Key != Key.ImeProcessed)
         {
             _ = HandleQuickFixAsync();
             _keyDownHandledByVim = true;
@@ -4523,17 +4540,22 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 {
                     // Let OnKeyDown handle Enter when a completion popup is visible.
                     if (_lspView.CompletionVisible || _pathCompletionManager.Visible) return;
-                    ProcessKey("Return", false, false, false);
+                    // Vim 無効時は修飾キーを渡す（Shift+Enter／Ctrl+Alt+Enter で上下に新しい行・§36）。
+                    // Vim の Insert では従来どおり素の改行。
+                    var (rCtrl, rShift, rAlt) = PlainModifiers(e);
+                    ProcessKey("Return", rCtrl, rShift, rAlt);
                     e.Handled = true;
                 }
                 else if (actualKey == Key.Back)
                 {
-                    ProcessKey("Back", false, false, false);
+                    var (bCtrl, bShift, bAlt) = PlainModifiers(e);
+                    ProcessKey("Back", bCtrl, bShift, bAlt);
                     e.Handled = true;
                 }
                 else if (actualKey == Key.Delete)
                 {
-                    ProcessKey("Delete", false, false, false);
+                    var (dCtrl, dShift, dAlt) = PlainModifiers(e);
+                    ProcessKey("Delete", dCtrl, dShift, dAlt);
                     e.Handled = true;
                 }
             }
@@ -4711,6 +4733,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             return;
         }
 
+        // Vim 無効時の Ctrl+/（行コメントの切替・§36）。'/' の物理キーは配列で違うので、
+        // その配列で実際に '/' を打つキーかどうかで判定する。
+        if (ctrl && !alt && !_engine.VimEnabled && UnshiftedCharForKey(key) == '/')
+        {
+            ProcessKey("/", true, shift, false);
+            _keyDownHandledByVim = true;
+            e.Handled = true;
+            return;
+        }
+
         // Ctrl combinations are valid in every mode for the subset the engine supports.
         if (ctrl)
         {
@@ -4750,8 +4782,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Key.Down => "Down",
             Key.Home => _engine.VimEnabled ? "0" : "Home",
             Key.End => _engine.VimEnabled ? "$" : "End",
-            Key.PageUp => ctrl ? "b" : null,
-            Key.PageDown => ctrl ? "f" : null,
+            Key.PageUp => ctrl ? "b" : _engine.VimEnabled ? null : "PageUp",
+            Key.PageDown => ctrl ? "f" : _engine.VimEnabled ? null : "PageDown",
             Key.F1 => null,
             Key.F2 => "F2",
             _ => null
@@ -5287,6 +5319,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void ApplyCompletionTextEdit(LspCompletionItem item, LspTextEdit textEdit)
     {
+        textEdit = textEdit with { Range = CompletionMerge.ExtendToCaret(textEdit.Range, _engine.Cursor.Line, _engine.Cursor.Column) };
         var replacement = textEdit.NewText;
         SnippetExpansion? expansion = null;
         if (item.TextFormat == InsertTextFormat.Snippet && replacement.Contains('$'))
@@ -7188,6 +7221,18 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Key.Decimal => ".",
             _ => null
         };
+    }
+
+    /// <summary>Vim 無効時だけ修飾キーをそのまま返す。Vim の Insert では Enter／Backspace／Delete を
+    /// 修飾なしで渡す従来の扱いを変えない。</summary>
+    private (bool Ctrl, bool Shift, bool Alt) PlainModifiers(KeyEventArgs e)
+    {
+        if (_engine.VimEnabled)
+            return (false, false, false);
+        var modifiers = e.KeyboardDevice.Modifiers;
+        return ((modifiers & ModifierKeys.Control) != 0,
+            (modifiers & ModifierKeys.Shift) != 0,
+            (modifiers & ModifierKeys.Alt) != 0);
     }
 
     private static string? GetCtrlKey(Key key)

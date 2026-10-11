@@ -243,6 +243,9 @@ public partial class EditorCanvas : FrameworkElement
     public event Action<string>? LinkClicked;          // (url) Ctrl+clicked on a detected URL
     public event Action<string>? FileLinkClicked;      // (absolutePath) Ctrl+clicked on a detected file path
     public event Action<string>? DocumentLinkClicked;  // (LSP target) Ctrl+clicked on a document link
+    /// <summary>リンクでない識別子の上を Ctrl+クリックした（line, col）。ホストは定義へ移動する
+    /// （Rider／VS の Ctrl+Click・Loomo 設計書 §36）。キャレットは先に <see cref="MouseClicked"/> で移っている。</summary>
+    public event Action<int, int>? SymbolCtrlClicked;
     public event Action<LspCodeLens>? CodeLensClicked; // (LSP code lens) Ctrl+clicked on its label
 
     // Brushes/pens for spell underlines — created once (theme-independent). Popup chrome brushes
@@ -1369,6 +1372,16 @@ public partial class EditorCanvas : FrameworkElement
                 e.Handled = true;
                 return;
             }
+
+            // リンクでなければ、識別子の上なら定義へ。空白や記号の上の Ctrl+クリックは従来どおり
+            // ただのクリック（キャレット移動）にする。
+            if (SymbolCtrlClicked is not null && IsIdentifierAt(line, col))
+            {
+                MouseClicked?.Invoke(line, col);
+                SymbolCtrlClicked.Invoke(line, col);
+                e.Handled = true;
+                return;
+            }
         }
 
         MouseClicked?.Invoke(line, col);
@@ -2346,6 +2359,14 @@ public partial class EditorCanvas : FrameworkElement
                 if (exists) InvalidateVisual(); // reveal newly-confirmed link underline
             });
         });
+    }
+
+    /// <summary>(line, col) が識別子の文字（英数字・_・CJK 等の文字）の上か。</summary>
+    private bool IsIdentifierAt(int line, int col)
+    {
+        if (line < 0 || line >= _lines.Length) return false;
+        var text = _lines[line];
+        return col >= 0 && col < text.Length && (char.IsLetterOrDigit(text[col]) || text[col] == '_');
     }
 
     /// <summary>Returns the live link at buffer (line, col), or null if none — shared by Ctrl+Click and Ctrl+hover.</summary>

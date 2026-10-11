@@ -71,10 +71,22 @@ public sealed class LspClient : ILspClient
         _process.ServerRequestHandler = OnServerRequest;
     }
 
+    /// <inheritdoc />
+    public Func<string?, string?, object?>? ConfigurationProvider { get; set; }
+
+    /// <inheritdoc />
+    public void NotifyConfigurationChanged()
+    {
+        if (!_process.IsRunning) return;
+        _process.SendNotification("workspace/didChangeConfiguration", new { settings = (object?)null });
+    }
+
     /// <summary>サーバー起点の要求のうち、ホストが実際に処理できるものを引き受ける。
     /// 関知しないものは null を返して <see cref="LspProcess.CreateServerRequestResult"/> の最小応答へ渡す。</summary>
     private object? OnServerRequest(string method, JsonElement @params)
     {
+        if (string.Equals(method, "workspace/configuration", StringComparison.Ordinal))
+            return ConfigurationProvider is { } provider ? AnswerConfiguration(provider, @params) : null;
         if (!string.Equals(method, "workspace/applyEdit", StringComparison.Ordinal)) return null;
         if (ApplyEditRequested is not { } handler) return null;
 
@@ -100,6 +112,32 @@ public sealed class LspClient : ILspClient
         {
             return new { applied = false, failureReason = ex.Message };
         }
+    }
+
+    /// <summary><c>workspace/configuration</c> の応答。要求された item と同数・同順の配列を返す
+    /// （数が合わないと Roslyn は初期化に失敗する）。値を作れない item は null。</summary>
+    internal static object?[] AnswerConfiguration(Func<string?, string?, object?> provider, JsonElement @params)
+    {
+        if (@params.ValueKind != JsonValueKind.Object ||
+            !@params.TryGetProperty("items", out var items) ||
+            items.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var result = new object?[items.GetArrayLength()];
+        var index = 0;
+        foreach (var item in items.EnumerateArray())
+        {
+            string? section = null, scopeUri = null;
+            if (item.ValueKind == JsonValueKind.Object)
+            {
+                if (item.TryGetProperty("section", out var s) && s.ValueKind == JsonValueKind.String) section = s.GetString();
+                if (item.TryGetProperty("scopeUri", out var u) && u.ValueKind == JsonValueKind.String) scopeUri = u.GetString();
+            }
+            try { result[index] = provider(section, scopeUri); }
+            catch { result[index] = null; }
+            index++;
+        }
+        return result;
     }
 
     public async Task InitializeAsync(string rootUri)
@@ -221,6 +259,10 @@ public sealed class LspClient : ILspClient
                         resourceOperations = new[] { "create", "rename", "delete" },
                         failureHandling = "abort"
                     },
+                    // workspace/configuration に答えられることの宣言。Roslyn はこれを見てから
+                    // インレイヒント・未 using 型の補完などの設定を引きに来る（答えるのはホスト）。
+                    configuration = true,
+                    didChangeConfiguration = new { dynamicRegistration = false },
                     // これを宣言しないと InitializeParams.workspaceFolders は無視される
                     // (Roslyn / rust-analyzer はフォルダを取り込む前にこの capability を見る)。
                     workspaceFolders = true

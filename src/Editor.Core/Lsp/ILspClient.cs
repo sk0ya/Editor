@@ -36,6 +36,18 @@ public interface ILspClient : IDisposable
     bool SupportsSemanticTokens { get; }
     /// <summary>サーバーが textDocument/semanticTokens/full/delta をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsSemanticTokensDelta => false;
+
+    /// <summary>
+    /// サーバー起点の <c>workspace/configuration</c> に答えるホストの設定。引数は要求された item の
+    /// <c>section</c>（Roslyn なら <c>csharp|inlay_hints.dotnet_enable_inlay_hints_for_parameters</c> の形）と
+    /// <c>scopeUri</c>、戻り値はその値（JSON にそのまま載る。知らない section は null＝サーバー既定）。
+    /// 未設定なら全項目 null を返す（従来どおり）。
+    /// </summary>
+    Func<string?, string?, object?>? ConfigurationProvider { get => null; set { } }
+
+    /// <summary>ホストの設定が変わったことをサーバーへ知らせる（<c>workspace/didChangeConfiguration</c>）。
+    /// pull 型のサーバー（Roslyn）はこれを受けて <c>workspace/configuration</c> を引き直す。</summary>
+    void NotifyConfigurationChanged() { }
     /// <summary>サーバーが textDocument/selectionRange をサポートしているか。InitializeAsync 後に確定する。</summary>
     bool SupportsSelectionRange { get; }
     /// <summary>サーバーが textDocument/diagnostic をサポートしているか。InitializeAsync 後に確定する。

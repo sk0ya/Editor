@@ -285,6 +285,26 @@ or on reopen is the host implementation's call.
 
 **Diagnostics** are rendered as wavy underlines on `EditorCanvas`. Colors are defined on `EditorTheme` (`DiagnosticError`, `DiagnosticWarning`, `DiagnosticInfo`, `DiagnosticHint`).
 
+## Plain (Vim-disabled) mode is a code editor, not a text box
+
+With `VimEnabled = false` the engine routes every key to `ProcessPlainEditInput`. It used to accept only
+Ctrl+Z/Y/C/X/V; it now carries the IDE keys a Rider/VS user expects (`VimEngineRuntime.PlainIdeKeys.cs`):
+Ctrl+A, Ctrl+←/→ (+Shift), Ctrl+Home/End, Ctrl+Backspace/Delete, Ctrl+D (duplicate), Ctrl+/ (line comment),
+Alt+Shift+↑/↓ (move lines), Ctrl+Shift+Z, Ctrl+X without selection (cut line), Shift+Enter / Ctrl+Alt+Enter,
+smart Home, PageUp/PageDown. Rules: **each such command is its own undo step** (`BeginPlainCommand` — mixing it into
+the typing run makes Ctrl+Z after Ctrl+D also eat the text typed before it); the control passes modifiers for
+Enter/Backspace/Delete **only when Vim is off** (`PlainModifiers`), so Vim Insert behaviour is untouched; Alt+Enter
+(Quick Fix) does not fire when Ctrl is also down. Ctrl+Click on an identifier (not a link) goes to definition in
+every mode (`EditorCanvas.SymbolCtrlClicked`).
+
+**Host completion comes in two flavours.** `HostCompletionProvider` is the fallback used when LSP returns nothing;
+`HostSupplementalCompletionProvider` is **always merged** with the LSP result (Loomo's Live/Postfix templates).
+Merging dedupes on label **and** kind (`CompletionMerge`). On accept, a TextEdit range that stops before the caret
+on the caret line is extended to the caret — items are built at request time and the user keeps typing.
+
+**`workspace/configuration`** is answered by `ILspClient.ConfigurationProvider` when the host sets one (Loomo does,
+for Roslyn); otherwise every item is null as before. The client now declares `workspace.configuration`.
+
 ## Document formatting (`:Format`)
 
 `:Format` (also the "Format Document" context-menu item) is handled by `VimEditorControl.HandleFormatDocumentAsync`. It is **not** LSP-only — many text-LSP servers (e.g. `marksman`) never implement `textDocument/formatting`, so there is a CLI-formatter layer alongside it:

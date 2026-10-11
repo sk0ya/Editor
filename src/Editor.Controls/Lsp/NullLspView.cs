@@ -29,6 +29,8 @@ internal sealed class NullLspView : IEditorLspView
     public bool CompletionVisible => _completionItems.Count > 0;
     public LspSignatureHelp? CurrentSignatureHelp => _signatureHelp;
     public Func<int, int, CancellationToken, Task<IReadOnlyList<LspCompletionItem>>>? HostCompletionProvider { get; set; }
+    /// <summary>常に合流させるホストの候補（<see cref="LspViewBridge.HostSupplementalCompletionProvider"/> と同じ）。</summary>
+    public Func<int, int, CancellationToken, Task<IReadOnlyList<LspCompletionItem>>>? HostSupplementalCompletionProvider { get; set; }
     /// <summary>Fallback for host-provided, language-specific semantic tokens.</summary>
     public Func<CancellationToken, Task<IReadOnlyList<SemanticToken>>>? HostSemanticTokensProvider { get; set; }
     /// <summary>Fallback for host-provided, language-specific signature help.</summary>
@@ -105,12 +107,16 @@ internal sealed class NullLspView : IEditorLspView
 
     public async Task<string?> RequestCompletionAsync(int line, int character)
     {
-        if (HostCompletionProvider is not { } provider)
+        var provider = HostCompletionProvider;
+        var supplemental = HostSupplementalCompletionProvider;
+        if (provider is null && supplemental is null)
             return "LSP integration is not configured";
         IReadOnlyList<LspCompletionItem> items;
         try
         {
-            items = await provider(line, character, CancellationToken.None);
+            var supplementalTask = CompletionMerge.Start(supplemental, line, character, CancellationToken.None);
+            items = provider is null ? [] : await provider(line, character, CancellationToken.None);
+            items = CompletionMerge.Merge(await supplementalTask, items);
         }
         catch (OperationCanceledException)
         {
