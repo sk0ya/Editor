@@ -633,8 +633,50 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     public string Text => _engine.CurrentBuffer.Text.GetText();
     public string? FilePath => _engine.CurrentBuffer.FilePath;
-    /// <summary>True when the current buffer has unsaved changes.</summary>
-    public bool IsModified => _engine.CurrentBuffer.Text.IsModified;
+    /// <summary>True when the current buffer has unsaved changes (text, or the line ending / encoding it
+    /// will be saved with — see <see cref="SetFileFormat"/>).</summary>
+    public bool IsModified => _engine.CurrentBuffer.HasUnsavedChanges;
+
+    /// <summary>保存するときの改行（"unix"＝LF・"dos"＝CRLF・"mac"＝CR）。読み込んだファイルから判定した値。</summary>
+    public string FileFormat => _engine.CurrentBuffer.FileFormat;
+
+    /// <summary>保存するときの文字コード（"utf-8"・"utf-8-bom"・"shift-jis" など）。読み込んだファイルから判定した値。</summary>
+    public string FileEncoding => _engine.CurrentBuffer.FileEncoding;
+
+    /// <summary>
+    /// 保存するときの改行を変える（<c>:set fileformat=</c> と同じ）。本文は変えず、<b>保存したときに</b>すべての行が
+    /// この改行で書き出される。未保存の変更として扱う。読み込んだファイルの改行が混在していれば、いまと同じ形を
+    /// 選んでも「そろえて保存する」必要があるので未保存にする（<see cref="Editor.Core.Buffer.VimBuffer.RequestNormalizeLineEndings"/>）。
+    /// </summary>
+    /// <param name="format">"unix"（LF）・"dos"（CRLF）・"mac"（CR）。</param>
+    /// <returns>知らない値なら false（何も変えない）。</returns>
+    public bool SetFileFormat(string format)
+    {
+        if (!Editor.Core.Buffer.VimBuffer.FileFormats.Contains(format))
+            return false;
+        _engine.CurrentBuffer.FileFormat = format;
+        _engine.Options.FileFormat = format;
+        _engine.CurrentBuffer.RequestNormalizeLineEndings();
+        PushStatusBarState();
+        return true;
+    }
+
+    /// <summary>
+    /// 保存するときの文字コードを変える（<c>:set fileencoding=</c> と同じ）。本文は変えず、<b>保存したときに</b>
+    /// この文字コードで書き出される。未保存の変更として扱う。
+    /// </summary>
+    /// <param name="encoding">"utf-8"・"utf-8-bom"・"utf-16le"・"utf-16be"・"shift-jis"・"euc-jp"・"latin1"・"ascii"。</param>
+    /// <returns>知らない値なら false（何も変えない）。</returns>
+    public bool SetFileEncoding(string encoding)
+    {
+        var name = encoding.ToLowerInvariant();
+        if (!Editor.Core.Buffer.VimBuffer.FileEncodings.Contains(name))
+            return false;
+        _engine.CurrentBuffer.FileEncoding = name;
+        _engine.Options.FileEncoding = name;
+        PushStatusBarState();
+        return true;
+    }
     /// <summary>True when the current buffer is a virtual (file-less) document.</summary>
     public bool IsVirtualDocument => _engine.CurrentBuffer.IsVirtual;
 
@@ -663,7 +705,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 buf.FilePath,
                 buf.IsVirtual,
                 buf.DocumentId,
-                buf.Text.IsModified,
+                buf.HasUnsavedChanges,
                 buf.Text.LineCount,
                 _engine.Syntax.LanguageName,
                 _engine.Mode);
@@ -2489,10 +2531,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         var detectedFmt = Editor.Core.Buffer.VimBuffer.DetectFileFormat(text);
         _engine.CurrentBuffer.FileFormat   = detectedFmt;
         _engine.CurrentBuffer.FileEncoding = detectedEnc;
+        _engine.CurrentBuffer.HasMixedLineEndings = Editor.Core.Buffer.VimBuffer.DetectMixedLineEndings(text);
         _engine.Options.FileFormat   = detectedFmt;
         _engine.Options.FileEncoding = detectedEnc;
         _engine.CurrentBuffer.Text.SetText(text);
         _engine.CurrentBuffer.Text.MarkSaved();
+        _engine.CurrentBuffer.MarkFileFormatSaved();
         _engine.CurrentBuffer.Undo.Clear();
         _engine.CurrentBuffer.Folds.Clear();
         _engine.SetCursorPosition(CursorPosition.Zero);
@@ -2636,6 +2680,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (documentId != null && _engine.CurrentBuffer.DocumentId != documentId)
             return;
         _engine.CurrentBuffer.Text.MarkSaved();
+        _engine.CurrentBuffer.MarkFileFormatSaved();
         RefreshSaveDiff();
         PushStatusBarState();
     }
@@ -3348,7 +3393,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (!branchMatchesCurrentFile)
             _ = RefreshGitDiffAsync();
         ActiveStatusBar.UpdateMode(_engine.Mode, _engine.VimEnabled, _engine.Options.ShowMode);
-        ActiveStatusBar.UpdateFile(buf.FilePath, buf.Text.IsModified, buf.FileFormat, buf.FileEncoding);
+        ActiveStatusBar.UpdateFile(buf.FilePath, buf.HasUnsavedChanges, buf.FileFormat, buf.FileEncoding);
         // Ownership already decides whether this reaches the shared bar, so no separate
         // keyboard-focus test is needed here (focus was a weaker stand-in for "is this the
         // current editor" — it failed when the host activated a tab from a side panel).

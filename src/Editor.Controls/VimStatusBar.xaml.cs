@@ -41,6 +41,9 @@ public partial class VimStatusBar : UserControl
         var ratio = System.Math.Max(1, editorFontSize) / 14.0;
         ModeText.FontSize     = 13 * ratio;
         FileText.FontSize     = 12 * ratio;
+        FormatText.FontSize   = 12 * ratio;
+        EncodingText.FontSize = 12 * ratio;
+        ModifiedText.FontSize = 12 * ratio;
         CommandText.FontSize  = 13 * ratio;
         StatusText.FontSize   = 12 * ratio;
         BranchText.FontSize   = 12 * ratio;
@@ -76,10 +79,60 @@ public partial class VimStatusBar : UserControl
 
     public void UpdateFile(string? filePath, bool modified, string? fileFormat = null, string? fileEncoding = null)
     {
-        var name = filePath != null ? System.IO.Path.GetFileName(filePath) : "[No Name]";
-        var fmt = fileFormat != null ? $" [{fileFormat}]" : "";
-        var enc = fileEncoding != null ? $" [{fileEncoding}]" : "";
-        FileText.Text = modified ? $"{name}{fmt}{enc} [+]" : $"{name}{fmt}{enc}";
+        FileText.Text = filePath != null ? System.IO.Path.GetFileName(filePath) : "[No Name]";
+        FormatText.Text = fileFormat != null ? $" [{fileFormat}]" : "";
+        EncodingText.Text = fileEncoding != null ? $" [{fileEncoding}]" : "";
+        ModifiedText.Text = modified ? " [+]" : "";
+    }
+
+    /// <summary>The file line displayed (name, format, encoding, modified mark). Exposed for tests.</summary>
+    internal string CurrentFileLine => FileText.Text + FormatText.Text + EncodingText.Text + ModifiedText.Text;
+
+    private EventHandler? _fileFormatClicked;
+    private EventHandler? _fileEncodingClicked;
+
+    /// <summary>
+    /// 改行形式の表示（<c>[dos]</c> など）がクリックされた。ホストが改行をそろえる操作などの入口に使う。
+    /// 購読者がいるときだけ、その表示を押せる見た目（手のカーソル・ツールチップ）にする。
+    /// </summary>
+    public event EventHandler? FileFormatClicked
+    {
+        add { _fileFormatClicked += value; UpdateClickable(); }
+        remove { _fileFormatClicked -= value; UpdateClickable(); }
+    }
+
+    /// <summary>
+    /// 文字コードの表示（<c>[utf-8]</c> など）がクリックされた。ホストが文字コードを変換する操作などの入口に使う。
+    /// 購読者がいるときだけ、その表示を押せる見た目（手のカーソル・ツールチップ）にする。
+    /// </summary>
+    public event EventHandler? FileEncodingClicked
+    {
+        add { _fileEncodingClicked += value; UpdateClickable(); }
+        remove { _fileEncodingClicked -= value; UpdateClickable(); }
+    }
+
+    private void UpdateClickable()
+    {
+        FormatText.Cursor = _fileFormatClicked != null ? System.Windows.Input.Cursors.Hand : null;
+        FormatText.ToolTip = _fileFormatClicked != null ? "改行コード（クリックで変更）" : null;
+        EncodingText.Cursor = _fileEncodingClicked != null ? System.Windows.Input.Cursors.Hand : null;
+        EncodingText.ToolTip = _fileEncodingClicked != null ? "文字コード（クリックで変更）" : null;
+    }
+
+    private void OnFormatTextClicked(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_fileFormatClicked is null || string.IsNullOrEmpty(FormatText.Text))
+            return;
+        e.Handled = true;
+        _fileFormatClicked(this, EventArgs.Empty);
+    }
+
+    private void OnEncodingTextClicked(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_fileEncodingClicked is null || string.IsNullOrEmpty(EncodingText.Text))
+            return;
+        e.Handled = true;
+        _fileEncodingClicked(this, EventArgs.Empty);
     }
 
     public void UpdateGitBranch(string? branchName)
@@ -120,13 +173,13 @@ public partial class VimStatusBar : UserControl
         if (string.IsNullOrEmpty(text))
         {
             CommandText.Visibility = System.Windows.Visibility.Collapsed;
-            FileText.Visibility = System.Windows.Visibility.Visible;
+            FileInfoPanel.Visibility = System.Windows.Visibility.Visible;
         }
         else
         {
             CommandText.Text = text;
             CommandText.Visibility = System.Windows.Visibility.Visible;
-            FileText.Visibility = System.Windows.Visibility.Collapsed;
+            FileInfoPanel.Visibility = System.Windows.Visibility.Collapsed;
         }
     }
 

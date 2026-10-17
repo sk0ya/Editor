@@ -18,6 +18,51 @@ public class VimBuffer
     /// <summary>File encoding name (vim-style, e.g. "utf-8", "utf-16", "latin1").</summary>
     public string FileEncoding { get; set; } = "utf-8";
 
+    private string _savedFileFormat = "unix";
+    private string _savedFileEncoding = "utf-8";
+    private bool _normalizeRequested;
+
+    /// <summary>
+    /// 読み込んだファイルの改行が混在していたか（CRLF と LF など）。<see cref="FileFormat"/> は最初に出てきた改行で
+    /// 決まるので、混在したファイルはそのままでも保存すれば1つの形にそろう——が、本文も形式も変わっていないので
+    /// 未保存にならず、保存する理由が無い。<see cref="RequestNormalizeLineEndings"/> で明示的にそろえさせる。
+    /// </summary>
+    public bool HasMixedLineEndings { get; set; }
+
+    /// <summary>
+    /// 保存するときの改行（<see cref="FileFormat"/>）か文字コード（<see cref="FileEncoding"/>）が、最後に読み込んだ／
+    /// 保存したときから変わっているか（混在した改行をそろえる依頼も含む）。本文が同じでも、保存し直さないと
+    /// ファイルは変わらない（Vim で <c>:set ff=dos</c> すると 'modified' が立つのと同じ）。
+    /// </summary>
+    public bool IsFileFormatChanged
+        => FileFormat != _savedFileFormat
+           || !string.Equals(FileEncoding, _savedFileEncoding, StringComparison.OrdinalIgnoreCase)
+           || _normalizeRequested;
+
+    /// <summary>
+    /// 改行が混在しているなら、いまの <see cref="FileFormat"/> でそろえて保存する必要がある印を付ける（未保存になる）。
+    /// 混在していなければ何もしない。保存・読み込みで解ける。
+    /// </summary>
+    public void RequestNormalizeLineEndings() => _normalizeRequested = HasMixedLineEndings;
+
+    /// <summary>未保存の変更があるか（本文の変更、または保存するときの改行・文字コードの変更）。</summary>
+    public bool HasUnsavedChanges => Text.IsModified || IsFileFormatChanged;
+
+    /// <summary>いまの改行・文字コードを「ファイルと同じ」とする（読み込んだ・保存した直後に呼ぶ）。</summary>
+    public void MarkFileFormatSaved()
+    {
+        _savedFileFormat = FileFormat;
+        _savedFileEncoding = FileEncoding;
+        _normalizeRequested = false;
+    }
+
+    /// <summary>保存するときの改行として使える値（Vim の 'fileformat'）。</summary>
+    public static IReadOnlyList<string> FileFormats { get; } = ["unix", "dos", "mac"];
+
+    /// <summary>保存するときの文字コードとして使える値（<see cref="GetEncoding"/> が知っている名前）。</summary>
+    public static IReadOnlyList<string> FileEncodings { get; } =
+        ["utf-8", "utf-8-bom", "utf-16le", "utf-16be", "shift-jis", "euc-jp", "latin1", "ascii"];
+
     /// <summary>True when the backing file was detected as binary; its content is not loaded and the buffer is read-only.</summary>
     public bool IsBinary { get; private set; }
 
@@ -62,6 +107,7 @@ public class VimBuffer
                 IsBinary = true;
                 Text.SetText($"[Binary file — {bytes.Length:N0} bytes, not loaded]");
                 Text.MarkSaved();
+                MarkFileFormatSaved();
                 return;
             }
             var enc = GetEncoding(FileEncoding);
@@ -69,8 +115,10 @@ public class VimBuffer
             int bomLen = GetBomLength(bytes, enc);
             var raw = enc.GetString(bytes, bomLen, bytes.Length - bomLen);
             FileFormat = DetectFileFormat(raw);
+            HasMixedLineEndings = DetectMixedLineEndings(raw);
             Text.SetText(raw);
             Text.MarkSaved();
+            MarkFileFormatSaved();
         }
     }
 
@@ -242,6 +290,25 @@ public class VimBuffer
         _                           => new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
     };
 
+    /// <summary>改行が2種類以上混ざっているか（CRLF・LF・CR のうち）。</summary>
+    public static bool DetectMixedLineEndings(string raw)
+    {
+        bool crlf = false, lf = false, cr = false;
+        for (int i = 0; i < raw.Length; i++)
+        {
+            if (raw[i] == '\r')
+            {
+                if (i + 1 < raw.Length && raw[i + 1] == '\n') { crlf = true; i++; }
+                else cr = true;
+            }
+            else if (raw[i] == '\n')
+                lf = true;
+            if ((crlf ? 1 : 0) + (lf ? 1 : 0) + (cr ? 1 : 0) > 1)
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>Detect line-ending style from raw file content in a single pass.</summary>
     public static string DetectFileFormat(string raw)
     {
@@ -280,6 +347,8 @@ public class VimBuffer
         };
         File.WriteAllText(path, content, GetEncoding(FileEncoding));
         Text.MarkSaved();
+        HasMixedLineEndings = false;   // 書き出した時点で1つの形にそろっている
+        MarkFileFormatSaved();
         AfterWrite?.Invoke(path);
     }
 }

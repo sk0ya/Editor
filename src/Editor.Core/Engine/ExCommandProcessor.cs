@@ -238,9 +238,16 @@ public class ExCommandProcessor
             if (cmd == "set") return new ExResult(true, "Options: (use :set option)");
             var opt = cmd[4..].Trim();
             var err = _options.Apply(opt);
-            // Sync fileformat/fileencoding options to the current buffer so Save() uses them.
-            _bufferManager.Current.FileFormat   = _options.FileFormat;
-            _bufferManager.Current.FileEncoding = _options.FileEncoding;
+            // Sync fileformat/fileencoding options to the current buffer so Save() uses them —
+            // only when one of those was set. Syncing on every :set (e.g. ":set number") copied a
+            // stale option value (left over from another buffer) onto this buffer's format, which
+            // now also marks the buffer modified (IsFileFormatChanged).
+            var name = opt.Split('=', 2)[0].Trim();
+            if (name is "fileformat" or "ff" or "fileencoding" or "fenc")
+            {
+                _bufferManager.Current.FileFormat   = _options.FileFormat;
+                _bufferManager.Current.FileEncoding = _options.FileEncoding;
+            }
             return err == null ? new ExResult(true) : new ExResult(false, err);
         }
 

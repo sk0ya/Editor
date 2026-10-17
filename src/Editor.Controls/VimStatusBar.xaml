@@ -27,9 +27,21 @@
 
         <!-- File name / Command line area -->
         <Grid Grid.Column="1">
-            <TextBlock x:Name="FileText" FontFamily="Cascadia Code, Consolas" FontSize="12"
-                       Foreground="#DDDDDD" VerticalAlignment="Center" Padding="8,0"
-                       TextTrimming="CharacterEllipsis"/>
+            <!-- ファイル名・改行形式・文字コード・変更印。改行形式と文字コードはホストが購読していればクリックできる
+                 （FileFormatClicked / FileEncodingClicked。変換の入口に使う）。 -->
+            <StackPanel x:Name="FileInfoPanel" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0">
+                <TextBlock x:Name="FileText" FontFamily="Cascadia Code, Consolas" FontSize="12"
+                           Foreground="#DDDDDD" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="FormatText" FontFamily="Cascadia Code, Consolas" FontSize="12"
+                           Foreground="#DDDDDD" VerticalAlignment="Center" Background="Transparent"
+                           MouseLeftButtonUp="OnFormatTextClicked"/>
+                <TextBlock x:Name="EncodingText" FontFamily="Cascadia Code, Consolas" FontSize="12"
+                           Foreground="#DDDDDD" VerticalAlignment="Center" Background="Transparent"
+                           MouseLeftButtonUp="OnEncodingTextClicked"/>
+                <TextBlock x:Name="ModifiedText" FontFamily="Cascadia Code, Consolas" FontSize="12"
+                           Foreground="#DDDDDD" VerticalAlignment="Center"/>
+            </StackPanel>
             <TextBlock x:Name="CommandText" FontFamily="Cascadia Code, Consolas" FontSize="13"
                        Foreground="White" VerticalAlignment="Center" Padding="4,0"
                        Visibility="Collapsed"/>

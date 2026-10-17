@@ -12,7 +12,7 @@ public class FileOpsCommands(BufferManager bufferManager, VimOptions options)
         // :q :q! :quit :quit! :wq :x :xit :exit
         if (cmd is "q" or "quit")
         {
-            result = bufferManager.Current.Text.IsModified
+            result = bufferManager.Current.HasUnsavedChanges
                 ? new ExResult(false, "No write since last change (add ! to override)")
                 : new ExResult(true, null, VimEvent.WindowCloseRequested(false));
             return true;
@@ -86,7 +86,7 @@ public class FileOpsCommands(BufferManager bufferManager, VimOptions options)
                     result = new ExResult(false, "No file name");
                     return true;
                 }
-                if (!bang && buf.Text.IsModified)
+                if (!bang && buf.HasUnsavedChanges)
                 {
                     result = new ExResult(false, "No write since last change (add ! to override)");
                     return true;
@@ -99,7 +99,7 @@ public class FileOpsCommands(BufferManager bufferManager, VimOptions options)
             // data here (BufferManager keeps the old buffer around, reachable via :bn/:bp), so
             // when 'hidden' is on this is allowed without '!' — matching real Vim's semantics
             // where 'hidden' lets you leave a modified buffer without writing it.
-            if (!bang && !options.Hidden && bufferManager.Current.Text.IsModified)
+            if (!bang && !options.Hidden && bufferManager.Current.HasUnsavedChanges)
             {
                 result = new ExResult(false, "No write since last change (add ! to override)");
                 return true;
