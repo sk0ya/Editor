@@ -11,6 +11,44 @@ namespace Editor.Core.Tests;
 // ─────────────────────────────────────────────────────────────────────────────
 public class FoldManagerTests
 {
+    // ── RestoreClosed（ホストのタブの復元） ─────────────────────────────────
+
+    [Fact]
+    public void RestoreClosed_ManualFoldsAreRecreatedClosed()
+    {
+        var fm = new FoldManager();
+        fm.RestoreClosed([new FoldRegion(2, 5, IsClosed: true, IsManual: true)], lineCount: 10);
+
+        var fold = Assert.Single(fm.Folds);
+        Assert.True(fold.IsClosed);
+        Assert.True(fold.IsManual);
+    }
+
+    [Fact]
+    public void RestoreClosed_ServerFoldsWaitForTheFirstRangesThenStopWaiting()
+    {
+        var fm = new FoldManager();
+        fm.RestoreClosed([new FoldRegion(5, 8, IsClosed: true)], lineCount: 20);
+        Assert.Empty(fm.Folds);   // 範囲が届くまでは作らない（届いた範囲と二重にならないように）
+
+        fm.SetLspRanges([(0, 3), (5, 8)]);
+        Assert.True(fm.Folds.Single(f => f.StartLine == 5).IsClosed);
+        Assert.False(fm.Folds.Single(f => f.StartLine == 0).IsClosed);
+
+        // 人が開いたあとの次の応答で閉じ直さない。
+        fm.OpenFold(5);
+        fm.SetLspRanges([(0, 3), (5, 8)]);
+        Assert.False(fm.Folds.Single(f => f.StartLine == 5).IsClosed);
+    }
+
+    [Fact]
+    public void RestoreClosed_IgnoresRangesBeyondTheFile()
+    {
+        var fm = new FoldManager();
+        fm.RestoreClosed([new FoldRegion(2, 50, IsClosed: true, IsManual: true)], lineCount: 10);
+        Assert.Empty(fm.Folds);
+    }
+
     // ── SetLspRanges ─────────────────────────────────────────────────────────
 
     [Fact]

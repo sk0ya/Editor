@@ -59,7 +59,35 @@ public class FoldManager
         InvalidateCache();
     }
 
-    public void Clear() { _folds.Clear(); InvalidateCache(); }
+    public void Clear() { _folds.Clear(); _pendingClosed.Clear(); InvalidateCache(); }
+
+    /// <summary>復元で「閉じておく」と頼まれたが、まだ範囲が届いていない（言語サーバーの foldingRange 待ち）もの。
+    /// 最初に届いた <see cref="SetLspRanges"/> で、同じ範囲を閉じて消える。</summary>
+    private readonly HashSet<(int StartLine, int EndLine)> _pendingClosed = [];
+
+    /// <summary>
+    /// 前に閉じていた範囲を戻す（ホストのタブの復元）。手で畳んだもの（<see cref="FoldRegion.IsManual"/>）はその場で作って閉じる。
+    /// 言語サーバーの範囲は届くまで覚えておき、届いた最初の 1 回で同じ範囲を閉じる（届く前に作ると、サーバーの範囲と
+    /// 重なって二重になる）。<paramref name="lineCount"/> を超える範囲は捨てる（ファイルが外で縮んだ）。
+    /// </summary>
+    public void RestoreClosed(IEnumerable<FoldRegion> folds, int lineCount)
+    {
+        foreach (var fold in folds)
+        {
+            if (fold.StartLine < 0 || fold.EndLine <= fold.StartLine || fold.EndLine >= lineCount) continue;
+            if (fold.IsManual)
+            {
+                CreateFold(fold.StartLine, fold.EndLine);
+                continue;
+            }
+            var idx = _folds.FindIndex(f => f.StartLine == fold.StartLine && f.EndLine == fold.EndLine);
+            if (idx >= 0)
+                _folds[idx] = _folds[idx] with { IsClosed = true };
+            else
+                _pendingClosed.Add((fold.StartLine, fold.EndLine));
+        }
+        InvalidateCache();
+    }
 
     // LSPのfoldingRangeレスポンスからフォールドを設定する。
     // 既存の開閉状態を同じ範囲のフォールドに引き継ぐ。
@@ -76,9 +104,11 @@ public class FoldManager
         {
             if (end <= start) continue;
             if (manual.Any(m => m.StartLine == start && m.EndLine == end)) continue;
-            bool isClosed = existing.TryGetValue((start, end), out bool c) && c;
+            bool isClosed = (existing.TryGetValue((start, end), out bool c) && c) || _pendingClosed.Contains((start, end));
             _folds.Add(new FoldRegion(start, end, IsClosed: isClosed));
         }
+        // 復元の保留は最初の 1 回だけ効かせる（以後、人が開いたものを次の応答で閉じ直さない）。
+        _pendingClosed.Clear();
         _folds.Sort((a, b) => a.StartLine.CompareTo(b.StartLine));
         InvalidateCache();
     }

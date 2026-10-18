@@ -1995,8 +1995,12 @@ public partial class EditorCanvas : FrameworkElement
 
                 // デバッグ停止中の行末の値（ホストが SetInlineValues で渡す）。折り返しは最後の表示行だけ。
                 if (!isPreviewLine)
-                    DrawInlineValue(dc, metrics, l, lineText, y, textLeft,
-                        isLastSegment: !EffectiveWrapLines || GetSegmentEndColumn(vi) >= lineText.Length);
+                {
+                    var isLastSegment = !EffectiveWrapLines || GetSegmentEndColumn(vi) >= lineText.Length;
+                    DrawInlineValue(dc, metrics, l, lineText, y, textLeft, isLastSegment);
+                    // カーソル行の blame（ShowCaretLineBlame）。行末の値が出ている行には出さない。
+                    DrawLineAnnotation(dc, metrics, l, lineText, y, textLeft, isLastSegment);
+                }
 
                 // LSP diagnostics (wavy underlines)
                 DrawDiagnostics(dc, l, y, textLeft, lineText);

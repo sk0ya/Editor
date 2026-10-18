@@ -463,6 +463,18 @@ too. On by default; `set linkedediting` / `set lke` (`VimOptions.LinkedEditing`)
 - Suspended while multi-cursor is active (`LinkedEditingSuspended`); the live ranges are outlined by
   `EditorCanvas.LinkedEditing.cs`.
 
+## Host-restorable folds and caret-line blame
+
+- **Folds survive a host restore** through `GetClosedFolds()` / `RestoreClosedFolds(folds)` (`VimEditorControl.InlineValues.cs`).
+  `LoadFile` clears folds, so the host calls restore *after* loading. Manual folds (`IsManual`, e.g. `zf`) are recreated on the
+  spot; server folds are remembered in `FoldManager._pendingClosed` and closed by the **first** `SetLspRanges` that reports the
+  same range — creating them up front would double up with the server's ranges, and applying the pending set on later responses
+  would re-close a fold the human just opened.
+- **Caret-line blame** (`ShowCaretLineBlame`, `VimEditorControl.CaretBlame.cs`) draws `author, date · summary` at the end of the
+  caret line via `EditorCanvas.SetLineAnnotation` (same painter as inline values, lighter). Blame is loaded once per open/save in
+  `RefreshGitDiffAsync`, never on caret moves, and is hidden while the buffer has unsaved edits (blame line numbers describe the
+  saved version). Not drawn on a line that already shows an inline value or an inline suggestion.
+
 ## Side-by-side diff hosting (read-only, diff decorations)
 
 A host can put two `VimEditorControl`s side by side as a diff editor (Loomo's Diff pane does). The editor

@@ -2481,6 +2481,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         Canvas.SetTestGlyphs([]);
         // 行末の値（デバッグの Inline Values）も同じ。前のファイルの行番号に値を残さない。
         Canvas.SetInlineValues([]);
+        Canvas.SetLineAnnotation(-1, null);   // 前のファイルのカーソル行の blame（行番号にしか結び付いていない）
         // 電球も行にしか結び付いていない。前のファイルの判定を持ち越さない。
         ResetCodeActionBulb();
         _engine.LoadFile(path, prepared);
@@ -2848,6 +2849,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             var blame = await Task.Run(() => _gitProvider.GetBlameLines(filePath));
             Canvas.SetBlameLines(blame);
         }
+        // 開いた・保存した（コミットしたかもしれない）ときに、カーソル行の blame を引き直す。
+        await LoadCaretBlameAsync();
     }
 
     /// <summary>Turns off git blame and removes its gutter annotations. Called from <see cref="SetText"/>
@@ -6734,6 +6737,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             {
                 case VimEventType.TextChanged:
                     needFullUpdate = true;
+                    UpdateCaretBlameAnnotation();   // 未保存の編集の間は出さない
                     // 編集で行がずれる＝点いていた電球の根拠も動く。世代を進めて問い直す。
                     InvalidateCodeActionBulb();
                     BufferChanged?.Invoke(this, EventArgs.Empty);
@@ -6744,6 +6748,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                     ScheduleLinkedEditingPrefetch(ce.Position);
                     RefreshLinkedEditingRanges();
                     CaretMoved?.Invoke(this, new CaretInfo(ce.Position.Line, ce.Position.Column));
+                    UpdateCaretBlameAnnotation();
                     if (!needFullUpdate)
                     {
                         Canvas.SetCursor(ce.Position);
