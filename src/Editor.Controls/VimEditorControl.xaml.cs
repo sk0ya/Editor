@@ -2671,6 +2671,25 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     }
 
     /// <summary>
+    /// Sets the highlighting language of a buffer that has no file path — an untitled buffer whose language the
+    /// host detected from its content, or one the user picked. A buffer with a path keeps the language its
+    /// extension gives (saving an untitled buffer under a name re-detects from the extension as usual), so this
+    /// returns false for it. Pass null or "" to clear. Returns false when <paramref name="name"/> is not a
+    /// registered language name (see <see cref="DocumentMeta.Language"/> for the current one).
+    /// </summary>
+    public bool SetSyntaxLanguage(string? name)
+    {
+        if (!string.IsNullOrEmpty(_engine.CurrentBuffer.FilePath)) return false;
+        var wanted = string.IsNullOrEmpty(name) ? null : name;
+        if (string.Equals(_engine.Syntax.LanguageName, wanted, StringComparison.Ordinal)) return true;
+        _engine.Syntax.SetLanguage(wanted ?? "");
+        if (wanted is not null && _engine.Syntax.LanguageName is null) return false;
+        UpdateAll();
+        PushStatusBarState();
+        return true;
+    }
+
+    /// <summary>
     /// Clears the modified flag without writing to disk. Hosts call this after persisting a
     /// virtual document's content themselves. When <paramref name="documentId"/> is supplied it
     /// acts as a guard: the flag is only cleared if it matches the current document's id.

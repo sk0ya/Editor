@@ -46,6 +46,35 @@ public sealed class VimEditorControlIntegrationTests
     }
 
     [Fact]
+    public void SetSyntaxLanguage_AppliesOnlyToBuffersWithoutPath()
+    {
+        WpfTestHost.Run(() => WpfTestHost.WithLoadedControl<VimEditorControl>((editor, _) =>
+        {
+            editor.SetText("{ \"a\": 1 }");
+            Assert.Null(editor.DocumentInfo.Language);
+
+            Assert.True(editor.SetSyntaxLanguage("JSON"));
+            Assert.Equal("JSON", editor.DocumentInfo.Language);
+            Assert.False(editor.SetSyntaxLanguage("NoSuchLanguage"));
+            Assert.True(editor.SetSyntaxLanguage(null));
+            Assert.Null(editor.DocumentInfo.Language);
+
+            var path = Path.Combine(Path.GetTempPath(), $"editor-syntax-{Guid.NewGuid():N}.py");
+            File.WriteAllText(path, "print(1)\n");
+            try
+            {
+                editor.LoadFile(path);
+                Assert.False(editor.SetSyntaxLanguage("JSON"));
+                Assert.Equal("Python", editor.DocumentInfo.Language);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }));
+    }
+
+    [Fact]
     public void LoadedControl_ChangesVirtualDocumentAndReportsHostSave()
     {
         WpfTestHost.Run(() =>
