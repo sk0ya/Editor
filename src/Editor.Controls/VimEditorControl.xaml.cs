@@ -466,6 +466,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     // ─── File Watcher ───
     private FileSystemWatcher? _fileWatcher;
     private volatile bool _suppressFileWatcher;
+    /// <summary><see cref="VimEditorControlOptions.WatchFileOnDisk"/>。false ならファイルの監視を張らない。</summary>
+    private readonly bool _watchFileOnDisk = true;
     private bool _pendingWatcherReload;
     private string? _lastSavedFilePath;
     private DateTime _lastSavedWriteTimeUtc;
@@ -831,6 +833,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         _gitProvider = options.GitServiceFactory?.Invoke() ?? NullEditorGitService.Instance;
         _inlineSuggestionProvider = options.InlineSuggestionProvider;
+        _watchFileOnDisk = options.WatchFileOnDisk;
         _lspWorkspace = options.LspWorkspace;
         _lspView = options.LspViewFactory?.Invoke()
             ?? (_lspWorkspace is null
@@ -2514,6 +2517,28 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         PushStatusBarState();
     }
 
+    /// <summary>
+    /// Re-reads the open file from disk after it changed outside the editor — the host-side
+    /// counterpart of the file watcher, for hosts that turn it off
+    /// (<see cref="VimEditorControlOptions.WatchFileOnDisk"/>).
+    /// <para>Unlike <c>:e!</c> the reload is <b>one undoable edit</b>: undo history survives (Ctrl+Z
+    /// brings back the text from before the reload), the caret stays where it was, and folds are
+    /// kept. The buffer is marked saved, so any unsaved edits become part of the undo history rather
+    /// than being lost. Pass a <see cref="PreparedFileLoad"/> prepared on a background thread to keep
+    /// the read and decode off the UI thread; null reads here. Returns false when there is no file
+    /// to read.</para>
+    /// </summary>
+    public bool ReloadFromDisk(PreparedFileLoad? prepared = null)
+    {
+        if (_engine.ReloadFromDisk(prepared) is not { } events)
+            return false;
+        ProcessVimEvents(events);
+        RefreshSaveDiff();
+        _ = RefreshGitDiffAsync();
+        PushStatusBarState();
+        return true;
+    }
+
     private void ReloadCurrentFile()
     {
         var filePath = _engine.CurrentBuffer.FilePath;
@@ -2710,6 +2735,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // Dispose previous watcher
         _fileWatcher?.Dispose();
         _fileWatcher = null;
+        if (!_watchFileOnDisk) return;   // ホストが見張る（VimEditorControlOptions.WatchFileOnDisk）
 
         var dir = Path.GetDirectoryName(filePath);
         if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;

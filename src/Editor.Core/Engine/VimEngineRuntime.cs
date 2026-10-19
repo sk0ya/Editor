@@ -1222,6 +1222,34 @@ internal sealed partial class VimEngineRuntime
     }
 
     /// <summary>
+    /// Re-reads the current buffer's file after it changed outside the editor, applied as one
+    /// undoable edit (<see cref="ApplyExternalText"/>) so the undo history survives, then marks the
+    /// buffer saved. <paramref name="prepared"/> lets the host do the read and decode off its UI
+    /// thread; null (or a preparation for another path) reads here. Returns null when there is no
+    /// file to read.
+    /// </summary>
+    public IReadOnlyList<VimEvent>? ReloadFromDisk(PreparedFileLoad? prepared)
+    {
+        var buffer = CurrentBuffer;
+        if (string.IsNullOrEmpty(buffer.FilePath))
+            return null;
+        if (prepared is null || !prepared.Matches(buffer.FilePath))
+            prepared = PreparedFileLoad.Prepare(buffer.FilePath);
+        if (prepared.Buffer is not { } disk)
+            return null;
+
+        var events = ApplyExternalText(disk.Text.GetText());
+        buffer.FileFormat = disk.FileFormat;
+        buffer.FileEncoding = disk.FileEncoding;
+        buffer.HasMixedLineEndings = disk.HasMixedLineEndings;
+        _config.Options.FileFormat = disk.FileFormat;
+        _config.Options.FileEncoding = disk.FileEncoding;
+        buffer.Text.MarkSaved();
+        buffer.MarkFileFormatSaved();
+        return events;
+    }
+
+    /// <summary>
     /// Restores host-managed text without adding another undo checkpoint.
     /// This is reserved for rolling back a completed host transaction after a later
     /// file operation fails; normal formatter/LSP edits must use <see cref="ApplyExternalText"/>.

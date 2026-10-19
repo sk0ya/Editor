@@ -111,6 +111,10 @@ public class VimEngine
     public void SetText(string text) => _runtime.SetText(text);
     public IReadOnlyList<VimEvent> ApplyExternalText(string text) =>
         _runtime.ApplyExternalText(text);
+    /// <summary>Re-reads the current file as one undoable edit and marks it saved
+    /// (<see cref="VimEngineRuntime.ReloadFromDisk"/>). Null when there is no file to read.</summary>
+    public IReadOnlyList<VimEvent>? ReloadFromDisk(PreparedFileLoad? prepared) =>
+        _runtime.ReloadFromDisk(prepared);
     /// <summary>Host transaction rollback用。Undo履歴へ新しいcheckpointを追加しない。</summary>
     public IReadOnlyList<VimEvent> RestoreExternalText(string text) =>
         _runtime.RestoreExternalText(text);

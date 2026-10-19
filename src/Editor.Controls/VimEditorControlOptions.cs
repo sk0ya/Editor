@@ -159,6 +159,17 @@ public sealed class VimEditorControlOptions
     /// そちらは待ちを削っても効かないので、長引くときは「取得しています」の板を先に出している。</para></summary>
     public int HoverInfoDelayMs { get; init; } = 250;
 
+    /// <summary>
+    /// 開いているファイルをディスク上で見張り、外での書き換えを取り込むか（既定は true）。
+    /// 保存済みならそのまま読み直し、未保存の編集があればモーダルの確認を出す。
+    ///
+    /// <para>ホストが自分で見張って取り込み方を決める（ワークスペースの全タブをまとめて見張る・
+    /// 未保存の編集との競合をモーダルでなく通知バーで尋ねる等）ときは false にする。true のままだと
+    /// 1回の書き換えにホストとエディタの両方が反応し、確認が二重に出る。読み直しはホストから
+    /// <c>ExecuteCommand("e!")</c> で行える。</para>
+    /// </summary>
+    public bool WatchFileOnDisk { get; init; } = true;
+
     public SyntaxLanguageRegistry? SyntaxLanguages { get; init; }
     public EditorCommandRegistry? Commands { get; init; }
     public IServiceProvider? CommandServices { get; init; }
