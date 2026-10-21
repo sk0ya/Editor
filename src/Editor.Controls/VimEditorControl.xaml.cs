@@ -276,6 +276,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     [DllImport("user32.dll")] private static extern bool   SetCaretPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool   HideCaret(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern uint   MapVirtualKey(uint uCode, uint uMapType);
+    [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint idThread);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int ToUnicodeEx(uint wVirtKey, uint wScanCode, byte[] lpKeyState,
+        [Out] System.Text.StringBuilder pwszBuff, int cchBuff, uint wFlags, IntPtr dwhkl);
 
     private const int  NI_COMPOSITIONSTR      = 0x0015;
     private const int  CPS_CANCEL             = 0x0004;
@@ -1105,7 +1109,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         PreviewKeyDown += OnPreviewKeyDown;
 
         // Active-pane cursor and status bar
-        GotKeyboardFocus  += (_, _) => { Canvas.IsActive = true;  SyncStatusBar(); FocusCustomTextStore(); };
+        GotKeyboardFocus  += (_, e) =>
+        {
+            Canvas.IsActive = true;
+            SyncStatusBar();
+            // 検索バー（Ctrl+F）など自前の入力欄へ移ったときは TSF のフォーカスを奪い返さない。
+            // GotKeyboardFocus はバブルするので子の TextBox が得たときもここへ来る。奪うと IME は
+            // エディタのストアへ組み立て、しかも Normal では IsCompositionAllowed が偽なので、
+            // IME ON で打った文字が検索欄に入らなかった。
+            if (e.NewFocus is not TextBoxBase) FocusCustomTextStore();
+        };
         LostKeyboardFocus += (_, _) => Canvas.IsActive = false;
 
         // Mouse and scroll wiring
@@ -3868,16 +3881,21 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
     private void UpdateImeCompositionOverlay(TextCompositionEventArgs e)
     {
+        var composition = e.TextComposition;
+        var text = composition?.CompositionText;
+        if (string.IsNullOrEmpty(text))
+            text = composition?.SystemCompositionText;
+
+        if (IsCommandLineMode(_engine.Mode))
+        {
+            ShowCommandLineComposition(text);
+            return;
+        }
         if (_engine.Mode is not (VimMode.Insert or VimMode.Replace))
         {
             ClearImeCompositionOverlay();
             return;
         }
-
-        var composition = e.TextComposition;
-        var text = composition?.CompositionText;
-        if (string.IsNullOrEmpty(text))
-            text = composition?.SystemCompositionText;
 
         if (string.IsNullOrEmpty(text))
         {
@@ -3900,7 +3918,30 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _lastImeCompositionText = string.Empty;
         Canvas.SetImeCompositionText(string.Empty);
         Canvas.SetImeClauses([], -1, -1);
+        ActiveStatusBar.UpdateCommandLineComposition(null);
         ClearImeCandidateOverlay();
+    }
+
+    private static bool IsCommandLineMode(VimMode mode)
+        => mode is VimMode.Command or VimMode.SearchForward or VimMode.SearchBackward;
+
+    /// <summary>
+    /// コマンドライン（: / ?）で組み立て中の文字を、本文のカーソル位置ではなくステータスバーの
+    /// コマンドライン末尾に出す。確定した文字は <see cref="InsertCommittedText"/> からエンジンへ入る。
+    /// </summary>
+    private void ShowCommandLineComposition(string? text)
+    {
+        _imeCompositionSeq++;
+        if (string.IsNullOrEmpty(text))
+        {
+            ScheduleImeCompositionOverlayClear();
+            return;
+        }
+
+        CancelScheduledImeCompositionOverlayClear();
+        _lastImeCompositionText = text;
+        ActiveStatusBar.UpdateCommandLineComposition(text);
+        NotifyImeLayoutChanged();
     }
 
     private void ScheduleImeCompositionOverlayClear()
@@ -3943,9 +3984,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         if (!IsImeTextInputMode(mode))
             return;
 
-        foreach (var ch in text)
+        foreach (var raw in text)
         {
-            if (ch < 32) continue; // Skip control chars
+            if (raw < 32) continue; // Skip control chars
+            // Ex コマンドは ASCII で解釈されるので、IME ON のまま打った全角スペース・全角英数
+            // （`:ｗ`、`:e　foo`）は半角に戻す。検索（/ ?）は打ったとおりの文字で探す。
+            var ch = mode == VimMode.Command ? NormalizeVimInputChar(raw) : raw;
             ProcessKey(ch.ToString(), false, false, false);
         }
 
@@ -4064,8 +4108,12 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // WPF's own TextServicesContext may set the thread's TSF focus to its default
         // document manager *after* this focus change settles; re-assert once more so our
         // store wins. Harmless/idempotent in a standalone editor-only window.
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input,
-            () => AssertImeStoreFocus());
+        // その間にフォーカスが自前の入力欄（検索バー）へ移っていれば、そちらに譲る。
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+        {
+            if (Keyboard.FocusedElement is TextBoxBase) return;
+            AssertImeStoreFocus();
+        });
     }
 
     private void DisposeCustomTextStore()
@@ -4138,6 +4186,11 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             ClearImeCompositionOverlay();
             return;
         }
+        if (IsCommandLineMode(_engine.Mode))
+        {
+            ShowCommandLineComposition(text);
+            return;
+        }
         // Attach the read-only edit sink to our (now focused) context so clause boundaries
         // and the focused clause are read from GUID_PROP_ATTRIBUTE and rendered.
         EnsureTsfTextEditSink();
@@ -4189,6 +4242,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         left = top = right = bottom = 0;
         try
         {
+            // コマンドラインで組み立て中なら、候補窓はステータスバーのコマンドラインに付ける。
+            if (IsCommandLineMode(_engine.Mode)
+                && ActiveStatusBar.TryGetCommandLineCaretScreenRect(out var cmd))
+            {
+                left = (int)cmd.Left;
+                top = (int)cmd.Top;
+                right = (int)cmd.Right;
+                bottom = (int)cmd.Bottom;
+                return true;
+            }
             if (Canvas.ActualWidth <= 0 || Canvas.ActualHeight <= 0) return false;
             var p = Canvas.GetImeCaretPixelPosition();
             var topPt = Canvas.PointToScreen(p);
@@ -4658,7 +4721,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         // In Command mode, intercept Tab for completion cycling (prevent WPF focus traversal)
-        if (actualKey == Key.Tab && mode == VimMode.Command)
+        if (actualKey == Key.Tab && mode == VimMode.Command && !HasActiveImeComposition())
         {
             bool ctrl = (e.KeyboardDevice.Modifiers & ModifierKeys.Control) != 0;
             bool shift = (e.KeyboardDevice.Modifiers & ModifierKeys.Shift) != 0;
@@ -4686,8 +4749,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             e.Handled = true;
         }
 
-        // In Normal/Visual/Command/Search mode, intercept IME-processed keys before
-        // the IME can consume them and turn them into Japanese text.
+        // In Normal/Visual mode, intercept IME-processed keys before the IME can consume
+        // them and turn them into Japanese text. Command/Search only take Ctrl chords here:
+        // their plain keys go to the IME so a pattern / Ex argument can be typed in Japanese
+        // (composition shows on the command line, the commit arrives via InsertCommittedText).
         if (e.Key == Key.ImeProcessed &&
             mode is VimMode.Normal or VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock
                  or VimMode.Command or VimMode.SearchForward or VimMode.SearchBackward)
@@ -4709,6 +4774,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                     return;
                 }
             }
+
+            if (IsCommandLineMode(mode))
+                return;
 
             var keyStr = GetVimKey(actualKey, shift);
             if (keyStr != null)
@@ -7277,6 +7345,16 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
                 : char.ToLowerInvariant(letter).ToString();
         }
 
+        // 数字段と記号は配列で打つ文字が違う（JIS では Shift+2 が '"'、':' が VK_OEM_1、';' が
+        // VK_OEM_PLUS…）。IME ON のキーは Key.ImeProcessed で届き、OS が解決した文字（OnTextInput）
+        // を待てないので、ここで使っている配列から引き直す。下の US 固定の表は引けなかったときの控え。
+        // これが無いと IME ON の `/` 検索で記号が別の文字に化け、検索が当たらなかった。
+        if ((key >= Key.D0 && key <= Key.D9) || IsOemCharKey(key))
+        {
+            if (LayoutCharForKey(key, shift) is char laid)
+                return laid.ToString();
+        }
+
         if (key >= Key.D0 && key <= Key.D9)
         {
             const string plain = "0123456789";
@@ -7357,6 +7435,31 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     }
 
     private const uint MAPVK_VK_TO_CHAR = 2;
+    private const uint MAPVK_VK_TO_VSC = 0;
+
+    private static bool IsOemCharKey(Key key) => key is
+        Key.OemSemicolon or Key.OemPlus or Key.OemComma or Key.OemMinus or Key.OemPeriod or
+        Key.OemQuestion or Key.OemTilde or Key.OemOpenBrackets or Key.OemPipe or
+        Key.OemCloseBrackets or Key.Oem7 or Key.Oem8 or Key.Oem102;
+
+    /// <summary>
+    /// アクティブなキーボード配列で、そのキーが（Shift を含めて）打つ ASCII の印字文字。
+    /// IME の状態は見ない（JIS 配列そのものの文字を返す）。印字できない／デッドキーは null。
+    /// </summary>
+    private static char? LayoutCharForKey(Key key, bool shift)
+    {
+        int vk = KeyInterop.VirtualKeyFromKey(key);
+        if (vk == 0) return null;
+        var state = new byte[256];
+        if (shift) state[0x10] = 0x80; // VK_SHIFT
+        var buf = new System.Text.StringBuilder(4);
+        uint scan = MapVirtualKey((uint)vk, MAPVK_VK_TO_VSC);
+        // wFlags 0x4: デッドキーの保留などキーボード状態を変えない（Windows 10 1607 以降）。
+        int n = ToUnicodeEx((uint)vk, scan, state, buf, buf.Capacity, 0x4, GetKeyboardLayout(0));
+        if (n != 1) return null;
+        char ch = buf[0];
+        return ch is >= (char)33 and <= (char)126 ? ch : null;
+    }
 
     /// <summary>
     /// Returns the character a key produces with no modifiers on the active
@@ -7390,7 +7493,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             Key.Space or
             Key.OemSemicolon or Key.OemQuestion or Key.OemPeriod or Key.OemComma or
             Key.OemOpenBrackets or Key.OemCloseBrackets or Key.OemPipe or Key.Oem7 or
-            Key.OemTilde or Key.OemMinus or Key.OemPlus or
+            Key.OemTilde or Key.OemMinus or Key.OemPlus or Key.Oem8 or Key.Oem102 or
             Key.Add or Key.Subtract or Key.Multiply or Key.Divide or Key.Decimal;
     }
 

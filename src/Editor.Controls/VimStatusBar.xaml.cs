@@ -1,4 +1,6 @@
+using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using Editor.Controls.Themes;
 using Editor.Core.Engine;
@@ -168,19 +170,75 @@ public partial class VimStatusBar : UserControl
     /// <summary>The status message currently displayed. Exposed for tests.</summary>
     internal string CurrentStatus => StatusText.Text;
 
+    private string _commandLine = "";
+    private string _commandComposition = "";
+    private Run? _compositionRun;
+
     public void UpdateCommandLine(string text)
     {
-        if (string.IsNullOrEmpty(text))
+        _commandLine = text ?? "";
+        RenderCommandLine();
+    }
+
+    /// <summary>
+    /// コマンドライン（<c>:</c> <c>/</c> <c>?</c>）で IME が組み立て中の文字。確定するまでは
+    /// エンジンのコマンドラインに入っていないので、末尾に下線付きで重ねて見せる。空で消す。
+    /// </summary>
+    public void UpdateCommandLineComposition(string? composition)
+    {
+        composition ??= "";
+        if (composition == _commandComposition) return;
+        _commandComposition = composition;
+        RenderCommandLine();
+    }
+
+    /// <summary>組み立て中の文字の先頭（無ければコマンドラインの末尾）の画面座標。IME の候補窓の位置合わせに使う。</summary>
+    internal bool TryGetCommandLineCaretScreenRect(out Rect rect)
+    {
+        rect = Rect.Empty;
+        if (!CommandText.IsVisible) return false;
+        try
         {
-            CommandText.Visibility = System.Windows.Visibility.Collapsed;
-            FileInfoPanel.Visibility = System.Windows.Visibility.Visible;
+            var pointer = _compositionRun?.ContentStart ?? CommandText.ContentEnd;
+            var local = pointer.GetCharacterRect(LogicalDirection.Forward);
+            if (local.IsEmpty) return false;
+            var top = CommandText.PointToScreen(local.TopLeft);
+            var bottom = CommandText.PointToScreen(local.BottomLeft);
+            rect = new Rect(top, new Point(top.X + 1, bottom.Y));
+            return true;
         }
-        else
+        catch { return false; }
+    }
+
+    /// <summary>コマンドライン欄に今見えている文字（組み立て中の文字を含む）。テスト用。</summary>
+    internal string CurrentCommandLineText
+        => CommandText.Visibility == Visibility.Visible
+            ? string.Concat(CommandText.Inlines.OfType<Run>().Select(r => r.Text))
+            : "";
+
+    /// <summary>下線付きで重ねている組み立て中の文字。テスト用。</summary>
+    internal string CurrentCommandComposition => _commandComposition;
+
+    private void RenderCommandLine()
+    {
+        if (_commandLine.Length == 0 && _commandComposition.Length == 0)
         {
-            CommandText.Text = text;
-            CommandText.Visibility = System.Windows.Visibility.Visible;
-            FileInfoPanel.Visibility = System.Windows.Visibility.Collapsed;
+            _compositionRun = null;
+            CommandText.Visibility = Visibility.Collapsed;
+            FileInfoPanel.Visibility = Visibility.Visible;
+            return;
         }
+
+        CommandText.Inlines.Clear();
+        CommandText.Inlines.Add(new Run(_commandLine));
+        _compositionRun = null;
+        if (_commandComposition.Length > 0)
+        {
+            _compositionRun = new Run(_commandComposition) { TextDecorations = TextDecorations.Underline };
+            CommandText.Inlines.Add(_compositionRun);
+        }
+        CommandText.Visibility = Visibility.Visible;
+        FileInfoPanel.Visibility = Visibility.Collapsed;
     }
 
     public void ShowCompletions(string[] items, int selectedIndex)
