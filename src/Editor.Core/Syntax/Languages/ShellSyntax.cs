@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class ShellSyntax : ISyntaxLanguage
+public class ShellSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "Shell";
     public string[] Extensions => [".sh", ".bash", ".zsh", ".fish"];
@@ -16,19 +16,19 @@ public class ShellSyntax : ISyntaxLanguage
         "echo", "printf", "read", "test", "true", "false",
     ];
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inHereDoc = false;
-        string hereDocEnd = "";
+    private readonly record struct LineState(bool InHereDoc, string HereDocEnd);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref inHereDoc, ref hereDocEnd);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false, "");
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var (inHereDoc, hereDocEnd) = (LineState)state;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inHereDoc, ref hereDocEnd);
+        LineStateTokenizer.Advance(ref state, new LineState(inHereDoc, hereDocEnd));
+        return [.. tokens];
     }
 
     private void TokenizeLine(string line, List<SyntaxToken> tokens,

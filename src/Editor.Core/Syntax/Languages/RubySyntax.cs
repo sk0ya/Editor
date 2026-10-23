@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class RubySyntax : ISyntaxLanguage
+public class RubySyntax : ILineStateSyntaxLanguage
 {
     public string Name => "Ruby";
     public string[] Extensions => [".rb"];
@@ -19,35 +19,31 @@ public class RubySyntax : ISyntaxLanguage
         "puts", "print", "raise", "new", "lambda", "proc",
     ];
 
-    public LineTokens[] Tokenize(string[] lines)
+    private readonly record struct LineState(bool InBlockComment);
+
+    public object InitialState { get; } = new LineState(false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
     {
-        var result = new List<LineTokens>();
-        bool inBlockComment = false;
+        var tokens = new List<SyntaxToken>();
 
-        for (int i = 0; i < lines.Length; i++)
+        if (((LineState)state).InBlockComment)
         {
-            var line = lines[i];
-            var tokens = new List<SyntaxToken>();
-
-            if (inBlockComment)
-            {
-                tokens.Add(new SyntaxToken(0, line.Length, TokenKind.Comment));
-                if (line.TrimEnd() == "=end") inBlockComment = false;
-                result.Add(new LineTokens(i, [.. tokens]));
-                continue;
-            }
-            if (line.TrimEnd() == "=begin")
-            {
-                tokens.Add(new SyntaxToken(0, line.Length, TokenKind.Comment));
-                inBlockComment = true;
-                result.Add(new LineTokens(i, [.. tokens]));
-                continue;
-            }
-
-            TokenizeLine(line, tokens);
-            result.Add(new LineTokens(i, [.. tokens]));
+            tokens.Add(new SyntaxToken(0, line.Length, TokenKind.Comment));
+            if (line.TrimEnd() == "=end") LineStateTokenizer.Advance(ref state, new LineState(false));
+            return [.. tokens];
         }
-        return [.. result];
+        if (line.TrimEnd() == "=begin")
+        {
+            tokens.Add(new SyntaxToken(0, line.Length, TokenKind.Comment));
+            LineStateTokenizer.Advance(ref state, new LineState(true));
+            return [.. tokens];
+        }
+
+        TokenizeLine(line, tokens);
+        return [.. tokens];
     }
 
     private static void TokenizeLine(string line, List<SyntaxToken> tokens)

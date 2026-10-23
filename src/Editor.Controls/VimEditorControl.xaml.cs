@@ -1156,6 +1156,14 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             NotifyImeLayoutChanged();
             ViewportScrolled?.Invoke(this, EventArgs.Empty);
         };
+        // スクロールせずにキャレットだけ動いた：見えている範囲は変わらないので装飾は組み直さないが、
+        // キャレットに付いていくもの（ホバー・データチップを引っ込める、IME の候補窓）は従来どおり動かす。
+        Canvas.CursorRevealedInPlace += () =>
+        {
+            HideDataTip();
+            HideHoverInfoUnlessHeld();
+            NotifyImeLayoutChanged();
+        };
         Canvas.SizeChanged += (_, _) =>
         {
             SyncViewportState();
@@ -1327,7 +1335,10 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // XML/XAML paths are deep (Window › Grid › Border › ContentPresenter › …) and overflow
         // the bar. The innermost segment is the one that says where the cursor is, so let the
         // overflow fall off the left edge rather than clipping the tail.
-        BreadcrumbScroll.UpdateLayout();
+        // ここで UpdateLayout() を呼んではいけない：窓全体のレイアウトを同期で走らせるので、直前の
+        // キャレット移動で無効化されたキャンバスの描画まで打鍵の中で起き（j/k のキー処理の 4 割）、
+        // そのあとの無効化でもう一度描くことになる。ScrollToRightEnd は ScrollViewer の次の配置で
+        // 新しい幅に対して丸められるので、レイアウトを待たずに頼んでおけば右端に揃う。
         BreadcrumbScroll.ScrollToRightEnd();
     }
 

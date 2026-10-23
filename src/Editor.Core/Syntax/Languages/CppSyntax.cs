@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class CppSyntax : ISyntaxLanguage
+public class CppSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "C/C++";
     public string[] Extensions => [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh"];
@@ -37,18 +37,19 @@ public class CppSyntax : ISyntaxLanguage
         "nullptr_t", "max_align_t",
     ];
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inBlockComment = false;
+    private readonly record struct LineState(bool InBlockComment);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref inBlockComment);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var inBlockComment = ((LineState)state).InBlockComment;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inBlockComment);
+        LineStateTokenizer.Advance(ref state, new LineState(inBlockComment));
+        return [.. tokens];
     }
 
     private static void TokenizeLine(string line, List<SyntaxToken> tokens, ref bool inBlockComment)

@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class CssSyntax : ISyntaxLanguage
+public class CssSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "CSS";
     public string[] Extensions => [".css", ".scss", ".less"];
@@ -8,19 +8,19 @@ public class CssSyntax : ISyntaxLanguage
     public string? BlockCommentPrefix => "/*";
     public string? BlockCommentSuffix => "*/";
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inBlockComment = false;
-        int braceDepth = 0;
+    private readonly record struct LineState(bool InBlockComment, int BraceDepth);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref inBlockComment, ref braceDepth);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false, 0);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var (inBlockComment, braceDepth) = (LineState)state;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inBlockComment, ref braceDepth);
+        LineStateTokenizer.Advance(ref state, new LineState(inBlockComment, braceDepth));
+        return [.. tokens];
     }
 
     private static void TokenizeLine(string line, List<SyntaxToken> tokens,

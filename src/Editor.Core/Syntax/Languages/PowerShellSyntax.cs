@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class PowerShellSyntax : ISyntaxLanguage
+public class PowerShellSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "PowerShell";
     public string[] Extensions => [".ps1", ".psm1", ".psd1"];
@@ -25,20 +25,19 @@ public class PowerShellSyntax : ISyntaxLanguage
         "replace", "split", "join", "f",
     };
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inBlockComment = false;
-        bool inHereDouble = false;  // @"..."@
-        bool inHereSingle = false;  // @'...'@
+    private readonly record struct LineState(bool InBlockComment, bool InHereDouble, bool InHereSingle);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref inBlockComment, ref inHereDouble, ref inHereSingle);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false, false, false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var (inBlockComment, inHereDouble, inHereSingle) = (LineState)state;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inBlockComment, ref inHereDouble, ref inHereSingle);
+        LineStateTokenizer.Advance(ref state, new LineState(inBlockComment, inHereDouble, inHereSingle));
+        return [.. tokens];
     }
 
     private void TokenizeLine(string line, List<SyntaxToken> tokens,

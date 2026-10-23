@@ -36,6 +36,7 @@ public partial class EditorCanvas : FrameworkElement
     // Character-boundary X positions measured by WPF's text formatter. Unchanged line strings
     // retain their entry across edits; changed/deleted strings are pruned in SetLines.
     private readonly Dictionary<string, double[]> _textBoundaryCache = [];
+    private const int TextBoundaryCacheSlack = 256;
     private const int LongLineCharacterThreshold = TextBoundaryMeasurer.ExactCharacterLimit;
     private bool _hasLongLine;
     private double _scrollOffsetY;
@@ -48,7 +49,11 @@ public partial class EditorCanvas : FrameworkElement
     private CursorPosition _cursor;
     private Selection? _selection;
     private VimMode _mode = VimMode.Normal;
-    private Dictionary<int, SyntaxToken[]> _tokensByLine = [];
+    private LineTokens[] _tokens = [];
+    private bool _tokensDense = true;
+    private Dictionary<int, SyntaxToken[]>? _tokensByLine;
+    // 開始桁の順でない行（字句器の出力は普通は順どおり）だけ、並べ直したものを持つ。
+    private readonly Dictionary<SyntaxToken[], SyntaxToken[]> _sortedTokens = new(ReferenceEqualityComparer.Instance);
     private Dictionary<int, List<CursorPosition>> _searchMatchesByLine = [];
     private string _searchPattern = "";
     private IReadOnlyDictionary<int, string> _substitutePreviewLines = new Dictionary<int, string>();
@@ -108,6 +113,12 @@ public partial class EditorCanvas : FrameworkElement
     // wrapping; recomputed only when the line array itself changes (keyed by reference).
     private string[]? _maxLineWidthCacheLines;
     private double _cachedMaxLineWidth;
+    // 行ごとの横幅の見積もり（NaN＝未計算）と、それがどの行配列のものか。SyncLineExtents を参照。
+    private double[] _lineExtents = [];
+    // 最後に組んだ行レイアウトが前提にした本文の幅とガターの幅（ArrangeOverride で組み直しが要るかの判定）。
+    private double _visualLayoutTextWidth = double.NaN;
+    private double _visualLayoutGutterWidth = double.NaN;
+    private string[]? _lineExtentsLines;
     private readonly Dictionary<int, (string Text, IReadOnlyList<Editor.Core.Text.DetectedLink> Links)> _linkCache = [];
     // File-path link verification (resolved absolute path → exists on disk). Null while a
     // background check is in flight. Populated off the UI thread; reads/writes happen on the
@@ -228,6 +239,11 @@ public partial class EditorCanvas : FrameworkElement
     public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
 
     public event Action<double, double>? ScrollChanged;
+    /// <summary>キャレットを見える位置へ合わせたが、スクロールは要らなかった。<see cref="ScrollChanged"/> は
+    /// 位置が実際に動いたときだけ出す（以前は j/k の1打鍵ごとに出して、見えている範囲の装飾を毎回
+    /// 組み直していた）。キャレットの移動そのものに反応したい受け手（ホバーを閉じる、IME の候補窓を
+    /// 追従させる）はこちらも購読する。</summary>
+    public event Action? CursorRevealedInPlace;
     public event Action<int>? VisibleLinesChanged;
     public event Action? ScrollMetricsChanged;
     public event Action<int, int>? MouseClicked;       // (line, col)
@@ -267,6 +283,8 @@ public partial class EditorCanvas : FrameworkElement
         // visibly had the caret.
         Focusable = true;
         GotKeyboardFocus += (_, _) => EditorCanvasAutomationPeer.NotifyFocusChanged(this);
+        // 本文層と上層（EditorCanvas.TextDrawingCache.cs）。下層はこの要素自身の OnRender。
+        _layers = new VisualCollection(this) { _textLayer, _overlayLayer };
         _gutterHitTester = new GutterHitTester(HitTestGutterLine);
         StartCursorBlink();
         RebuildVisualLayout();
@@ -342,7 +360,7 @@ public partial class EditorCanvas : FrameworkElement
         _charWidth = 0;
         _charWidthCache.Clear();
         _textBoundaryCache.Clear();
-        _maxLineWidthCacheLines = null; // char widths changed — invalidate cached extent
+        InvalidateLineExtents(); // char widths changed — invalidate cached extent
         MeasureChar();
         RecomputeTableOverrides();
         RebuildVisualLayout();
@@ -400,7 +418,9 @@ public partial class EditorCanvas : FrameworkElement
         // A TextBuffer snapshot is a new array after every edit, but almost all of its line
         // strings are unchanged. Keep those measurements and discard only stale line text.
         // This also bounds the cache to the current document instead of clearing it globally.
-        if (_textBoundaryCache.Count > 0)
+        // 掃除は溜まってからまとめて行う：打鍵ごとに全行の集合を作っていた（7500行で 1打鍵 0.4ms）。
+        // 1打鍵で増える古い項目は高々数行なので、行数＋余裕を超えたときだけ掃けば上限は保たれる。
+        if (_textBoundaryCache.Count > _lines.Length + TextBoundaryCacheSlack)
         {
             var currentLines = _lines.ToHashSet(StringComparer.Ordinal);
             foreach (string cachedLine in _textBoundaryCache.Keys.ToArray())
@@ -666,16 +686,62 @@ public partial class EditorCanvas : FrameworkElement
         _                                    => null
     };
 
+    /// <summary>
+    /// 字句の色分けを差し替える。構文エンジンは同じ版の本文には同じ配列を返すので、同じ配列なら何もしない
+    /// ——キャレットが動くたびに全行ぶんの索引と並べ替えを作り直していた（7500行の .cs で 1打鍵 2〜3ms）。
+    /// 索引は作らず配列のまま持ち、行の位置は描画のときに引く（<see cref="TokensForLine"/>）。
+    /// </summary>
     public void SetTokens(LineTokens[] tokens)
     {
-        _tokensByLine = new Dictionary<int, SyntaxToken[]>(tokens.Length);
-        foreach (var lineTokens in tokens)
-        {
-            _tokensByLine[lineTokens.Line] = lineTokens.Tokens.Length > 1
-                ? lineTokens.Tokens.OrderBy(t => t.StartColumn).ToArray()
-                : lineTokens.Tokens;
-        }
+        if (ReferenceEquals(_tokens, tokens)) return;
+        _tokens = tokens;
+        _tokensDense = IsDense(tokens);
+        _tokensByLine = null;
+        _sortedTokens.Clear();
         InvalidateVisual();
+
+        // ファイル全体の結果は行 i が添字 i にある。範囲だけの結果（大きなファイルの可視範囲）は飛び飛びなので索引を引く。
+        static bool IsDense(LineTokens[] tokens)
+        {
+            for (int i = 0; i < tokens.Length; i++)
+                if (tokens[i].Line != i) return false;
+            return true;
+        }
+    }
+
+    /// <summary>その行の字句（開始桁の順）。無ければ null。</summary>
+    private SyntaxToken[]? TokensForLine(int line)
+    {
+        SyntaxToken[]? raw;
+        if (_tokensDense)
+        {
+            if ((uint)line >= (uint)_tokens.Length) return null;
+            raw = _tokens[line].Tokens;
+        }
+        else
+        {
+            _tokensByLine ??= BuildIndex(_tokens);
+            if (!_tokensByLine.TryGetValue(line, out raw)) return null;
+        }
+        if (raw.Length < 2 || IsSorted(raw)) return raw;
+        if (!_sortedTokens.TryGetValue(raw, out var sorted))
+            _sortedTokens[raw] = sorted = raw.OrderBy(t => t.StartColumn).ToArray();
+        return sorted;
+
+        static Dictionary<int, SyntaxToken[]> BuildIndex(LineTokens[] tokens)
+        {
+            var index = new Dictionary<int, SyntaxToken[]>(tokens.Length);
+            foreach (var lineTokens in tokens)
+                index[lineTokens.Line] = lineTokens.Tokens;
+            return index;
+        }
+
+        static bool IsSorted(SyntaxToken[] tokens)
+        {
+            for (int i = 1; i < tokens.Length; i++)
+                if (tokens[i].StartColumn < tokens[i - 1].StartColumn) return false;
+            return true;
+        }
     }
     public void SetSearchMatches(List<CursorPosition> matches, string pattern)
     {
@@ -992,6 +1058,9 @@ public partial class EditorCanvas : FrameworkElement
         double minimapReserve = _showMinimap ? MinimapWidth : 0;
         double availableTextWidth = Math.Max(1, RenderSize.Width - gutterWidth - minimapReserve);
 
+        _visualLayoutTextWidth = availableTextWidth;
+        _visualLayoutGutterWidth = gutterWidth;
+
         var visibleLines = _visibleLineMap.Length > 0
             ? _visibleLineMap
             : Enumerable.Range(0, Math.Max(1, _lines.Length)).ToArray();
@@ -1004,6 +1073,8 @@ public partial class EditorCanvas : FrameworkElement
         bool needMaxWidth = !EffectiveWrapLines;
         bool widthCached = needMaxWidth && ReferenceEquals(_maxLineWidthCacheLines, _lines);
         double maxLineWidth = widthCached ? _cachedMaxLineWidth : 0;
+        if (needMaxWidth && !widthCached)
+            SyncLineExtents();
 
         foreach (int lineIndex in visibleLines)
         {
@@ -1024,7 +1095,7 @@ public partial class EditorCanvas : FrameworkElement
             if (!EffectiveWrapLines || lineText.Length == 0 || availableTextWidth <= 1)
             {
                 if (needMaxWidth && !widthCached)
-                    maxLineWidth = Math.Max(maxLineWidth, EstimateLineExtent(lineText));
+                    maxLineWidth = Math.Max(maxLineWidth, LineExtent(safeLine));
                 visualLines.Add(new VisualLineSegment(safeLine, 0, false));
                 continue;
             }
@@ -1192,6 +1263,60 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
     }
+
+    /// <summary>
+    /// ビジュアル行 <paramref name="visualLine"/> に入る時点で、コンフリクトの「こちら側／あちら側」の中にいるか。
+    /// 描画のたびに先頭から画面の上端まで全行を舐めていた（ファイルの下の方ほど1フレームが重くなる）ので、
+    /// 行配列ごとにマーカーの有無だけ調べ、あるときだけビジュアル行ごとの状態をまとめて作って持つ。
+    /// 数え方は従来どおりビジュアル行（畳まれた行は数えない）。
+    /// </summary>
+    private (bool InOurs, bool InTheirs) ConflictRegionBefore(int visualLine)
+    {
+        if (!ReferenceEquals(_conflictScanLines, _lines))
+        {
+            _conflictScanLines = _lines;
+            _hasConflictMarkers = Array.Exists(_lines, line => ConflictMarkerKind(line) != 0);
+            _conflictStatesVisual = null;
+        }
+        if (!_hasConflictMarkers) return (false, false);
+
+        if (!ReferenceEquals(_conflictStatesVisual, _visualLines))
+        {
+            int total = TotalVisualLines;
+            var states = new byte[total + 1];
+            byte state = 0; // 0=外, 1=こちら側, 2=あちら側
+            for (int si = 0; si < total; si++)
+            {
+                states[si] = state;
+                var seg = GetVisualSegment(si);
+                if (seg.BufferLine < _lines.Length)
+                {
+                    switch (ConflictMarkerKind(_lines[seg.BufferLine]))
+                    {
+                        case 1: state = 1; break;
+                        case 2: state = 2; break;
+                        case 3: state = 0; break;
+                    }
+                }
+            }
+            states[total] = state;
+            _conflictStates = states;
+            _conflictStatesVisual = _visualLines;
+        }
+        byte entering = _conflictStates![Math.Clamp(visualLine, 0, _conflictStates.Length - 1)];
+        return (entering == 1, entering == 2);
+
+        static int ConflictMarkerKind(string line) =>
+            line.StartsWith("<<<<<<<", StringComparison.Ordinal) ? 1
+            : line.StartsWith("=======", StringComparison.Ordinal) ? 2
+            : line.StartsWith(">>>>>>>", StringComparison.Ordinal) ? 3
+            : 0;
+    }
+
+    private string[]? _conflictScanLines;
+    private bool _hasConflictMarkers;
+    private VisualLineSegment[]? _conflictStatesVisual;
+    private byte[]? _conflictStates;
 
     private VisualLineSegment GetVisualSegment(int visualLine)
     {
@@ -1749,11 +1874,29 @@ public partial class EditorCanvas : FrameworkElement
             _visibleColumns = (int)(textAreaWidth / _charWidth) + 2;
         }
 
-        RebuildVisualLayout();
+        // 行レイアウトは中身（行・折りたたみ・折り返し・注釈行…）が変わったときにそれぞれの設定口で組み直し済み。
+        // ここで要るのは幅が変わったときだけ：InvalidateVisual は配置も無効にするので、無条件に組み直すと
+        // カーソルが動くたびに全行（7500行で約 0.3ms）のレイアウトを作り直していた。
+        if (NeedsVisualLayoutForWidth(finalSize))
+            RebuildVisualLayout();
         return finalSize;
     }
 
-    protected override void OnRender(DrawingContext dc)
+    /// <summary>最後に組んだ行レイアウトが前提にした本文の幅・ガターの幅と、いまの幅がずれているか。
+    /// 組み直しは <see cref="RenderSize"/> を読むので、配置中の新しい大きさがまだ反映されていないとき
+    /// （<paramref name="finalSize"/> と食い違うとき）も組み直す——従来どおり、次の配置でもう一度合う。</summary>
+    private bool NeedsVisualLayoutForWidth(Size finalSize)
+    {
+        if (finalSize != RenderSize) return true;
+        var (_, _, _, _, _, gutterWidth) = GetGutterMetrics();
+        double minimapReserve = _showMinimap ? MinimapWidth : 0;
+        double availableTextWidth = Math.Max(1, RenderSize.Width - gutterWidth - minimapReserve);
+        return availableTextWidth != _visualLayoutTextWidth || gutterWidth != _visualLayoutGutterWidth;
+    }
+
+    /// <summary>1フレームを描く。<paramref name="dc"/> は下層（本文より下）、<paramref name="over"/> は上層
+    /// （本文より上）。本文は <see cref="PlaceTextRow"/> で本文層へ置く。重ね順は従来の1枚描きと同じ。</summary>
+    private void RenderLayers(DrawingContext dc, DrawingContext over)
     {
         var size = RenderSize;
         MeasureChar();
@@ -1767,7 +1910,11 @@ public partial class EditorCanvas : FrameworkElement
         // to contentBottom; the scrollbars themselves are drawn afterwards.
         bool needHorizBar = _showScrollbar && !EffectiveWrapLines && TotalContentWidth > size.Width + 1;
         double contentBottom = needHorizBar ? Math.Max(0, size.Height - OverlayRenderer.ScrollbarSize) : size.Height;
-        dc.PushClip(new RectangleGeometry(new Rect(0, 0, size.Width, contentBottom)));
+        var contentClip = new RectangleGeometry(new Rect(0, 0, size.Width, contentBottom));
+        contentClip.Freeze();
+        dc.PushClip(contentClip);
+        over.PushClip(contentClip);
+        SetTextLayerClip(new Rect(0, 0, size.Width, contentBottom));
 
         var (bpColWidth, bulbColWidth, testColWidth, lineNumWidth, foldColWidth, gutterWidth) = GetGutterMetrics();
         double textLeft = gutterWidth;
@@ -1780,19 +1927,8 @@ public partial class EditorCanvas : FrameworkElement
         // Compute matching bracket once — reused for every visible line
         var bracketMatch = FindMatchingBracket(_cursor.Line, _cursor.Column);
 
-        // Conflict marker region tracking — scan from line 0 up to firstLine to determine state
-        bool inOursRegion = false, inTheirsRegion = false;
-        for (int si = 0; si < firstLine && si < TotalVisualLines; si++)
-        {
-            var seg = GetVisualSegment(si);
-            if (seg.BufferLine < _lines.Length)
-            {
-                var sl = _lines[seg.BufferLine];
-                if (sl.StartsWith("<<<<<<<", StringComparison.Ordinal))      { inOursRegion = true;  inTheirsRegion = false; }
-                else if (sl.StartsWith("=======", StringComparison.Ordinal)) { inOursRegion = false; inTheirsRegion = true;  }
-                else if (sl.StartsWith(">>>>>>>", StringComparison.Ordinal)) { inOursRegion = false; inTheirsRegion = false; }
-            }
-        }
+        // Conflict marker region tracking — the state entering firstLine
+        var (inOursRegion, inTheirsRegion) = ConflictRegionBefore(firstLine);
 
         // Draw each visible line (vi = visual index, l = buffer line)
         for (int vi = firstLine; vi <= lastLine; vi++)
@@ -1938,7 +2074,10 @@ public partial class EditorCanvas : FrameworkElement
             if (_blameColWidth > 0)
                 GutterRenderer.DrawBlameMargin(dc, Theme, metrics, _blameLines, _hoveredBlameLine, l, y, 0, _blameColWidth, drawNumberAndFold);
 
-            dc.PushClip(new RectangleGeometry(new Rect(textLeft, y, Math.Max(0, size.Width - textLeft), _lineHeight)));
+            var lineClip = new RectangleGeometry(new Rect(textLeft, y, Math.Max(0, size.Width - textLeft), _lineHeight));
+            lineClip.Freeze();
+            dc.PushClip(lineClip);
+            over.PushClip(lineClip);
             // A bug in any single overlay must not tear down the whole render pass (which would
             // crash the host app). Catch per-line, and always Pop the clip so it stays balanced.
             try
@@ -1948,8 +2087,8 @@ public partial class EditorCanvas : FrameworkElement
                 // are either invisible outside the viewport or scale with the line length.
                 if (lineText.Length > LongLineCharacterThreshold)
                 {
-                    DrawLineText(dc, l, lineText, y, textLeft);
-                    DrawCursor(dc, l, y, textLeft, lineText);
+                    PlaceTextRow(vi, l, segment.StartColumn, lineText, y, textLeft, size.Width);
+                    DrawCursor(over, l, y, textLeft, lineText);
                     continue;
                 }
 
@@ -1972,50 +2111,50 @@ public partial class EditorCanvas : FrameworkElement
                 DrawLinkedEditingRanges(dc, l, y, textLeft, lineText);
 
                 // Text with syntax coloring
-                DrawLineText(dc, l, lineText, y, textLeft);
+                PlaceTextRow(vi, l, segment.StartColumn, lineText, y, textLeft, size.Width);
 
                 // CodeLensは宣言行の直上の注釈行に描く（このループの先頭の分岐）。本文行には出さない。
 
                 // LSP document links (capability-driven; Ctrl+Click opens the target)
-                LspOverlayRenderer.DrawDocumentLinks(dc, Theme, metrics, _documentLinks,
+                LspOverlayRenderer.DrawDocumentLinks(over, Theme, metrics, _documentLinks,
                     l, y, textLeft, lineText, _scrollOffsetX);
 
                 // Inline color preview swatches
                 if (_showColorPreview)
-                    OverlayRenderer.DrawColorSwatches(dc, metrics, lineText, y, textLeft, _scrollOffsetX);
+                    OverlayRenderer.DrawColorSwatches(over, metrics, lineText, y, textLeft, _scrollOffsetX);
 
                 // Invisible character markers (set list)
-                DrawListChars(dc, lineText, y, textLeft);
+                DrawListChars(over, lineText, y, textLeft);
 
                 // LSP inlay hints (inline ghost text)
-                LspOverlayRenderer.DrawInlayHints(dc, metrics, _inlayHintsByLine, l, lineText, y, textLeft, _scrollOffsetX);
+                LspOverlayRenderer.DrawInlayHints(over, metrics, _inlayHintsByLine, l, lineText, y, textLeft, _scrollOffsetX);
 
                 // 入力の先読み（キャレットの先に薄く出す提案）
-                DrawInlineSuggestion(dc, metrics, l, lineText, y, textLeft);
+                DrawInlineSuggestion(over, metrics, l, lineText, y, textLeft);
 
                 // デバッグ停止中の行末の値（ホストが SetInlineValues で渡す）。折り返しは最後の表示行だけ。
                 if (!isPreviewLine)
                 {
                     var isLastSegment = !EffectiveWrapLines || GetSegmentEndColumn(vi) >= lineText.Length;
-                    DrawInlineValue(dc, metrics, l, lineText, y, textLeft, isLastSegment);
+                    DrawInlineValue(over, metrics, l, lineText, y, textLeft, isLastSegment);
                     // カーソル行の blame（ShowCaretLineBlame）。行末の値が出ている行には出さない。
-                    DrawLineAnnotation(dc, metrics, l, lineText, y, textLeft, isLastSegment);
+                    DrawLineAnnotation(over, metrics, l, lineText, y, textLeft, isLastSegment);
                 }
 
                 // LSP diagnostics (wavy underlines)
-                DrawDiagnostics(dc, l, y, textLeft, lineText);
+                DrawDiagnostics(over, l, y, textLeft, lineText);
 
                 // Spell check errors (blue wavy underlines)
-                DrawSpellErrors(dc, l, y, textLeft, lineText);
+                DrawSpellErrors(over, l, y, textLeft, lineText);
 
                 // Detected link underlines
-                DrawLinkUnderline(dc, l, y, textLeft, lineText, segment.StartColumn, GetSegmentEndColumn(vi));
+                DrawLinkUnderline(over, l, y, textLeft, lineText, segment.StartColumn, GetSegmentEndColumn(vi));
 
                 // Cursor
-                DrawCursor(dc, l, y, textLeft, lineText);
+                DrawCursor(over, l, y, textLeft, lineText);
 
                 // Extra cursors (multi-cursor mode)
-                DrawExtraCursors(dc, l, y, textLeft, lineText);
+                DrawExtraCursors(over, l, y, textLeft, lineText);
             }
             catch (System.Exception ex)
             {
@@ -2023,25 +2162,27 @@ public partial class EditorCanvas : FrameworkElement
             }
             finally
             {
+                over.Pop();
                 dc.Pop();
             }
         }
 
         _scrollOffsetX = baseOffsetX;
+        EndTextDrawingFrame(lastLine - firstLine + 1);
 
         // Post-loop overlays. Guard them as a group so a failure can't escape OnRender (crashing
         // the app); the content clip is popped in the finally either way so it stays balanced.
         try
         {
-            DrawBracketGuides(dc, textLeft, gutterWidth, firstLine, lastLine, contentBottom, size);
+            DrawBracketGuides(over, textLeft, gutterWidth, firstLine, lastLine, contentBottom, size);
 
-            DrawImeCandidatePopup(dc, textLeft, size);
-            LspOverlayRenderer.DrawSignatureHelp(dc, Theme, metrics, _signatureHelp, textLeft, size, GetCursorPixelPosition());
-            LspOverlayRenderer.DrawCompletionPopup(dc, Theme, metrics, _completionItems, _completionSelection, _completionScrollOffset, textLeft, size, GetCursorPixelPosition());
-            LspOverlayRenderer.DrawCodeActionPopup(dc, Theme, metrics, _codeActionItems, _codeActionsSelection, _codeActionsScrollOffset, textLeft, size, GetCursorPixelPosition());
+            DrawImeCandidatePopup(over, textLeft, size);
+            LspOverlayRenderer.DrawSignatureHelp(over, Theme, metrics, _signatureHelp, textLeft, size, GetCursorPixelPosition());
+            LspOverlayRenderer.DrawCompletionPopup(over, Theme, metrics, _completionItems, _completionSelection, _completionScrollOffset, textLeft, size, GetCursorPixelPosition());
+            LspOverlayRenderer.DrawCodeActionPopup(over, Theme, metrics, _codeActionItems, _codeActionsSelection, _codeActionsScrollOffset, textLeft, size, GetCursorPixelPosition());
 
             // Color column guide line
-            OverlayRenderer.DrawColorColumn(dc, Theme, _colorColumn, _charWidth, gutterWidth, _scrollOffsetX, size);
+            OverlayRenderer.DrawColorColumn(over, Theme, _colorColumn, _charWidth, gutterWidth, _scrollOffsetX, size);
 
             // Indent guide lines
             if (_showIndentGuides && _charWidth > 0)
@@ -2068,19 +2209,19 @@ public partial class EditorCanvas : FrameworkElement
                     if (level > maxIndentLevel) maxIndentLevel = level;
                 }
 
-                OverlayRenderer.DrawIndentGuides(dc, Theme, gutterWidth, indentWidth, maxIndentLevel, _scrollOffsetX, size);
+                OverlayRenderer.DrawIndentGuides(over, Theme, gutterWidth, indentWidth, maxIndentLevel, _scrollOffsetX, size);
             }
 
             // Gutter border
             if (_showLineNumbers)
             {
                 var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)), 1);
-                dc.DrawLine(pen, new Point(gutterWidth - 1, 0), new Point(gutterWidth - 1, size.Height));
+                over.DrawLine(pen, new Point(gutterWidth - 1, 0), new Point(gutterWidth - 1, size.Height));
             }
 
             // Minimap
             if (_showMinimap)
-                OverlayRenderer.DrawMinimap(dc, Theme, _lines, _lineHeight, _scrollOffsetY, _visibleLines, MinimapWidth, size);
+                OverlayRenderer.DrawMinimap(over, Theme, _lines, _lineHeight, _scrollOffsetY, _visibleLines, MinimapWidth, size);
         }
         catch (System.Exception ex)
         {
@@ -2088,7 +2229,8 @@ public partial class EditorCanvas : FrameworkElement
         }
         finally
         {
-            dc.Pop(); // end content clip (contentBottom)
+            over.Pop(); // end content clip (contentBottom)
+            dc.Pop();
         }
 
         // Overlay scrollbars
@@ -2100,12 +2242,12 @@ public partial class EditorCanvas : FrameworkElement
                 // 差分の変更位置の印（左右並びの差分表示）は<b>サムの下</b>。変更が続く範囲は太い帯になるので、
                 // 上に載せると全行が追加のファイルではトラックが一色に潰れて、いまの位置が見えなくなる。
                 var diffMarks = CurrentDiffMarks();
-                OverlayRenderer.DrawScrollbars(dc, Theme, size, scrollbars,
+                OverlayRenderer.DrawScrollbars(over, Theme, size, scrollbars,
                     diffMarks.Count == 0 ? null : under => DiffOverlayRenderer.DrawMarks(
                         under, Theme, diffMarks, OverviewRows.RowCount,
                         size.Width - OverlayRenderer.ScrollbarSize, scrollbars.VertTrackH));
                 // 診断の印はサムの上に載せる（いまいる場所の問題だけ隠れる、を防ぐ）。
-                DrawDiagnosticMarks(dc, size, scrollbars);
+                DrawDiagnosticMarks(over, size, scrollbars);
             }
         }
         catch (System.Exception ex)
@@ -2705,7 +2847,7 @@ public partial class EditorCanvas : FrameworkElement
         if (lineLength > LongLineCharacterThreshold) return null;
 
         _semanticTokensByLine.TryGetValue(lineIndex, out var semTokens);
-        _tokensByLine.TryGetValue(lineIndex, out var regexTokens);
+        var regexTokens = TokensForLine(lineIndex);
         bool hasSem = semTokens is { Count: > 0 };
         bool hasRegex = regexTokens is { Length: > 0 };
 
@@ -3342,6 +3484,48 @@ public partial class EditorCanvas : FrameworkElement
     /// <para>見積もりは小さく出ないようにしてある（小さいと行末へスクロールできない）。タブは行頭に置いた
     /// ときの幅（＝タブ1つぶんの最大）で数え、表の列揃えの上書きは <see cref="CharW(char, int)"/> が反映する。</para>
     /// </summary>
+    /// <summary>
+    /// 行ごとの横幅の見積もりを、いまの行配列に合わせる。編集のたびに全行の全文字の幅を引き直していた
+    /// （7500行の .cs で打鍵時間の 2 割）。前の配列と先頭・末尾で同じ行の見積もりはそのまま引き継ぎ、
+    /// 変わった行だけ未計算にする（<see cref="LineExtent"/> が必要になったときに測る）。
+    /// </summary>
+    private void SyncLineExtents()
+    {
+        if (ReferenceEquals(_lineExtentsLines, _lines)) return;
+        var oldLines = _lineExtentsLines;
+        var oldExtents = _lineExtents;
+        int n = _lines.Length;
+        var extents = new double[n];
+        Array.Fill(extents, double.NaN);
+        if (oldLines != null && oldExtents.Length == oldLines.Length)
+        {
+            int m = oldLines.Length, max = Math.Min(n, m), prefix = 0, suffix = 0;
+            while (prefix < max && SameLine(oldLines[prefix], _lines[prefix])) prefix++;
+            while (suffix < max - prefix && SameLine(oldLines[m - 1 - suffix], _lines[n - 1 - suffix])) suffix++;
+            Array.Copy(oldExtents, extents, prefix);
+            Array.Copy(oldExtents, m - suffix, extents, n - suffix, suffix);
+        }
+        _lineExtents = extents;
+        _lineExtentsLines = _lines;
+
+        static bool SameLine(string a, string b) => ReferenceEquals(a, b) || string.Equals(a, b, StringComparison.Ordinal);
+    }
+
+    private double LineExtent(int line)
+    {
+        double extent = _lineExtents[line];
+        if (double.IsNaN(extent))
+            _lineExtents[line] = extent = EstimateLineExtent(_lines[line]);
+        return extent;
+    }
+
+    private void InvalidateLineExtents()
+    {
+        _maxLineWidthCacheLines = null;
+        _lineExtentsLines = null;
+        _lineExtents = [];
+    }
+
     private double EstimateLineExtent(string lineText)
     {
         if (lineText.Length == 0) return 0;
@@ -3502,6 +3686,7 @@ public partial class EditorCanvas : FrameworkElement
 
     private double GetDpi()
     {
+        if (!double.IsNaN(_frameDpi)) return _frameDpi;
         try { return VisualTreeHelper.GetDpi(this).PixelsPerDip; }
         catch { return 1.0; }
     }
@@ -3540,7 +3725,7 @@ public partial class EditorCanvas : FrameworkElement
             GetDpi());
     }
 
-    private GlyphMetrics BuildGlyphMetrics() => new(FormatText, FormatScaledText, GetVisualX, _lineHeight, _charWidth);
+    private GlyphMetrics BuildGlyphMetrics() => new(FormatText, FormatScaledText, GetVisualX, _lineHeight, _charWidth, DrawLabelText, ScaledLabel);
 
     private void MeasureChar()
     {
@@ -3562,6 +3747,8 @@ public partial class EditorCanvas : FrameworkElement
         MeasureChar();
         if (_lineHeight == 0) return;
 
+        double previousOffsetY = _scrollOffsetY;
+        double previousOffsetX = _scrollOffsetX;
         double cursorY = GetCursorVisualLine() * _lineHeight;
         double viewHeight = UsableViewportHeight;
         double margin = _scrollOff * _lineHeight;
@@ -3601,7 +3788,10 @@ public partial class EditorCanvas : FrameworkElement
             : Math.Max(0, TotalContentWidth - UsableViewportWidth);
         _scrollOffsetY = Math.Clamp(_scrollOffsetY, 0, maxOffsetY);
         _scrollOffsetX = EffectiveWrapLines ? 0 : Math.Clamp(_scrollOffsetX, 0, maxOffsetX);
-        ScrollChanged?.Invoke(_scrollOffsetY, _scrollOffsetX);
+        if (_scrollOffsetY != previousOffsetY || _scrollOffsetX != previousOffsetX)
+            ScrollChanged?.Invoke(_scrollOffsetY, _scrollOffsetX);
+        else
+            CursorRevealedInPlace?.Invoke();
     }
 
     private void StartCursorBlink()

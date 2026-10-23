@@ -43,12 +43,16 @@ internal sealed class BracketGuideLayout
     {
         _scannedLines = null;
         _guides = [];
+        _index.Reset();
     }
+
+    // 編集のたびの走査は変わった行から先だけにする（BracketGuideIndex）。結果は全体の走査と同じ。
+    private readonly BracketGuideIndex _index = new();
 
     private IReadOnlyList<BracketGuide> GuidesFor(string[] lines)
     {
         if (ReferenceEquals(_scannedLines, lines)) return _guides;
-        _guides = BracketGuideScanner.Build(lines, Syntax);
+        _guides = _index.Update(lines, Syntax);
         _scannedLines = lines;
         return _guides;
     }

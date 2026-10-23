@@ -54,9 +54,76 @@ public class SyntaxEngine
         if (_currentLanguage == null) return [];
         if (lines == _cachedLines && _cachedTokens != null) return _cachedTokens;
         _cachedLines = lines;
-        _cachedTokens = _currentLanguage.Tokenize(lines);
+        _cachedTokens = _currentLanguage is ILineStateSyntaxLanguage lineState
+            ? TokenizeIncrementally(lineState, lines)
+            : _currentLanguage.Tokenize(lines);
         return _cachedTokens;
     }
+
+    /// <summary>
+    /// 前回分けた結果を引き継いで、変わった行から先だけを分け直す。1打鍵ごとに数千行のファイル全体を
+    /// UI スレッドで分け直していた（7500行の .cs で打鍵時間の 3 割）のを、ふつうの編集では数行で済ませる。
+    /// <para>前回と同じ先頭の行はそのまま使い、変わった最初の行から分け直す。末尾の同じ行の範囲に入ったら、
+    /// その行へ持ち込む状態が前回と同じかを見て、同じならそこから先は前回の結果を行番号だけずらして使う
+    /// （ブロックコメントを開いた・閉じたなど状態が変わり続ける間は、一致するまで分け続ける）。</para>
+    /// <para>前回の行は複製で持つ。呼び出し側が渡した配列をあとで書き換えても、差分の判定がずれない。</para>
+    /// </summary>
+    private LineTokens[] TokenizeIncrementally(ILineStateSyntaxLanguage language, string[] lines)
+    {
+        int n = lines.Length;
+        var tokens = new LineTokens[n];
+        var states = new object[n + 1];
+
+        var oldLines = _incrementalLines;
+        var oldTokens = _incrementalTokens;
+        var oldStates = _incrementalStates;
+        bool reuse = oldLines != null && oldTokens != null && oldStates != null
+            && ReferenceEquals(_incrementalLanguage, language);
+        int m = reuse ? oldLines!.Length : 0;
+        int prefix = 0, suffix = 0;
+        if (reuse)
+        {
+            int max = Math.Min(n, m);
+            while (prefix < max && SameLine(oldLines![prefix], lines[prefix])) prefix++;
+            while (suffix < max - prefix && SameLine(oldLines![m - 1 - suffix], lines[n - 1 - suffix])) suffix++;
+            Array.Copy(oldTokens!, tokens, prefix);
+            Array.Copy(oldStates!, states, prefix + 1);
+        }
+        else
+        {
+            states[0] = language.InitialState;
+        }
+
+        var state = states[prefix];
+        int shift = m - n; // 末尾の同じ範囲で、新しい行 i は前回の行 i + shift
+        for (int i = prefix; i < n; i++)
+        {
+            if (reuse && i >= n - suffix && Equals(state, oldStates![i + shift]))
+            {
+                for (int k = i; k < n; k++)
+                {
+                    tokens[k] = new LineTokens(k, oldTokens![k + shift].Tokens);
+                    states[k + 1] = oldStates![k + shift + 1];
+                }
+                break;
+            }
+            tokens[i] = new LineTokens(i, language.TokenizeLine(lines[i], ref state));
+            states[i + 1] = state;
+        }
+
+        _incrementalLanguage = language;
+        _incrementalLines = (string[])lines.Clone();
+        _incrementalTokens = tokens;
+        _incrementalStates = states;
+        return tokens;
+
+        static bool SameLine(string a, string b) => ReferenceEquals(a, b) || string.Equals(a, b, StringComparison.Ordinal);
+    }
+
+    private ILineStateSyntaxLanguage? _incrementalLanguage;
+    private string[]? _incrementalLines;
+    private LineTokens[]? _incrementalTokens;
+    private object[]? _incrementalStates;
 
     public LineTokens[] TokenizeVisible(string[] lines, int firstLine, int lastLine)
     {
@@ -147,5 +214,8 @@ public class SyntaxEngine
         _cachedVisibleLines = null;
         _cachedVisibleStart = -1;
         _cachedVisibleEnd = -1;
+        // 差分の基準（_incremental*）は残す。エンジンは本文が変わるたびにここを呼ぶが、差分は前回の
+        // 行の<b>中身</b>と比べて決めるので、捨てると毎打鍵ファイル全体を分け直すことになる。
+        // 言語が変われば言語のインスタンスが変わるので、基準は使われない。
     }
 }

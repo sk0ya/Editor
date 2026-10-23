@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class GoSyntax : ISyntaxLanguage
+public class GoSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "Go";
     public string[] Extensions => [".go"];
@@ -26,19 +26,19 @@ public class GoSyntax : ISyntaxLanguage
         "new", "panic", "print", "println", "recover",
     ];
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inBlockComment = false;
-        bool inRawString = false;
+    private readonly record struct LineState(bool InBlockComment, bool InRawString);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref inBlockComment, ref inRawString);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false, false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var (inBlockComment, inRawString) = (LineState)state;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inBlockComment, ref inRawString);
+        LineStateTokenizer.Advance(ref state, new LineState(inBlockComment, inRawString));
+        return [.. tokens];
     }
 
     private static void TokenizeLine(string line, List<SyntaxToken> tokens,

@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class MarkdownSyntax : ISyntaxLanguage
+public class MarkdownSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "Markdown";
     public string[] Extensions => [".md", ".markdown"];
@@ -8,38 +8,34 @@ public class MarkdownSyntax : ISyntaxLanguage
     public string? BlockCommentPrefix => "<!--";
     public string? BlockCommentSuffix => "-->";
 
-    public LineTokens[] Tokenize(string[] lines)
+    private readonly record struct LineState(bool InFencedCode);
+
+    public object InitialState { get; } = new LineState(false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
     {
-        var result = new List<LineTokens>();
-        bool inFencedCode = false;
+        bool inFencedCode = ((LineState)state).InFencedCode;
+        var tokens = new List<SyntaxToken>();
 
-        for (int i = 0; i < lines.Length; i++)
+        var stripped = line.TrimStart();
+        if (stripped.StartsWith("```") || stripped.StartsWith("~~~"))
         {
-            var line = lines[i];
-            var tokens = new List<SyntaxToken>();
-
-            var stripped = line.TrimStart();
-            if (stripped.StartsWith("```") || stripped.StartsWith("~~~"))
-            {
-                tokens.Add(new SyntaxToken(0, line.Length, TokenKind.String));
-                inFencedCode = !inFencedCode;
-                result.Add(new LineTokens(i, [.. tokens]));
-                continue;
-            }
-
-            if (inFencedCode)
-            {
-                if (line.Length > 0)
-                    tokens.Add(new SyntaxToken(0, line.Length, TokenKind.String));
-                result.Add(new LineTokens(i, [.. tokens]));
-                continue;
-            }
-
-            TokenizeLine(line, tokens);
-            result.Add(new LineTokens(i, [.. tokens]));
+            tokens.Add(new SyntaxToken(0, line.Length, TokenKind.String));
+            LineStateTokenizer.Advance(ref state, new LineState(!inFencedCode));
+            return [.. tokens];
         }
 
-        return [.. result];
+        if (inFencedCode)
+        {
+            if (line.Length > 0)
+                tokens.Add(new SyntaxToken(0, line.Length, TokenKind.String));
+            return [.. tokens];
+        }
+
+        TokenizeLine(line, tokens);
+        return [.. tokens];
     }
 
     private static void TokenizeLine(string line, List<SyntaxToken> tokens)

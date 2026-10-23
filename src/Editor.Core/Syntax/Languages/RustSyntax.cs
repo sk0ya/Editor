@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class RustSyntax : ISyntaxLanguage
+public class RustSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "Rust";
     public string[] Extensions => [".rs"];
@@ -25,18 +25,19 @@ public class RustSyntax : ISyntaxLanguage
         "Some", "None", "Ok", "Err",
     ];
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inBlockComment = false;
+    private readonly record struct LineState(bool InBlockComment);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref inBlockComment);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var inBlockComment = ((LineState)state).InBlockComment;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inBlockComment);
+        LineStateTokenizer.Advance(ref state, new LineState(inBlockComment));
+        return [.. tokens];
     }
 
     private static void TokenizeLine(string line, List<SyntaxToken> tokens, ref bool inBlockComment)

@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class JavaScriptSyntax : ISyntaxLanguage
+public class JavaScriptSyntax : ILineStateSyntaxLanguage
 {
     public virtual string Name => "JavaScript";
     public virtual string[] Extensions => [".js", ".jsx"];
@@ -17,19 +17,19 @@ public class JavaScriptSyntax : ISyntaxLanguage
         "debugger",
     };
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inBlockComment = false;
-        bool inTemplateLiteral = false;
+    private readonly record struct LineState(bool InBlockComment, bool InTemplateLiteral);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref inBlockComment, ref inTemplateLiteral);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false, false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var (inBlockComment, inTemplateLiteral) = (LineState)state;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inBlockComment, ref inTemplateLiteral);
+        LineStateTokenizer.Advance(ref state, new LineState(inBlockComment, inTemplateLiteral));
+        return [.. tokens];
     }
 
     private void TokenizeLine(string line, List<SyntaxToken> tokens,

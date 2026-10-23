@@ -58,29 +58,67 @@ public static class BracketGuideScanner
 
     public static IReadOnlyList<BracketGuide> Build(string[] lines, BracketGuideSyntax? syntax = null)
     {
-        if (lines.Length == 0) return [];
+        if (lines.Length == 0 || ExceedsCharacterLimit(lines)) return [];
 
+        var scanner = new LineScanner(lines, syntax ?? BracketGuideSyntax.CFamily);
+        var guides = new List<BracketGuide>();
+        OpenBracket? stack = null;
+        bool inBlockComment = false;
+        for (int l = 0; l < lines.Length; l++)
+            scanner.ScanLine(l, ref stack, ref inBlockComment, guides, guides.Count);
+        return guides;
+    }
+
+    internal static bool ExceedsCharacterLimit(string[] lines)
+    {
         int total = 0;
         foreach (var line in lines)
         {
             total += line.Length;
-            if (total > MaxCharacters) return [];
+            if (total > MaxCharacters) return true;
         }
+        return false;
+    }
 
-        syntax ??= BracketGuideSyntax.CFamily;
-        var guides = new List<BracketGuide>();
-        var stack = new List<(char Close, int Line, int Column)>();
-        bool inBlockComment = false;
+    /// <summary>
+    /// まだ閉じていない開き括弧の積み重ね。各行の行頭の状態として持つので、変更できない連結リストにして
+    /// 行どうしで共有する（行ごとに複製すると行数×深さになる）。<see cref="Depth"/> は底からの位置。
+    /// </summary>
+    internal sealed class OpenBracket(char close, int line, int column, OpenBracket? next)
+    {
+        public char Close { get; } = close;
+        public int Line { get; } = line;
+        public int Column { get; } = column;
+        public OpenBracket? Next { get; } = next;
+        public int Depth { get; } = next is null ? 0 : next.Depth + 1;
+    }
 
+    /// <summary>1行を走査する。全体の走査（<see cref="Build"/>）と差分の走査（<see cref="BracketGuideIndex"/>）が
+    /// 同じこれを通すので、両者の結果は構造上一致する。</summary>
+    internal readonly struct LineScanner
+    {
+        private readonly string[] _lines;
+        private readonly BracketGuideSyntax _syntax;
         // 1 文字ごとに文字列比較を走らせると 400KB のファイルで 17ms かかった（打鍵ごとに払える額
         // ではない）。先頭 1 文字が一致したときだけ比較する。
-        char lineCommentHead = syntax.LineComment is { Length: > 0 } lc ? lc[0] : '\0';
-        char blockCommentHead = syntax.BlockCommentStart is { Length: > 0 } bc && syntax.BlockCommentEnd is { Length: > 0 }
-            ? bc[0] : '\0';
+        private readonly char _lineCommentHead;
+        private readonly char _blockCommentHead;
 
-        for (int l = 0; l < lines.Length; l++)
+        public LineScanner(string[] lines, BracketGuideSyntax syntax)
         {
-            string line = lines[l];
+            _lines = lines;
+            _syntax = syntax;
+            _lineCommentHead = syntax.LineComment is { Length: > 0 } lc ? lc[0] : '\0';
+            _blockCommentHead = syntax.BlockCommentStart is { Length: > 0 } bc && syntax.BlockCommentEnd is { Length: > 0 }
+                ? bc[0] : '\0';
+        }
+
+        /// <param name="guidesBefore">この行より前までに作ったガイドの数（<see cref="MaxGuides"/> の判定用）。</param>
+        public void ScanLine(int l, ref OpenBracket? stack, ref bool inBlockComment, List<BracketGuide> sink, int guidesBefore)
+        {
+            var syntax = _syntax;
+            string line = _lines[l];
+            int made = 0;
             int i = 0;
             while (i < line.Length)
             {
@@ -97,9 +135,9 @@ public static class BracketGuideScanner
 
                 char c = line[i];
 
-                if (c == lineCommentHead && Matches(line, i, syntax.LineComment)) break;   // 行末までコメント
+                if (c == _lineCommentHead && Matches(line, i, syntax.LineComment)) break;   // 行末までコメント
 
-                if (c == blockCommentHead && Matches(line, i, syntax.BlockCommentStart))
+                if (c == _blockCommentHead && Matches(line, i, syntax.BlockCommentStart))
                 {
                     i += syntax.BlockCommentStart!.Length;
                     inBlockComment = true;
@@ -115,26 +153,25 @@ public static class BracketGuideScanner
                 char close = c switch { '{' => '}', '(' => ')', '[' => ']', _ => '\0' };
                 if (close != '\0')
                 {
-                    if (stack.Count < MaxDepth) stack.Add((close, l, i));
+                    if ((stack?.Depth + 1 ?? 0) < MaxDepth) stack = new OpenBracket(close, l, i, stack);
                     i++;
                     continue;
                 }
 
                 if (c is '}' or ')' or ']')
                 {
-                    int match = -1;
-                    for (int s = stack.Count - 1; s >= 0; s--)
-                        if (stack[s].Close == c) { match = s; break; }
+                    var open = stack;
+                    while (open is not null && open.Close != c) open = open.Next;
 
-                    if (match >= 0)
+                    if (open is not null)
                     {
-                        var open = stack[match];
                         // 対応しない内側の括弧（書きかけの行など）は捨てる
-                        stack.RemoveRange(match, stack.Count - match);
-                        if (l > open.Line && guides.Count < MaxGuides)
+                        stack = open.Next;
+                        if (l > open.Line && guidesBefore + made < MaxGuides)
                         {
-                            var (anchorLine, anchorColumn) = Anchor(lines, open.Line, open.Column, l, i);
-                            guides.Add(new BracketGuide(open.Line, open.Column, l, i, anchorLine, anchorColumn, match));
+                            var (anchorLine, anchorColumn) = Anchor(_lines, open.Line, open.Column, l, i);
+                            sink.Add(new BracketGuide(open.Line, open.Column, l, i, anchorLine, anchorColumn, open.Depth));
+                            made++;
                         }
                     }
                     i++;
@@ -144,8 +181,6 @@ public static class BracketGuideScanner
                 i++;
             }
         }
-
-        return guides;
     }
 
     /// <summary>

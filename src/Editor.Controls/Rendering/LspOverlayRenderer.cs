@@ -122,8 +122,8 @@ internal static class LspOverlayRenderer
 
             if (!first)
             {
-                var separator = metrics.FormatScaledText("|", theme.CodeLensStaleForeground, LensScale);
-                dc.DrawText(separator, new Point(x + LensGap, y + (metrics.LineHeight - separator.Height) / 2));
+                var separator = metrics.ScaledLabel("|", theme.CodeLensStaleForeground, LensScale);
+                separator.Draw(dc, x + LensGap, y, metrics.LineHeight);
                 x += LensGap * 2 + separator.Width;
             }
             first = false;
@@ -131,10 +131,10 @@ internal static class LspOverlayRenderer
             // 古い（行が増減した直後）ラベルは薄く出す。消すと本文が跳ねるので残すが、
             // いまの本文に対する答えではないことは見て分かるようにする。
             var brush = stale ? theme.CodeLensStaleForeground : theme.CodeLensForeground;
-            var text = metrics.FormatScaledText(lens.Title, brush, LensScale);
+            var text = metrics.ScaledLabel(lens.Title, brush, LensScale);
             if (x > viewportWidth) break;
 
-            dc.DrawText(text, new Point(x, y + (metrics.LineHeight - text.Height) / 2));
+            text.Draw(dc, x, y, metrics.LineHeight);
             // 当たり判定は行の高さいっぱいに取る——文字が小さいので、字面ちょうどだと押しにくい。
             // 古いあいだは取らない。旧行のラベルを押すと別の宣言に対して実行されうる。
             if (!stale)

@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class XmlSyntax : ISyntaxLanguage
+public class XmlSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "XML";
     public string[] Extensions => [".xml", ".xaml", ".html", ".htm", ".svg", ".csproj", ".sln"];
@@ -8,18 +8,19 @@ public class XmlSyntax : ISyntaxLanguage
     public string? BlockCommentPrefix => "<!--";
     public string? BlockCommentSuffix => "-->";
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inComment = false;
+    private readonly record struct LineState(bool InComment);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref inComment);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var inComment = ((LineState)state).InComment;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inComment);
+        LineStateTokenizer.Advance(ref state, new LineState(inComment));
+        return [.. tokens];
     }
 
     private void TokenizeLine(string line, List<SyntaxToken> tokens, ref bool inComment)

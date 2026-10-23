@@ -42,8 +42,7 @@ internal static class GutterRenderer
                 : relativeNumber && !isCursorLine
                 ? Math.Abs(line - cursorLine).ToString().PadLeft(lineNumberWidth)
                 : (line + 1).ToString().PadLeft(lineNumberWidth);
-            var numText = metrics.FormatText(lineNumStr, lineNumberBrush);
-            dc.DrawText(numText, new Point(blameColWidth + bpColWidth + bulbColWidth + testColWidth + 2, y + (metrics.LineHeight - numText.Height) / 2));
+            metrics.DrawLabel(dc, lineNumStr, lineNumberBrush, blameColWidth + bpColWidth + bulbColWidth + testColWidth + 2, y);
         }
 
         bool isClosed = closedFoldStarts.Contains(line);

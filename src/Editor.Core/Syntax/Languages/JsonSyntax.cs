@@ -1,21 +1,22 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class JsonSyntax : ISyntaxLanguage
+public class JsonSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "JSON";
     public string[] Extensions => [".json"];
     public string? LineCommentPrefix => null; // JSON has no comments
 
-    public LineTokens[] Tokenize(string[] lines)
+    private readonly record struct LineState;
+
+    public object InitialState { get; } = new LineState();
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
     {
-        var result = new List<LineTokens>();
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens);
+        return [.. tokens];
     }
 
     private static void TokenizeLine(string line, List<SyntaxToken> tokens)

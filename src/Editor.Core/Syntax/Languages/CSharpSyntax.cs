@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace Editor.Core.Syntax.Languages;
 
-public class CSharpSyntax : ISyntaxLanguage
+public class CSharpSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "C#";
     public string[] Extensions => [".cs"];
@@ -27,20 +27,19 @@ public class CSharpSyntax : ISyntaxLanguage
         "file", "scoped", "managed", "unmanaged"
     ];
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inBlockComment = false;
-        bool inVerbatimString = false;
+    private readonly record struct LineState(bool InBlockComment, bool InVerbatimString);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var line = lines[i];
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(line, tokens, ref inBlockComment, ref inVerbatimString);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false, false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var (inBlockComment, inVerbatimString) = (LineState)state;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inBlockComment, ref inVerbatimString);
+        LineStateTokenizer.Advance(ref state, new LineState(inBlockComment, inVerbatimString));
+        return [.. tokens];
     }
 
     private void TokenizeLine(string line, List<SyntaxToken> tokens,

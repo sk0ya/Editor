@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class PythonSyntax : ISyntaxLanguage
+public class PythonSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "Python";
     public string[] Extensions => [".py", ".pyw"];
@@ -17,20 +17,19 @@ public class PythonSyntax : ISyntaxLanguage
         "dict", "set", "tuple", "bool", "bytes", "super", "self"
     ];
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inTripleDouble = false;
-        bool inTripleSingle = false;
+    private readonly record struct LineState(bool InTripleDouble, bool InTripleSingle);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var line = lines[i];
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(line, tokens, ref inTripleDouble, ref inTripleSingle);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false, false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var (inTripleDouble, inTripleSingle) = (LineState)state;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inTripleDouble, ref inTripleSingle);
+        LineStateTokenizer.Advance(ref state, new LineState(inTripleDouble, inTripleSingle));
+        return [.. tokens];
     }
 
     private void TokenizeLine(string line, List<SyntaxToken> tokens,

@@ -159,7 +159,7 @@ public partial class VimStatusBar : UserControl
         }
         PosText.Visibility = System.Windows.Visibility.Visible;
         var pct = totalLines > 0 ? (int)((pos.Line + 1) * 100.0 / totalLines) : 0;
-        PosText.Text = $"{pos.Line + 1}/{totalLines}  Col {pos.Column + 1}  {pct}%%";
+        PosText.Text = $"{pos.Line + 1}/{totalLines}  Col {pos.Column + 1}  {pct}%";
     }
 
     public void UpdateStatus(string message)

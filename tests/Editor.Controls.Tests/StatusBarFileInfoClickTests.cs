@@ -65,6 +65,16 @@ public sealed class StatusBarFileInfoClickTests
             Assert.False(raised);
         });
 
+    [Fact]
+    public void Ruler_shows_a_single_percent_sign()
+        => WpfTestHost.Run(() =>
+        {
+            var bar = new VimStatusBar();
+            bar.UpdateCursor(new Editor.Core.Models.CursorPosition(49, 3), totalLines: 200);
+
+            Assert.Equal("50/200  Col 4  25%", bar.PosText.Text);
+        });
+
     private static void Click(UIElement element)
         => element.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
         {

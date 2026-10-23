@@ -1,24 +1,24 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class TomlSyntax : ISyntaxLanguage
+public class TomlSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "TOML";
     public string[] Extensions => [".toml"];
     public string? LineCommentPrefix => "#";
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        bool inMultiLineDouble = false;
-        bool inMultiLineSingle = false;
+    private readonly record struct LineState(bool InMultiLineDouble, bool InMultiLineSingle);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref inMultiLineDouble, ref inMultiLineSingle);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(false, false);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var (inMultiLineDouble, inMultiLineSingle) = (LineState)state;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref inMultiLineDouble, ref inMultiLineSingle);
+        LineStateTokenizer.Advance(ref state, new LineState(inMultiLineDouble, inMultiLineSingle));
+        return [.. tokens];
     }
 
     private static void TokenizeLine(string line, List<SyntaxToken> tokens,

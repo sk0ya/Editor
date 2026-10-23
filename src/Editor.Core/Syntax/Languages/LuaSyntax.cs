@@ -1,6 +1,6 @@
 namespace Editor.Core.Syntax.Languages;
 
-public class LuaSyntax : ISyntaxLanguage
+public class LuaSyntax : ILineStateSyntaxLanguage
 {
     public string Name => "Lua";
     public string[] Extensions => [".lua"];
@@ -23,19 +23,19 @@ public class LuaSyntax : ISyntaxLanguage
         "unpack", "assert", "error", "self",
     ];
 
-    public LineTokens[] Tokenize(string[] lines)
-    {
-        var result = new List<LineTokens>();
-        int longStringLevel = -1;
-        int longCommentLevel = -1;
+    private readonly record struct LineState(int LongStringLevel, int LongCommentLevel);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var tokens = new List<SyntaxToken>();
-            TokenizeLine(lines[i], tokens, ref longStringLevel, ref longCommentLevel);
-            result.Add(new LineTokens(i, [.. tokens]));
-        }
-        return [.. result];
+    public object InitialState { get; } = new LineState(-1, -1);
+
+    public LineTokens[] Tokenize(string[] lines) => LineStateTokenizer.TokenizeAll(this, lines);
+
+    public SyntaxToken[] TokenizeLine(string line, ref object state)
+    {
+        var (longStringLevel, longCommentLevel) = (LineState)state;
+        var tokens = new List<SyntaxToken>();
+        TokenizeLine(line, tokens, ref longStringLevel, ref longCommentLevel);
+        LineStateTokenizer.Advance(ref state, new LineState(longStringLevel, longCommentLevel));
+        return [.. tokens];
     }
 
     private static void TokenizeLine(string line, List<SyntaxToken> tokens, ref int longStringLevel, ref int longCommentLevel)

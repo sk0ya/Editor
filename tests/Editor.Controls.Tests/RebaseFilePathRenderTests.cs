@@ -72,10 +72,10 @@ public sealed class RebaseFilePathRenderTests
         var canvas = typeof(VimEditorControl)
             .GetField("Canvas", BindingFlags.NonPublic | BindingFlags.Instance)!
             .GetValue(editor)!;
-        var byLine = (Dictionary<int, SyntaxToken[]>)canvas.GetType()
-            .GetField("_tokensByLine", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .GetValue(canvas)!;
-        return byLine.TryGetValue(0, out var tokens) ? tokens : [];
+        var tokens = (SyntaxToken[]?)canvas.GetType()
+            .GetMethod("TokensForLine", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(canvas, [0]);
+        return tokens ?? [];
     }
 
     private static string WriteFile(string dir, string name, string text)
