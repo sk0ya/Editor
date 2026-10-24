@@ -9,8 +9,14 @@ public class MarkManager
     private readonly BoundedHistory _jumps = new(100);
     private readonly BoundedHistory _changes = new(100);
 
+    /// <summary>ジャンプした回数（ジャンプリストに積む・戻る・進む、直前の位置 <c>'</c> を置く）。打鍵の前後で比べて、
+    /// 飛んだ先が閉じた折りたたみの中なら開くのに使う（G・gg は <c>'</c> だけを置き、検索はジャンプリストに積む）。</summary>
+    public int JumpVersion { get; private set; }
+
     public void SetMark(char name, CursorPosition pos)
     {
+        if (name == '\'')
+            JumpVersion++;
         if (char.IsLetter(name) || name == '<' || name == '>' || name == '.' || name == '\'')
             _marks[name] = pos;
     }
@@ -22,9 +28,23 @@ public class MarkManager
 
     public bool DeleteMark(char name) => _marks.Remove(name);
 
-    public void AddJump(CursorPosition pos) => _jumps.Add(pos);
-    public CursorPosition? JumpBack() => _jumps.Back();
-    public CursorPosition? JumpForward() => _jumps.Forward();
+    public void AddJump(CursorPosition pos)
+    {
+        _jumps.Add(pos);
+        JumpVersion++;
+    }
+
+    public CursorPosition? JumpBack()
+    {
+        JumpVersion++;
+        return _jumps.Back();
+    }
+
+    public CursorPosition? JumpForward()
+    {
+        JumpVersion++;
+        return _jumps.Forward();
+    }
 
     public void AddChange(CursorPosition pos) => _changes.Add(pos);
     public CursorPosition? ChangeBack() => _changes.Back();

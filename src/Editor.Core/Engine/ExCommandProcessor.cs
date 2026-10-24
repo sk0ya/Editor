@@ -228,6 +228,17 @@ public class ExCommandProcessor
         cmd = parsed.Command;
         var range = parsed.Range;
 
+        // :行番号（:5・:$・:.+3・:'a）——範囲だけでコマンドが無いのは、その行（範囲の最後の行）へ移ること。
+        // 範囲の剥がしを入れたときから :5 の数字まで範囲として剥がされ、「Not an editor command」になっていた。
+        if (cmd.Length == 0 && range.Length > 0)
+        {
+            var (_, _, target) = ResolveRangeClamped(range, cursor);
+            return new ExResult(true, null, VimEvent.CursorMoved(new CursorPosition(target, 0)));
+        }
+        if (cmd == "$" && range.Length == 0)   // :$ は範囲の読み取りに乗らない（$ 単独を範囲と見ない）
+            return new ExResult(true, null, VimEvent.CursorMoved(
+                new CursorPosition(Math.Max(0, _bufferManager.Current.Text.LineCount - 1), 0)));
+
         // :q/:quit/:wq/:w/:write/:e/:edit — see ExCommands/FileOpsCommands.cs
         if (_fileOpsCommands.TryHandle(cmd, out var fileOpsResult))
             return fileOpsResult;
@@ -398,13 +409,6 @@ public class ExCommandProcessor
                      : null;
             return new ExResult(true, null, VimEvent.SplitRequested(true,
                 string.IsNullOrWhiteSpace(path) ? null : path));
-        }
-
-        // :number (go to line)
-        if (int.TryParse(cmd, out var lineNum))
-        {
-            var line = Math.Clamp(lineNum - 1, 0, _bufferManager.Current.Text.LineCount - 1);
-            return new ExResult(true, null, VimEvent.CursorMoved(new CursorPosition(line, 0)));
         }
 
         // :grep [!] {pattern} [{glob}]  /  :vimgrep [!] /{pattern}/[flags] [{glob}]

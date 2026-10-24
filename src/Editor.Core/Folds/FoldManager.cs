@@ -113,6 +113,24 @@ public class FoldManager
         InvalidateCache();
     }
 
+    /// <summary>その行を隠している閉じた折りたたみを全部開く（入れ子なら外側も）。開いたものがあれば true。
+    /// 飛んだ先を見せるため（ホストからの移動・ジャンプ・<c>:行番号</c>）。見出しの行は隠れていないので開かない。</summary>
+    public bool OpenFoldsHiding(int bufferLine)
+    {
+        var opened = false;
+        for (int i = 0; i < _folds.Count; i++)
+        {
+            var f = _folds[i];
+            if (f.IsClosed && f.StartLine < bufferLine && f.EndLine >= bufferLine)
+            {
+                _folds[i] = f with { IsClosed = false };
+                opened = true;
+            }
+        }
+        if (opened) InvalidateCache();
+        return opened;
+    }
+
     // 指定バッファ行が閉じたフォールドに隠れているか（StartLine 自体は隠れない）
     public FoldRegion? GetHidingFold(int bufferLine)
     {

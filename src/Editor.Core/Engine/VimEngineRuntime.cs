@@ -1284,6 +1284,8 @@ internal sealed partial class VimEngineRuntime
         SetPreferredColumn(col);
 
         var events = new List<VimEvent> { VimEvent.CursorMoved(_cursor) };
+        // ホストからの移動（定義へ・軌跡・Problems・アウトライン）。マウスで押せるのは見えている行だけなので、ここで開いても困らない。
+        RevealCursorLine(events);
 
         if (_mode is VimMode.Visual or VimMode.VisualLine or VimMode.VisualBlock)
         {
@@ -1325,7 +1327,10 @@ internal sealed partial class VimEngineRuntime
     {
         var events = new List<VimEvent>();
         var linked = _linkedEditing.Capture();
+        var jumps = _markManager.JumpVersion;
         ProcessStroke(new VimKeyStroke(key, ctrl, shift, alt), events, allowMapping: true);
+        if (_markManager.JumpVersion != jumps)
+            RevealCursorLine(events);
         _linkedEditing.After(linked, events);
         return events;
     }
@@ -1467,7 +1472,10 @@ internal sealed partial class VimEngineRuntime
     {
         var events = new List<VimEvent>();
         var linked = _linkedEditing.Capture();
+        var jumps = _markManager.JumpVersion;
         ProcessStroke(new VimKeyStroke(key, false, false, false), events, allowMapping: false);
+        if (_markManager.JumpVersion != jumps)
+            RevealCursorLine(events);
         _linkedEditing.After(linked, events);
         return events;
     }
@@ -2676,6 +2684,7 @@ internal sealed partial class VimEngineRuntime
         var events = new List<VimEvent>();
         UpdatePlainSelection(buf.ClampCursor(caret, insertMode: true), events);
         SetPreferredColumn(_cursor.Column);
+        RevealCursorLine(events);
         return events;
     }
 
@@ -3529,6 +3538,14 @@ internal sealed partial class VimEngineRuntime
         }
     }
 
+    /// <summary>キャレットの行を隠している閉じた折りたたみを開く（飛んだ先を見せる・Vim の 'foldopen'）。
+    /// j/k のような行ごとの移動では呼ばない（折りたたみを飛び越えるのが Vim の振る舞い）。</summary>
+    private void RevealCursorLine(List<VimEvent> events)
+    {
+        if (CurrentBuffer.Folds.OpenFoldsHiding(_cursor.Line))
+            events.Add(VimEvent.FoldsChanged());
+    }
+
     private void MoveCursor(CursorPosition pos, List<VimEvent> events)
     {
         _cursor = _bufferManager.Current.Text.ClampCursor(
@@ -4065,6 +4082,14 @@ internal sealed partial class VimEngineRuntime
                     _cursor = CurrentBuffer.Text.ClampCursor(result.RestoredCursor ?? _cursor);
                     CurrentBuffer.Folds.Clear();
                     events.Add(VimEvent.FoldsChanged());
+                }
+                // :行番号 は移動先を CursorMoved で返すだけだった——表示のキャレットは動くがエンジンの位置は元のまま
+                // （続けて j を押すと元の行から動く）。Vim と同じくジャンプとして直前の位置 ' を置いて動かす。
+                if (result.Success && result.Event is CursorMovedEvent moved)
+                {
+                    _markManager.SetMark('\'', _cursor);
+                    _cursor = CurrentBuffer.Text.ClampCursor(moved.Position);
+                    SetPreferredColumn(_cursor.Column);
                 }
                 transaction.Cursor = _cursor;
                 if (result.Event != null)
