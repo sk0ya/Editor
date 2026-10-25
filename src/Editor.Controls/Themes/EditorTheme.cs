@@ -64,6 +64,9 @@ public class EditorTheme
     public Brush DiffRemovedLineBg { get; init; } = new SolidColorBrush(Color.FromArgb(0x2E, 0xE5, 0x73, 0x73));
     // 反対側にしか無い行のぶん挿し込む空き行。本文の無い場所だと分かる程度に沈める。
     public Brush DiffSpacerBg      { get; init; } = new SolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
+    // 移動したブロック（DiffDecorations.MovedLines）。赤／緑と見分けられる別の色相（移動元＝紫・移動先＝青）。
+    public Brush DiffMovedSourceLineBg { get; init; } = new SolidColorBrush(Color.FromArgb(0x30, 0x95, 0x75, 0xCD));
+    public Brush DiffMovedTargetLineBg { get; init; } = new SolidColorBrush(Color.FromArgb(0x30, 0x4F, 0xA3, 0xF7));
     // 行内差分（DiffDecorations.InlineChanges）。行の背景の上に重ねるので、同じ色相をずっと濃くする。
     public Brush DiffAddedChangeBg   { get; init; } = new SolidColorBrush(Color.FromArgb(0x60, 0x4C, 0xAF, 0x50));
     public Brush DiffRemovedChangeBg { get; init; } = new SolidColorBrush(Color.FromArgb(0x60, 0xE5, 0x73, 0x73));

@@ -1995,11 +1995,14 @@ public partial class EditorCanvas : FrameworkElement
             // いちばん見たい行で色が消えていた。差分の色は半透明なので、現在行も色味を帯びて見分けられる。
             if (_diffDecorations.Lines.TryGetValue(l, out var diffKind) && size.Width > textLeft)
             {
-                dc.DrawRectangle(
-                    diffKind == DiffDecorationKind.Added ? Theme.DiffAddedLineBg : Theme.DiffRemovedLineBg,
-                    null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
+                // 移動したブロックの行は移動の色にし、行内差分は描かない（DiffDecorations.MovedLines）。
+                var moved = _diffDecorations.MovedLines.TryGetValue(l, out var isSource);
+                var lineBrush = moved
+                    ? (isSource ? Theme.DiffMovedSourceLineBg : Theme.DiffMovedTargetLineBg)
+                    : diffKind == DiffDecorationKind.Added ? Theme.DiffAddedLineBg : Theme.DiffRemovedLineBg;
+                dc.DrawRectangle(lineBrush, null, new Rect(textLeft, y, size.Width - textLeft, _lineHeight));
                 // 行内差分（変わった文字だけ濃く）。本文の下に敷くので、ここで描く。
-                if (!isPreviewLine)
+                if (!isPreviewLine && !moved)
                     DrawDiffInlineChanges(dc, vi, segment, l, diffKind, lineText, y, textLeft, size);
             }
 

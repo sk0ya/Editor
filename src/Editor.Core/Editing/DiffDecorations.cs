@@ -72,6 +72,15 @@ public sealed class DiffDecorations
     /// </summary>
     public DiffDecorationKind? SpacerKind { get; init; }
 
+    /// <summary>
+    /// バッファ行 → 移動したブロックの行か（true＝移動元・false＝移動先）。削除と追加が実は同じブロックの移動であるものを、
+    /// ホストが見分けて渡す（git の <c>--color-moved</c> と同じ考え方）。<see cref="Lines"/> の種別（追加／削除）はそのまま持ち、
+    /// 行の背景だけを移動の色にする。移動の行には行内差分を描かない（相手は別の場所にあり、同じかたまりの行と比べた範囲は嘘になる）。
+    /// </summary>
+    public IReadOnlyDictionary<int, bool> MovedLines { get; init; } = NoMovedLines;
+
+    private static readonly IReadOnlyDictionary<int, bool> NoMovedLines = new Dictionary<int, bool>();
+
     /// <summary>描くものが何も無いか。<see cref="InlineChanges"/> は種別のある行にしか描かれないので数えない
     /// （行内差分だけを渡しても何も出ない——それを「空でない」と答えると、描画と食い違う）。</summary>
     public bool IsEmpty => Lines.Count == 0 && SpacersBefore.Count == 0;

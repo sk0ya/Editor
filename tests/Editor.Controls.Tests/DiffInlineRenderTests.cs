@@ -96,6 +96,48 @@ public sealed class DiffInlineRenderTests
     }
 
     /// <summary>
+    /// 移動したブロックの行（<see cref="DiffDecorations.MovedLines"/>）は追加／削除と違う色で塗り、行内差分は描かない。
+    /// </summary>
+    [Fact]
+    public void Moved_lines_get_their_own_color_and_no_inline_ranges()
+    {
+        WpfTestHost.Run(() =>
+        {
+            const string text = "          ";
+            var canvas = Canvas("x", text, "y");
+            var window = WpfTestHost.Load(canvas, Width, Height);
+            try
+            {
+                var lines = new Dictionary<int, DiffDecorationKind> { [1] = DiffDecorationKind.Removed };
+                var inline = new Dictionary<int, IReadOnlyList<DiffInlineRange>> { [1] = [new DiffInlineRange(2, 3)] };
+                canvas.SetDiffDecorations(Decorations(lines));
+                var removed = Render(canvas);
+
+                canvas.SetDiffDecorations(new DiffDecorations(lines, new Dictionary<int, int>(), inline)
+                {
+                    MovedLines = new Dictionary<int, bool> { [1] = true },
+                });
+                var moved = Render(canvas);
+
+                // 行全体の色が変わる（移動元の色）——行内差分の範囲だけでなく、行の端から端まで
+                var changed = ChangedColumns(removed, moved, canvas, row: 1);
+                Assert.True(changed.Count > Width / 2, $"changed={changed.Count}");
+
+                // 行内差分の範囲は描かない：範囲を外しても同じ絵
+                canvas.SetDiffDecorations(new DiffDecorations(lines, new Dictionary<int, int>())
+                {
+                    MovedLines = new Dictionary<int, bool> { [1] = true },
+                });
+                Assert.Empty(ChangedColumns(moved, Render(canvas), canvas, row: 1));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>
     /// キャレットのある変更行でも差分の色が消えない。現在行の強調はどのテーマでも不透明なので、差分の色を
     /// その下に敷くと消える——差分の次/前へ飛ぶとキャレットはまさにその変更行に乗るので、いちばん見たい行で
     /// 行の背景も行内差分も見えなくなっていた。
