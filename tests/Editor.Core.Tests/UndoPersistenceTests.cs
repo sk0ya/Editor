@@ -223,5 +223,69 @@ public class UndoPersistenceTests
         Assert.False(result.Success);
         Assert.Empty(target.GetHistory());
     }
+
+    [Fact]
+    public void BudgetedExport_NothingToUndoOrRedo_ReturnsNull()
+    {
+        var buffer = new TextBuffer("fresh");
+        Assert.Null(new UndoManager().ExportHistory(buffer, "doc", new UndoExportOptions()));
+    }
+
+    [Fact]
+    public void BudgetedExport_KeepsNewestUndoStatesWithinBudget_AndStillImports()
+    {
+        var buffer = new TextBuffer("a");
+        var source = new UndoManager();
+        for (var i = 0; i < 10; i++)
+        {
+            source.Snapshot(buffer, CursorPosition.Zero);
+            buffer.InsertText(0, buffer.GetLine(0).Length, "x");
+        }
+        // Each state costs its characters plus one separator per line. Budget for the current text and the newest three states.
+        var budget = buffer.GetText().Length + 1 + 11 + 10 + 9;
+        var json = source.ExportHistory(buffer, "doc", new UndoExportOptions(MaxCharacters: budget));
+
+        Assert.NotNull(json);
+        var target = new UndoManager();
+        var result = target.ImportHistory(json!, buffer, "doc");
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(3, target.GetHistory().Count);
+        target.Undo(buffer, CursorPosition.Zero);
+        Assert.Equal("a" + new string('x', 9), buffer.GetText());
+    }
+
+    [Fact]
+    public void BudgetedExport_MaxUndoStatesAndRedoSwitch()
+    {
+        var buffer = new TextBuffer("a");
+        var source = new UndoManager();
+        for (var i = 0; i < 5; i++)
+        {
+            source.Snapshot(buffer, CursorPosition.Zero);
+            buffer.InsertText(0, buffer.GetLine(0).Length, "x");
+        }
+        source.Undo(buffer, CursorPosition.Zero);   // one redo available
+
+        var withoutRedo = source.ExportHistory(buffer, "doc", new UndoExportOptions(MaxUndoStates: 2, IncludeRedo: false))!;
+        var target = new UndoManager();
+        Assert.True(target.ImportHistory(withoutRedo, buffer, "doc").Success);
+        Assert.False(target.CanRedo);
+        Assert.Equal(2, target.GetHistory().Count);
+
+        var withRedo = source.ExportHistory(buffer, "doc", new UndoExportOptions())!;
+        var full = new UndoManager();
+        Assert.True(full.ImportHistory(withRedo, buffer, "doc").Success);
+        Assert.True(full.CanRedo);
+    }
+
+    [Fact]
+    public void BudgetedExport_CurrentTextAloneOverBudget_ReturnsNull()
+    {
+        var buffer = new TextBuffer(new string('a', 100));
+        var source = new UndoManager();
+        source.Snapshot(buffer, CursorPosition.Zero);
+        buffer.InsertText(0, 0, "b");
+        Assert.Null(source.ExportHistory(buffer, "doc", new UndoExportOptions(MaxCharacters: 50)));
+    }
 }
 #pragma warning restore CS0618

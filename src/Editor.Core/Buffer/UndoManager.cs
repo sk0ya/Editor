@@ -43,6 +43,18 @@ public sealed record UndoPersistenceLimits(
     int MaxCharactersPerState = 64 * 1024 * 1024,
     long MaxFileBytes = 256L * 1024 * 1024);
 
+/// <summary>
+/// Bounds applied when a host writes undo history to disk (Loomo §24.96). Every undo state is a full snapshot of the
+/// buffer, so an unbounded export of a long-edited large file can reach hundreds of megabytes. The newest undo
+/// states are kept first, then redo states, then archived branches, until <see cref="MaxCharacters"/> is reached.
+/// What is dropped is the far end (oldest undo / farthest redo / whole branches), so the result still validates on import.
+/// </summary>
+public sealed record UndoExportOptions(
+    int MaxUndoStates = 1000,
+    bool IncludeRedo = true,
+    bool IncludeBranches = true,
+    long MaxCharacters = 32L * 1024 * 1024);
+
 /// <summary>Result of importing persisted undo history.</summary>
 public sealed record UndoImportResult(bool Success, string? Error = null);
 
@@ -101,7 +113,50 @@ public class UndoManager
         return ExportHistoryCore(documentId, ComputeContentHash(buffer), buffer);
     }
 
-    private string ExportHistoryCore(string? documentId, string? contentHash, TextBuffer? currentBuffer = null)
+    /// <summary>
+    /// Exports bound history within <paramref name="options"/>' bounds (newest undo states first). Returns null when
+    /// there is nothing worth persisting — no undo and no redo — or when not even the current state fits the budget.
+    /// </summary>
+    public string? ExportHistory(TextBuffer buffer, string documentId, UndoExportOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentException.ThrowIfNullOrWhiteSpace(documentId);
+        ArgumentNullException.ThrowIfNull(options);
+        if (!CanUndo && !CanRedo)
+            return null;
+        var budget = options.MaxCharacters - CharacterCount(buffer.Snapshot());
+        if (budget < 0)
+            return null;
+        bool Fits(UndoState state)
+        {
+            var size = CharacterCount(state.Lines);
+            if (size > budget) return false;
+            budget -= size;
+            return true;
+        }
+        var undo = _undoStack.Take(Math.Max(0, options.MaxUndoStates)).TakeWhile(Fits).ToList();
+        var redo = options.IncludeRedo ? _redoStack.TakeWhile(Fits).ToList() : [];
+        var branches = new List<PersistenceBranch>();
+        if (options.IncludeBranches)
+            foreach (var branch in _archivedBranches.AsEnumerable().Reverse())   // newest branch first
+            {
+                var size = branch.States.Sum(s => CharacterCount(s.Lines));
+                if (size > budget) break;
+                budget -= size;
+                branches.Insert(0, new PersistenceBranch(branch.ForkChangeNumber, branch.ArchivedAt, branch.States.ToList()));
+            }
+        return ExportHistoryCore(documentId, ComputeContentHash(buffer), buffer, undo, redo, branches);
+    }
+
+    private static long CharacterCount(string[] lines)
+    {
+        long count = lines.Length;   // one separator per line
+        foreach (var line in lines) count += line.Length;
+        return count;
+    }
+
+    private string ExportHistoryCore(string? documentId, string? contentHash, TextBuffer? currentBuffer = null,
+        List<UndoState>? undo = null, List<UndoState>? redo = null, List<PersistenceBranch>? branches = null)
     {
         var persistedCurrent = _currentState == null ? null : CloneState(_currentState);
         if (persistedCurrent != null && currentBuffer != null)
@@ -117,9 +172,9 @@ public class UndoManager
             _nextChangeNumber,
             _currentChangeNumber,
             persistedCurrent,
-            _undoStack.ToList(), // Stack enumeration is top first; import preserves that ordering.
-            _redoStack.ToList(),
-            _archivedBranches.Select(b => new PersistenceBranch(
+            undo ?? _undoStack.ToList(), // Stack enumeration is top first; import preserves that ordering.
+            redo ?? _redoStack.ToList(),
+            branches ?? _archivedBranches.Select(b => new PersistenceBranch(
                 b.ForkChangeNumber, b.ArchivedAt, b.States.ToList())).ToList());
         return JsonSerializer.Serialize(document, PersistenceJsonOptions);
     }
