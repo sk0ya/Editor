@@ -60,7 +60,7 @@ public partial class VimEditorControl
         Dictionary<int, EditorBlameLine> blame;
         try
         {
-            blame = await Task.Run(() => _gitProvider.GetBlameLines(filePath));
+            blame = await GetGitBlameLinesAsync(filePath);
         }
         catch (Exception)
         {

@@ -202,12 +202,16 @@ public partial class GitDiffProvider : IEditorGitService
         return string.IsNullOrEmpty(workDir) ? null : FindGitRoot(workDir);
     }
 
-    private static string? FindGitRoot(string dir)
+    // ワークツリー（git worktree add）とサブモジュールでは .git がフォルダーではなく「gitdir: …」と書いた
+    // ファイルになる。フォルダーだけを探すと、そこで開いたファイルは「Git リポジトリの外」とされ、
+    // blame・ガターの変更マーク・ブランチ名がすべて黙って空になっていた。
+    internal static string? FindGitRoot(string dir)
     {
         var current = dir;
         while (!string.IsNullOrEmpty(current))
         {
-            if (Directory.Exists(Path.Combine(current, ".git")))
+            var dotGit = Path.Combine(current, ".git");
+            if (Directory.Exists(dotGit) || File.Exists(dotGit))
                 return current;
             current = Path.GetDirectoryName(current);
         }

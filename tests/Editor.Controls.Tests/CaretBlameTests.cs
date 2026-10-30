@@ -72,6 +72,65 @@ public sealed class CaretBlameTests
         });
     }
 
+    /// <summary>非同期版を持つホスト：同期版は呼ばれたら失敗にする（呼ばれないことを確かめる）。</summary>
+    private sealed class AsyncOnlyGit : IAsyncEditorGitService
+    {
+        private readonly FakeGit _data = new();
+        public int AsyncBlameCalls;
+        public int AsyncDiffCalls;
+        public int AsyncBranchCalls;
+        public Task<Dictionary<int, GitLineState>> GetDiffAsync(string filePath)
+        {
+            Interlocked.Increment(ref AsyncDiffCalls);
+            return Task.FromResult(new Dictionary<int, GitLineState> { [1] = GitLineState.Added });
+        }
+        public Task<string?> GetBranchNameAsync(string repoPath)
+        {
+            Interlocked.Increment(ref AsyncBranchCalls);
+            return Task.FromResult<string?>("topic");
+        }
+        public async Task<Dictionary<int, EditorBlameLine>> GetBlameLinesAsync(string filePath)
+        {
+            Interlocked.Increment(ref AsyncBlameCalls);
+            await Task.Yield();
+            return _data.Blame;
+        }
+        public Dictionary<int, GitLineState> GetDiff(string filePath) => throw new InvalidOperationException("sync GetDiff");
+        public string? GetBranchName(string repoPath) => throw new InvalidOperationException("sync GetBranchName");
+        public Dictionary<int, EditorBlameLine> GetBlameLines(string filePath) => throw new InvalidOperationException("sync GetBlameLines");
+        public string GetStatusOutput(string repoPath) => "";
+        public string GetDiffOutput(string filePath) => "";
+        public string GetLogOutput(string repoPath, int count = 30) => "";
+        public string GetFileHistoryOutput(string filePath, int? count = null) => "";
+        public (bool Success, string Output) RunPush(string repoPath) => (true, "");
+        public (bool Success, string Output) RunPull(string repoPath) => (true, "");
+        public (bool Success, string Output) RunCommit(string filePath, string message) => (true, "");
+        public (bool Success, string Output) StageHunk(string filePath, int line) => (true, "");
+        public (bool Success, string Output) UnstageHunk(string filePath, int line) => (true, "");
+    }
+
+    [Fact]
+    public void Host_with_async_git_is_awaited_instead_of_the_sync_methods()
+    {
+        var git = new AsyncOnlyGit();
+        WithEditor(git, (editor, dir) =>
+        {
+            var path = Path.Combine(dir, "a.cs");
+            File.WriteAllText(path, "one\ntwo\nthree\n");
+            editor.LoadFile(path);
+            editor.ShowCaretLineBlame = true;
+            PumpUntil(() => CanvasOf(editor).LineAnnotation.Text is not null);
+
+            Assert.Equal((0, "Alice, 2026-10-01 · 最初のコミット"), CanvasOf(editor).LineAnnotation);
+            Assert.True(git.AsyncBlameCalls > 0);
+
+            editor.RefreshGitDiff();
+            PumpUntil(() => git.AsyncDiffCalls > 0 && git.AsyncBranchCalls > 0);
+            Assert.True(git.AsyncDiffCalls > 0);
+            Assert.True(git.AsyncBranchCalls > 0);
+        });
+    }
+
     [Fact]
     public void Long_summaries_are_cut()
     {

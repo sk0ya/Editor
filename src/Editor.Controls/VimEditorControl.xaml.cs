@@ -2882,9 +2882,9 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             return;
         }
 
-        var gitInfo = await Task.Run(() => (
-            Diff: _gitProvider.GetDiff(filePath),
-            Branch: _gitProvider.GetBranchName(filePath)));
+        var diffTask = GetGitDiffAsync(filePath);
+        var branchTask = GetGitBranchNameAsync(filePath);
+        var gitInfo = (Diff: await diffTask, Branch: await branchTask);
         if (!string.Equals(filePath, _engine.CurrentBuffer.FilePath, StringComparison.OrdinalIgnoreCase))
             return;
 
@@ -2896,7 +2896,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
 
         if (_blameActive)
         {
-            var blame = await Task.Run(() => _gitProvider.GetBlameLines(filePath));
+            var blame = await GetGitBlameLinesAsync(filePath);
             Canvas.SetBlameLines(blame);
         }
         // 開いた・保存した（コミットしたかもしれない）ときに、カーソル行の blame を引き直す。
@@ -2931,7 +2931,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         }
 
         ActiveStatusBar.UpdateStatus("Git blame: loading...");
-        var blame = await Task.Run(() => _gitProvider.GetBlameLines(filePath));
+        var blame = await GetGitBlameLinesAsync(filePath);
         if (_blameActive)
         {
             Canvas.SetBlameLines(blame);
