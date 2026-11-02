@@ -1,21 +1,15 @@
 name: publish-nuget
 
-# Publishes sk0ya.Editor.Controls to nuget.org via Trusted Publishing (no stored API key).
-# The nuget.org policy must name this repository (sk0ya/Editor) and this file (publish-nuget.yml).
-# The version is whatever <Version> the Defaults .csproj carries at the given ref — bump and commit first.
-
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
-      ref:
-        description: Commit / branch / tag to publish (the bump commit)
-        required: false
-        default: main
+      version:
+        description: Package version to publish (for example 1.0.1)
+        required: true
         type: string
-
-permissions:
-  contents: read
-  id-token: write   # Trusted Publishing: GitHub OIDC token -> short-lived NuGet key
 
 jobs:
   publish:
@@ -26,45 +20,57 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 9.0.x
 
-      - name: Test (Core)
-        run: dotnet test tests/Editor.Core.Tests/Editor.Core.Tests.csproj -c Release
-
-      - name: Pack
-        run: dotnet pack src/Editor.Controls.Defaults/Editor.Controls.Defaults.csproj -c Release -o artifacts
-
-      - name: Verify package
-        id: verify
+      - name: Resolve package version
+        id: version
         shell: pwsh
         run: |
-          $pkg = Get-ChildItem artifacts/sk0ya.Editor.Controls.*.nupkg | Select-Object -First 1
-          if (-not $pkg) { throw 'No package produced.' }
-          $sha = git rev-parse HEAD
-          $dir = Join-Path $env:RUNNER_TEMP 'nupkg-check'
-          Expand-Archive $pkg.FullName $dir
-          $version = ([xml](Get-Content (Join-Path $dir 'sk0ya.Editor.Controls.nuspec'))).package.metadata.version
-          $dlls = Get-ChildItem (Join-Path $dir 'lib') -Recurse -Filter *.dll
-          if ($dlls.Count -lt 4) { throw "Expected 4 DLLs, found $($dlls.Count)." }
-          foreach ($d in $dlls) {
-            $pv = [Diagnostics.FileVersionInfo]::GetVersionInfo($d.FullName).ProductVersion
-            "$($d.Directory.Name)/$($d.Name) $pv"
-            if ($pv -ne "$version+$sha") { throw "$($d.Name): ProductVersion $pv != $version+$sha" }
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $version = '${{ inputs.version }}'
           }
-          "package=$($pkg.FullName)" >> $env:GITHUB_OUTPUT
-          "version=$version" >> $env:GITHUB_OUTPUT
+          else {
+            $version = '${{ github.ref_name }}'.TrimStart('v')
+          }
 
-      - name: NuGet login (Trusted Publishing)
-        id: login
-        uses: NuGet/login@v1
-        with:
-          user: ShigekazuKoya
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw 'Package version could not be resolved.'
+          }
 
-      - name: Push to nuget.org
-        run: dotnet nuget push "${{ steps.verify.outputs.package }}" --source https://api.nuget.org/v3/index.json --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+          "package_version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore Editor.sln
+
+      - name: Build
+        run: dotnet build Editor.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/Editor.Core.Tests/Editor.Core.Tests.csproj -c Release --no-build
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts\packages | Out-Null
+          dotnet pack src\Editor.Core\Editor.Core.csproj -c Release --no-build -p:Version=${{ steps.version.outputs.package_version }} -o artifacts\packages
+          dotnet pack src\Editor.Controls\Editor.Controls.csproj -c Release --no-build -p:Version=${{ steps.version.outputs.package_version }} -o artifacts\packages
+          dotnet pack src\Editor.Controls.Defaults\Editor.Controls.Defaults.csproj -c Release --no-build -p:Version=${{ steps.version.outputs.package_version }} -o artifacts\packages
+
+      - name: Publish to nuget.org
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) {
+            throw 'NUGET_API_KEY secret is not set. Add it under repository Settings > Secrets and variables > Actions.'
+          }
+
+          Get-ChildItem artifacts\packages\*.nupkg |
+            Where-Object { $_.Name -notlike '*.snupkg' } |
+            ForEach-Object {
+              dotnet nuget push $_.FullName --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY --skip-duplicate
+            }
