@@ -84,7 +84,18 @@ This is unfixable after pushing, because a NuGet version can never be re-uploade
    SourceLink's `<repository commit="…">` element is **not** emitted — the DLLs' `ProductVersion` suffix
    is what pins the commit, so verify that instead.
    If the commit doesn't match, **stop** — commit the stray changes, re-pack, and re-verify.
-7. **Push** to nuget.org using the `NUGET_API_KEY` env var:
+7. **Push** to nuget.org using the `NUGET_API_KEY` env var.
+   **API keys last at most 30 days** (nuget.org policy since 2026-08-17; all longer keys died 2026-11-01).
+   A `403 ... has expired` means the monthly key ran out — it is not a packaging problem. Ask the user for a
+   new key from https://www.nuget.org/account/apikeys (the "API Keys" menu item redirects to Trusted
+   Publishing; use the underlined "API keys" link in its banner, or that URL). Create: Expires 30 days,
+   Scope "Push new packages and package versions", Glob `sk0ya.Editor.Controls`. When they paste it, push
+   with it, then store it for next time: `[Environment]::SetEnvironmentVariable("NUGET_API_KEY", "<key>", "User")`
+   and `dotnet nuget setapikey <key> --source https://api.nuget.org/v3/index.json`. The running session keeps
+   the old env value, so use the pasted key directly for this push. The user does **not** want publishing via
+   GitHub Actions / Trusted Publishing — don't propose moving there.
+   Push the git commits only **after** nuget.org says Created — chain them, don't run `git push` after a failed
+   `dotnet nuget push`.
    ```
    dotnet nuget push src/Editor.Controls.Defaults/bin/Release/sk0ya.Editor.Controls.<VER>.nupkg --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY
    ```
