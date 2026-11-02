@@ -22,7 +22,10 @@ internal static class ColorParser
         char c = text[startIndex];
 
         if (c == '#')
-            return TryParseHex(text, startIndex, out color, out length);
+            return IsHexColorStart(text, startIndex) && TryParseHex(text, startIndex, out color, out length);
+
+        // rgb( は語の途中（torgb( など）では取らない
+        if (startIndex > 0 && IsWordChar(text[startIndex - 1])) return false;
 
         if (startIndex + 3 < text.Length &&
             char.ToLowerInvariant(c) == 'r' &&
@@ -50,9 +53,10 @@ internal static class ColorParser
             hexLen++;
         }
 
-        // Ensure the character after the hex digits is not alphanumeric (word boundary)
+        // 直後が語の続きなら色ではない。'-' も続きとして扱う：見出しのアンカー（#add-feature）の頭
+        // （#add）が色として拾われていた。
         int afterEnd = start + 1 + hexLen;
-        if (afterEnd < text.Length && (char.IsLetterOrDigit(text[afterEnd]) || text[afterEnd] == '_'))
+        if (afterEnd < text.Length && (IsWordChar(text[afterEnd]) || text[afterEnd] == '-'))
             return false;
 
         if (hexLen == 3)
@@ -137,6 +141,49 @@ internal static class ColorParser
 
         return false;
     }
+
+    /// <summary>
+    /// '#' が色の書き出しとして置かれうる位置か。以前は '#' の前を見ていなかったので、Markdown のリンク
+    /// （<c>[見出し](#add)</c>、<c>doc.md#bed</c>）、HTML の <c>href="#fed"</c>、<c>issue#123</c> まで
+    /// 色として拾っていた。色を書く場所（行頭・空白・<c>:</c> <c>=</c> <c>,</c> <c>(</c> の後・引用符の中・
+    /// XML の値）の直後だけを認め、リンク先になる文脈は除く。
+    /// </summary>
+    private static bool IsHexColorStart(string text, int hashIndex)
+    {
+        if (hashIndex == 0) return true;
+        char prev = text[hashIndex - 1];
+        switch (prev)
+        {
+            case ' ' or '\t' or ':' or '=' or ',' or '{' or '>':
+                return true;
+            case '(':
+                // Markdown のリンク先 [..](#anchor)
+                return !(hashIndex >= 2 && text[hashIndex - 2] == ']');
+            case '"' or '\'' or '`':
+                // HTML のリンク先 href="#anchor"
+                return !EndsWithLinkAttribute(text, hashIndex - 1);
+            default:
+                return false;
+        }
+    }
+
+    private static bool EndsWithLinkAttribute(string text, int quoteIndex)
+    {
+        int end = quoteIndex; // text[..end] が引用符の手前まで
+        while (end > 0 && text[end - 1] == ' ') end--;
+        if (end == 0 || text[end - 1] != '=') return false;
+        end--;
+        while (end > 0 && text[end - 1] == ' ') end--;
+        int start = end;
+        while (start > 0 && (char.IsAsciiLetter(text[start - 1]) || text[start - 1] == ':')) start--;
+        var name = text.AsSpan(start, end - start);
+        return name.Equals("href", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("xlink:href", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("src", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("action", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
     private static bool TryParseByte(string s, out byte value)
     {

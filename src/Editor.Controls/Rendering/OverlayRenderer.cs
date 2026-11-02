@@ -267,33 +267,62 @@ internal static class OverlayRenderer
         }
     }
 
-    public static void DrawColorSwatches(
-        DrawingContext dc, GlyphMetrics metrics, string lineText, double y, double textLeft, double scrollOffsetX)
-    {
-        if (string.IsNullOrEmpty(lineText)) return;
+    /// <summary>色見本の両側に空ける隙間（px）。</summary>
+    public const double ColorSwatchGap = 3;
 
-        double swatchSize = Math.Max(8, metrics.LineHeight - 4);
-        double swatchY    = y + (metrics.LineHeight - swatchSize) / 2;
+    /// <summary>色見本の一辺（px）。行の高さに合わせる。</summary>
+    public static double ColorSwatchSize(double lineHeight) => Math.Max(8, Math.Round(lineHeight * 0.6));
+
+    /// <summary>
+    /// 色テキストの最後の 1 文字に足す幅（隙間＋見本＋隙間）。色見本はこの幅で後ろの文字を右へズラして
+    /// 空けた所に描く。以前は詰まったままの列の上に四角を重ねていたので、「#123;」の「;」以降の文字に
+    /// 四角が被っていた。ズラしは表の列揃えと同じ文字幅の上書き（キャンバスの _activeLineOverrides）に
+    /// 乗せるので、キャレット・選択・クリック位置・折り返しもズラした位置に従う。
+    /// </summary>
+    public static double ColorSwatchExtraWidth(double lineHeight) => ColorSwatchSize(lineHeight) + ColorSwatchGap * 2;
+
+    /// <summary>行の中の色テキストを左から順に返す（開始列・長さ・色）。色が無い行はすぐ空で返す。</summary>
+    public static List<(int Start, int Length, Color Color)> FindColors(string lineText)
+    {
+        var found = new List<(int, int, Color)>();
+        if (string.IsNullOrEmpty(lineText)) return found;
+        if (lineText.IndexOf('#') < 0 && lineText.IndexOf("rgb", StringComparison.OrdinalIgnoreCase) < 0)
+            return found;
 
         for (int i = 0; i < lineText.Length; i++)
         {
             char c = lineText[i];
             if (c != '#' && c != 'r' && c != 'R') continue;
-
-            if (!ColorParser.TryParseColor(lineText, i, out var color, out int matchLen))
+            if (!ColorParser.TryParseColor(lineText, i, out var color, out int matchLen) || matchLen <= 0)
                 continue;
+            found.Add((i, matchLen, color));
+            // Advance past the matched token so we don't re-scan its interior
+            i += matchLen - 1;
+        }
+        return found;
+    }
 
-            // Position swatch right after the color text
-            double textX = textLeft + metrics.GetVisualX(lineText, i + matchLen) - scrollOffsetX;
-            double swatchX = textX + 2; // small gap
+    /// <summary>
+    /// 色見本を描く。置き場所は <see cref="ColorSwatchExtraWidth"/> で色テキストの直後に空けてある所
+    /// （最後の文字の右端の手前）なので、どの文字にも被らない。
+    /// </summary>
+    public static void DrawColorSwatches(
+        DrawingContext dc, GlyphMetrics metrics, string lineText, double y, double textLeft, double scrollOffsetX)
+    {
+        var colors = FindColors(lineText);
+        if (colors.Count == 0) return;
+
+        double swatchSize = ColorSwatchSize(metrics.LineHeight);
+        double swatchY    = y + (metrics.LineHeight - swatchSize) / 2;
+
+        foreach (var (start, length, color) in colors)
+        {
+            double slotRight = textLeft + metrics.GetVisualX(lineText, start + length) - scrollOffsetX;
+            double swatchX   = slotRight - ColorSwatchGap - swatchSize;
 
             var brush = new SolidColorBrush(color);
             brush.Freeze();
-            var swatchRect = new Rect(swatchX, swatchY, swatchSize, swatchSize);
-            dc.DrawRectangle(brush, s_swatchBorderPen, swatchRect);
-
-            // Advance past the matched token so we don't re-scan its interior
-            i += matchLen - 1;
+            dc.DrawRectangle(brush, s_swatchBorderPen, new Rect(swatchX, swatchY, swatchSize, swatchSize));
         }
     }
 }

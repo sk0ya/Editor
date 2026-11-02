@@ -134,6 +134,8 @@ public partial class EditorCanvas : FrameworkElement
     private bool _markdownTableAlignEnabled;
     private Dictionary<int, Dictionary<int, double>> _tableColumnOverrides = [];
     private Dictionary<int, double>? _activeLineOverrides;
+    // 行の文字列 → 色見本ぶんの文字幅の上書き（null = 色の無い行）。フォント・見本の表示切替で捨てる
+    private readonly Dictionary<string, Dictionary<int, double>?> _colorSwatchOverrideCache = new(StringComparer.Ordinal);
     // The detected table blocks for the current text (kept so the cursor's enclosing table can be
     // found without re-scanning on every cursor/mode change).
     private IReadOnlyList<Editor.Core.Editing.MarkdownTableLayout.TableBlock> _tableBlocks = [];
@@ -360,6 +362,7 @@ public partial class EditorCanvas : FrameworkElement
         _charWidth = 0;
         _charWidthCache.Clear();
         _textBoundaryCache.Clear();
+        _colorSwatchOverrideCache.Clear();
         InvalidateLineExtents(); // char widths changed — invalidate cached extent
         MeasureChar();
         RecomputeTableOverrides();
@@ -824,6 +827,10 @@ public partial class EditorCanvas : FrameworkElement
     {
         if (_showColorPreview == show) return;
         _showColorPreview = show;
+        // 見本の有無で色テキストの後ろの文字の位置が変わる
+        _colorSwatchOverrideCache.Clear();
+        InvalidateLineExtents();
+        RebuildVisualLayout();
         InvalidateVisual();
     }
 
@@ -2113,6 +2120,11 @@ public partial class EditorCanvas : FrameworkElement
                 // 連動編集の範囲（開き/閉じタグ名）
                 DrawLinkedEditingRanges(dc, l, y, textLeft, lineText);
 
+                // 色見本。後ろの文字は SetActiveLine の上書きで見本ぶん右へズレているので、空いた所に描く。
+                // ズラしが効いていない行（:s のプレビュー・長大な行）には描かない（文字に被る）
+                if (!isPreviewLine && ColorSwatchOverrides(lineText) is not null)
+                    OverlayRenderer.DrawColorSwatches(dc, metrics, lineText, y, textLeft, _scrollOffsetX);
+
                 // Text with syntax coloring
                 PlaceTextRow(vi, l, segment.StartColumn, lineText, y, textLeft, size.Width);
 
@@ -2121,10 +2133,6 @@ public partial class EditorCanvas : FrameworkElement
                 // LSP document links (capability-driven; Ctrl+Click opens the target)
                 LspOverlayRenderer.DrawDocumentLinks(over, Theme, metrics, _documentLinks,
                     l, y, textLeft, lineText, _scrollOffsetX);
-
-                // Inline color preview swatches
-                if (_showColorPreview)
-                    OverlayRenderer.DrawColorSwatches(over, metrics, lineText, y, textLeft, _scrollOffsetX);
 
                 // Invisible character markers (set list)
                 DrawListChars(over, lineText, y, textLeft);
@@ -3446,14 +3454,49 @@ public partial class EditorCanvas : FrameworkElement
         // cell, and re-aligns in one step when insert mode is left. The suppressed range is only
         // set in Insert/Replace mode (which also covers the Vim-disabled resting state); Normal-mode
         // viewing/navigation keeps the table aligned.
-        if (_suppressedTableStart >= 0 && lineIndex >= _suppressedTableStart && lineIndex <= _suppressedTableEnd)
+        Dictionary<int, double>? table = null;
+        bool tableSuppressed = _suppressedTableStart >= 0 && lineIndex >= _suppressedTableStart && lineIndex <= _suppressedTableEnd;
+        if (!tableSuppressed && _tableColumnOverrides.Count > 0)
+            _tableColumnOverrides.TryGetValue(lineIndex, out table);
+
+        var colors = lineIndex >= 0 && lineIndex < _lines.Length ? ColorSwatchOverrides(_lines[lineIndex]) : null;
+        if (colors is null) { _activeLineOverrides = table; return; }
+        if (table is null) { _activeLineOverrides = colors; return; }
+
+        // 表の列揃えと色見本が同じ行に乗るとき（表のセルに色を書いた行）は、見本の幅を表の幅に足す
+        var merged = new Dictionary<int, double>(table);
+        string line = _lines[lineIndex];
+        double extra = OverlayRenderer.ColorSwatchExtraWidth(_lineHeight);
+        foreach (var col in colors.Keys)
+            merged[col] = (table.TryGetValue(col, out double w) ? w : CharW(line[col])) + extra;
+        _activeLineOverrides = merged;
+    }
+
+    /// <summary>
+    /// 色見本ぶん後ろの文字をズラすための、行の文字幅の上書き（色テキストの最後の文字 → 本来の幅＋見本の幅）。
+    /// 色の無い行・見本を出さない設定・長大な行（列を等幅で近似するので上書きが効かない）は null。
+    /// 行の文字列ごとに覚えておく（行を描く・測るたびに色を探し直さない）。
+    /// </summary>
+    private Dictionary<int, double>? ColorSwatchOverrides(string line)
+    {
+        if (!_showColorPreview || line.Length == 0 || line.Length > LongLineCharacterThreshold) return null;
+        if (_colorSwatchOverrideCache.TryGetValue(line, out var cached)) return cached;
+
+        Dictionary<int, double>? overrides = null;
+        var colors = OverlayRenderer.FindColors(line);
+        if (colors.Count > 0)
         {
-            _activeLineOverrides = null;
-            return;
+            double extra = OverlayRenderer.ColorSwatchExtraWidth(_lineHeight);
+            overrides = [];
+            foreach (var (start, length, _) in colors)
+            {
+                int last = start + length - 1;
+                overrides[last] = CharW(line[last]) + extra;
+            }
         }
-        _activeLineOverrides = _tableColumnOverrides.Count > 0 && _tableColumnOverrides.TryGetValue(lineIndex, out var ov)
-            ? ov
-            : null;
+        if (_colorSwatchOverrideCache.Count > 4096) _colorSwatchOverrideCache.Clear();
+        _colorSwatchOverrideCache[line] = overrides;
+        return overrides;
     }
 
     /// <summary>
