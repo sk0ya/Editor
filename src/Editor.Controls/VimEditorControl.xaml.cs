@@ -1132,6 +1132,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
             BlameCommitClicked?.Invoke(this, new Git.BlameCommitClickedEventArgs(line, blame));
         Canvas.BreakpointToggled += OnCanvasBreakpointToggled;
         Canvas.TestGlyphClicked += OnCanvasTestGlyphClicked;
+        Canvas.NoteMarkerClicked += OnCanvasNoteMarkerClicked;
         Canvas.CodeActionBulbClicked += OnCanvasCodeActionBulbClicked;
         Canvas.DiagnosticMarkClicked += OnCanvasDiagnosticMarkClicked;
         Canvas.DataTipHoverChanged += OnCanvasDataTipHoverChanged;
@@ -2506,6 +2507,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         // テストグリフは行番号でしか結び付いていないので、別のファイルを載せた時点で無意味になる。
         // ホストが新しい一覧を送るまでの間、前のファイルの ▶ や結果が残らないようここで捨てる。
         Canvas.SetTestGlyphs([]);
+        // 注記の印も行番号にしか結び付いていない。前のファイルの吹き出しを残さない。
+        Canvas.SetNoteMarkers([]);
         // 行末の値（デバッグの Inline Values）も同じ。前のファイルの行番号に値を残さない。
         Canvas.SetInlineValues([]);
         Canvas.SetLineAnnotation(-1, null);   // 前のファイルのカーソル行の blame（行番号にしか結び付いていない）

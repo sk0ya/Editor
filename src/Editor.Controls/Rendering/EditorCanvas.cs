@@ -1179,7 +1179,8 @@ public partial class EditorCanvas : FrameworkElement
         // 無い行でも幅を保つ——出た瞬間に本文が右へずれるくらいなら、空の 14px を常に空けておく方がよい。
         int bulbColWidth = _codeActionBulbEnabled ? glyphColWidth : 0;
         // テスト実行列も同じ流儀。ホストが SetTestGlyphsEnabled(true) を呼ぶまでは幅 0。
-        int testColWidth = (_testGlyphsEnabled || _coverageMarkersEnabled) ? glyphColWidth : 0;
+        // 注記の印（PR のコメント等）はこの列の右側に同居する（EditorCanvas.NoteMarkers.cs）。
+        int testColWidth = TestGlyphSubWidth() + NoteMarkerSubWidth();
         int lineNumWidth = _showLineNumbers ? (int)((_lineNumberWidth + 1) * _charWidth) : 0;
         double foldColWidth = _showLineNumbers && _showFoldColumn ? Math.Max(16.0, _charWidth + 4) : 0;
         // blame 左カラム（:Gblame 有効時のみ幅 > 0）はガターの最左に確保する。
@@ -1434,6 +1435,13 @@ public partial class EditorCanvas : FrameworkElement
             return;
         }
 
+        // 注記の印のクリック（テストの列の右側）— 印のある行ならホストに知らせる。
+        if (TryClickNoteMarkerColumn(point))
+        {
+            e.Handled = true;
+            return;
+        }
+
         // テスト列のクリック — グリフのある行ならホストにその行のテスト実行を依頼する。
         if (TryClickTestGlyphColumn(point))
         {
@@ -1599,6 +1607,7 @@ public partial class EditorCanvas : FrameworkElement
             if (_hoveredBlameLine >= 0) { _hoveredBlameLine = -1; CloseBlameToolTip(); InvalidateVisual(); }
             SetHoveredBreakpointLine(-1);
             SetHoveredTestGlyphLine(-1);
+            SetHoveredNoteLine(-1);
             ClearDataTipHover();
             ClearTextHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
@@ -1618,7 +1627,11 @@ public partial class EditorCanvas : FrameworkElement
         }
 
         // テスト列のホバー（グリフのある行だけ。ツールチップの開閉も含めてここで一括更新する）。
-        bool inTestGlyphGutter = _gutterHitTester.TryHitTestGlyphGutter(point, boundaries2, out int testHoverLine);
+        // 注記の印（テストの列の右側）を先に見る。そこはテストの印の場所ではない。
+        bool inNoteGutter = TryHitNoteMarkerColumn(point, out int noteHoverLine);
+        SetHoveredNoteLine(inNoteGutter ? noteHoverLine : -1);
+        int testHoverLine = -1;
+        bool inTestGlyphGutter = !inNoteGutter && _gutterHitTester.TryHitTestGlyphGutter(point, boundaries2, out testHoverLine);
         SetHoveredTestGlyphLine(inTestGlyphGutter ? testHoverLine : -1);
 
         // 電球列のホバー（電球の出ている行だけ）。
@@ -1632,6 +1645,15 @@ public partial class EditorCanvas : FrameworkElement
             // Hovering over the breakpoint band — show a faint placeholder dot and a hand cursor.
             Cursor = bpHoverLine >= 0 ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
             SetHoveredBreakpointLine(bpHoverLine);
+            ClearDataTipHover();
+            ClearTextHover();
+            if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
+        }
+        else if (inNoteGutter)
+        {
+            // 注記の印の上 — 印のある行だけ手カーソル。
+            Cursor = IsNoteMarkerHovered ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow;
+            SetHoveredBreakpointLine(-1);
             ClearDataTipHover();
             ClearTextHover();
             if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
@@ -1738,6 +1760,7 @@ public partial class EditorCanvas : FrameworkElement
         if (_hoveredBlameLine >= 0) { _hoveredBlameLine = -1; InvalidateVisual(); }
         TrackMousePoint(null);
         SetHoveredTestGlyphLine(-1);
+        SetHoveredNoteLine(-1);
         SetCodeActionBulbHovered(false);
         CloseBlameToolTip();
         ClearDataTipHover();
@@ -2070,7 +2093,11 @@ public partial class EditorCanvas : FrameworkElement
             // テスト実行グリフ（電球列の右）。折り返しの継続行には描かない＝
             // ブレークポイントと同じ「バッファ行の先頭ビジュアル行だけ」の扱い。
             if ((_testGlyphsEnabled || _coverageMarkersEnabled) && drawNumberAndFold && testColWidth > 0)
-                DrawTestGlyph(dc, l, y, _blameColWidth + bpColWidth + bulbColWidth, testColWidth);
+                DrawTestGlyph(dc, l, y, _blameColWidth + bpColWidth + bulbColWidth, TestGlyphSubWidth());
+
+            // 注記の印（テストの列の右側）。
+            if (_noteMarkersEnabled && drawNumberAndFold)
+                DrawNoteMarker(dc, l, y, _blameColWidth + bpColWidth + bulbColWidth + TestGlyphSubWidth(), NoteMarkerSubWidth());
 
             // ブレークポイント／停止中の矢印。行番号の上に重ねる（行番号を消しているときだけ専用列）。
             if (_breakpointsEnabled && drawNumberAndFold)

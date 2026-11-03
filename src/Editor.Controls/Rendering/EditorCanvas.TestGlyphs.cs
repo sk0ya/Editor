@@ -86,6 +86,7 @@ public partial class EditorCanvas
     internal bool TryClickTestGlyphColumn(Point point)
     {
         if (!_testGlyphsEnabled) return false;
+        if (TryHitNoteMarkerColumn(point, out _)) return false;   // 右側は注記の印の場所
         if (!_gutterHitTester.TryHitTestGlyphGutter(point, CurrentGutterBoundaries(), out int line)) return false;
         if (line >= 0 && _testGlyphs.ContainsKey(line)) TestGlyphClicked?.Invoke(line);
         return true;
@@ -100,6 +101,7 @@ public partial class EditorCanvas
     {
         int line = -1;
         bool inColumn = _testGlyphsEnabled && _lastMousePoint is { } point
+            && !TryHitNoteMarkerColumn(point, out _)   // 右側は注記の印の場所
             && _gutterHitTester.TryHitTestGlyphGutter(point, CurrentGutterBoundaries(), out line);
         SetHoveredTestGlyphLine(inColumn ? line : -1);
     }
