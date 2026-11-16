@@ -66,6 +66,39 @@ public sealed class StatusBarThemeTests
             Assert.Same(theme.StatusBarFg, bar.ModeText.Foreground);
         });
 
+    [Theory]
+    [InlineData(1000, true, true, true, true)]   // 全部入る
+    [InlineData(330, true, true, false, false)]  // 印は丸ごと外れ、[+] とファイル名が残る
+    public void Narrow_bar_keeps_the_modified_mark_and_file_name_first(
+        double width, bool file, bool modified, bool format, bool encoding)
+        => WpfTestHost.Run(() =>
+        {
+            var bar = new VimStatusBar { Width = width };
+            bar.UpdateFile(@"C:\work\my-theme-2.json", modified: true, "dos", "utf-8");
+            bar.UpdateGitBranch("main");
+            bar.UpdateStatus("\"my-theme-2.json\" 39L written");
+            bar.UpdateCursor(new Editor.Core.Models.CursorPosition(0, 0), 39);
+            var window = WpfTestHost.Load(bar, width + 40, 100);
+            try
+            {
+                window.UpdateLayout();
+                // ActualWidth は枠より狭く置かれても元の幅のまま（見える範囲を切り取るだけ）なので、置かれた枠の幅で見る
+                static double Slot(FrameworkElement e) => System.Windows.Controls.Primitives.LayoutInformation.GetLayoutSlot(e).Width;
+                Assert.Equal(file, Slot(bar.FileText) > 0);
+                Assert.Equal(modified, Slot(bar.ModifiedText) > 0);
+                // 印は途中で切らない：見えるなら全幅、見えないなら 0
+                foreach (var (tag, shown) in new[] { (bar.FormatText, format), (bar.EncodingText, encoding), (bar.ModifiedText, modified) })
+                {
+                    tag.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                    if (shown) Assert.Equal(tag.DesiredSize.Width, Slot(tag), 1);
+                    else Assert.Equal(0, Slot(tag));
+                }
+                // カーソル位置はいつも見える
+                Assert.True(Slot(bar.PosText) > 0);
+            }
+            finally { window.Close(); }
+        });
+
     private static void AssertPainted(VimStatusBar bar, EditorTheme theme)
     {
         Assert.Same(theme.LineNumberBg, bar.Background);

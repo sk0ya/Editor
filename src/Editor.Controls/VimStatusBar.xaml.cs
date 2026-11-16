@@ -204,6 +204,8 @@ public partial class VimStatusBar : UserControl
     public void UpdateStatus(string message)
     {
         StatusText.Text = message;
+        // 狭いと省略されるので、全文はツールチップで読めるようにする。
+        StatusText.ToolTip = string.IsNullOrEmpty(message) ? null : message;
     }
 
     /// <summary>The status message currently displayed. Exposed for tests.</summary>
