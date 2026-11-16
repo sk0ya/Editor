@@ -10,7 +10,23 @@ namespace Editor.Controls;
 
 public partial class VimStatusBar : UserControl
 {
-    public EditorTheme Theme { get; set; } = EditorTheme.Dracula;
+    private EditorTheme _theme = EditorTheme.Dracula;
+
+    /// <summary>
+    /// 帯の配色の出所。モードの札（NORMAL など）だけでなく、帯の地・ファイル名・メッセージ・ブランチ・
+    /// カーソル位置・補完の行もこのテーマから塗る（地は行番号の帯と同じ <see cref="EditorTheme.LineNumberBg"/>、
+    /// 文字はすべて <see cref="EditorTheme.Foreground"/>。行番号の淡い色や構文の色は明色のテーマで地に沈む）。
+    /// 以前は地と文字が暗色の直書きで、明色のテーマでもフッターだけ黒いままだった。
+    /// </summary>
+    public EditorTheme Theme
+    {
+        get => _theme;
+        set
+        {
+            _theme = value ?? EditorTheme.Dracula;
+            ApplyTheme();
+        }
+    }
 
     /// <summary>
     /// このバーを今どの編集ビューが代表しているか（共有バーとして複数の
@@ -28,8 +44,28 @@ public partial class VimStatusBar : UserControl
     public VimStatusBar()
     {
         InitializeComponent();
-        Background = new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E));
-        UpdateMode(VimMode.Normal);
+        ApplyTheme();
+    }
+
+    private VimMode _mode = VimMode.Normal;
+    private bool _vimEnabled = true;
+    private bool _showMode = true;
+
+    private void ApplyTheme()
+    {
+        var t = _theme;
+        Background = t.LineNumberBg;
+        FileText.Foreground = t.Foreground;
+        FormatText.Foreground = t.Foreground;
+        EncodingText.Foreground = t.Foreground;
+        ModifiedText.Foreground = t.Foreground;
+        CommandText.Foreground = t.Foreground;
+        PosText.Foreground = t.Foreground;
+        StatusText.Foreground = t.Foreground;
+        BranchText.Foreground = t.Foreground;
+        WildmenuBorder.Background = t.CurrentLineBg;
+        WildmenuText.Foreground = t.Foreground;
+        UpdateMode(_mode, _vimEnabled, _showMode);
     }
 
     /// <summary>
@@ -56,6 +92,9 @@ public partial class VimStatusBar : UserControl
 
     public void UpdateMode(VimMode mode, bool vimEnabled = true, bool showMode = true)
     {
+        _mode = mode;
+        _vimEnabled = vimEnabled;
+        _showMode = showMode;
         if (!vimEnabled || !showMode)
         {
             ModeBorder.Visibility = System.Windows.Visibility.Collapsed;
@@ -65,18 +104,18 @@ public partial class VimStatusBar : UserControl
         ModeBorder.Visibility = System.Windows.Visibility.Visible;
         (ModeText.Text, var bg) = mode switch
         {
-            VimMode.Insert => ("-- INSERT --", Theme.StatusBarInsert),
-            VimMode.Replace => ("-- REPLACE --", Theme.StatusBarReplace),
-            VimMode.Visual => ("-- VISUAL --", Theme.StatusBarVisual),
-            VimMode.VisualLine => ("-- VISUAL LINE --", Theme.StatusBarVisual),
-            VimMode.VisualBlock => ("-- VISUAL BLOCK --", Theme.StatusBarVisual),
-            VimMode.Command => ("-- COMMAND --", Theme.StatusBarNormal),
-            VimMode.SearchForward => ("-- SEARCH --", Theme.StatusBarNormal),
-            VimMode.SearchBackward => ("-- SEARCH -- ", Theme.StatusBarNormal),
-            _ => ("NORMAL", Theme.StatusBarNormal)
+            VimMode.Insert => ("-- INSERT --", _theme.StatusBarInsert),
+            VimMode.Replace => ("-- REPLACE --", _theme.StatusBarReplace),
+            VimMode.Visual => ("-- VISUAL --", _theme.StatusBarVisual),
+            VimMode.VisualLine => ("-- VISUAL LINE --", _theme.StatusBarVisual),
+            VimMode.VisualBlock => ("-- VISUAL BLOCK --", _theme.StatusBarVisual),
+            VimMode.Command => ("-- COMMAND --", _theme.StatusBarNormal),
+            VimMode.SearchForward => ("-- SEARCH --", _theme.StatusBarNormal),
+            VimMode.SearchBackward => ("-- SEARCH -- ", _theme.StatusBarNormal),
+            _ => ("NORMAL", _theme.StatusBarNormal)
         };
         ModeBorder.Background = bg;
-        ModeText.Foreground = Theme.StatusBarFg;
+        ModeText.Foreground = _theme.StatusBarFg;
     }
 
     public void UpdateFile(string? filePath, bool modified, string? fileFormat = null, string? fileEncoding = null)

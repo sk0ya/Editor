@@ -4,10 +4,10 @@
     <StackPanel>
 
     <!-- Wildmenu completion bar (hidden when no completions) -->
-    <Border x:Name="WildmenuBorder" Background="#44475A" Padding="6,2" Visibility="Collapsed">
+    <Border x:Name="WildmenuBorder" Padding="6,2" Visibility="Collapsed">
         <TextBlock x:Name="WildmenuText"
                    FontFamily="Cascadia Code, Consolas" FontSize="12"
-                   Foreground="#F8F8F2" TextWrapping="Wrap"/>
+                   TextWrapping="Wrap"/>
     </Border>
 
     <Grid x:Name="StatusGrid" MinHeight="24">
@@ -29,36 +29,37 @@
         <Grid Grid.Column="1">
             <!-- ファイル名・改行形式・文字コード・変更印。改行形式と文字コードはホストが購読していればクリックできる
                  （FileFormatClicked / FileEncodingClicked。変換の入口に使う）。 -->
+            <!-- 文字色・地の色は Theme から塗る（VimStatusBar.ApplyTheme）。 -->
             <StackPanel x:Name="FileInfoPanel" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0">
                 <TextBlock x:Name="FileText" FontFamily="Cascadia Code, Consolas" FontSize="12"
-                           Foreground="#DDDDDD" VerticalAlignment="Center"
+                           VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis"/>
                 <TextBlock x:Name="FormatText" FontFamily="Cascadia Code, Consolas" FontSize="12"
-                           Foreground="#DDDDDD" VerticalAlignment="Center" Background="Transparent"
+                           VerticalAlignment="Center" Background="Transparent"
                            MouseLeftButtonUp="OnFormatTextClicked"/>
                 <TextBlock x:Name="EncodingText" FontFamily="Cascadia Code, Consolas" FontSize="12"
-                           Foreground="#DDDDDD" VerticalAlignment="Center" Background="Transparent"
+                           VerticalAlignment="Center" Background="Transparent"
                            MouseLeftButtonUp="OnEncodingTextClicked"/>
                 <TextBlock x:Name="ModifiedText" FontFamily="Cascadia Code, Consolas" FontSize="12"
-                           Foreground="#DDDDDD" VerticalAlignment="Center"/>
+                           VerticalAlignment="Center"/>
             </StackPanel>
             <TextBlock x:Name="CommandText" FontFamily="Cascadia Code, Consolas" FontSize="13"
-                       Foreground="White" VerticalAlignment="Center" Padding="4,0"
+                       VerticalAlignment="Center" Padding="4,0"
                        Visibility="Collapsed"/>
         </Grid>
 
         <!-- Status message -->
         <TextBlock x:Name="StatusText" Grid.Column="2" FontFamily="Cascadia Code, Consolas" FontSize="12"
-                   Foreground="#AAAAAA" VerticalAlignment="Center" Padding="8,0"/>
+                   VerticalAlignment="Center" Padding="8,0"/>
 
         <!-- Git branch -->
         <TextBlock x:Name="BranchText" Grid.Column="3" FontFamily="Cascadia Code, Consolas" FontSize="12"
-                   Foreground="#8BE9FD" VerticalAlignment="Center" Padding="8,0"
+                   VerticalAlignment="Center" Padding="8,0"
                    TextTrimming="CharacterEllipsis" MaxWidth="220" Visibility="Collapsed"/>
 
         <!-- Cursor position -->
         <TextBlock x:Name="PosText" Grid.Column="4" FontFamily="Cascadia Code, Consolas" FontSize="12"
-                   Foreground="#DDDDDD" VerticalAlignment="Center" Padding="8,0" MinWidth="120" TextAlignment="Right"/>
+                   VerticalAlignment="Center" Padding="8,0" MinWidth="120" TextAlignment="Right"/>
     </Grid>
     </StackPanel>
 </UserControl>
