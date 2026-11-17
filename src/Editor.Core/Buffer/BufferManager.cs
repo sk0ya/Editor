@@ -336,7 +336,6 @@ public class VimBuffer
             throw new InvalidOperationException("E21: Cannot write a binary file (read-only).");
         path ??= FilePath ?? throw new InvalidOperationException("No file path specified.");
         BeforeWrite?.Invoke(path);
-        FilePath = path;
         // GetText() joins lines with \n; replace with the desired line ending.
         var text = Text.GetText();
         var content = FileFormat switch
@@ -345,7 +344,10 @@ public class VimBuffer
             "mac" => text.Replace("\n", "\r"),
             _     => text,
         };
+        // 書けてから保存先を名乗る。先に代入すると、書込みが失敗した後のバッファが
+        // 「保存先あり・未保存」になり、次の :w が保存先ダイアログを出さず同じ失敗を繰り返す。
         File.WriteAllText(path, content, GetEncoding(FileEncoding));
+        FilePath = path;
         Text.MarkSaved();
         HasMixedLineEndings = false;   // 書き出した時点で1つの形にそろっている
         MarkFileFormatSaved();
