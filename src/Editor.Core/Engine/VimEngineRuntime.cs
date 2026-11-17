@@ -1540,6 +1540,13 @@ internal sealed partial class VimEngineRuntime
 
     private void ProcessKeyInternal(string key, bool ctrl, bool shift, bool alt, List<VimEvent> events)
     {
+        // Alt+文字は Vim の割り当てに無い（<M-x> の対応も無い）。Alt を無視して文字として扱うと、
+        // Alt+K が Visual モードの k（カーソルを上へ）になり、選択が広がって見える。ホストが取らなかった
+        // Alt+文字（割り当てに無いもの）は、ここで何もせず消費する。
+        // Ctrl 併用（Ctrl+Alt+…）と Alt+矢印などの名前付きキーは、従来どおり下の処理へ。
+        if (alt && !ctrl && key.Length == 1)
+            return;
+
         // pastetoggle — works in any mode
         var pt = _config.Options.PasteToggle;
         if (pt.Length > 0 && key == pt && !ctrl && !shift && !alt)

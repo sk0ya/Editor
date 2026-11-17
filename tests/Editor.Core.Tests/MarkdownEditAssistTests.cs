@@ -238,7 +238,7 @@ public class MarkdownEditAssistTests
     public void Engine_OpensListItemAboveWithShiftO()
     {
         var engine = CreateMdEngine("- item");
-        engine.ProcessKey("O", false, false, true);    // open line above → Insert
+        engine.ProcessKey("O", false, true, false);    // Shift+O: open line above → Insert
         Assert.Equal("- \n- item", engine.CurrentBuffer.Text.GetText());
         Assert.Equal(new CursorPosition(0, 2), engine.Cursor);
     }

@@ -1946,6 +1946,44 @@ public class VimEngineTests
     }
 
     [Fact]
+    public void AltLetter_WithoutMapping_IsSwallowed_InNormalMode()
+    {
+        // Vim に Alt+文字の割り当ては無い。Alt を無視して l（右へ）として動くと、Alt+L が移動に化ける。
+        var engine = CreateEngine("abc");
+
+        engine.ProcessKey("l", alt: true);
+
+        Assert.Equal(0, engine.Cursor.Column);
+    }
+
+    [Fact]
+    public void AltLetter_WithoutMapping_DoesNotExtendVisualSelection()
+    {
+        // 事故の再現：範囲を選んだあと Alt+K が Visual の k（カーソルを上へ）として効いていた。
+        var engine = CreateEngine("abc\ndef");
+        engine.ProcessKey("j");
+        engine.ProcessKey("v");
+        var before = engine.Cursor;
+
+        engine.ProcessKey("k", alt: true);
+
+        Assert.Equal(before, engine.Cursor);
+    }
+
+    [Fact]
+    public void AltLetter_FromConfig_SupportsAltNotation()
+    {
+        // <A-x> / <M-x> の割り当ては、Vim の記法どおり設定から効く。
+        var config = new VimConfig();
+        config.NormalMaps["<A-l>"] = "l";
+        var engine = CreateEngine("abc", config);
+
+        engine.ProcessKey("l", alt: true);
+
+        Assert.Equal(1, engine.Cursor.Column);
+    }
+
+    [Fact]
     public void NormalMap_RhsMultiKeySequence_IsExecuted()
     {
         var config = new VimConfig();
