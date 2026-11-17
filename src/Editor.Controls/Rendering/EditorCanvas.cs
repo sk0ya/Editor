@@ -1758,6 +1758,8 @@ public partial class EditorCanvas : FrameworkElement
         base.OnMouseLeave(e);
         if (_hoveredFoldLine >= 0) { _hoveredFoldLine = -1; InvalidateVisual(); }
         if (_hoveredBlameLine >= 0) { _hoveredBlameLine = -1; InvalidateVisual(); }
+        // ブレークポイントの薄赤丸は、キャンバスの外へ出たら必ず消す（外に残ると赤丸が居座る）。
+        SetHoveredBreakpointLine(-1);
         TrackMousePoint(null);
         SetHoveredTestGlyphLine(-1);
         SetHoveredNoteLine(-1);
