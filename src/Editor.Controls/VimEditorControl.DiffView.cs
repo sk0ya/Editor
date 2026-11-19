@@ -41,6 +41,21 @@ public partial class VimEditorControl
     /// <summary>バッファ行（0始まり）が載っている表示行。畳まれていれば -1。</summary>
     public int GetTextVisualLine(int bufferLine) => Canvas.GetTextVisualLine(bufferLine);
 
+    /// <summary>
+    /// このコントロール上の点（<paramref name="point"/> はこのコントロール基準）が指す、文字を差し込む位置（0 始まりの行と UTF-16 の列）。
+    /// ホストがファイルのドロップを受けて、落とした所へリンクを入れるためのもの。カーソルと違って列は行末の後ろ（行の長さ）も返す。
+    /// 本文の外（ガター・スクロールバー・本文の領域の外）なら false。入れるのは <see cref="TryApplyLspTextEdits"/> で（取り消し 1 回で戻る）。
+    /// </summary>
+    public bool TryGetInsertionPositionFromPoint(System.Windows.Point point, out int line, out int column)
+    {
+        line = 0;
+        column = 0;
+        if (!Canvas.IsLoaded || Canvas.ActualWidth <= 0)
+            return false;
+        var onCanvas = TranslatePoint(point, Canvas);
+        return Canvas.TryHitTestInsertion(onCanvas, out line, out column);
+    }
+
     /// <summary>画素単位でスクロールする（範囲外は収める）。スクロールが動けば <see cref="ViewportScrolled"/> が出る。</summary>
     public void ScrollToOffset(double verticalOffset, double horizontalOffset)
         => Canvas.ScrollTo(verticalOffset, horizontalOffset);

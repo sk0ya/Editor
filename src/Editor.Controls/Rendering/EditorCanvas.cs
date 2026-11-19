@@ -1845,7 +1845,24 @@ public partial class EditorCanvas : FrameworkElement
         return fallback >= 0 ? fallback : _visualLines.Length - 1;
     }
 
-    private (int line, int col) HitTest(System.Windows.Point point)
+    private (int line, int col) HitTest(System.Windows.Point point) => HitTest(point, insertion: false);
+
+    /// <summary>文字を差し込む位置としての当たり（ファイルのドロップ等）。カーソルと違って行末の後ろ（行の長さ）も返す。
+    /// 本文の外（ガター・スクロールバー・キャンバスの外）なら false。</summary>
+    internal bool TryHitTestInsertion(System.Windows.Point point, out int line, out int column)
+    {
+        line = 0;
+        column = 0;
+        if (_lineHeight <= 0 || _charWidth <= 0)
+            return false;
+        var (_, _, _, _, _, gutterWidth) = GetGutterMetrics();
+        if (point.X < gutterWidth || point.Y < 0 || point.X > ActualWidth || point.Y > ActualHeight || IsOverScrollbar(point))
+            return false;
+        (line, column) = HitTest(point, insertion: true);
+        return true;
+    }
+
+    private (int line, int col) HitTest(System.Windows.Point point, bool insertion)
     {
         if (_lineHeight <= 0 || _charWidth <= 0) return (0, 0);
 
@@ -1869,14 +1886,14 @@ public partial class EditorCanvas : FrameworkElement
             int segLength = Math.Max(0, segEnd - segStart);
             string segmentText = segLength > 0 ? hitLine.Substring(segStart, segLength) : string.Empty;
             int segCol = VisualXToCol(segmentText, visualX);
-            int wrappedMaxCol = Math.Max(0, hitLine.Length - 1);
+            int wrappedMaxCol = insertion ? hitLine.Length : Math.Max(0, hitLine.Length - 1);
             int colWrapped = Math.Clamp(segStart + segCol, 0, wrappedMaxCol);
             return (line, colWrapped);
         }
 
         SetActiveLine(line);
         int col = VisualXToCol(hitLine, visualX);
-        int maxCol = Math.Max(0, hitLine.Length - 1);
+        int maxCol = insertion ? hitLine.Length : Math.Max(0, hitLine.Length - 1);
         col = Math.Clamp(col, 0, maxCol);
 
         return (line, col);
