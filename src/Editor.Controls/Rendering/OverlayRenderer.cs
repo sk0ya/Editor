@@ -267,6 +267,25 @@ internal static class OverlayRenderer
         }
     }
 
+    /// <summary>ホストが指定した範囲の背景を塗る（<see cref="Editor.Core.Syntax.LineHighlightProvider"/>）。</summary>
+    public static void DrawLineHighlights(
+        DrawingContext dc, EditorTheme theme, GlyphMetrics metrics,
+        int line, double y, double textLeft, string lineText, double scrollOffsetX,
+        IReadOnlyDictionary<int, IReadOnlyList<Editor.Core.Syntax.LineHighlightSpan>> highlights)
+    {
+        if (!highlights.TryGetValue(line, out var spans)) return;
+        foreach (var span in spans)
+        {
+            int start = Math.Clamp(span.Start, 0, lineText.Length);
+            int end = Math.Clamp(span.Start + span.Length, start, lineText.Length);
+            if (end <= start) continue;
+            double left = metrics.GetVisualX(lineText, start);
+            double width = metrics.GetVisualX(lineText, end) - left;
+            dc.DrawRectangle(theme.LineHighlightBackground, null,
+                new Rect(textLeft + left - scrollOffsetX, y, Math.Max(0, width), metrics.LineHeight));
+        }
+    }
+
     /// <summary>色見本の両側に空ける隙間（px）。</summary>
     public const double ColorSwatchGap = 3;
 

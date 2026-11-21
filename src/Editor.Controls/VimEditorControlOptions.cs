@@ -170,6 +170,9 @@ public sealed class VimEditorControlOptions
     /// </summary>
     public bool WatchFileOnDisk { get; init; } = true;
 
+    /// <summary>見えている行のうち背景を塗る範囲をホストが決める口（TODO の強調など）。null なら何も塗らない。</summary>
+    public LineHighlightProvider? LineHighlightProvider { get; init; }
+
     public SyntaxLanguageRegistry? SyntaxLanguages { get; init; }
     public EditorCommandRegistry? Commands { get; init; }
     public IServiceProvider? CommandServices { get; init; }

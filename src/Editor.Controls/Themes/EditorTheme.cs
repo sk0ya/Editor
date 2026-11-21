@@ -45,6 +45,9 @@ public class EditorTheme
     public Brush FullWidthSpaceBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xA5, 0x00));
     public Brush TrailingWhitespaceBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0x30, 0x30));
 
+    // ホストが指定した範囲の強調（VimEditorControlOptions.LineHighlightProvider）。明色・暗色どちらの背景にも載る半透明。
+    public Brush LineHighlightBackground { get; init; } = new SolidColorBrush(Color.FromArgb(0x60, 0xFF, 0xB0, 0x20));
+
     // Indent guide lines
     public Brush IndentGuideBrush { get; init; } = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x4A));
 
@@ -404,6 +407,7 @@ public class EditorTheme
             TokenIdentifier = TokenIdentifier,
             TokenFunction = TokenFunction,
             MatchingBracketBackground = MatchingBracketBackground,
+            LineHighlightBackground = LineHighlightBackground,
             IndentGuideBrush = IndentGuideBrush,
             BracketGuideBrush = BracketGuideBrush,
             BracketGuideActiveBrush = BracketGuideActiveBrush,
@@ -444,6 +448,7 @@ public class EditorTheme
             TokenIdentifier = TokenIdentifier,
             TokenFunction = TokenFunction,
             MatchingBracketBackground = MatchingBracketBackground,
+            LineHighlightBackground = LineHighlightBackground,
             IndentGuideBrush = IndentGuideBrush,
             BracketGuideBrush = BracketGuideBrush,
             BracketGuideActiveBrush = BracketGuideActiveBrush,

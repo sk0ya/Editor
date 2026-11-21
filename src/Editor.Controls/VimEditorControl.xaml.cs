@@ -472,6 +472,8 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
     private volatile bool _suppressFileWatcher;
     /// <summary><see cref="VimEditorControlOptions.WatchFileOnDisk"/>。false ならファイルの監視を張らない。</summary>
     private readonly bool _watchFileOnDisk = true;
+    /// <summary><see cref="VimEditorControlOptions.LineHighlightProvider"/>。</summary>
+    private readonly Editor.Core.Syntax.LineHighlightProvider? _lineHighlightProvider;
     private bool _pendingWatcherReload;
     private string? _lastSavedFilePath;
     private DateTime _lastSavedWriteTimeUtc;
@@ -838,6 +840,7 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         _gitProvider = options.GitServiceFactory?.Invoke() ?? NullEditorGitService.Instance;
         _inlineSuggestionProvider = options.InlineSuggestionProvider;
         _watchFileOnDisk = options.WatchFileOnDisk;
+        _lineHighlightProvider = options.LineHighlightProvider;
         _lspWorkspace = options.LspWorkspace;
         _lspView = options.LspViewFactory?.Invoke()
             ?? (_lspWorkspace is null
@@ -7242,15 +7245,13 @@ public partial class VimEditorControl : UserControl, Editor.Controls.Ime.IEditor
         firstLine = Math.Clamp(firstLine, 0, Math.Max(0, lines.Length - 1));
         lastLine = Math.Clamp(lastLine, firstLine, Math.Max(0, lines.Length - 1));
 
-        if (_engine.Options.Syntax)
-        {
-            var tokens = _engine.Syntax.TokenizeVisible(lines, firstLine, lastLine);
-            Canvas.SetTokens(tokens);
-        }
-        else
-        {
-            Canvas.SetTokens([]);
-        }
+        Editor.Core.Syntax.LineTokens[] tokens = _engine.Options.Syntax
+            ? _engine.Syntax.TokenizeVisible(lines, firstLine, lastLine)
+            : [];
+        Canvas.SetTokens(tokens);
+
+        if (_lineHighlightProvider is { } highlight)
+            Canvas.SetLineHighlights(highlight(buf.FilePath, lines, tokens, firstLine, lastLine));
 
         Canvas.SetWhitespaceIssues(_engine.Options.HighlightWhitespace
             ? Editor.Core.Editing.WhitespaceIssueDetector.Detect(lines, firstLine, lastLine)

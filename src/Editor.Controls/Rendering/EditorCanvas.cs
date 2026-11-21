@@ -933,6 +933,17 @@ public partial class EditorCanvas : FrameworkElement
         InvalidateVisual();
     }
 
+    private IReadOnlyDictionary<int, IReadOnlyList<LineHighlightSpan>> _lineHighlights =
+        new Dictionary<int, IReadOnlyList<LineHighlightSpan>>();
+
+    /// <summary>ホストが指定した範囲の強調。文字の絵（作り置き）には触らず、下層の背景だけを塗り直す。</summary>
+    public void SetLineHighlights(IReadOnlyDictionary<int, IReadOnlyList<LineHighlightSpan>> highlights)
+    {
+        if (highlights.Count == 0 && _lineHighlights.Count == 0) return;
+        _lineHighlights = highlights;
+        InvalidateVisual();
+    }
+
     public void SetCompletionItems(IReadOnlyList<LspCompletionItem> items, int selection, int scrollOffset = 0)
     {
         _completionItems = items;
@@ -2159,6 +2170,9 @@ public partial class EditorCanvas : FrameworkElement
 
                 // Full-width space / trailing whitespace markers
                 OverlayRenderer.DrawWhitespaceIssues(dc, Theme, metrics, l, y, textLeft, lineText, _scrollOffsetX, _whitespaceIssues);
+
+                // ホストが指定した範囲の強調（TODO など）
+                OverlayRenderer.DrawLineHighlights(dc, Theme, metrics, l, y, textLeft, lineText, _scrollOffsetX, _lineHighlights);
 
                 // Matching bracket highlight
                 DrawMatchingBrackets(dc, l, y, textLeft, lineText, bracketMatch);
