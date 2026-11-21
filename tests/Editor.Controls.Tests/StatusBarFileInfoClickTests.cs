@@ -66,6 +66,18 @@ public sealed class StatusBarFileInfoClickTests
         });
 
     [Fact]
+    public void Virtual_document_shows_its_title_instead_of_no_name()
+        => WpfTestHost.Run(() =>
+        {
+            var bar = new VimStatusBar();
+            bar.UpdateFile(null, modified: false, "unix", "utf-8", displayName: "Calculator.cs");
+            Assert.Equal("Calculator.cs [unix] [utf-8]", bar.CurrentFileLine);
+
+            bar.UpdateFile(null, modified: false, "unix", "utf-8", displayName: null);
+            Assert.Equal("[No Name] [unix] [utf-8]", bar.CurrentFileLine);
+        });
+
+    [Fact]
     public void Ruler_shows_a_single_percent_sign()
         => WpfTestHost.Run(() =>
         {

@@ -119,8 +119,17 @@ public partial class VimStatusBar : UserControl
     }
 
     public void UpdateFile(string? filePath, bool modified, string? fileFormat = null, string? fileEncoding = null)
+        => UpdateFile(filePath, modified, fileFormat, fileEncoding, displayName: null);
+
+    /// <summary>
+    /// <paramref name="displayName"/> names a buffer that has no file path (a virtual document such as a diff
+    /// side or an excerpt), so the bar shows that title instead of "[No Name]".
+    /// </summary>
+    public void UpdateFile(string? filePath, bool modified, string? fileFormat, string? fileEncoding, string? displayName)
     {
-        FileText.Text = filePath != null ? System.IO.Path.GetFileName(filePath) : "[No Name]";
+        FileText.Text = filePath != null
+            ? System.IO.Path.GetFileName(filePath)
+            : !string.IsNullOrEmpty(displayName) ? displayName : "[No Name]";
         FormatText.Text = fileFormat != null ? $" [{fileFormat}]" : "";
         EncodingText.Text = fileEncoding != null ? $" [{fileEncoding}]" : "";
         ModifiedText.Text = modified ? " [+]" : "";
